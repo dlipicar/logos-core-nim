@@ -24,14 +24,16 @@ when defined(posix):
     ]
   from ../src/logos_core/runtime/evidence import
     newEvidenceContext, accept, verifyEvidence
-  from ../src/logos_core/authority/scopes import encode
+  from ../src/logos_core/authority/scopes import encode, sortSet
   from ../src/logos_core/daemon/supervise import heldLocks
   from ../src/logos_core/runtime/plumbing import MaxDiagnostics
   from logos_sdk/iface/accept import acceptContractSet
   from ../src/logos_core/durable import
     acquire, ensurePrivateDir, release, removeIfPresent, writeAtomic
   import
-    ./support/[daemonbuild, daemonproc, evfixture, modulehostbuild, shortdir, slowdown],
+    ./support/[
+      clibuild, daemonbuild, daemonproc, evfixture, modulehostbuild, shortdir, slowdown
+    ],
     logos_sdk/testing/[kitbuild, testdirs]
 
   import std/posix
@@ -57,6 +59,7 @@ when defined(posix):
       ## `tests/kit/chatter_impl.nim`'s line, which ends with the writer's pid
     ChatterInstance = "chatter-1"
     ChatterDelayVar = "LCN_CHATTER_INIT_DELAY_MS" ## `chatter_impl`'s init delay
+    MeterInstance = "meter-1" ## a hosted provider `lcn_call` is granted
 
   let
     dExe = logosdProgram()
@@ -68,6 +71,12 @@ when defined(posix):
       acceptContractSet(readFile(repoDir / fixtureDir / "beacon_module.cddl"))
       .expect("the beacon_module contract set").primary.root
     ) ## so `chatter-1` provides it: a hosted provider's endpoint is made in `run/ep`
+    cliArt = cliArtifact()
+    meterLib = buildKitLibrary("meter_impl.nim", "lgdmeter")
+    meterRoot = @(
+      acceptContractSet(readFile(repoDir / "spec/mirrors/IFC/3.9.1.module.cddl"))
+      .expect("the meter_module contract set").primary.root
+    )
 
   var cases = 0
   var children: seq[Child]
@@ -253,6 +262,77 @@ when defined(posix):
 
   proc startChatter(c: Case): Ran =
     c.ctl("module", "start", "beacon_module", "--instance", ChatterInstance)
+
+  proc initCli(c: Case): Ran =
+    ## [DAEMON.md §7a] The default configuration with the hosted `meter-1`
+    ## (not started), an operator rule granting `lcn_call` all of the meter's
+    ## provider actions, and `cli.artifact` naming the library
+    ## `support/clibuild` builds.
+    var dc = defaultDaemonConfig("assigned-by-init")
+    dc.runtime.module_host = Opt.some(hostExe)
+    dc.runtime.module_host_env = Opt.some(@SanitizerEnv)
+    dc.modules = Opt.some(
+      @[
+        LcnAppModule(
+          instance: MeterInstance,
+          module: "meter_module",
+          primary_contract: Opt.some(SchemaCommitment(schema_root: meterRoot)),
+          implementation: LcnAppImplementation(
+            kind: LcnAppImplementationKind.Process_hosted_dynamic,
+            arm_Process_hosted_dynamic: LcnAppImplementationARProcessHostedDynamicMap(
+              artifact: LcnAppArtifact(
+                id: "meter", local_path: meterLib, hash: digestOfFile(meterLib)
+              )
+            ),
+          ),
+        )
+      ]
+    )
+    var actions = @[
+      LcnApAction(kind: LcnApActionKind.Discover),
+      LcnApAction(kind: LcnApActionKind.Establish_route),
+      LcnApAction(kind: LcnApActionKind.Renew_route),
+      LcnApAction(kind: LcnApActionKind.Call),
+    ]
+    sortSet(actions)
+    dc.policy.arm_Capability_authority.rules = @[
+      LcnApRule(
+        kind: LcnApRuleKind.lcn_Ap_allow,
+        arm_lcn_Ap_allow: LcnApAllow(
+          subject: LcnApSubject(instances: Opt.some(@[CliInstance])),
+          scopes: @[
+            LcnApScope(
+              kind: LcnApScopeKind.lcn_Ap_provider_access,
+              arm_lcn_Ap_provider_access: LcnApProviderAccess(
+                contract: LcnApProviderAccessContractChoice(
+                  kind: LcnApProviderAccessContractChoiceKind.logos_Schema_commitment,
+                  arm_logos_Schema_commitment: SchemaCommitment(schema_root: meterRoot),
+                ),
+                actions: actions,
+              ),
+            )
+          ],
+        ),
+      )
+    ]
+    dc.cli = Opt.some(LcnDcCli(artifact: Opt.some(cliArt)))
+    c.initWith(dc)
+
+  func hexOf(bytes: openArray[byte]): string =
+    for b in bytes:
+      result.add(toHex(b, 2).toLowerAscii)
+
+  proc startMeter(c: Case): Ran =
+    c.ctl("module", "start", "meter_module", "--instance", MeterInstance)
+
+  proc lcn(c: Case, args: varargs[string]): Ran =
+    ## A CLI command with no output flag: stdout is a file, so JSON (G89).
+    runOnce(
+      ctlExe, @["--session-dir", c.s.dir] & @args, c.dir, timeoutMs = 120_000 * Slow
+    )
+
+  proc cliSocket(c: Case): string =
+    c.s.dir / "run" / "lcn_call.sock"
 
   proc chatterLogged(d: Child, count: int): seq[int] =
     ## The chatter pids in `d`'s log once there are `count`, or what there is
@@ -992,6 +1072,90 @@ when defined(posix):
       check reaped.code == 1
       check "seq 1 is not retained" in reaped.stderr
       check not fileExists(outFile & ".2")
+
+    test "[IMPL-DECISION G343] [IMPL-DECISION G349] call, describe and module wait as processes: the first command starts lcn_call; JSON on a file, diagnostic notation with --text; exits 1, 2 and 5":
+      let c = newCase()
+      check c.initCli().code == 0
+      let d = c.start()
+      c.expectReady(d)
+      check c.startMeter().code == 0
+      let mw = c.ctl("module", "wait", "meter_module", "--instance", MeterInstance)
+      checkpoint mw.stderr
+      check mw.code == 0
+      # [G350] Not started with logosd: a wait for it ends at the timeout (2).
+      let early =
+        c.ctl("--timeout", "300", "module", "wait", CliModule, "--state", "ready")
+      checkpoint early.stderr
+      check early.code == 2
+      check "last state unloaded" in early.stderr
+      check not entryExists(c.cliSocket)
+      # [G89] JSON when stdout is not a terminal, as here.
+      let a = c.lcn("call", "meter_module", "read", "channel=7")
+      checkpoint a.stdout & a.stderr
+      check a.code == 0
+      check a.stderr == ""
+      let j = parseJson(a.stdout)
+      check j{"command"}.getStr == "call meter_module.read"
+      check j{"status"}.getStr == "ok"
+      check j{"result", "label"}.getStr == "ch7"
+      check j{"result", "reading", "value"}.getInt == 70
+      check c.state(CliInstance) == "ready"
+      check entryExists(c.cliSocket)
+      check c.ctl("module", "wait", CliModule).code == 0
+      let t = c.ctl("call", "meter_module", "read", "channel=8")
+      checkpoint t.stdout & t.stderr
+      check t.code == 0
+      check "\"ch8\"" in t.stdout
+      check "\"deployment\"" notin t.stdout
+      let desc = c.lcn("describe", "meter_module")
+      checkpoint desc.stdout & desc.stderr
+      check desc.code == 0
+      let r = parseJson(desc.stdout){"result"}
+      check r{"instance"}.getStr == MeterInstance
+      check r{"selected"}.getStr == hexOf(meterRoot)
+      check r{"methods"}.getElems.anyIt(it{"method"}.getStr == "read")
+      let dt = c.ctl("describe", "meter_module")
+      check dt.code == 0
+      check hexOf(meterRoot) & " (selected)" in dt.stdout
+      # A value its field does not read (1); the provider's error channel (5).
+      let bad = c.ctl("call", "meter_module", "read", "channel=x")
+      check bad.code == 1
+      check bad.stdout == ""
+      check bad.stderr.startsWith("logosctl: ")
+      let pe = c.ctl("call", "meter_module", "read", "channel=13")
+      checkpoint pe.stderr
+      check pe.code == 5
+      check d.stopped == 0
+      check hostsGone()
+
+    test "[IMPL-DECISION G289] [IMPL-DECISION G350] kill -9 with lcn_call ready, then a restart: lcn_call comes back, resumed or recovered, and the next logosctl call succeeds":
+      let c = newCase()
+      check c.initCli().code == 0
+      var d = c.start()
+      c.expectReady(d)
+      check c.startMeter().code == 0
+      check c.ctl("module", "wait", "meter_module", "--instance", MeterInstance).code ==
+        0
+      check c.lcn("call", "meter_module", "read", "channel=7").code == 0
+      check c.state(CliInstance) == "ready"
+      killChild(d)
+      d = c.start("logosd2")
+      c.expectReady(d)
+      # Both were restored as `error`, `host-terminated` (RUN-1194), with
+      # requested intent: the orchestrator's first pass resumes them (G289),
+      # and a command that comes first recovers lcn_call itself (DAEMON.md
+      # §7a, Activation). Neither is `unloaded`: the intent was kept.
+      check c.state(CliInstance) in ["error", "loaded", "ready"]
+      check c.ctl("module", "wait", "meter_module", "--instance", MeterInstance).code ==
+        0
+      let b = c.lcn("call", "meter_module", "read", "channel=9")
+      checkpoint b.stdout & b.stderr
+      check b.code == 0
+      if b.code == 0:
+        check parseJson(b.stdout){"result", "label"}.getStr == "ch9"
+      check c.state(CliInstance) == "ready"
+      check d.stopped == 0
+      check hostsGone()
 else:
   import unittest2
 

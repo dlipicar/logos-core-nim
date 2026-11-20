@@ -27,6 +27,7 @@ lcn.daemon_config = {
   ? permissions: lcn.dc_permissions,
   ? state_transfers: [* lcn.app_state_transfer],
   ? ctl: lcn.dc_ctl,
+  ? cli: lcn.dc_cli,
   ? test_hooks: lcn.dc_test_hooks,
 }
 
@@ -112,6 +113,20 @@ lcn.dc_ctl = {
   ? socket_dir: lcn.app_path,
   ? workers: uint8,
   ? idle_timeout_ms: uint32,
+}
+
+; The lcn_call instance, the CLI module (DECISIONS G343, G344; DAEMON.md
+; §7a). artifact replaces the library installed with logosd; socket_dir must
+; be owner-only, as ctl.socket_dir; workers 1-32 (default 8), streams 1-64
+; (default 8), idle_timeout_ms 100-600000 (default 30000), route_idle_ms
+; 1000-86400000 (default 600000).
+lcn.dc_cli = {
+  ? artifact: lcn.app_artifact,
+  ? socket_dir: lcn.app_path,
+  ? workers: uint8,
+  ? streams: uint8,
+  ? idle_timeout_ms: uint32,
+  ? route_idle_ms: uint32,
 }
 
 ; Accepted only by a logosd built with lcnTestHooks, with the development
