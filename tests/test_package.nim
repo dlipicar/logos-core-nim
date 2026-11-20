@@ -103,6 +103,8 @@ proc base(): CborValue =
       artifact("alpha", "module-binary", "lib/libalpha.so", 1),
       artifact("alpha-config", "schema", "schema/alpha.cddl", 2),
       artifact("alpha-defaults", "data", "data/alpha.cbor", 3),
+      artifact("alpha-types", "schema", "schema/alpha_types.cddl", 6),
+      artifact("alpha-units", "schema", "schema/alpha_units.cddl", 7),
       artifact("beta", "module-binary", "lib/libbeta.so", 4),
     ],
   )
@@ -113,6 +115,8 @@ proc base(): CborValue =
       artifact("alpha", "module-binary", "lib/libalpha.dylib", 5),
       artifact("alpha-config", "schema", "schema/alpha.cddl", 2),
       artifact("alpha-defaults", "data", "data/alpha.cbor", 3),
+      artifact("alpha-types", "schema", "schema/alpha_types.cddl", 6),
+      artifact("alpha-units", "schema", "schema/alpha_units.cddl", 7),
     ],
   )
   cborMap(
@@ -153,10 +157,7 @@ proc base(): CborValue =
         cborMap(
           (cbor("commitment"), commitmentValue(10)),
           (cbor("schema_artifact"), cbor("alpha-config")),
-          (
-            cbor("input_artifacts"),
-            cborArray(cbor("alpha-defaults"), cbor("alpha-config")),
-          ),
+          (cbor("input_artifacts"), cborArray(cbor("alpha-units"), cbor("alpha-types"))),
         )
       ),
     ),
@@ -245,7 +246,7 @@ suite "pkg.manifest: the PM §4 schema and the manifest value commitment":
     check x.contractDocuments.len == 1
     check x.contractDocuments[0].schemaArtifact == "alpha-config"
     # [IMPL; UF-15] input artifacts as written, in their written order
-    check x.contractDocuments[0].inputArtifacts == @["alpha-defaults", "alpha-config"]
+    check x.contractDocuments[0].inputArtifacts == @["alpha-units", "alpha-types"]
     check x.encoded == encodeCbor(base())
 
   test "[PKG-0256] [PKG-0258] values outside the CDDL are invalid-package":
@@ -427,12 +428,14 @@ suite "pkg.validation: the manifest rules beyond the CDDL (PM §5, §8, §9, §1
       proc(m: CborValue) =
         m["modules"].items[1].put("configuration", m.alpha["configuration"])
     ) == "ok"
-    # Without the module's implementation, a variant needs no configuration artifacts.
+    # Without the module's implementation, a variant needs no configuration artifacts
+    # (contract documents are needed in every variant, PM l.357, so they go too).
     check mutated(
       proc(m: CborValue) =
         m["variants"].items[1].put(
           "artifacts", cborArray(artifact("beta", "module-binary", "lib/libbeta.dylib"))
         )
+        m.drop("contract_documents")
     ) == "ok"
 
   test "[PKG-0055] [PKG-0285] [PKG-0057] [TXT-0456] implements, extends, requires and requested permissions are unique and ordered":
