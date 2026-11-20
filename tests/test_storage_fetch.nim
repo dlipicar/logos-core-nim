@@ -6,12 +6,11 @@
 ## path (C1; plan §2.2): a hosted consumer (`probe_module`) reads a 4 MiB object from the hosted
 ## fake, and P-13's carrier trace finds none of its bytes in a frame of either host.
 
-import std/[atomics, monotimes, os, sequtils, strutils, tables, times, typedthreads]
+import std/[atomics, monotimes, os, strutils, tables, times, typedthreads]
 import unittest2
 import ../src/logos_core/runtime/engine
 import logos_sdk/abi/[checks, types]
-import ../src/logos_core/runtime/[invoke, remotemarked, routes]
-import ./support/rcaddresses
+import ../src/logos_core/runtime/routes
 import logos_sdk/cbor
 import logos_sdk/commitment
 import logos_sdk/iface/[accept, outcome, provider, surface]
@@ -138,13 +137,17 @@ proc harness(): seq[string] =
       FetchFakeSetFaultRequest(`object`: big, unavailable: 1, delay_ms: 0),
     )
   if fault.isErr:
-    result.add("set_fault failed")
+    result.add("set_fault failed: " & fault.error.message.get(""))
   let offset = uint64(MaxReadLength)
   let first = h.read(big, offset, 16)
-  if first.isErr or first.get.failureOf != Opt.some(FetchFailure.Unavailable):
+  if first.isErr:
+    result.add("the injected fault: " & first.error)
+  elif first.get.failureOf != Opt.some(FetchFailure.Unavailable):
     result.add("the injected fault did not answer unavailable")
   let again = h.read(big, offset, 16)
-  if again.isErr or again.get.failureOf.isSome or
+  if again.isErr:
+    result.add("the read after the fault: " & again.error)
+  elif again.get.failureOf.isSome or
       again.get.arm_Map_data.data != fakeObject(big)[int(offset) ..< int(offset) + 16]:
     result.add("the read after the fault did not resume at its offset")
 
@@ -192,7 +195,9 @@ when defined(posix):
 
   proc hosted(): EngineConfig =
     ## `config` with a state root, the Module Host program and a short endpoint directory,
-    ## as `test_hosted_routes` makes it; Hello and admission deadlines no case here is about.
+    ## as `test_hosted_routes` makes it; Hello and admission deadlines no case here is about,
+    ## and a write-stall deadline that 1 MiB responses on four routes at once do not reach in a
+    ## sanitizer build (as `transport_io_body`'s multi-MiB cases set it).
     result = config(extra = @[fakeReg])
     result.stateRoot = Opt.some(result.workDir / "state")
     result.moduleHost = Opt.some(hostProgram)
@@ -201,6 +206,10 @@ when defined(posix):
     var t = fastConfig()
     t.helloTimeout = int64(Answer) * 1000 * Ms
     t.admissionTimeout = int64(Answer) * 1000 * Ms
+    # Every host takes the Runtime's Transport limits. fastConfig's 500 ms x Slow closed a
+    # host's connection under TSan while the Runtime's reader drained four 1 MiB responses
+    # (CI, 4fdc140, ubuntu-24.04-arm): no case here is about a write stall.
+    t.writeStallTimeout = 10_000 * Ms * Slow
     result.transport = Opt.some(t)
     result.shutdownGrace = initDuration(seconds = 10 * Slow)
 
