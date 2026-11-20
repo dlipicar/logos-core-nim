@@ -7,6 +7,7 @@
     logos_ledger_module_MODULE_call_surface;
     logos_ledger_module_MODULE_free;
     logos_ledger_module_MODULE_dispatch;
+    logos_ledger_module_MODULE_async_api;
     logos_ledger_module_CALL_ledger_Post;
     logos_ledger_module_CALL_ledger_Probe;
     logos_ledger_module_CALL_ledger_Seal;

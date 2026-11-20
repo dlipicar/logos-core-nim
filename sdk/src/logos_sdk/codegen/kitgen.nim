@@ -50,9 +50,14 @@
 ## <Event>)`, and the template restores the host's signal dispositions at the
 ## end of the library's initialization (G340).
 ##
-## Not generated yet: `_MODULE_async_api` (optional), and kits for an
-## interface-only provider (no primary document). A consumer's typed call
-## helpers (App A.5) come from `callsgen`.
+## With `KitOptions.asyncApi` as well (`--async-api`; DECISIONS G338) a
+## provider's kit also exports `_MODULE_async_api`, a static descriptor whose
+## `submit` and `request_cancel` hand the invocation to the module thread
+## (`confinedSubmit`, `confinedRequestCancel`): the same route, handlers and
+## typed results as `_MODULE_dispatch` (INTERFACE §2.9.2).
+##
+## Not generated yet: kits for an interface-only provider (no primary
+## document). A consumer's typed call helpers (App A.5) come from `callsgen`.
 
 {.push raises: [].}
 
@@ -74,6 +79,8 @@ type
     importPrefix*: string ## how the kit imports this library (`NimOptions`)
     configuration*: Opt[KitConfiguration]
     confined*: bool ## [DECISIONS G335] a module thread per context
+    asyncApi*: bool
+      ## [DECISIONS G338] export `_MODULE_async_api` (a confined provider's)
 
 proc configurationSet*(document: string): Result[ContractSet, string] =
   ## [SPEC CONFIG §2 l.62-66] A configuration document accepted as the Runtime
@@ -203,6 +210,8 @@ proc kitParts(
         ", InvocationFailure]\n"
     )
   let confined = opts.confined
+  if opts.asyncApi and not (confined and provider):
+    return err("_MODULE_async_api is generated for a confined provider's kit only")
   if confined:
     o.add(
       "##\n## Confined (DECISIONS G335-G337): every entry that uses the instance runs on\n" &
@@ -212,6 +221,12 @@ proc kitParts(
         "##       Future[Result[<Response>, InvocationFailure]] {.async: (raises: []).}\n##\n" &
         "## and `initModule`, `destroyModule` and `applyConfiguration` may return a\n" &
         "## future of their result.\n"
+    )
+  if opts.asyncApi:
+    o.add(
+      "##\n## Deferred (DECISIONS G338): the kit exports `_MODULE_async_api`; a submitted\n" &
+        "## invocation runs the same handler on the module thread, and its cancellation\n" &
+        "## cancels an `async` handler's future.\n"
     )
   var mirrors = KitMirrors()
   if provider:
@@ -355,7 +370,7 @@ proc kitParts(
       o.add(
         "    var response: Result[" & responseType & ", InvocationFailure]\n" &
           "    when compiles(" & h & "(instance, typed, inv)):\n" &
-          "      settleHandler(response, " & h & "(instance, typed, inv))\n" &
+          "      settleHandler(response, " & h & "(instance, typed, inv), inv)\n" &
           "    else:\n" & "      let saved = enterPlain(inv)\n" & "      response = " & h &
           "(instance, typed)\n" & "      leavePlain(saved)\n"
       )
@@ -513,6 +528,23 @@ proc kitParts(
           "    kitEnter()\n    confinedDispatch(module, methodName, paramsCbor, paramsLen, outResponseCbor, outResponseLen, " &
           prefix & "KitRoute)\n"
       )
+      if opts.asyncApi:
+        # [SPEC INTERFACE §2.9.2, App A.3; DECISIONS G338] The deferred surface:
+        # a descriptor that never changes, from a context-free getter.
+        o.add(
+          "\n  proc " & prefix &
+            "KitSubmit(module: ptr LogosModuleContext, invocation: ptr LogosProviderInvocation) {.cdecl, gcsafe, raises: [].} =\n" &
+            "    kitEnter()\n    confinedSubmit(module, invocation, " & prefix &
+            "KitRoute)\n\n" & "  proc " & prefix &
+            "KitRequestCancel(module: ptr LogosModuleContext, invocation: ptr LogosProviderInvocation) {.cdecl, gcsafe, raises: [].} =\n" &
+            "    kitEnter()\n    confinedRequestCancel(module, invocation)\n\n" &
+            "  let " & prefix &
+            "KitAsyncApiData = LogosAsyncProviderApi(abiVersion: AsyncProviderAbiVersion, structSize: csize_t(sizeof(LogosAsyncProviderApi)), submit: " &
+            prefix & "KitSubmit, requestCancel: " & prefix & "KitRequestCancel)\n\n" &
+            "  proc " & prefix & "KitAsyncApi(): ptr LogosAsyncProviderApi {.exportc: \"" &
+            sym("async_api") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
+            "    unsafeAddr " & prefix & "KitAsyncApiData\n"
+        )
       for e in mirrors.exports:
         o.add("\n" & e & "\n")
   else:
@@ -594,6 +626,8 @@ proc kitParts(
         (sym("dispatch"), prefix & "KitDispatch"),
       ]
     )
+    if opts.asyncApi:
+      table.add((sym("async_api"), prefix & "KitAsyncApi"))
     table.add(mirrors.symbols)
   o.add(
     "\n  proc " & prefix & "StaticSymbols*(): seq[(string, pointer)] =\n" &

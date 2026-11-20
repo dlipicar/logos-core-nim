@@ -14,6 +14,9 @@
 ## opens a route to the meter through its Runtime Control binding (`kit/routes`)
 ## and its typed handlers run on its module thread: deliveries, a subscription
 ## its full queue ended, one the authority ended, a completion and a route end.
+## Its kit exports `_MODULE_async_api` (G338): the Runtime's prepared calls and
+## the Module Host's transported calls take that deferred surface, and a
+## cancellation or a deadline reaches its `async` handler.
 ##
 ## Under refc the cases skip: a refc Runtime refuses every route to a contract
 ## that marks a payload (DECISIONS G277), as the ledger's does, so they pair an
@@ -324,6 +327,56 @@ when defined(posix):
     discard p[].probe(19)
     releasePerThread()
 
+  # Prepared calls to its deferred surface (DECISIONS G338) -------------------------------
+  #
+  # Plain data in globals: completions run on the Runtime's threads.
+
+  type Waited = object
+    count: Atomic[int] ## completions
+    code: Atomic[int] ## the last one's code
+    note: array[64, char]
+    noteLen: int
+
+  var waited: array[3, Waited]
+
+  proc onWaited(
+      outcome: Result[LedgerWaitResponse, InvocationFailure], user: pointer
+  ) {.nimcall, gcsafe, raises: [].} =
+    let w = cast[ptr Waited](user)
+    if outcome.isOk:
+      let n = outcome.unsafeGet.note
+      w.noteLen = min(n.len, w.note.len)
+      for i in 0 ..< w.noteLen:
+        w.note[i] = n[i]
+      w.code.store(0)
+    else:
+      w.code.store(ord(outcome.unsafeError.code))
+    w.count += 1
+
+  proc noteOf(w: ptr Waited): string =
+    for i in 0 ..< w.noteLen:
+      result.add(w.note[i])
+
+  proc prepared(
+      h: RouteHandle, w: ptr Waited, request: LedgerWaitRequest, timeoutMs = 0'u64
+  ): PreparedCall =
+    ## `wait` through `h`, prepared and submitted.
+    w.count.store(0)
+    w.code.store(-1)
+    w.noteLen = 0
+    let c = h.prepareInvoke(request, onWaited, w, timeoutMs)
+    check c.isOk
+    if c.isOk:
+      result = c.get
+      result.submit()
+
+  proc completed(w: ptr Waited): bool =
+    waitUntil(
+      proc(): bool =
+        w.count.load >= 1,
+      Answer,
+    )
+
   # Signals and descriptors ----------------------------------------------------------------
 
   proc sigactionOf(
@@ -339,7 +392,7 @@ when defined(posix):
 
   # The cases ------------------------------------------------------------------------------
 
-  suite "run.kit-mixed: a thread-confined kit built with the other memory manager (DECISIONS G342, G335-G337, G339)":
+  suite "run.kit-mixed: a thread-confined kit built with the other memory manager (DECISIONS G342, G335-G339)":
     teardown:
       leftover()
       check noHostLeft()
@@ -498,6 +551,57 @@ when defined(posix):
       check r.isOk and r.get.total == 1
       h2.drop()
       e.finish()
+
+    test "[IMPL-DECISION G338] [IFC-0753] MX-4 prepared calls to its deferred surface (_MODULE_async_api), direct_dynamic and hosted: a completion with the consumer as caller, a cancellation that reaches its async handler, and a deadline that does":
+      instrumentedOnly()
+      for placeHosted in [false, true]:
+        checkpoint (if placeHosted: "hosted" else: "direct")
+        let cfg = hosted()
+        discard cfg.stateOf("dl")
+        let e = fixtureEngine(cfg)
+        let l = e.started(ledgerRecord(placeHosted, "dl"), "dl")
+        let (c, rc) = e.startClient("c")
+        resetPosted(c.instance)
+        var sync = rc.ledgerHandle("ks", l)
+        let before = parseInt(sync.probe(23).split(' ')[0])
+        let wrapped = wrapRoute(rc.ledgerHandle("kd", l))
+        check wrapped.isOk
+        let h = wrapped.get
+        # A completion: the handler reads its caller through its Invocation.
+        let a = h.prepared(addr waited[0], LedgerWaitRequest(channel: 1, millis: 1))
+        check completed(addr waited[0])
+        check waited[0].code.load == 0
+        check callerIs(noteOf(addr waited[0]))
+        check a.release().isOk
+        # A cancellation, once the handler sleeps: the Runtime marks the
+        # invocation and calls request_cancel, which cancels its future.
+        let started = getMonoTime()
+        let b =
+          h.prepared(addr waited[1], LedgerWaitRequest(channel: 9, millis: 600_000))
+        check sync.probeUntil(23, $before & " 1") == $before & " 1"
+        b.cancel()
+        check completed(addr waited[1])
+        check waited[1].code.load == ord(ecCancelled)
+        check sync.probeUntil(23, $(before + 1) & " 0") == $(before + 1) & " 0"
+        check b.release().isOk
+        # A deadline: TIMEOUT, and the provider's invocation is cancelled too.
+        let d = h.prepared(
+          addr waited[2],
+          LedgerWaitRequest(channel: 9, millis: 600_000),
+          timeoutMs = uint64(3000 * Slow),
+        )
+        check sync.probeUntil(23, $(before + 1) & " 1") == $(before + 1) & " 1"
+        check completed(addr waited[2])
+        check waited[2].code.load == ord(ecTimeout)
+        check sync.probeUntil(23, $(before + 2) & " 0") == $(before + 2) & " 0"
+        check getMonoTime() - started < initDuration(seconds = Answer)
+        check d.release().isOk
+        check h.release().isOk
+        check sync.post("after").isOk
+        sync.drop()
+        check e.stop("dl").tryGet.state == msUnloaded
+        e.finish()
+        check noHostLeft()
 
     test "[IMPL-DECISION G342] [IMPL-DECISION G339] MX-3 as a consumer, direct_dynamic and hosted: its route to the meter through kit/routes; deliveries, a completion, a subscription the authority ended, one its full queue ended and the route's end reach its typed handlers on its module thread":
       instrumentedOnly()

@@ -21,6 +21,9 @@ const
   storageFetchRootPath* = contractGeneratedDir & "/lcn_storage_fetch_root.nim"
   fetchFakeDocument* = fixtureDir & "/fetch_fake_module.cddl"
   ledgerDocument* = fixtureDir & "/ledger_module.cddl"
+  confinedSensorDir* = sdkGeneratedDir & "/confined"
+    ## [DECISIONS G338] the §3.9.2 sensor as a confined kit with
+    ## `_MODULE_async_api`, beside the plain one under testing/generated
 
 const nimFixtures* = [
   NimFixture(
@@ -156,9 +159,30 @@ const nimFixtures* = [
   ),
   NimFixture(module: "ledger_module_types.nim", primary: ledgerDocument),
   NimFixture(
-    module: "ledger_module_kit.nim", primary: ledgerDocument, kit: true, confined: true
+    module: "ledger_module_kit.nim",
+    primary: ledgerDocument,
+    kit: true,
+    confined: true,
+    asyncApi: true,
   ),
   NimFixture(module: "ledger_module_calls.nim", primary: ledgerDocument, calls: true),
+  NimFixture(
+    module: "sensor_module_types.nim",
+    home: confinedSensorDir,
+    primary: "spec/mirrors/IFC/3.9.2.module.cddl",
+    interfaces: @["spec/mirrors/IFC/3.9.2.interface.cddl"],
+    supporting: @["spec/mirrors/IFC/3.9.2.supporting.cddl"],
+  ),
+  NimFixture(
+    module: "sensor_module_kit.nim",
+    home: confinedSensorDir,
+    primary: "spec/mirrors/IFC/3.9.2.module.cddl",
+    interfaces: @["spec/mirrors/IFC/3.9.2.interface.cddl"],
+    supporting: @["spec/mirrors/IFC/3.9.2.supporting.cddl"],
+    kit: true,
+    confined: true,
+    asyncApi: true,
+  ),
 ]
 
 type ExportFixture* = object
@@ -166,6 +190,7 @@ type ExportFixture* = object
   ## `kitbuild` links a kit library with.
   kit*: string ## the kit's `NimFixture.module`
   kind*: ExportListKind
+  home*: string ## the kit's `NimFixture.home`
 
 const exportFixtures* = [
   ExportFixture(kit: "meter_module_kit.nim", kind: elDarwin),
@@ -180,6 +205,8 @@ const exportFixtures* = [
   ExportFixture(kit: "fetch_fake_module_kit.nim", kind: elGnu),
   ExportFixture(kit: "ledger_module_kit.nim", kind: elDarwin),
   ExportFixture(kit: "ledger_module_kit.nim", kind: elGnu),
+  ExportFixture(kit: "sensor_module_kit.nim", kind: elDarwin, home: confinedSensorDir),
+  ExportFixture(kit: "sensor_module_kit.nim", kind: elGnu, home: confinedSensorDir),
 ]
 
 proc fixtureName(f: ExportFixture): string =
@@ -192,7 +219,7 @@ proc fixtureName(f: ExportFixture): string =
 proc generated*(f: ExportFixture): Result[string, string] =
   ## The export list lcn-gen makes for `f` now.
   for k in nimFixtures:
-    if k.module == f.kit and k.kit:
+    if k.module == f.kit and k.home == f.home and k.kit:
       let (set, opts) = ?fixtureSet(k)
       let name = exportListName(set, f.kind)
       if name != f.fixtureName:
@@ -201,7 +228,7 @@ proc generated*(f: ExportFixture): Result[string, string] =
   err("no kit fixture " & f.kit)
 
 proc fixturePath*(f: ExportFixture): string =
-  homeOf("", f.fixtureName) / f.fixtureName
+  homeOf(f.home, f.fixtureName) / f.fixtureName
 
 const headerFixtures* = [
   HeaderFixture(header: "logos_types.h"),

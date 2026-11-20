@@ -329,6 +329,10 @@ proc raw*(h: RouteHandle): ptr LogosRouteHandle =
   ## rules; the caller then keeps them itself.
   addr h.route
 
+func dispatcher*(h: RouteHandle): Dispatcher =
+  ## Where the handle's callbacks run (DECISIONS G339).
+  h.dispatch
+
 proc ended*(h: RouteHandle): Opt[ErrorCode] =
   ## The route's termination code once its end has been reported.
   let c = h.endCode.load
