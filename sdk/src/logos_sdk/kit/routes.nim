@@ -66,6 +66,7 @@ type
     lock: Lock ## `held`; never held across a binding call
     held: ptr Held
     events: BindingEvents
+    dispatch: Dispatcher ## a confined kit's module thread, or none (G339)
 
   RouteSet* = ptr RouteSetObj ## One module instance's routes; `close` it once.
 
@@ -120,16 +121,24 @@ proc freshKey*(): string =
 # The set ------------------------------------------------------------------------------
 
 proc newRouteSet*(
-    rc: ptr LogosRuntimeControlBinding
+    rc: ptr LogosRuntimeControlBinding, dispatcher = Dispatcher()
 ): Result[RouteSet, InvocationFailure] =
   ## A set over the instance's binding, checked as INTERFACE §5.2 requires.
+  ## With a confined kit's `dispatcher`, the handles and subscriptions it
+  ## makes run their callbacks on the kit's module thread (G339).
   checkBinding(rc).isOkOr:
     return err(toFailure(error))
   let s = cast[RouteSet](allocShared0(sizeof(RouteSetObj)))
   s.rc = rc
   initLock(s.lock)
-  s.events = newBindingEvents(rc)
+  s.dispatch = dispatcher
+  s.events = newBindingEvents(rc, dispatcher)
   ok(s)
+
+proc newRouteSet*(services: ModuleServices): Result[RouteSet, InvocationFailure] =
+  ## The set of the instance `services` belong to: over its Runtime Control
+  ## binding, with its dispatcher (a confined kit's module thread, or none).
+  newRouteSet(services.runtimeControl, services.dispatcher)
 
 proc binding*(s: RouteSet): ptr LogosRuntimeControlBinding =
   s.rc
@@ -274,7 +283,7 @@ proc materialize*(
   readStatus(r).isOkOr:
     let f = error
     return err(InvocationFailure(code: f.code, message: f.message, detail: f.detail))
-  let h = ?wrapRoute(raw, onRouteEnd, user)
+  let h = ?wrapRoute(raw, onRouteEnd, user, s.dispatch)
   s.adopt(h)
   ok(h)
 

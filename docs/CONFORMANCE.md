@@ -607,6 +607,19 @@ that uses them (the inspection item says how). A marked response decoded by `pre
 erased once its receiver returns (`test_wipe_routes` W-8, orc). Nothing else changes: the helpers
 call the route and binding vtables as a module would, and the Runtime's side is unchanged.
 
+Sub-part 3 adds the thread-confined kit (`lcn-gen kit --confined`; G335 to G337): each context runs
+on its own module thread, every instance-dependent entry hands its work over while the caller waits,
+and publication goes through a publisher thread or, in a call's scope, through the entry thread
+while the module thread serves new entries. **IFC-0281 and IFC-0282 are claimed for confined
+modules** (they were out of scope as requirements on modules): a direct subscriber re-enters the
+publishing module during each of `publish`, `publishAsync` and `publishScoped`, from the publisher
+thread and from the entry thread, with plain and async handlers (`sdk/tests/test_kit_confined.nim`),
+and through the Runtime and a Module Host with the module built with the other memory manager
+(`tests/test_kit_mixed.nim`, G342). A handler that blocks its module thread in a synchronous route
+call of its own while the callee calls back is a route-call cycle, outside these units; the guide says
+so. The consumer helpers' callbacks run on the module thread through the handle's dispatcher (G339),
+with no change to what the Runtime sees.
+
 ## Properties not claimed
 
 - A complete Logos module system (BCP §5.1; owner decision 10 (a), K18; DECISIONS G310, I97): there

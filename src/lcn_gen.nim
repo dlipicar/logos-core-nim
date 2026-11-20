@@ -21,7 +21,7 @@ Usage:
   lcn-gen nim-common [--out:DIR] [--import-prefix:P]
   lcn-gen nim [--out:DIR] [--import-prefix:P] [--system] [--module:NAME] PRIMARY.cddl
               [--interface:FILE]... [--supporting:FILE]...
-  lcn-gen kit [--out:DIR] [--import-prefix:P] [--system] PRIMARY.cddl
+  lcn-gen kit [--out:DIR] [--import-prefix:P] [--system] [--confined] PRIMARY.cddl
               [--interface:FILE]... [--supporting:FILE]...
               [--configuration:FILE --configuration-root:NAME
                [--live-reconfiguration]]
@@ -83,6 +83,9 @@ cddl         reads exactly the C headers named, without a preprocessor, and
 --live-reconfiguration
                    kit: the module declares live reconfiguration and exports
                    _MODULE_apply_configuration (CONFIG §8)
+--confined         kit: each context runs on its own module thread, which runs
+                   chronos; handlers may be async (DECISIONS G335-G337). Build
+                   the library with --import:logos_sdk/base/hostsignals
 
 Limits (INTERFACE §2.1): no identifier-length limit; identifiers are never
 truncated, hashed or aliased. Input is bounded by the INTERFACE §5.3 schema
@@ -206,6 +209,7 @@ proc main(): int =
     interfaces, supporting: seq[string]
     configuration, configurationRoot = ""
     live = false
+    confined = false
   for kind, key, val in getopt():
     case kind
     of cmdArgument:
@@ -241,6 +245,8 @@ proc main(): int =
         configurationRoot = val
       of "live-reconfiguration":
         live = true
+      of "confined":
+        confined = true
       of "help", "h":
         echo usage
         return 0
@@ -250,6 +256,8 @@ proc main(): int =
       discard
   if (configuration.len > 0 or configurationRoot.len > 0 or live) and command != "kit":
     return fail("--configuration options apply to kit only\n" & usage)
+  if confined and command != "kit":
+    return fail("--confined applies to kit only\n" & usage)
   if (configuration.len > 0) != (configurationRoot.len > 0) or
       (live and configuration.len == 0):
     return fail(
@@ -337,7 +345,7 @@ proc main(): int =
       let module = nimModule(set, NimOptions(importPrefix: prefix), opts.system).valueOr:
         return fail(error)
       if command == "kit":
-        var kopts = KitOptions(importPrefix: prefix)
+        var kopts = KitOptions(importPrefix: prefix, confined: confined)
         var configTypes = ""
         if configuration.len > 0:
           let text =

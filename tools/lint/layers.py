@@ -2,12 +2,15 @@
 """Holds the import direction between the SDK, core, the daemon and the CLI.
 
 [IMPL] The base set, the generators and the kit sit below core, and the daemon and the CLI
-sit above it. Seven rules keep that shape:
+sit above it. Eight rules keep that shape:
 
   sdk-closed          the SDK imports nothing outside the SDK
   base-below-binding  the SDK's base imports neither `codegen`, `kit` nor `testing`
-  kit-facade          what generated kits and calls import (each `kit_facade` root) never
-                      reaches `rcclient` or `rc_types`
+  kit-facade          what generated kits and calls import (each `kit_facade` root, and the
+                      `confined_facade` roots of thread-confined kits) never reaches
+                      `rcclient` or `rc_types`
+  kit-chronos         nothing in a `kit_facade` root's closure imports chronos (`chronos`,
+                      `chronos/...`, `pkg/chronos...`): a plain kit stays chronos-free
   core-below-daemon   core imports nothing from the daemon or the CLI
   daemon-no-tls       the daemon's and CLI's closure reaches no TLS engine (owner: no TLS in logosd)
   daemon-allowlist    the daemon and the CLI import only the reviewed core modules
@@ -277,6 +280,12 @@ def resolve(root, importer, path):
     return "?" if path.startswith(".") else None
 
 
+def is_chronos(module):
+    """A raw import name of chronos or one of its modules."""
+    name = module.removeprefix("pkg/")
+    return name == "chronos" or name.startswith("chronos/")
+
+
 def covers(entry, path):
     return path.startswith(entry) if entry.endswith("/") else path == entry
 
@@ -319,12 +328,13 @@ def check(root, config):
     layers = config["layers"]
     strict = config.get("strict", False)
     files = nim_files(root)
-    edges, findings = {}, []
+    edges, raw, findings = {}, {}, []
     for path in files:
         with open(os.path.join(root, path), encoding="utf-8") as f:
             source = f.read()
         edges[path] = []
-        for module, line in imports_of(source):
+        raw[path] = imports_of(source)
+        for module, line in raw[path]:
             target = resolve(root, path, module)
             if target == "?":
                 findings.append((path, line, "unresolved", f"`{module}` names no file"))
@@ -368,12 +378,21 @@ def check(root, config):
     roots = config["kit_facade"]
     if isinstance(roots, str):
         roots = [roots]
-    for facade in roots:
+    confined = config.get("confined_facade", [])
+    for facade in roots + confined:
         if facade in edges:
             seen = closure([facade], edges)
             for target in config["kit_forbidden"]:
                 if target in seen:
                     findings.append((facade, 1, "kit-facade", f"reaches {chain(seen, target)}"))
+            if facade in confined:
+                continue
+            for reached in sorted(seen):
+                for module, line in raw.get(reached, ()):
+                    if is_chronos(module):
+                        findings.append(
+                            (reached, line, "kit-chronos", f"imports {module}: {chain(seen, reached)}")
+                        )
         elif strict:
             findings.append((facade, 0, "kit-facade", "the facade does not exist"))
 
@@ -426,6 +445,7 @@ SELF_CONFIG = {
         "sdk/src/logos_sdk/codegen/consumert.nim",
     ],
     "kit_forbidden": ["sdk/src/logos_sdk/kit/rcclient.nim", "sdk/src/logos_sdk/kit/rc_types.nim"],
+    "confined_facade": ["sdk/src/logos_sdk/confined.nim"],
     "daemon_tls_forbidden": [
         "src/logos_core/transport/tls/boring.nim",
         "src/logos_core/transport/tls/engine.nim",
@@ -437,6 +457,7 @@ SELF_CONFIG = {
         "sdk_binding": [
             "sdk/src/logos_sdk.nim",
             "sdk/src/logos_sdk/kit.nim",
+            "sdk/src/logos_sdk/confined.nim",
             "sdk/src/logos_sdk/codegen/",
             "sdk/src/logos_sdk/kit/",
         ],
@@ -454,6 +475,8 @@ CLEAN_TREE = {
     "sdk/src/logos_sdk/kit/rc_types.nim": "import ../codegen/kitrt\n",
     "sdk/src/logos_sdk/kit/rcclient.nim": "import ./rc_types\n",
     "sdk/src/logos_sdk/kit.nim": "import ./codegen/kitrt\nexport kitrt\n",
+    "sdk/src/logos_sdk/codegen/confinedrt.nim": "import chronos\nimport ./kitrt\n",
+    "sdk/src/logos_sdk/confined.nim": "import chronos\nimport ./codegen/[kitrt, confinedrt]\n",
     "sdk/src/logos_sdk/testing/helper.nim": "import ../base/hex\n",
     "sdk/tests/test_hex.nim": "import logos_sdk/base/hex\nimport logos_sdk/testing/helper\n",
     "src/logos_core/runtime/host.nim": "import logos_sdk/kit/rcclient\n",
@@ -477,6 +500,11 @@ PLANTS = [
     ("kit-facade", "sdk/src/logos_sdk/codegen/kitrt.nim", "import ../kit/rc_types\n"),
     ("kit-facade", "sdk/src/logos_sdk/codegen/invokert.nim", "import ../kit/rc_types\n"),
     ("kit-facade", "sdk/src/logos_sdk/codegen/consumert.nim", "import ../kit/rcclient\n"),
+    ("kit-facade", "sdk/src/logos_sdk/confined.nim", "import ./kit/rcclient\n"),
+    ("kit-chronos", "sdk/src/logos_sdk/kit.nim", "import chronos\n"),
+    ("kit-chronos", "sdk/src/logos_sdk/codegen/kitrt.nim", "import chronos/asyncloop\n"),
+    ("kit-chronos", "sdk/src/logos_sdk/codegen/consumert.nim", "import pkg/chronos\n"),
+    ("kit-chronos", "sdk/src/logos_sdk/codegen/invokert.nim", "import ./confinedrt\n"),
     ("core-below-daemon", "src/logos_core/runtime/bad.nim", "import ../daemon/main\n"),
     ("core-below-daemon", "src/logos_core/runtime/bad.nim", "import ../../logosd\n"),
     ("daemon-no-tls", "src/logos_core/runtime/host.nim", "import ../transport/tls/boring\n"),
