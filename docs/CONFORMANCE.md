@@ -673,6 +673,12 @@ the selected contract. RUN-0174 is re-tested for a Module Host's prepared `estab
     done with it.
   - **Values on the stack**: fixed-size values held in locals (a digest, a scalar) are not zeroed;
     every heap and shared-heap copy is.
+  - **Argument text typed for a marked method, until step N-2d** (DECISIONS I102, G349; planning,
+    2026-11-20): `lcn_call` refuses a method with a marked request or response before any route,
+    so no marked value reaches a provider or comes back. But `key=value` or `--request` text typed for
+    such a method crosses the launcher and the `lcn_call` instance in the `cli.v1` frame, and their
+    buffers hold it, unwiped, until the refusal and after it. N-2d erases every buffer in both,
+    with a wipe-audit test.
 
 ## Unix-stream endpoints and peer checks
 

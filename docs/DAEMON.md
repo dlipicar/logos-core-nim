@@ -978,7 +978,9 @@ lcn.cli_refused = {
   a provider supplied (an error message or detail) is labelled "(declared)" and has control characters
   replaced. Every output carries the `NON-PRODUCTION deployment` line when the switch is on.
 - **Marked methods** (a request or response with a marked field) are refused, naming the method: their
-  values would reach a terminal.
+  values would reach a terminal. Do not type a secret for one even so: a value typed on the command
+  line is also in the shell's history and in the process's arguments, whether or not it is refused
+  (and until step N-2d the launcher and `lcn_call` do not erase it either; CONFORMANCE.md).
 - **`describe`** lists the provider's contract views (primary, interfaces, extended views) with their
   roots, the roots its module record carries, and the selected contract's methods (request fields and
   response rule) and events.
