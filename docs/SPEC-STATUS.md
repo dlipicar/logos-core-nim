@@ -57,10 +57,10 @@ table (each unit with its reason: the workspace's `tier5-plans/step5-0-pkg-recou
 | A4 | Signing-trust continuity in use (PM §4.1-§4.3) | PKG 30 | 5-3a 4, 5-3b 16, 5-5 7, 5-8 2, 5-7a 1 (PKG-0435, the TLS key) |
 | A2 | Sources, the catalog document and the Storage role (PM §2, §4, §4.4, §6, §13) | PKG 13 | 5-3b 10, 5-6a 2, 5-8 1 |
 | A3 | Installation and installed state (PM §1, §5, §7-§8, §10, §14; §15's inspect, install, remove and update) | PKG 63; BCP-0033, BCP-0035 | 5-5 |
-| A1 | The `logos_package_manager` service: contract, queries, watch, progress (PM Abstract, §15-§15.2) | PKG 78 | 5-6a 29, 5-6b 49 |
+| A1 | The `logos_package_manager` service: contract, queries, watch, progress (PM Abstract, §15-§15.2) | PKG 77 | 5-6a 28, 5-6b 49 |
 | B | Package-backed selection and the handoff's use (PM §4, §9, §11, §12; RUNTIME §9.3) | PKG 19; RUN 7 (RUN-0995 to RUN-0997, RUN-1000, RUN-1023 to RUN-1025) | 5-8 |
 | C | SLSA provenance (PM §4.5 and its §14 codes), droppable | PKG 75 | 5-11 |
-| D | Nix realization profile (PM §2, §7.3), droppable | PKG 30; BCP-0034 | 5-10 |
+| D | Nix realization profile (PM §2, §7.3, §8), droppable | PKG 31; BCP-0034 | 5-10 |
 | E1 | `logos.remote.tls-tcp` (TRANSPORT §8.4, §8.4.1) | TRN 36 | 5-2 |
 | E2 | `logos.remote.quic` (TRANSPORT §8.4.2), droppable | TRN 5; BCP-0032; RUN-0503 (counted in F) | 5-12 |
 | F | Remote Runtimes (RUNTIME §9, §9.3; INTERFACE §5.2) | RUN 126; IFC 20 | 5-7a, 5-7b |
@@ -76,17 +76,23 @@ The 308 PKG units by step (`PKG-` omitted):
 | 5-3a | A4 | 4 | 0418-0421 |
 | 5-3b | A2 | 10 | 0019, 0021, 0069, 0114, 0115, 0353, 0449, 0472-0474 |
 | 5-3b | A4 | 16 | 0076, 0077, 0079, 0081-0083, 0085-0093, 0112 |
-| 5-5 | A3 | 63 | 0011, 0012, 0172, 0177, 0178, 0181, 0182, 0189, 0190, 0192, 0204, 0219, 0222, 0271, 0275, 0291-0293, 0356, 0357, 0359-0363, 0389-0411, 0468-0471, 0487-0489, 0493, 0498-0500, 0534-0537 |
+| 5-5 | A3 | 63 | 0011, 0012, 0172, 0177, 0178, 0181, 0182, 0189, 0190, 0192, 0204, 0219, 0222, 0271, 0274, 0291-0293, 0356, 0357, 0359-0363, 0389-0411, 0468-0471, 0487-0489, 0493, 0498-0500, 0534-0537 |
 | 5-5 | A4 | 7 | 0080, 0436-0441 |
-| 5-6a | A1 | 29 | 0003-0008, 0365-0380, 0388, 0519-0524 |
+| 5-6a | A1 | 28 | 0003-0008, 0366-0380, 0388, 0519-0524 |
 | 5-6a | A2 | 2 | 0513, 0514 |
 | 5-6b | A1 | 49 | 0381, 0383-0387, 0525-0533, 0538-0542, 0544-0562, 0564-0573 |
 | 5-7a | A4 | 1 | 0435 |
 | 5-8 | B | 19 | 0060, 0287, 0289, 0335, 0337-0345, 0347-0351, 0512 |
 | 5-8 | A2 | 1 | 0354 |
 | 5-8 | A4 | 2 | 0423, 0424 |
-| 5-10 | D | 30 | 0017, 0224-0252 |
+| 5-10 | D | 31 | 0017, 0224-0252, 0273 |
 | 5-11 | C | 75 | 0118-0170, 0450-0467, 0515-0518 |
+
+**Re-pin P7a (2026-11-19, I110):** PKG-0275 is stale (G156 settled), PKG-0365 (`_module`) now heads PM §4.3
+and is claimed with it. PKG-0273, which names only the realized output at 6cac8335, is deferred to 5-10, and
+PKG-0274, whose LGX half is the extraction check, to 5-5 (G362). App A's 38 rules are new units, copies of rules
+the sections state: ten are claimed and 28 are deferred by name with their twins, five to 5-5, two to 5-8 and 21 to 5-6a
+(G363). PKG-0568 is now deferred by name to 5-6b (G362). The count by step above is still that of 6a4dfa28.
 
 A dropped area's units that bind without it stay and are claimed in their own steps: TRN-0352, PKG-0190,
 PKG-0166, PKG-0167, PKG-0169, the `nix` and `quic` refusals (plan A1). At the close (5-13) every unit
@@ -109,7 +115,7 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-3b | TF-07 (G166) | the plan's §6 wording; the answer to PM l.402 stays *no* | open (C5) |
 | 5-3b | no §4.2 freshness profile is defined | claim the baseline; a configuration that asks for a profile is refused | open (C9) |
 | 5-5 | PM-11 (G93) | `local_path` per artifact; one self-contained module library | open (C8) |
-| 5-5 | NP-15 (G156), PKG-0275 | keep G156; PKG-0275 by reading | open (C10, C11) |
+| 5-5 | NP-15 (G156), PKG-0275 | keep G156; PKG-0275 by reading | settled by PM l.1096-1101 at 6cac8335 (re-pin P7a): PKG-0275 is stale |
 | 5-5 | TF-12, TF-14 | keep I69's interims; exclude an installed candidate whose signer is no longer accepted | open (C11) |
 | 5-5 | the no-op install and update while the retained signer is not accepted (TF-07's second point); a D9 stop | fail with `signature-verification-failed` | open (C6) |
 | 5-6a | where the Package Manager runs | hosted in its own process, the engine's binding over TRANSPORT §8.1.2 | open (C1) |
@@ -130,7 +136,8 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-13 | TF-43 (G310); the units still deferred | the member set of E1; E2's relabels | open (E1, E2, E3) |
 | N-2 | marked methods through the CLI | refused, naming the method (INTERFACE l.388-389); local-only support later (N-2d), non-local targets refused | decided 2026-11-17 (owner) |
 
-Unanswered upstream and bearing on Tier 5: NP-12 to NP-15 (NP-11 is settled by text: PM l.964, l.1180),
+Unanswered upstream and bearing on Tier 5: NP-12 to NP-14 (NP-11 is settled by text: PM l.964, l.1180, and
+NP-15 by PM l.1096-1101 at 6cac8335),
 NE-07, NL-12, NA-12, HC-02, HC-04, HC-07, HC-10; in `claude-spec-comments-3.md` TF-04, TF-07, TF-12,
 TF-14, TF-30, TF-43, TF-44, TF-45, TF-52, TS-04 to TS-06, TP-07, TL-01, TL-02, and the TF-06 remarks of
 G352 and G354 (DECISIONS, "Open items").
@@ -294,6 +301,22 @@ G352 and G354 (DECISIONS, "Open items").
     (INTERFACE l.2025); a `route-timeout` end is a loss of readiness, NOT_READY (l.1263).
 
   Claimed: RUN-1100 and RUN-1101. 3 text entries cleared. P5 closed.
+- 2026-11-19, re-pin P7a (I110), the manifest, signing and LGX at 6cac8335:
+  - The manifest gains `extends`, a dependency's `contracts` and `contract_documents` (UF-15, UF-38 and
+    UF-39 as written), checked for order, uniqueness and non-emptiness. The roots are recomputed from the
+    mirror (`d517cf20…`, `23de138c…`).
+  - A claim that names another manifest schema is `unsupported-manifest`, judged after the signature and
+    the profile and before the manifest decodes (M26; G29 revised).
+  - A wrong artifact kind and a path-rule violation are `invalid-package`. Every variant's paths and
+    files are checked, and a file missing from any variant is `artifact-integrity-failed` (M23 to M25;
+    I37, G40, G41).
+  - G156 is settled. PKG-0273 is deferred to 5-10 and PKG-0274 to 5-5, and TXT-0463 and TXT-0472 ride PKG-0418
+    (5-3a) and PKG-0293 (5-5); TXT-0497 and TXT-0498 ride PKG-0568 (5-6b) (G362).
+  - App A: the §10, §12 and appendix blocks are mirrored and pinned, and one test compares the appendix's 38 rules
+    with the section excerpts in spec order. A copy takes its twin's status (G363).
+
+  Claimed: PKG-0576, PKG-0581 to PKG-0588 and PKG-0591; PKG-0365 moved to §4.3; App A's PKG-0613 to PKG-0617,
+  PKG-0621 to PKG-0623, PKG-0625 and PKG-0629, with 28 copies deferred. 36 text entries cleared and 4 deferred.
 
 ## Tiers at f4f83471 (the original plan)
 
@@ -512,7 +535,7 @@ Three spec facts drive the order:
 | TR-07 | claude-spec-comments | §4.1 | M5 | MED | Close vs error response. | `transport/boundary.nim` `acceptResponse`, `acceptEvent`; test `[TRN-0097] [TRN-0300]` | resolved in 6a4dfa28 (TRANSPORT §4.1); =s |
 | TR-08 | claude-spec-comments | §4.1 | M5 | MED | Check precedence. | `transport/boundary.nim` `acceptRequest`; tests `[TRN-0292]`..`[TRN-0298]` | resolved in 6a4dfa28 (TRANSPORT §4.1 l.655-673): the code's order conforms; G37 restated |
 | TR-09 | claude-spec-comments | §8.2, §9.1 | M5,M12 | MED | Windows mechanism. | — | resolved in 6a4dfa28: conditional Windows applicability with stated requirements (G107 spike) |
-| G156 | claude-spec-comments-2 (NP-15) | PM §8 l.1000 vs §4 l.326 and §8 l.974 | M7 | LOW | An artifact without its `hash` is named `artifact-integrity-failed` by §8 l.1000, but the §4 CDDL requires the field, so the manifest fails validation, which l.974 makes `invalid-package`. Error code only; no bytes change. Interim: `invalid-package` (the schema check runs first, G29). | `package/manifest.nim` `decodeManifest`; test `[IMPL-DECISION G156]`; unit PKG-0275 deferred | awaiting owner follow-up (NP-15); PM §8 l.1070 makes the interim conformant |
+| G156 | claude-spec-comments-2 (NP-15) | PM §8 l.1000 vs §4 l.326 and §8 l.974 | M7 | LOW | An artifact without its `hash` is named `artifact-integrity-failed` by §8 l.1000, but the §4 CDDL requires the field, so the manifest fails validation, which l.974 makes `invalid-package`. Error code only; no bytes change. Interim: `invalid-package` (the schema check runs first, G29). | `package/manifest.nim` `decodeManifest`; test `[PKG-0258]` | settled at 6cac8335 (re-pin P7a): PM l.1096-1101 drops the bullet, so the interim is the text; PKG-0275 is stale |
 
 ## Tier 4 — runtime, Loader, CONFIG, CA
 

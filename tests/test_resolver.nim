@@ -346,7 +346,9 @@ proc appManifest(): CborValue =
     ),
   )
 
-proc libManifest(version: string): CborValue =
+proc libManifest(
+    version: string, id = "linux-x86_64", os = "linux", arch = "x86_64"
+): CborValue =
   cborMap(
     (cbor("package"), cbor("lib")),
     (cbor("version"), cbor(version)),
@@ -355,9 +357,9 @@ proc libManifest(version: string): CborValue =
       cbor("variants"),
       cborArray(
         variant(
-          "linux-x86_64",
-          "linux",
-          "x86_64",
+          id,
+          os,
+          arch,
           cborMap(
             (cbor("id"), cbor("data")),
             (cbor("kind"), cbor("data")),
@@ -594,7 +596,7 @@ suite "pkg.resolver: dependency resolution (PM §11)":
     check o.picked == @["A@1.0.0", "R@1.0.0"]
     check o.considered("A") == 1
 
-  test "[PKG-0316] [PKG-0476] a real LGX record is a candidate only when its signer is authorized for its exact name":
+  test "[PKG-0316] [PKG-0476] [PKG-0583] a real LGX record is a candidate only when its signer is authorized for its exact name":
     var archives: Table[seq[byte], seq[byte]]
     var u = Universe()
     proc put(name, version: string, n: int, data: seq[byte]) =
@@ -647,6 +649,54 @@ suite "pkg.resolver: dependency resolution (PM §11)":
     check inspect(PackageSource(kind: skNix, flakeRef: "x")).error.code ==
       pecUnsupportedSource
     check inspect(source("lib", "9.9.9")).kind == ikUnavailable
+
+  test "[PKG-0584] [TXT-0465] packages signed per platform are distinct candidates; the host's platform picks one":
+    # One identity, published as two separately signed single-variant
+    # packages (PM l.959-961): their manifest commitments differ, and only the
+    # one compatible with the host is eligible, so no commitment conflict
+    # arises (G74 counts eligible candidates).
+    var archives: Table[seq[byte], seq[byte]]
+    var u = Universe()
+    proc put(name, version: string, n: int, data: seq[byte]) =
+      let s = source(name, version, n)
+      u.catalog.add(CatalogEntry(identity: ident(name & "@" & version), source: s))
+      archives[s.encoded] = data
+
+    put(
+      "lib",
+      "1.0.0",
+      0,
+      packed(
+        libManifest("1.0.0", "darwin-aarch64", "darwin", "aarch64"),
+        "good",
+        goodKey,
+        ["darwin-aarch64"],
+      ),
+    )
+    put(
+      "lib", "1.0.0", 1, packed(libManifest("1.0.0"), "good", goodKey, ["linux-x86_64"])
+    )
+    let fetched = archives
+    let fetch: Fetch = proc(s: PackageSource): Opt[seq[byte]] {.gcsafe, raises: [].} =
+      let k = s.encoded
+      if k in fetched:
+        Opt.some(fetched.getOrDefault(k))
+      else:
+        Opt.none(seq[byte])
+    let darwinHost = Platform(os: "darwin", architecture: "aarch64")
+    for (host, n) in [(linuxHost, 1), (darwinHost, 0)]:
+      let inspect = lgxInspector(fetch, anchors, host, pathRules = PathRules())
+      var c: ResolverCounters
+      let r = resolve(
+        ResolverInput(catalog: u.catalog, limits: limits(), inspect: inspect),
+        RootReference(package: Opt.some("lib")),
+        c,
+      )
+      check r.isOk
+      if r.isOk:
+        check r.get.packages.mapIt($it.identity) == @["lib@1.0.0"]
+        check r.get.packages[0].source == Opt.some(source("lib", "1.0.0", n))
+      check inspect(source("lib", "1.0.0", 1 - n)).error.code == pecIncompatiblePlatform
 
   test "[PKG-0318] an installed record satisfies a dependency without being materialized":
     let u = Universe()
