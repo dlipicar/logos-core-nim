@@ -328,7 +328,7 @@ G352 and G354 (DECISIONS, "Open items").
   - G167 is settled; G166 is partly settled, with TXT-0493 to TXT-0495 riding PKG-0608 to 5-5.
 
   Claimed: PKG-0592, PKG-0593 and PKG-0597 to PKG-0607 (PKG-0597, PKG-0604 and PKG-0605 by inspection;
-  PKG-0594 to PKG-0596 out of scope); PKG-0317 is stale. 19 text entries cleared and 3 deferred.
+  PKG-0594 to PKG-0596 out of scope); PKG-0317 is stale. 19 text entries cleared and 3 deferred. P7 closed.
 
 ## Tiers at f4f83471 (the original plan)
 
