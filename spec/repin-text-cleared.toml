@@ -3801,3 +3801,33 @@ test = "sdk/tests/test_commitment.nim"
 id = "TXT-0533"
 step = "P8"
 test = "sdk/tests/test_commitment.nim"
+
+# P8a: the descriptor's extends (IF §2.6) -------------------------------------------------------------------------
+
+[[units]]
+id = "IFC-0230"
+compared = "IF l.1704 at 6a4dfa28 limited `interfaces` to 256 entries; l.1675-1676 at 6cac8335 limit `extends` too. provider.nim's MaxDescriptorExtends is checked before the entries are parsed and when a binding is encoded; test_call_surface's [IFC-0230] test refuses 257 of each."
+
+[[units]]
+id = "IFC-0245"
+compared = "IF l.1740 at 6a4dfa28 rejected a bare-name collision across the described contracts; l.1712-1715 at 6cac8335 name the `primary` and `interfaces` contracts, so an `extends` entry, which repeats its successor's bare names, is not a collision, and duplicate contract identity is read across all three arrays (G392). The eight existing [IFC-0245] cases stand; a new one shows both."
+
+[[text]]
+id = "TXT-0536"
+step = "P8"
+test = "sdk/tests/test_call_surface.nim"
+
+[[text]]
+id = "TXT-0538"
+step = "P8"
+test = "sdk/tests/test_call_surface.nim"
+
+[[text]]
+id = "TXT-0539"
+step = "P8"
+test = "sdk/tests/test_call_surface.nim"
+
+[[text]]
+id = "TXT-0540"
+step = "P8"
+test = "sdk/tests/test_call_surface.nim"

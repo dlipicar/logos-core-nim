@@ -5,10 +5,12 @@
 ## `acceptCallSurfaceDescriptor` validates one as an ABI caller must before the
 ## provider is registered or invoked: limits, closed maps, every document parsed
 ## and resolved under §5.3, every root recomputed and compared, supporting
-## entries exact per contract and ordered, interfaces ordered by derived
-## namespace then root, no duplicate identity or interface namespace, and the
-## binding rules (`_module`, `_implements`, reserved and colliding bare method
-## names). The descriptor is metadata: it has no root of its own.
+## entries exact per contract and ordered, interfaces and earlier (`extends`)
+## contracts ordered by derived namespace then root, no duplicate identity or
+## interface namespace, the binding rules (`_module`, `_implements`, reserved
+## and colliding bare method names) and each earlier contract extended by the
+## described contract of its namespace. The descriptor is metadata: it has no
+## root of its own.
 
 {.push raises: [].}
 
@@ -22,6 +24,7 @@ export accept
 const
   MaxDescriptorBytes* = 8_388_608 ## [SPEC INTERFACE §2.6] the encoded descriptor
   MaxDescriptorInterfaces* = 256 ## [SPEC INTERFACE §2.6] `interfaces` entries
+  MaxDescriptorExtends* = 256 ## [SPEC INTERFACE §2.6] `extends` entries
   MaxSupportingNamespaceBytes* = 128
     ## [SPEC INTERFACE §2.6] `provider-supporting-schema.namespace`
   DescriptorRequired* = ["interfaces"]
@@ -41,39 +44,34 @@ func isProvider*(b: ModuleBinding): bool =
     docs.insert(b.primary.get, 0)
   docs.anyIt(it.model.methods.len > 0 or it.model.events.len > 0)
 
+func sameSet(supplied: openArray[Digest], own: seq[Contract]): bool =
+  ## The supplied roots, each once, are exactly the roots of `own`.
+  let mine = own.mapIt(it.root).toHashSet
+  supplied.len == own.len and supplied.toHashSet == mine and
+    supplied.toHashSet.len == supplied.len
+
 func matchesContracts*(
-    b: ModuleBinding, primary: Opt[Digest], interfaces: openArray[Digest]
+    b: ModuleBinding,
+    primary: Opt[Digest],
+    interfaces: openArray[Digest],
+    extends: openArray[Digest],
 ): bool =
-  ## [SPEC INTERFACE §2.6] Contract references that a package, Runtime input,
-  ## static registration or protected built-in declaration supplies match the
-  ## validated descriptor exactly: the same optional primary root and the same
-  ## set of implemented-interface roots.
+  ## [SPEC INTERFACE §2.6 l.1717] Contract references that a package, Runtime
+  ## input, static registration or protected built-in declaration supplies
+  ## match the validated descriptor exactly: the same optional primary root, the
+  ## same set of implemented-interface roots and the same set of extended
+  ## roots.
   let own =
     if b.primary.isSome:
       Opt.some(b.primary.get.root)
     else:
       Opt.none(Digest)
-  if own != primary or interfaces.len != b.interfaces.len:
-    return false
-  let mine = b.interfaces.mapIt(it.root).toHashSet
-  interfaces.toHashSet == mine and interfaces.toHashSet.len == interfaces.len
-
-func supportingOf(b: ModuleBinding, c: Contract): seq[Contract] =
-  ## The binding's supporting schemas that `c` references, in namespace order.
-  let used = c.model.importedRoots
-  b.supporting.filterIt(it.root in used)
+  own == primary and sameSet(interfaces, b.interfaces) and sameSet(extends, b.extends)
 
 func byNamespace(cs: seq[Contract]): seq[Contract] =
   ## [SPEC INTERFACE §2.6] Derived namespace UTF-8 bytes, then root bytes.
   result = cs
-  result.sort(
-    proc(a, b: Contract): int =
-      let byName = cmp(a.model.namespace, b.model.namespace)
-      if byName != 0:
-        byName
-      else:
-        cmpBytes(a.root, b.root)
-  )
+  result.sort(cmpContract)
 
 func contractEntry(c: Contract, supporting: seq[Contract]): CborValue =
   cborMap(
@@ -86,22 +84,36 @@ func callSurfaceDescriptor*(b: ModuleBinding): Result[seq[byte], string] =
   ## [SPEC INTERFACE §2.6] The deterministic-CBOR `provider-call-surface` of an
   ## accepted binding: the primary contract with every supporting schema it or
   ## its interfaces use, then each interface (by namespace, then root) with
-  ## exactly the supporting schemas it uses. A binding with neither a primary
-  ## contract nor an interface, more than 256 interfaces or an encoding over
-  ## 8 MiB has no descriptor.
+  ## exactly the supporting schemas it uses, then, when the binding has any,
+  ## each earlier contract (by namespace, then root) with the supporting
+  ## schemas it or the interfaces it selects use. A binding with neither a
+  ## primary contract nor an interface, more than 256 interfaces or `extends`
+  ## entries, or an encoding over 8 MiB has no descriptor.
   if b.primary.isNone and b.interfaces.len == 0:
     return err("a descriptor needs a primary contract, an interface or both")
   if b.interfaces.len > MaxDescriptorInterfaces:
     return err("more than 256 implemented interfaces")
+  if b.extends.len > MaxDescriptorExtends:
+    return err("more than 256 extends entries")
   var fields: seq[CborEntry]
   if b.primary.isSome:
-    fields.add((cbor("primary"), contractEntry(b.primary.get, b.supporting)))
+    fields.add(
+      (cbor("primary"), contractEntry(b.primary.get, supportingOf(b, b.primary.get)))
+    )
   fields.add(
     (
       cbor("interfaces"),
       cborArray(byNamespace(b.interfaces).mapIt(contractEntry(it, supportingOf(b, it)))),
     )
   )
+  if b.extends.len > 0:
+    # [SPEC INTERFACE §2.6] `? extends: [+ …]`: absent rather than empty.
+    fields.add(
+      (
+        cbor("extends"),
+        cborArray(byNamespace(b.extends).mapIt(contractEntry(it, supportingOf(b, it)))),
+      )
+    )
   let bytes = encodeCbor(cborMap(fields))
   if bytes.len > MaxDescriptorBytes:
     return err("the descriptor is larger than 8,388,608 bytes")
@@ -232,6 +244,16 @@ proc acceptCallSurfaceDescriptor*(
     return err("interfaces is not an array")
   if list.items.len > MaxDescriptorInterfaces:
     return err("more than 256 interfaces")
+  let extendsV = v.lookup("extends")
+  if extendsV.isSome:
+    if extendsV.get.kind != ckArray:
+      return err("extends is not an array")
+    # [SPEC INTERFACE §2.6] `[+ …]`, at most 256 entries, counted before any
+    # entry is parsed.
+    if extendsV.get.items.len == 0:
+      return err("extends is present and empty")
+    if extendsV.get.items.len > MaxDescriptorExtends:
+      return err("more than 256 extends entries")
   let primaryV = v.lookup("primary")
   if primaryV.isNone and list.items.len == 0:
     return err("a descriptor needs a primary contract, an interface or both")
@@ -241,11 +263,25 @@ proc acceptCallSurfaceDescriptor*(
   var ifaces: seq[ContractClaim]
   for x in list.items:
     ifaces.add(?parseContract(x, "an interface entry"))
-  var claims = ifaces
+  var earlier: seq[ContractClaim]
+  if extendsV.isSome:
+    for x in extendsV.get.items:
+      earlier.add(?parseContract(x, "an extends entry"))
+  # [SPEC INTERFACE §2.6] Distinct schema roots among the `extends` entries.
+  var claimed: HashSet[Digest]
+  for c in earlier:
+    if claimed.containsOrIncl(c.root):
+      return err("two extends entries claim one schema root")
+  # [IMPL-DECISION G392] r7: an `extends` entry's supporting schemas join the
+  # gather-once set, so one that needs another document for a namespace is
+  # refused here.
+  var claims = ifaces & earlier
   if primary.isSome:
     claims.insert(primary.get, 0)
   let supp = ?union(claims)
-  # Parse, resolve and check every document as one construction input set.
+  # Parse, resolve and check every document: the primary and interface
+  # documents as one construction input set, and each `extends` document as its
+  # own, related to the described contract of its namespace.
   let b = ?acceptBinding(
     module,
     primary.map(
@@ -255,6 +291,7 @@ proc acceptCallSurfaceDescriptor*(
     ifaces.mapIt(it.document),
     supp.mapIt(it.document),
     opts,
+    earlier.mapIt(it.document),
   )
   # Every claimed commitment and namespace against its recomputed value.
   for s in supp:
@@ -271,7 +308,7 @@ proc acceptCallSurfaceDescriptor*(
     let p = b.primary.get
     if p.root != primary.get.root:
       return err("the primary entry has the wrong commitment")
-    ?sameSupporting(primary.get.supporting, b.supporting, "the primary entry")
+    ?sameSupporting(primary.get.supporting, supportingOf(b, p), "the primary entry")
   var described: seq[Contract]
   for claim in ifaces:
     let c = b.interfaces.findSource(claim.document).valueOr:
@@ -289,6 +326,20 @@ proc acceptCallSurfaceDescriptor*(
       return err("two interface entries have namespace " & described[i].model.namespace)
     if byName > 0:
       return err("interface entries are not in namespace, then root order")
+  var olders: seq[Contract]
+  for claim in earlier:
+    let c = b.extends.findSource(claim.document).valueOr:
+      return err("an extends entry's document is not in the binding")
+    if c.root != claim.root:
+      return err("the extends entry " & c.model.namespace & " has the wrong commitment")
+    ?sameSupporting(
+      claim.supporting, supportingOf(b, c), "the extends entry " & c.model.namespace
+    )
+    olders.add(c)
+  # [SPEC INTERFACE §2.6] `extends` entries by derived namespace, then root.
+  for i in 1 ..< olders.len:
+    if cmpContract(olders[i - 1], olders[i]) >= 0:
+      return err("extends entries are not in namespace, then root order")
   # Nothing above may let a non-canonical descriptor through.
   let again = ?callSurfaceDescriptor(b)
   if again != @data:

@@ -12,7 +12,8 @@
 
 import std/[algorithm, sequtils, sets, strutils]
 import ../cbor
-import ../cddl/syntax
+import ../base/hex
+import ../cddl/[model, syntax]
 import ../hash/hashinput
 import ../commitment
 import ./[cmap, names]
@@ -54,6 +55,10 @@ type
     primary*: Opt[Contract] ## a concrete module document whose `_module` is `module`
     interfaces*: seq[Contract] ## ascending raw root
     supporting*: seq[Contract] ## by namespace UTF-8 bytes, then root bytes
+    extends*: seq[Contract]
+      ## [SPEC INTERFACE §2.6] earlier contracts that the primary contract or an
+      ## interface extends, by namespace UTF-8 bytes, then root bytes. They add
+      ## no method or event and take no part in the set rules of the binding.
 
 # Model measurements ----------------------------------------------------------------
 
@@ -291,7 +296,7 @@ func cSchemaSet*(s: ContractSet): CSchemaSet =
         Opt.none(string),
   )
 
-func cmpContract(a, b: Contract): int =
+func cmpContract*(a, b: Contract): int =
   ## Namespace UTF-8 bytes, then schema-root bytes.
   let byName = cmp(a.model.namespace, b.model.namespace)
   if byName != 0:
@@ -306,6 +311,42 @@ proc checkInputBytes(sources: openArray[string]): Result[void, string] =
   if total > MaxInputSetBytes:
     return err("the input set is larger than 8 MiB (INTERFACE §5.3)")
   ok()
+
+proc dependencyContext*(
+    supporting: openArray[Contract], interfaces: openArray[Contract] = []
+): SchemaContext =
+  ## The pinned common schema with these accepted dependencies: what a document
+  ## that uses them is built against.
+  result = pinnedContext()
+  for c in supporting:
+    result.supporting.add(c.model)
+  for c in interfaces:
+    result.interfaces.add(c.model)
+
+proc implementsOf*(source: string): seq[Digest] =
+  ## [SPEC COMMITMENT §3.1 step 7] The roots a document's `_implements` lists,
+  ## read from its source before construction so that the interfaces it selects
+  ## can be supplied. Empty when the document has no `_implements` or it is not
+  ## a fixed array of 32-byte literals; construction then reports the error.
+  let rules = parseSource(source).valueOr:
+    return @[]
+  var roots: seq[Digest]
+  for r in rules:
+    if r.name != "_implements":
+      continue
+    let list = r.typ.unwrap
+    if list.kind != skArray:
+      return @[]
+    for m in list.members:
+      let x = m.typ.unwrap
+      if x.kind != skLiteral or x.literal.kind != lkBstr or
+          x.literal.bytes.len != DigestLen:
+        return @[]
+      var d: Digest
+      for i in 0 ..< DigestLen:
+        d[i] = x.literal.bytes[i]
+      roots.add(d)
+  roots
 
 proc acceptDependencies(
     interfaces, supporting: openArray[string], opts: AcceptOptions
@@ -378,23 +419,13 @@ proc checkSetRules(
     return err("the input set has more than 65,536 schema nodes (INTERFACE §5.3)")
   ok()
 
-proc acceptContractSet*(
-    primary: string,
-    interfaces: openArray[string] = [],
-    supporting: openArray[string] = [],
-    opts = AcceptOptions(),
+proc completeSet(
+    primary: Contract, ifaces, supp: openArray[Contract], ctx: SchemaContext
 ): Result[ContractSet, string] =
-  ## [SPEC INTERFACE §1.1, §1.4, §5.3] An explicitly supplied construction input
-  ## set: the primary document (a concrete module, interface or supporting
-  ## schema), the interface documents its `_implements` selects, and the
-  ## supporting schemas whose named types it or those interfaces reference,
-  ## each once. Nothing outside the set and the pinned common schema
-  ## participates in resolution.
-  ?checkInputBytes(@[primary] & @interfaces & @supporting)
-  let (ifaces, supp, ctx) = ?acceptDependencies(interfaces, supporting, opts)
-  var set = ContractSet(supporting: supp, context: ctx)
-  set.primary = ?acceptDocument(primary, ctx, opts)
-  let p = set.primary.model
+  ## The rules on an accepted primary document and its supplied dependencies as
+  ## one construction input set.
+  var set = ContractSet(primary: primary, supporting: @supp, context: ctx)
+  let p = primary.model
   case p.role
   of srModule:
     discard
@@ -417,6 +448,22 @@ proc acceptContractSet*(
   # identical C identifiers and no namespace-projection collision.
   discard ?cDeclarations(set.cSchemaSet)
   ok(set)
+
+proc acceptContractSet*(
+    primary: string,
+    interfaces: openArray[string] = [],
+    supporting: openArray[string] = [],
+    opts = AcceptOptions(),
+): Result[ContractSet, string] =
+  ## [SPEC INTERFACE §1.1, §1.4, §5.3] An explicitly supplied construction input
+  ## set: the primary document (a concrete module, interface or supporting
+  ## schema), the interface documents its `_implements` selects, and the
+  ## supporting schemas whose named types it or those interfaces reference,
+  ## each once. Nothing outside the set and the pinned common schema
+  ## participates in resolution.
+  ?checkInputBytes(@[primary] & @interfaces & @supporting)
+  let (ifaces, supp, ctx) = ?acceptDependencies(interfaces, supporting, opts)
+  completeSet(?acceptDocument(primary, ctx, opts), ifaces, supp, ctx)
 
 func supportingOf*(s: ContractSet, c: Contract): seq[Contract] =
   ## [SPEC INTERFACE §1.1, §5.1] The supporting schemas of the set that `c`
@@ -466,37 +513,134 @@ func binding*(s: ContractSet): Result[ModuleBinding, string] =
     )
   )
 
+func interfacesOf*(b: ModuleBinding, c: Contract): seq[Contract] =
+  ## [SPEC INTERFACE §1.1] The binding's interfaces that `c`'s `_implements`
+  ## selects, in that order: all of them for the primary contract, none for an
+  ## interface, and its own selection for an earlier concrete contract.
+  b.interfaces.filterIt(it.root in c.model.implemented)
+
+func supportingOf*(b: ModuleBinding, c: Contract): seq[Contract] =
+  ## [SPEC INTERFACE §2.6 l.1698-1699] The binding's supporting schemas that `c`
+  ## or an interface it implements references, in namespace order: every one
+  ## for the primary contract, and exactly its own for an interface.
+  var used = c.model.importedRoots
+  for i in b.interfacesOf(c):
+    used.incl(i.model.importedRoots)
+  b.supporting.filterIt(it.root in used)
+
+proc acceptEarlier(
+    b: ModuleBinding, source: string, opts: AcceptOptions
+): Result[Contract, string] =
+  ## [SPEC INTERFACE §2.6 l.1694] One `extends` document, accepted as its own
+  ## construction input set. An earlier concrete contract follows the rules for
+  ## the primary contract; an earlier interface those for interfaces.
+  ## [IMPL-DECISION G392] r3: a concrete entry is built against only the
+  ## binding's accepted interfaces its own `_implements` selects, with the
+  ## supporting schemas it and they use (no unused input, IF l.110, l.113).
+  var selected: seq[Contract]
+  for r in implementsOf(source):
+    let found = b.interfaces.filterIt(it.root == r)
+    if found.len == 0:
+      # [SPEC COMMITMENT §9.1 l.972] A contract of the binding implements at
+      # most the binding's interfaces.
+      return err(
+        "no described contract extends an extends entry that implements " & toHex(r) &
+          ", an interface the binding does not implement"
+      )
+    selected.add(found[0])
+  let c = ?acceptDocument(source, dependencyContext(b.supporting, selected), opts)
+  case c.model.role
+  of srModule:
+    if c.model.moduleName != Opt.some(b.module):
+      return err(
+        "an extends entry's _module is " & c.model.moduleName.get("") &
+          ", the binding's module is " & b.module
+      )
+  of srInterface:
+    discard
+  of srSupporting, srCommon:
+    return err("an extends entry is a " & $c.model.role & " schema, not a contract")
+  var used = c.model.importedRoots
+  for i in selected:
+    used.incl(i.model.importedRoots)
+  let supp = b.supporting.filterIt(it.root in used)
+  discard ?completeSet(c, selected, supp, dependencyContext(supp, selected))
+  ok(c)
+
+proc acceptExtends(
+    b: ModuleBinding, sources: openArray[string], opts: AcceptOptions
+): Result[seq[Contract], string] =
+  ## [SPEC INTERFACE §2.6 l.1693-1696, l.1710-1712] The binding's earlier
+  ## contracts, in namespace, then root order. Each is accepted on its own,
+  ## paired with the described contract (the primary or an interface) of its
+  ## namespace, and extended by it under COMMITMENT §9.1. They stay out of the
+  ## binding's set rules: the duplicate-namespace check (I62) and the bare-name
+  ## collision check name the primary and interface contracts only
+  ## [IMPL-DECISION G392] r4.
+  var described = b.interfaces
+  if b.primary.isSome:
+    described.insert(b.primary.get, 0)
+  # [IMPL-DECISION G392] r6: one contract identity across all three arrays.
+  var ids = described.mapIt(it.root).toHashSet
+  var all: seq[Contract]
+  for s in sources:
+    let a = ?acceptEarlier(b, s, opts)
+    if ids.containsOrIncl(a.root):
+      return err(
+        "the extends entry " & a.model.namespace &
+          " repeats the identity of a described contract or another entry"
+      )
+    # [SPEC INTERFACE §2.6 l.1711] [IMPL-DECISION G392] r2: at most one
+    # described contract has the namespace (I62); the relation checks the role.
+    let pair = described.filterIt(it.model.namespace == a.model.namespace)
+    if pair.len == 0:
+      return err(
+        "no described contract has the namespace of the extends entry " &
+          a.model.namespace
+      )
+    extendsContract(pair[0].model, a.model).isOkOr:
+      return err("the described contract " & a.model.namespace & " " & error)
+    all.add(a)
+  all.sort(cmpContract)
+  ok(all)
+
 proc acceptBinding*(
     module: string,
     primary: Opt[string],
     interfaces: openArray[string] = [],
     supporting: openArray[string] = [],
     opts = AcceptOptions(),
+    extends: openArray[string] = [],
 ): Result[ModuleBinding, string] =
   ## [SPEC INTERFACE §2, §3.9.2] An explicit module binding: the runtime module
   ## name `module`, an optional concrete module document, and the implemented
   ## interface documents with the supporting schemas they use. A supplied
   ## primary document must be a concrete module whose `_module` is `module` and
   ## whose `_implements` selects exactly `interfaces`; without one, `interfaces`
-  ## is the implemented set. The binding changes no document or identity.
+  ## is the implemented set. `extends` holds the documents of earlier contracts
+  ## that the primary contract or an interface extends (§2.6); their supporting
+  ## schemas are among `supporting`. The binding changes no document or
+  ## identity.
   ?checkModuleName(module, opts.system)
+  var b: ModuleBinding
   if primary.isSome:
     let set = ?acceptContractSet(primary.get, interfaces, supporting, opts)
-    let b = ?set.binding
+    b = ?set.binding
     if b.module != module:
       return err(
         "the binding names module " & module & ", the primary document's _module is " &
           b.module
       )
-    return ok(b)
-  ?checkInputBytes(@interfaces & @supporting)
-  var (ifaces, supp, _) = ?acceptDependencies(interfaces, supporting, opts)
-  # [SPEC INTERFACE §2.1] Implemented interfaces in ascending raw root order.
-  ifaces.sort(
-    proc(a, b: Contract): int =
-      cmpBytes(a.root, b.root)
-  )
-  ?checkSetRules(Opt.none(Contract), ifaces, supp)
-  let b = ModuleBinding(module: module, interfaces: ifaces, supporting: supp)
-  discard ?cDeclarations(b.cSchemaSet)
+  else:
+    ?checkInputBytes(@interfaces & @supporting)
+    var (ifaces, supp, _) = ?acceptDependencies(interfaces, supporting, opts)
+    # [SPEC INTERFACE §2.1] Implemented interfaces in ascending raw root order.
+    ifaces.sort(
+      proc(a, b: Contract): int =
+        cmpBytes(a.root, b.root)
+    )
+    ?checkSetRules(Opt.none(Contract), ifaces, supp)
+    b = ModuleBinding(module: module, interfaces: ifaces, supporting: supp)
+    discard ?cDeclarations(b.cSchemaSet)
+  b.extends = ?acceptExtends(b, extends, opts)
   ok(b)

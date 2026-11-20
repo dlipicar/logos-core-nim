@@ -32,8 +32,6 @@ closed = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"]  # sub-steps that have merge
 "BCP-0103" = "P9"
 "IFC-0957" = "P8"
 "IFC-0958" = "P8"
-"IFC-0968" = "P8"
-"IFC-0969" = "P8"
 "PKG-0577" = "P8"
 "PKG-0578" = "P8"
 "PKG-0579" = "P8"
@@ -44,8 +42,6 @@ closed = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"]  # sub-steps that have merge
 "RUN-1105" = "P8"
 
 [units.changed]
-"IFC-0230" = "P8"
-"IFC-0245" = "P8"
 "IFC-0246" = "P8"
 "PKG-0338" = "P8"
 "PKG-0347" = "P8"
@@ -163,49 +159,6 @@ side = "new"
 section = "§1.2"
 class = "todo"
 what = "Such a view selects the earlier schema root and contains only its declarations; each of its methods and events is the same declaration, with the same implementation, as in the extending contract."
-
-[[text]]
-id = "TXT-0536"
-step = "P8"
-spec = "IFC"
-line = "204"
-side = "new"
-section = "§1.2"
-class = "todo"
-what = "Adding declarations is the only change an extension permits."
-
-[[text]]
-id = "TXT-0538"
-step = "P8"
-spec = "IFC"
-line = "1693"
-side = "new"
-section = "§2.6"
-class = "todo"
-guard = true
-what = "Each `extends` entry carries an earlier contract that the `primary` contract or one `interfaces` contract of this descriptor extends under LOGOS-MODULE-COMMITMENT-MODEL."
-
-[[text]]
-id = "TXT-0539"
-step = "P8"
-spec = "IFC"
-line = "1694"
-side = "new"
-section = "§2.6"
-class = "todo"
-guard = true
-what = "An entry for an earlier concrete module contract follows the rules for `primary`, and an entry for an earlier interface contract follows the rules for `interfaces`."
-
-[[text]]
-id = "TXT-0540"
-step = "P8"
-spec = "IFC"
-line = "1695"
-side = "new"
-section = "§2.6"
-class = "todo"
-guard = true
-what = "An `extends` entry adds no method or event: each of its declarations is a declaration of the contract that extends it."
 
 [[text]]
 id = "TXT-0457"
