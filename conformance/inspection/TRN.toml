@@ -15,11 +15,11 @@ reason = "Documentation duty (§8.6). docs/CONFORMANCE.md 'Transport limits' and
 
 [[item]]
 ids = ["TRN-0387"]
-reason = "A rule about promises (§8.6 l.1357). No API, comment or document makes that promise; docs/CONFORMANCE.md 'Transport limits' states the opposite: a Cancel acts only on a Request whose Response is not yet committed, and frames are written in commit order (io/conn.nim, one ordered output queue per connection)."
+reason = "A rule about promises (§8.6 l.1343). No API, comment or document makes that promise; docs/CONFORMANCE.md 'Transport limits' states the opposite: a Cancel acts only on a Request whose Response is not yet committed, and frames are written in commit order (io/conn.nim, one ordered output queue per connection)."
 
 [[item]]
 ids = ["TRN-0127"]
-reason = "A rule about reply paths (§5.2 l.831). The only way the callee's owner answers a call is cmdRespond (io/api.nim), which commits a Response; the caller's owner learns a call's outcome only from evResponse or evLocalFailure. An Event carries no Request identifier (the envelope has none, and publishScoped adds none), so no API can treat an Event as a call's reply."
+reason = "A rule about reply paths (§5.2 l.819). The only way the callee's owner answers a call is cmdRespond (io/api.nim), which commits a Response; the caller's owner learns a call's outcome only from evResponse or evLocalFailure. An Event carries no Request identifier (the envelope has none, and publishScoped adds none), so no API can treat an Event as a call's reply."
 
 [[item]]
 ids = ["TRN-0400"]

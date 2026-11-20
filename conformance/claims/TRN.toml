@@ -33,7 +33,7 @@ default = "claimed"
 "§6" = "claimed"
 "§7" = "claimed"
 "§8.1" = "claimed"
-# §8.1.2: system-service sessions over unix-stream, a MAY profile (l.1075). G48(a)
+# §8.1.2: system-service sessions over unix-stream, a MAY profile (l.1056). G48(a)
 # keeps the Loader and the Capability Authority direct, so nothing uses it.
 "§8.1.2" = "out-of-scope:a MAY profile left unused: G48(a) binds the Loader and Capability Authority directly"
 # §8.2 (tier 4, transport I/O): endpoints, peer credentials checked before any

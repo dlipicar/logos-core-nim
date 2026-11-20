@@ -2,7 +2,7 @@
 
 `logosd` hosts one Logos Runtime as a long-running process for one user; `logosctl` is its shell.
 This page is the daemon's chapter of the deployment documentation (BOOTSTRAP-COMPOSITION-PROFILES,
-BCP), and the documentation BCP l.359 asks for of `logos-core-nim.daemon-config.v1`, logosd's
+BCP), and the documentation BCP l.364 asks for of `logos-core-nim.daemon-config.v1`, logosd's
 deployment input. The host configuration logosd derives from it is documented in
 [HOST-CONFIG.md](HOST-CONFIG.md); the authority policy in [AUTHORITY-POLICY.md](AUTHORITY-POLICY.md).
 Decisions: DECISIONS I95, G293–G304.
@@ -27,7 +27,7 @@ logosctl daemon stop --wait
 
 logosd is the host of one Runtime (RUNTIME §13: it calls the Host Embedding API like any embedding
 host). It is not a participant: it has no module identity of its own and makes no call as one
-(BCP l.100-104). What runs in its process:
+(BCP l.102-106). What runs in its process:
 
 - the Module Loader, `logos_module_loader`, established by the Runtime itself;
 - the orchestration instance `orchestrator` (the reference module, `lcn_orchestrator`);
@@ -38,7 +38,7 @@ host). It is not a participant: it has no module identity of its own and makes n
 A `hosted_dynamic` module (placement `process`) runs in its own `logos-module-host` process, which logosd
 starts through the Runtime, under logosd's user ([HOST-CONFIG.md](HOST-CONFIG.md), "Module Hosts").
 
-**`direct_dynamic` means this module's payloads are in the daemon's process** (R l.1609-1611): its
+**`direct_dynamic` means this module's payloads are in the daemon's process** (R l.1525-1527): its
 method payloads and events pass through logosd's memory, as any in-process module's do. Choose
 `hosted_dynamic` for a module whose data should stay out of logosd's process. logosd itself relays no
 payload and no event: nothing in its own code, the `logosctl` instance included, carries one.
@@ -77,7 +77,7 @@ marked field, as the library does (G277).
   "the Runtime state store is missing …; restore state/ from a backup, or make a new session with
   logosctl init". The Runtime id is fixed for the session, and the system instance ids are fixed
   strings, so a new store under the old id would give the old instances' addresses to unrelated ones
-  (RUNTIME l.2630-2632). A lost `state/` therefore needs a new session; a restored backup of it starts.
+  (RUNTIME l.2557-2559). A lost `state/` therefore needs a new session; a restored backup of it starts.
 
 ## 3. `logos-core-nim.daemon-config.v1`
 
@@ -229,13 +229,13 @@ the meaning those pages give them.
 
 | Field | Meaning |
 |---|---|
-| `runtime.runtime_instance_id` | The Runtime's id (RUNTIME l.2665). `init` assigns a random UUIDv4; it is fixed for the session's life, and `daemon config set` refuses a value that changes it. |
+| `runtime.runtime_instance_id` | The Runtime's id (RUNTIME l.2586). `init` assigns a random UUIDv4; it is fixed for the session's life, and `daemon config set` refuses a value that changes it. |
 | `runtime.*_deadline_ms`, `shutdown_grace_ms`, `max_payload_depth` | As in the host configuration (§14). |
 | `runtime.module_host` | The `logos-module-host` program. Default: `<d>/../libexec/logos-core/logos-module-host` if it exists, else `<d>/logos-module-host`, where `<d>` is the directory of logosd's executable with links resolved. |
 | `runtime.module_host_env` | As in the host configuration. |
-| `policy` | `allow-all`, which needs the development switch (§6), or `capability-authority`: `source`, the operator's `rules`, and the policy options; logosd adds the system rules (§5). `recovery` absent is off; `init` writes `true` (RUNTIME l.1676). |
+| `policy` | `allow-all`, which needs the development switch (§6), or `capability-authority`: `source`, the operator's `rules`, and the policy options; logosd adds the system rules (§5). `recovery` absent is off; `init` writes `true` (RUNTIME l.1592). |
 | `modules` | Operator instances: `lcn.app_module` with `direct_dynamic` or `hosted_dynamic`. logosd registers no operator binding, so `direct_static` is refused. |
-| `declarations` | Modules `module create` may instantiate (RUNTIME l.3614-3621), with the same strategies. |
+| `declarations` | Modules `module create` may instantiate (RUNTIME l.3481-3490), with the same strategies. |
 | `ordering` | Start-order pairs between operator instances. |
 | `orchestration` | `start`: the operator instances the orchestrator starts, in order; `restart`, `overrides`, `resync_ms`: its restart policy ([HOST-CONFIG.md](HOST-CONFIG.md), "The reference orchestration module"). An override may name `logosctl` or `authority`. |
 | `call_audit` | `call_records` and `evidence` as in the host configuration; `store` (§9) needs `evidence`. |
@@ -281,7 +281,7 @@ Runtime id, the instances of §4, the merged policy of §5, and the permission s
 | operator | daemon-config `modules` | `direct_dynamic` or `hosted_dynamic` | as configured |
 
 - The Module Loader is established first, by the Runtime, before anything else is realized; every other
-  instance is realized through it, the system ones included (BCP l.287-291). logosd registers two native
+  instance is realized through it, the system ones included (BCP l.292-296). logosd registers two native
   bindings before start (`lcn_orchestrator`, `logosctl`) and selects nothing else: no instance, binding,
   artifact or profile is substituted for one the configuration names.
 - `runtimeStart` returns when the orchestrator is ready. logosd then logs
@@ -321,7 +321,7 @@ default configuration they are, one per line:
   subscribes to no event, and may start and stop instances, with `host-ambient`.
 - **S4**: `logosctl` may not start, stop, recover, retire or reconfigure the Module Loader, the
   Capability Authority or itself.
-- **S5**: `logosctl` may restore the orchestrator only with `recover_module` (R l.3807-3808); it may not
+- **S5**: `logosctl` may restore the orchestrator only with `recover_module` (R l.3669-3670); it may not
   stop, retire or reconfigure it. The orchestrator is configured only by daemon-config.
 - **Codes** (CA l.783-784; DECISIONS G377): the event denials of S2 and S3 deny the consumer an action,
   so they answer `consumer-denied`; S4 and S5 protect the targets they name, so they answer
@@ -335,17 +335,17 @@ cannot undo a system deny, since a deny wins ([AUTHORITY-POLICY.md](AUTHORITY-PO
 constraints) for `orchestrator`, `logosctl` and `authority`, and the module entry `host-ambient` for each
 operator module the operator gave no module entry: the minimum each realization needs. No module
 administers the system instances' settings: `update_permission_settings` is not among `logosctl`'s
-methods, and no system rule grants it (BCP l.364).
+methods, and no system rule grants it (BCP l.369).
 
-**allow-all** gives every operation to everyone (RUNTIME l.1633). logosd accepts it only with the
+**allow-all** gives every operation to everyone (RUNTIME l.1547). logosd accepts it only with the
 development switch on (§6).
 
-**recovery** (RUNTIME l.1676): the derived rules also apply after a binding loss. Absent is off; `init`
+**recovery** (RUNTIME l.1592): the derived rules also apply after a binding loss. Absent is off; `init`
 writes `true`.
 
 ## 6. The trust file and the development switch
 
-`<session>/trust.cbor` is the revisioned trust input (PACKAGE MANAGER l.395-400): a revision and the
+`<session>/trust.cbor` is the revisioned trust input (PACKAGE MANAGER l.401-406): a revision and the
 development switch. Tier 5 adds the package-signing anchors. Without the file, the compiled-in floor
 applies: revision 1, switch off. `state/trust-mark.cbor` records the highest revision used and the
 BLAKE3-256 digest of its bytes, written durably before that revision is used.
@@ -426,9 +426,9 @@ The `logosctl` module is a consumer-only module linked into logosd (`direct_stat
 Loader like every instance, and persistent. Its instance serves the socket. Each command becomes one
 Runtime Control call **by the instance**, through its own binding: the shell is never the consumer.
 
-### Activation (BCP l.384)
+### Activation (BCP l.389)
 
-The socket is external application activation, documented by the five items BCP l.384 lists:
+The socket is external application activation, documented by the five items BCP l.389 lists:
 
 1. **Mechanism.** A Unix stream socket at `<session>/run/logosctl.sock` (or `ctl.socket_dir`), in a
    directory owned by logosd's user with mode 0700, the socket itself 0600. The path is handed to the
@@ -440,14 +440,14 @@ The socket is external application activation, documented by the five items BCP 
    own uid, and refuses otherwise ("nothing was sent").
 3. **Selection.** The socket reaches exactly one instance, `logosctl`, accepted and realized by the
    Loader. No command selects an artifact, chooses an instance id, grants anything or bypasses a
-   realization constraint (BCP l.386-387): the commands are the seventeen methods below, with the
+   realization constraint (BCP l.391-392): the commands are the seventeen methods below, with the
    Runtime's own checks.
 4. **Presentation handoff.** At initialization logosd hands the instance, in process: the socket path,
    the worker count and idle timeout, the deployment, the trust revision, logosd's version and start
    time. Nothing that authenticates a caller crosses it, or the socket: no binding, ticket or invocation
-   descriptor. Addresses cross only as data, never as identity (R l.1606, l.2561).
+   descriptor. Addresses cross only as data, never as identity (R l.1522, l.2489).
 5. **Failure behaviour.** The instance binds the socket during its initialization and serves only after
-   initialization returned; a command that arrives earlier waits (BCP l.388). A bind failure fails the
+   initialization returned; a command that arrives earlier waits (BCP l.393). A bind failure fails the
    initialization; the orchestrator reports it and there is no socket. What the shell sees:
 
 | Situation | `logosctl` |
@@ -461,10 +461,10 @@ The socket is external application activation, documented by the five items BCP 
 
 **Same user, same authority.** The peer check admits every process of logosd's user. Each of them can
 drive the instance with all of its grants, so the grants are the least the commands need (S3–S5). A
-shared operating-system user is not an isolation boundary (THREAT l.1107): run logosd under a user of
+shared operating-system user is not an isolation boundary (TRANSPORT l.1088): run logosd under a user of
 its own where that matters. The peer's uid and pid are kept with each command as requester provenance, in
 the instance's log lines; they never reach a Runtime Control request and never stand for the consumer
-(BCP l.382).
+(BCP l.387).
 
 **No payload is relayed.** The seventeen methods are reads, lifecycle, configuration and shutdown. No
 method payload of any operator module, and no event, crosses the socket or passes through the instance.
@@ -478,7 +478,7 @@ this instance nor logosd relays them.
 `get_permission_settings`, `get_configuration_schema`, `get_configuration_summary`, `get_configuration`,
 `update_configuration`, `apply_configuration`, `create_module`, `start_module`, `stop_module`,
 `recover_module`, `retire_module`, `shutdown_runtime`. Nothing else (`evaluate`, the permission and remote
-methods) can be encoded. `list_routes` returns no invocation in any record (R l.3365).
+methods) can be encoded. `list_routes` returns no invocation in any record (R l.3223).
 
 `module create` carries a request key: `lcli-` and 32 random hex digits, generated by the shell for each
 command and printed with the result. `--request-key K` repeats an earlier key, so a create whose answer
@@ -486,7 +486,7 @@ was lost can be retried, across a daemon restart too, and returns the same insta
 
 ### The wire format `logos-core-nim.ctl.v1`
 
-BCP l.390 assigns no encoding; this one is logos-core-nim's.
+BCP l.395 assigns no encoding; this one is logos-core-nim's.
 
 - A frame is a 4-byte big-endian length and one Logos deterministic-CBOR value, at most 32 MiB
   (33554432 bytes) each way.
@@ -495,7 +495,7 @@ BCP l.390 assigns no encoding; this one is logos-core-nim's.
 - A message is `lcn.ctl_message`; the reply `lcn.ctl_reply`, which always names the deployment.
 - `rc` carries a method, the Runtime Control request bytes, and an optional deadline. The instance makes
   one Runtime Control call with those bytes, deadline `min(deadline_ms, 60 s)`, and returns the response
-  bytes verbatim (BCP l.392), or the call's error code, message and detail. It does not decode `params`:
+  bytes verbatim (BCP l.397), or the call's error code, message and detail. It does not decode `params`:
   the Runtime validates them as for any consumer.
 - `daemon-info` returns `lcn.ctl_daemon_info` (one `get_self` call for the Runtime id).
 - A refusal names its reason: `protocol` (not one deterministic-CBOR map of this protocol), `command`
@@ -616,26 +616,26 @@ so the wait for it ends with that outcome or the command's deadline (I97).
 
 There is no approval path and no client command that changes authority. The policy, its grants and the
 trust input change only through the owner-only files, offline: `logosctl init`, `logosctl daemon config
-set`, `logosctl trust …`, or the owner's own edits, each applying at the next start (BCP l.380-382).
+set`, `logosctl trust …`, or the owner's own edits, each applying at the next start (BCP l.385-387).
 
 - **Authentication** of that path is the operating system's: the files are the session owner's, mode
   0600 in 0700 directories, and logosd refuses a session others can access.
 - **What it authorizes**: everything logosd does. Whoever can write the session can change the policy,
   the trust file and its switch, and the evidence key.
 - An `issue` rule in the policy is protected input too. Under it a module may issue grants while the
-  daemon runs (CA l.752), within what the rule allows; that is the only change of authority at run time.
+  daemon runs (CA l.744), within what the rule allows; that is the only change of authority at run time.
 - **State transfers** are the same kind of input (decision 9): an entry in `state_transfers`, set with
   `daemon config set` while logosd is stopped, authorizes one replacement instance to take another's
   state at the next start (§11). No socket command and no Runtime Control method moves state.
 - **State disposal** is offline too: `logosctl state purge`, with logosd stopped, removes a retired
-  instance's preserved state directory, the separately authorized deletion of BCP l.395;
+  instance's preserved state directory, the separately authorized deletion of BCP l.400;
   `logosctl state list` shows what is kept and where it came from (§11). No socket command and no
   Runtime Control method deletes module state.
 
 ## 9. Call evidence
 
 The Runtime's invocation boundary keeps a `call` record for each call whose applied decision retains a
-commitment (CA l.1172-1198), in a ring of `call_audit.call_records` records, lost at exit (I85).
+commitment (CA l.1215-1243), in a ring of `call_audit.call_records` records, lost at exit (I85).
 logosd can also keep them on disk, so the owner can later export one as call evidence (G301; G115,
 G143, G149).
 
@@ -694,7 +694,7 @@ lcn.ev_gap = {
 }
 ```
 
-- **Bounds** (G143; CA l.1169). Whole segments, oldest first, are reaped when the store opens and at each
+- **Bounds** (G143; CA l.1202). Whole segments, oldest first, are reaped when the store opens and at each
   rotation, while the store spans more than `max_records` seqs (default 1,000,000; dropped seqs count,
   as if stored) or while the oldest segment was last written more than `max_age_days` ago (default 30;
   the file's modification time, so a restore that resets it keeps a segment longer). The segment being
@@ -714,12 +714,12 @@ logosctl audit evidence export --seq N --out FILE      # or: … --seq N > FILE
   boot. `export` takes one seq.
 - **Authorization.** Both are offline and read-only, and work while logosd runs. The owner's command on
   the owner-only session files is the protected integration's authorization to disclose the complete
-  record (CA l.1321, as I85 reads it; CAP-0416). There is no export through the socket and no client
+  record (CA l.1365, as I85 reads it; CAP-0416). There is no export through the socket and no client
   command.
 - **What is exported.** A `logos.call-evidence.cose-sign1-slh-dsa-sha2-192s` container for the record as
-  stored, complete and with no proofs (CA l.1322; as I85). It is signed with the current evidence key,
+  stored, complete and with no proofs (CA l.1366; as I85). It is signed with the current evidence key,
   the one daemon-config names, checked against its binding (§3, check 4), for the Runtime that binding
-  names: a kid maps to one producer (CA l.1265, l.1290). Signing in the shell uses the Runtime's own key
+  names: a kid maps to one producer (CA l.1309, l.1334). Signing in the shell uses the Runtime's own key
   on the Runtime's behalf. A segment whose header names another Runtime is refused: "seg-… was written by
   Runtime X; the current evidence key belongs to Runtime Y". The container authorizes nothing (CAP-0256).
 - **Not retained.** A seq that was reaped, dropped, cut off or never stored is refused: "seq N is not
@@ -728,18 +728,18 @@ logosctl audit evidence export --seq N --out FILE      # or: … --seq N > FILE
   Without `--out` the container goes to stdout when stdout is not a terminal, and is never written to a
   terminal.
 - **The key.** A rotated key (`trust evidence-keys rotate`) applies at the next start. Its binding stays,
-  marked retired, with only the public half (CA l.1273). An export always signs with the current key, so a
+  marked retired, with only the public half (CA l.1317). An export always signs with the current key, so a
   record stored under an older kid is re-signed; a verifier needs the current key's binding.
 
 ### Limits
 
-These are what the store does and does not protect (CA l.1320; CAP-0415):
+These are what the store does and does not protect (CA l.1364; CAP-0415):
 - **What a record holds**: the consumer's address, the decision id, one call scope, a timestamp, and for
   each retained side its schema subtree root and value root. No payload, proof or constraint value.
 - **No marked side.** A call whose decision would retain a marked side's root is refused before dispatch
-  (IF l.397, IFC-0581, G278), so no record holds one.
+  (IF l.377, IFC-0581, G278), so no record holds one.
 - **Guessable data.** A retained root of guessable data discloses it to whoever can read the store (SEC
-  l.402).
+  l.403).
 - **Who can read it.** Other operating-system users are kept out by the modes; processes of the same user,
   backups and the disk are not. The store is plaintext at rest.
 - **Integrity.** None beyond the file modes: whoever can write the session can change a record before it
@@ -752,8 +752,8 @@ These are what the store does and does not protect (CA l.1320; CAP-0415):
 ## 10. Remote surfaces
 
 logosd has no remote transport, no listener and no provider export: nothing is reachable from another
-host (SEC l.524; R l.2830). The Runtime Control's remote methods answer as
-[HOST-CONFIG.md](HOST-CONFIG.md) says, after authorization (R l.1626): the two lists an empty page,
+host (SEC l.525; R l.2769). The Runtime Control's remote methods answer as
+[HOST-CONFIG.md](HOST-CONFIG.md) says, after authorization (R l.1540): the two lists an empty page,
 `set_provider_export` INVALID_PARAMS, `set_remote_listener` MODULE_ERROR for enabling a listener and
 success for disabling one, with no record kept. `logosctl` calls none of them.
 
@@ -808,7 +808,7 @@ success for disabling one, with no record kept. `logosctl` calls none of them.
     `+transfer-…` or `+purge-…` name the next start removes), its size, and its transfer history
     ("from a (a-state), move" on the replacement, "to b, move" on the source).
   - `logosctl state purge INSTANCE` removes a retired instance's preserved state directory, for
-    good (the separately authorized disposal of RUNTIME l.3587-3588; BCP l.394-395). The
+    good (the separately authorized disposal of RUNTIME l.3452-3453; BCP l.399-400). The
     tombstone keeps the assignment reserved: it is never reused. `--assignment A` removes a
     directory no instance and no tombstone names. It asks first; `--yes` confirms (needed when
     stdin is not a terminal). Refused: a live instance ("retire it first"), an assignment the
@@ -826,7 +826,7 @@ logosd logs to stderr, one line per event: `logosd[<pid>]: <level>: <text>`, lev
 (`logosctl: <method> from uid U pid P: <code>`). The store warns when it drops records or cuts off a torn
 tail.
 
-**The logging rule** (IF l.395, SEC l.305-306, l.403, G278): no log line holds a payload, a value root, a
+**The logging rule** (IF l.375, SEC l.305-306, l.404, G278): no log line holds a payload, a value root, a
 ticket, a key, record content, or the failure text of a method with a marked field. Method names, schema
 roots, codes and instance ids are metadata and may appear. **Every line is one line:** logosd replaces each
 control character (a line break, an escape, a C1 control) with a space before it writes, so no text in a
@@ -835,15 +835,15 @@ line, whoever wrote it, ends it, starts another or moves a terminal's cursor.
 ### The Runtime's diagnostics
 
 The Runtime keeps a diagnostic for what it reports to no caller: a publication it could not deliver
-(RUNTIME l.1227), a call record it could not keep (RUNTIME l.1770), state it could not persist, a state
+(RUNTIME l.1149), a call record it could not keep (RUNTIME l.1672), state it could not persist, a state
 transfer (§11), a module's or the Module Loader's reported failure, and the like. logosd logs each as
 `runtime: <text>`, at `warn` for a call record not kept and for state not persisted, at `info` otherwise.
-This is the logging integration BCP l.550-552 describes, and it states what that asks:
+This is the logging integration BCP l.557-559 describes, and it states what that asks:
 
 - **Attribution.** Text the Runtime did not write is quoted, cut to 256 bytes (`...` marks a cut) and
   followed by `(text from <who>)`: the instance whose reported failure it is, `logos_module_loader` for
   the Loader's, or `the transport serving <provider>` for a publication or link failure a Module Host
-  reported. It is that supplier's word and no evidence of another module's identity (BCP l.551).
+  reported. It is that supplier's word and no evidence of another module's identity (BCP l.558).
   Everything else in a `runtime:` line is the Runtime's.
 - **Who can read it.** The log is logosd's stderr, which only the service manager receives: the owner's
   user journal under systemd (`journalctl --user -u logosd`), `~/Library/Logs/logosd.log` under launchd
@@ -859,7 +859,7 @@ This is the logging integration BCP l.550-552 describes, and it states what that
   or 4 (§15). A failed start logs them before it exits 2. When more than 4096 arrive between two reads,
   the oldest are lost and the next read logs one warning, `runtime: N diagnostics dropped`. If the
   periodic read cannot start, logosd logs an error and runs on with the start and final reads. Required
-  audit does not depend on this log (BCP l.552): call records and the evidence store (§9) are kept as
+  audit does not depend on this log (BCP l.559): call records and the evidence store (§9) are kept as
   before.
 
 Hosted modules' stdout and stderr are inherited and pass through unfiltered: a module that logs its own
@@ -904,12 +904,12 @@ deadlines.
 
 ## 14. Profiles and waits
 
-**Profiles** (BCP l.361). The local transport profile is `logos.local.unix-stream`, with endpoints under
+**Profiles** (BCP l.366). The local transport profile is `logos.local.unix-stream`, with endpoints under
 `run/ep/`. No remote profile is enabled. The permission profile is `logos-core-nim.permission-profile.v1`.
 A selected profile that cannot be used fails the start or the realization that needs it; nothing falls
 back.
 
-**Waits** (BCP l.372):
+**Waits** (BCP l.376):
 
 | Wait | Value |
 |---|---|
@@ -924,7 +924,7 @@ back.
 ## 15. Loader loss
 
 If the Module Loader fails, the Runtime cannot realize anything again, and the process that hosts it
-must end (R l.3823-3824). logosd:
+must end (R l.3685-3688). logosd:
 
 1. receives the Runtime's termination notice (it names the instances left unresolved) and logs
    "the Module Loader failed; termination required for …". The notice comes through the Host API's
@@ -934,7 +934,7 @@ must end (R l.3823-3824). logosd:
 3. does not destroy the Runtime. It writes out the call-evidence store (§9), waits up to 10 s for every
    Module Host to be gone (their restart locks under `work/hosts/`), logs "exiting with 4", and exits 4.
    It keeps the session lock to the end: the kernel drops it with the process, so no offline writer or
-   second logosd holds the session while the orphaned in-process code still runs (R l.3824, l.2641).
+   second logosd holds the session while the orphaned in-process code still runs (R l.3688, l.2568).
 
 The Runtime sends the notice only when the failed Loader leaves in-process realizations. Under logosd
 that is always so: `orchestrator`, `logosctl` and, under capability-authority, `authority` are

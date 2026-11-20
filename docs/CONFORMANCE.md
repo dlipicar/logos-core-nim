@@ -61,6 +61,19 @@ heading under a numbered one.
 "Deferred" means not built. Behaviour that is built and differs from the text is a deviation: it is
 recorded in `docs/DECISIONS.md`, and its unit is deferred only when the text's behaviour is not built.
 
+**What a RUNTIME claim covers (BCP l.286).** A claim of conformance to RUNTIME covers a Runtime
+instance with its orchestration module (RUNTIME l.66). This repository's RUNTIME claim is for the
+engine with the reference orchestration module, `lcn_orchestrator`, wherever a host names it
+(DECISIONS I94). logosd does: its Runtime instance is the engine with `lcn_orchestrator` as instance
+`orchestrator` (`docs/DAEMON.md` §4; the facts block of `docs/DEPLOYMENT.md`, which
+`tests/test_deployment.nim` compares with logosd's composition). A host embedding `liblogos_runtime`
+that names another orchestration module supplies an engine without this one, so its claim is joint
+with the module it supplies, which carries the orchestration duties (`docs/HOST-CONFIG.md`,
+"Orchestration duties").
+
+The sections from here to "Properties not claimed" are dated records, except "What is claimed at the end of Tier 4b":
+each keeps the ids and spec lines of the revision it was written at (4b-6's BCP-0093 is BCP-0103 at 6cac8335).
+
 ### What is claimed at the end of Tier 4
 
 Tiers 1 to 4 are closed: `spectrace gate --closed-tier 1 --closed-tier 2 --closed-tier 3
@@ -436,7 +449,7 @@ status that still defers to one of them. The sections above say what each step c
 claim as it stands.
 
 - **RUNTIME** is claimed for the Runtime instance that `logosd` runs: the engine plus the reference
-  orchestration module (RUNTIME l.72; DECISIONS I94), in direct and local-transport mode, with hosted
+  orchestration module (RUNTIME l.66; DECISIONS I94), in direct and local-transport mode, with hosted
   realizations through the Module Host (I91). A host that embeds `liblogos_runtime` without `logosd`
   names the reference module or carries its duties itself (`docs/HOST-CONFIG.md`, "Orchestration
   duties"). Tier 5: remote mode, facades, enrollment, listeners and exports, and package-backed
@@ -555,23 +568,41 @@ Contract extension in the Runtime at 6cac8335 (DECISIONS I112 part b, G394, G391
 - **Discovery** (CA l.249-256): one `discover` decision per extended view (G394 r15).
 - **The handoff's `extends`** (PM §12; PKG-0338, PKG-0347, PKG-0351): deferred by name to 5-8 (G391).
 
+### What the re-pin's P9 changes
+
+The Credential Store scope, the claim statement and the close at 6cac8335 (DECISIONS I113, G159, G309, D27, I94, I104):
+
+- **The deployment document's new items** (BCP §5.4): BCP-0101 (the Credential Store, `None`, by inspection) and BCP-0102
+  (admission pools, by the test_deployment test) are claimed. BCP-0103 (non-production mechanisms identified by name)
+  is claimed by the logosd test that carried BCP-0093, which is retired at 6cac8335.
+- **The Credential Store** (LOGOS-MODULE-CREDENTIAL-STORE) is not claimed (owner row 38; G159 settled): "Properties not
+  claimed".
+- **The claim statement** (BCP l.286; TXT-0350): "Claims" above; test_deployment compares the facts' composition with
+  logosd's.
+- **The pending file** holds only the 53 units and 19 text entries that stay deferred past the re-pin, each owned by a
+  Tier 5 work item (I104's note); nothing else follows `6a4dfa28`.
+
 ## Properties not claimed
 
 - A complete Logos module system (BCP §5.1; owner decision 10 (a), K18; DECISIONS G310, I97): there
   is no Package Manager, so no package is installed, selected or trusted, and BCP's units that bind
   the whole are claimed only where `logosd` meets them on its own. `docs/DEPLOYMENT.md` answers each
   missing facility "None" or "Not supported", with the tier that changes it where one is planned.
+- The Credential Store (BCP l.287-289; owner row 38, 2026-11-18; DECISIONS G159): optional to
+  implement and deploy, and not claimed. Its provider would have to answer `NOT_AUTHORISED`, which
+  provider code may not return (TF-53). logosd deploys none (`docs/DEPLOYMENT.md` row 24, §25), and the
+  specification has no ledger, claims file or mirror here.
 - Operating-system isolation of hosted modules (SEC l.207-209): a Module Host is a process of the
   daemon's user with the daemon's view of the file system, the network and devices; placements
   `sandbox` and `container` are not offered (`docs/DEPLOYMENT.md` §8; DECISIONS G265 for what a module
   starts, below).
 
-- Protection between processes of the same OS identity (TRANSPORT §8.2 l.1107-1111): Module Hosts
+- Protection between processes of the same OS identity (TRANSPORT §8.2 l.1088-1092): Module Hosts
   run as the daemon's user, so a process running as that user can replace a socket pathname or
   impersonate an endpoint. Deployments that need that protection must run hosts under distinct OS
   identities, which this implementation does not set up (DECISIONS G58). The same holds on Windows
   once the profile is built there (step 5-9): a consumer of the Runtime's own user can delete,
-  rename or re-secure the endpoint, and TRANSPORT l.1156 is read as not reaching it (DECISIONS G332,
+  rename or re-secure the endpoint, and TRANSPORT l.1137 is read as not reaching it (DECISIONS G332,
   the owner's reading, 2026-11-17).
 - Containment of what a hosted module starts: a Module Host's process group is killed after every
   end of the host, but a process the module moved into another group or session outlives it
@@ -590,7 +621,7 @@ Contract extension in the Runtime at 6cac8335 (DECISIONS I112 part b, G394, G391
 - Erasure of a marked payload (INTERFACE §1.4.1; DECISIONS I92) where no wipe can run or reach:
   - **A Module Host ended by force**: SIGKILL at a startup, stop or apply deadline (G269), or
     `_exit(70)` on a broken carrier (G266), ends the process without running any wipe. This is a
-    non-claim for that host's own buffers only (LOADER l.573 permits the forced end); the Runtime's
+    non-claim for that host's own buffers only (LOADER l.571 permits the forced end); the Runtime's
     and the peer's keep their claim.
   - **A refc build of the Runtime or the Module Host**: under refc, Nim's `Channel[T]` deep-copies
     each message into the channel's region and frees that copy inside the standard library,
@@ -780,7 +811,7 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `
   invocation that fails before any work, a reply lost or garbled after the work, a reply held), or
   the Loader's report of its own failure (DECISIONS I89 part 4b-1d).
 - `engine.confirmTerminationForTests`: stands in for the protected mechanism that confirms a lost
-  Loader's realizations are gone (RUNTIME l.3825; G249), which a deployment does by ending the host
+  Loader's realizations are gone (RUNTIME l.3689; G249), which a deployment does by ending the host
   process.
 - `orchestration/testhooks.nim` (DECISIONS I94): `setOrchestratorFaultsForTests` and
   `clearOrchestratorFaultsForTests` select faults in the reference orchestration module (the next

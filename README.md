@@ -1,8 +1,8 @@
 # logos-core-nim
 
 A Nim implementation of the Logos Core module specs: logos-lips, branch
-`draft/logos-core-module-specs`, files `docs/logos-core/raw/spec-*.md`, pinned at `6a4dfa28` (since 2026-11-10; the work
-before that was built against `f4f83471`).
+`draft/logos-core-module-specs`, files `docs/logos-core/raw/spec-*.md`, pinned at `6cac8335` (since the re-pin,
+2026-11-18 to 2026-11-20; `6a4dfa28` from 2026-11-10, and the work before that was built against `f4f83471`).
 
 The specs are being revised, so the work is ordered by how settled each area is
 ([docs/SPEC-STATUS.md](docs/SPEC-STATUS.md)). Built so far:

@@ -7,27 +7,28 @@
 #   out-of-scope:<why>    normative, but not this repository's to implement
 # A `[units]` entry gives one requirement unit its own status, overriding its section's.
 #
-# The claim is for the Runtime instance logosd runs (DECISIONS I88, I97): RUNTIME l.72 defines it as
-# the engine plus an orchestration module, and logosd runs the engine with the reference orchestration
-# module (I94) in direct and local-transport mode, with hosted realizations through the Module Host
-# (I91). A host embedding liblogos_runtime without logosd supplies orchestration itself or links the
-# reference module (docs/HOST-CONFIG.md "Orchestration duties"). The Runtime binds a
-# `logos_module_loader` instance (I89), so the Loader-conditional rules (l.1641, l.3754,
-# l.3820-3825, l.3863) are claimed with it.
+# The claim is for a Runtime instance (DECISIONS I88, I97): RUNTIME l.66 defines it as the engine plus
+# an orchestration module, and BCP l.286 says a RUNTIME claim covers both. logosd's instance is the
+# engine with the reference orchestration module, lcn_orchestrator (I94), in direct and
+# local-transport mode, with hosted realizations through the Module Host (I91). A host embedding
+# liblogos_runtime that names another orchestration module claims jointly with it (BCP l.286;
+# docs/HOST-CONFIG.md "Orchestration duties"; docs/CONFORMANCE.md "Claims"). The Runtime binds a
+# `logos_module_loader` instance (I89), so the Loader-conditional rules (l.1554, l.3607,
+# l.3682-3689, l.3729) are claimed with it.
 
 default = "claimed"
 
 [sections]
 "References" = "informative"
 "Copyright" = "informative"
-# "Appendix A. Implementation Notes (Informative)", l.4092.
+# "Appendix A. Implementation Notes (Informative)", l.3959.
 "App A" = "informative"
-# Local transport mode, a permission (l.49): the hosted process-local boundary (§4.2.1) and
+# Local transport mode, a permission (l.46): the hosted process-local boundary (§4.2.1) and
 # provider-side local Transport scheduling (§6.2) are claimed with the Module Host (step 4b-3,
 # DECISIONS I91, part 4b-3.4); the Runtime-served endpoint of a direct provider (step 4b-2, I90,
 # G257) built part of §6.2 first.
-# A MAY convenience mode not provided (l.1094); l.1122 steers multi-instance code to handles.
-"§5.2.1" = "out-of-scope:a MAY convenience mode not provided (singleton direct calls, l.1094)"
+# A MAY convenience mode not provided (l.1023); l.1043 steers multi-instance code to handles.
+"§5.2.1" = "out-of-scope:a MAY convenience mode not provided (singleton direct calls, l.1023)"
 
 # Re-pin P4b: the order of checks (l.1824-1833) is claimed by default. For an ordinary transported
 # call, RUN-1117 before RUN-1118 is claimed under DECISIONS G171's interim reading: each side applies
@@ -53,28 +54,28 @@ default = "claimed"
 "RUN-1190" = "deferred:tier-5"
 # RUN-0007, RUN-0008 and RUN-0014 (the same contract across execution modes) are claimed with step
 # 4b-2b: one scripted sequence through a direct and a transported handle (DECISIONS I90).
-# Remote only (fable-scope §7): `connect_remote` (l.234-241) and the rule that a local route never
-# crosses Runtimes (TRANSPORT l.1136); with the remote profiles.
+# Remote only (fable-scope §7): `connect_remote` (l.225-232) and the rule that a local route never
+# crosses Runtimes (TRANSPORT l.1117); with the remote profiles.
 "RUN-0045" = "deferred:tier-5"
 # The Module Host (step 4b-3, DECISIONS I91): §4.2.1 (a hosted module's Runtime Control binding,
 # its route handles and the ends of its host; G267, G268), §6.2 (a hosted provider's endpoint,
 # readiness and calls; G267, G273, G274), RUN-0200 (§5.1, the endpoint made before the host
 # starts) and RUN-0284 (§8, a hosted record names an artifact) are claimed; the gates were parts
 # 4b-3.1a to 4b-3.3, the claims part 4b-3.4. RUN-0173 and RUN-0179 are also inspection items.
-# RUN-0501 (l.2741), RUN-1161, RUN-0543, RUN-0544 and RUN-1179 are claimed with step 4b-2a
+# RUN-0501 (l.2698), RUN-1161, RUN-0543, RUN-0544 and RUN-1179 are claimed with step 4b-2a
 # (DECISIONS I90; RUN-1161 and RUN-1179 since re-pin P4c). RUN-1161: a replayed establish or renew
 # answer carries no `invocation`, so its retained bytes hold no ticket (G255, l.2914 at 6cac8335);
 # the consumer renews. RUN-0800 to RUN-0806
 # (materializing a transported route) are claimed with step 4b-2b (G164, G258, G259). RUN-0192,
 # RUN-0234, RUN-0246 and RUN-0832 (subscriptions, delivery and scoped publication over a session)
 # are claimed with step 4b-2c.
-# RUN-0552 (l.3044): the Hello `schema` field of a remote-transport invocation path (§9.3
-# l.3042-3049); with the remote profiles (Tier 5, I90).
+# RUN-0552 (l.2953): the Hello `schema` field of a remote-transport invocation path (§9.3
+# l.2951-2955); with the remote profiles (Tier 5, I90).
 "RUN-0552" = "deferred:tier-5"
 # Package-backed selection: the Package Manager handoff, the retained manifest binding and exact
-# package/version pins (l.3519-3546, l.3613-3617) come with the Package Manager (Tier 5; owner
+# package/version pins (l.3384-3411, l.3480-3484) come with the Package Manager (Tier 5; owner
 # decision 1 (a), 2026-11-13, area 7). Until then declarations are host-configured (G55, I82) and a
-# selection names no package or signer. RUN-0844 (l.1394) is claimed by inspection: no signed
+# selection names no package or signer. RUN-0844 (l.1316) is claimed by inspection: no signed
 # package declarations are retained, so its condition does not hold (DECISIONS I97).
 "RUN-0995" = "deferred:tier-5"
 "RUN-0996" = "deferred:tier-5"
@@ -205,10 +206,10 @@ default = "claimed"
 "RUN-1059" = "deferred:tier-5"
 "RUN-1061" = "deferred:tier-5"
 "RUN-1062" = "deferred:tier-5"
-# A MAY convenience mode not provided (l.1094).
-"RUN-0158" = "out-of-scope:a MAY convenience mode not provided (singleton direct calls, l.1094)"
-# The Runtime side of system-service sessions over unix-stream (l.1670), a MAY profile (TRANSPORT
-# l.1075) left unused: G48(a) binds the Capability Authority directly.
+# A MAY convenience mode not provided (l.1023).
+"RUN-0158" = "out-of-scope:a MAY convenience mode not provided (singleton direct calls, l.1023)"
+# The Runtime side of system-service sessions over unix-stream (l.1586), a MAY profile (TRANSPORT
+# l.1056) left unused: G48(a) binds the Capability Authority directly.
 "RUN-0318" = "out-of-scope:a MAY profile left unused: G48(a) binds system services directly"
 # Requirements on provider modules and their contracts.
 "RUN-0116" = "out-of-scope:a requirement on provider modules and their contracts"
