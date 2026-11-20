@@ -361,8 +361,9 @@ When logosd composes the CLI module `lcn_call` (§7a), it adds four more:
   A method list with no event list also covers every subscription.
 - **S7** (the next two) and **the events rule** (G346): of the Runtime Control events, `lcn_call` may
   follow only `module_state_changed`, `execution_state_changed` and `inventory_changed`, the read-only
-  three `logosctl events` follows; each is checked per observed instance before delivery (R l.3362). It
-  may originate no execution, start or stop, on any target.
+  three `logosctl events` follows; each is checked per observed instance before delivery (R l.3362).
+  S7's event deny is needed because S6, a method list with no event list, would otherwise allow every
+  subscription. It may originate no execution, start or stop, on any target.
 - **S8**: `logosctl` may not retire or reconfigure `lcn_call`, whose configuration is daemon-config's; it
   may start, stop and recover it, which is the launcher's activation (§7a).
 - **What an operator rule can add.** The system rules give `lcn_call` no provider access: operator rules
@@ -370,9 +371,13 @@ When logosd composes the CLI module `lcn_call` (§7a), it adds four more:
   methods, but no rule can let it start or stop an instance, itself included: a start or stop also needs
   an execution decision for the requester, which S7 denies (so `lcn_call` never stops itself, G350). A
   granted `recover_module` would take effect, since a recovery is decided on the authority of the
-  instance's original starter; `lcn_call` never calls it. A deny over every other method cannot be
-  written: in this policy language a deny that covers a method request covers every event subscription
-  too, which would remove the events rule.
+  instance's original starter (its execution decision is for the retained origin); `lcn_call` never
+  calls it. A deny over every other method cannot be written: in this policy language a deny that
+  covers a method request covers every event subscription too, which would remove the events rule.
+  S3 has the same shape: an operator rule may grant the `logosctl` instance methods beyond its
+  seventeen, and only S3's event deny keeps it from every subscription. These limits bind under the
+  `capability-authority` policy; under the development switch (allow-all) nothing is denied to any
+  module, and neither `lcn_call` nor the `logosctl` instance calls a method outside its list.
 - **Codes:** S7 denies the consumer (`consumer-denied`), S8 protects its target (`target-denied`).
 
 The operator's rules follow, sorted and deduplicated with the system ones. An operator rule may grant

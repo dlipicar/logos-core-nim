@@ -6943,7 +6943,7 @@ their history.
 
 ### G345 — System rules S6–S8
 - **Kind:** Choice [IMPL] · **Plan:** `tier5-plans/stepN-2-cli.md` §8. Section and Q numbers below are the plan's.
-- **Decision.** §3.8: S6's Runtime Control methods for `lcn_call`, and no other unless an operator rule grants it (R7: a method deny would also deny every event, so none is derived); every event outside the events rule and every execution action denied; `logosctl` barred from reconfiguring or retiring it (`target-denied`); no provider access
+- **Decision.** §3.8: S6 allows `lcn_call` six Runtime Control methods and no system rule allows another; S7 denies every event outside the events rule and every execution start and stop (`consumer-denied`); S8 bars `logosctl` from reconfiguring or retiring it (`target-denied`); no provider access. An operator rule can allow `lcn_call` further Runtime Control methods, those that need only the Runtime Control decision: `recover_module` is one, since a recovery's execution decision is for the retained origin, not the requester; `lcn_call`'s code calls none of them. R7 (planning's ruling (a), 2026-11-20, with Fable): a method deny cannot be written, since a deny covering a method request covers every event request too and would remove the events rule; logosctl's S3 has the same shape. The clean fix, an event request whose scope a method pattern does not cover (G161; Fable's remark, comments document 29fa2e68), is not N-2's (TIER5-PLAN §8)
 - **Status.** Built in N-2b (`compose.nim`); `test_daemon_config` (dc.policy.cli).
 
 ### G346 — The CLI's events rule
@@ -6968,7 +6968,7 @@ their history.
 
 ### G350 — The CLI's idle policy
 - **Kind:** Choice [IMPL] · **Plan:** `tier5-plans/stepN-2-cli.md` §8. Section and Q numbers below are the plan's.
-- **Decision.** §3.1 (Q4, re-cited by planning, P2): no self-exit, an [IMPL] choice on R l.1735 (a self-stop would cancel the retained intent) and R l.3123 (routes close after `cli.route_idle_ms`); `stop_module` answering on acceptance (R l.3554-3556) removed the old reason; it rests on S7's execution deny, which refuses `lcn_call` every start and stop whatever operator rules grant (R7); `module stop lcn_call` stays allowed
+- **Decision.** §3.1 (Q4, re-cited by planning, P2, and its ruling (a) of 2026-11-20, which replaces P2's "S7's deny once S4 is applied"): no self-exit, an [IMPL] choice on R l.1735 (a self-stop would cancel the retained intent) and R l.3123 (routes close after `cli.route_idle_ms`); `stop_module` answering on acceptance (R l.3554-3556) removed the old reason. It rests on S7's execution deny of stop: in authority mode a `stop_module` needs an execution stop decision for the requester (`engine.nim`, the `aaStop` request), which S7 refuses `lcn_call` whatever an operator rule allows. Under the development switch nothing is denied to any module, and `lcn_call`'s code has no lifecycle call. `module stop lcn_call` stays allowed
 - **Status.** Built in N-2b: S7's execution deny and `cli.route_idle_ms`; `test_daemon_config`, `test_lcn_call` L-1, L-10.
 
 ## 13. Implementation defaults chosen without a separate question
