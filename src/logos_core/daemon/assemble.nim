@@ -5,13 +5,13 @@
 ## docs/DAEMON.md §4.
 ##
 ## `assembleDaemon` runs steps 4 to 9: the daemon-config and its five checks,
-## the trust decision, the evidence key's binding (check 4), `run/` and the
-## socket path, then `runtimeCreate` with the derived app-config, the two
-## static bindings, the termination hook, the call-evidence store as the call
-## record sink (G301), the presentation handoff, the orchestrator's
-## diagnostics and the selected test hooks. Nothing has
-## started when it returns. `startDaemon` is step 10; `finishDaemon` the
-## destroy after the wait.
+## the trust file's rules and decision (G396), the evidence key's binding
+## (check 4), `run/` and the socket path, then `runtimeCreate` with the
+## derived app-config, the two static bindings, the termination hook, the
+## call-evidence store as the call record sink (G301), the presentation
+## handoff, the orchestrator's diagnostics and the selected test hooks.
+## Nothing has started when it returns. `startDaemon` is step 10;
+## `finishDaemon` the destroy after the wait.
 
 {.push raises: [].}
 
@@ -60,7 +60,10 @@ type
   Daemon* = object ## An assembled logosd: a created Runtime, not started.
     session*: Session
     prepared*: Prepared
-    trust*: TrustInput
+    trust*: TrustFileState
+    signing*: TrustInput
+      ## [G396] the package-signing trust input the start accepted, for the
+      ## Package Manager (step 5-3b); nothing reads it before then
     rt*: ptr LogosRuntimeHandle
     supervisor*: Supervisor
     store*: EvidenceStore ## [G301] nil: no `call_audit.store`
@@ -92,6 +95,13 @@ proc orchestratorSink(line: string) {.nimcall, gcsafe, raises: [].} =
 
 proc storeLog(line: string) {.nimcall, gcsafe, raises: [].} =
   logWarn(line)
+
+proc sessionEvidenceKeys(s: Session, c: DaemonConfig): Result[seq[seq[byte]], string] =
+  ## [G397] The session's evidence keys, the configured one included.
+  if c.value.call_audit.isSome and c.value.call_audit.get.evidence.isSome:
+    let e = c.value.call_audit.get.evidence.get
+    return sessionEvidenceKeys(s, e.secret_key_file, e.kid)
+  sessionEvidenceKeys(s)
 
 proc openEvidenceStore(s: Session, c: DaemonConfig): Result[EvidenceStore, string] =
   ## [G301] The store `call_audit.store` configures (check 4 made sure the
@@ -181,17 +191,21 @@ proc assembleDaemon*(
           "from a backup, or make a new session with logosctl init",
       )
     )
-  let seen = readTrust(s).valueOr:
+  # [G396] Both reads of the trust file apply its rules.
+  let seen = checkedTrust(s).valueOr:
     return err(startError(ExitRefused, "the trust file: " & error))
   let prepared = prepareDaemon(
     s, bytes, seen, hooksBuild = opts.hooksBuild, checkKey = true, exe = opts.exe
   ).valueOr:
     return err(startError(ExitRefused, error))
-  # [G299] The mark moves before the revision is used, never created here.
-  let trust = establishTrust(s).valueOr:
+  let evidenceKeys = sessionEvidenceKeys(s, prepared.config).valueOr:
+    return err(startError(ExitRefused, "the evidence keys: " & error))
+  # [G299] The mark moves before the revision is used, never created here,
+  # and nothing is refused after it moved (a change since the first read
+  # included).
+  let accepted = establishTrust(s, evidenceKeys, Opt.some(seen.digest)).valueOr:
     return err(startError(ExitRefused, "the trust file: " & error))
-  if trust.digest != seen.digest:
-    return err(startError(ExitRefused, "the trust file changed during start"))
+  let trust = accepted.state
   if trust.file.development:
     logWarn(
       "NON-PRODUCTION: the development switch is on (trust revision " &
@@ -267,6 +281,7 @@ proc assembleDaemon*(
       session: s,
       prepared: prepared,
       trust: trust,
+      signing: accepted.signing,
       rt: rt,
       supervisor: sv,
       store: store,

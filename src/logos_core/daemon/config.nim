@@ -172,7 +172,7 @@ proc checkNames(dc: LcnDaemonConfig): Result[void, string] =
   ok()
 
 proc checkGates(
-    dc: LcnDaemonConfig, trust: TrustInput, hooksBuild: bool
+    dc: LcnDaemonConfig, trust: TrustFileState, hooksBuild: bool
 ): Result[HookSelection, string] =
   ## Check 3: what the development switch gates (decision 11; D27; G300).
   let development = trust.file.development
@@ -250,7 +250,7 @@ proc checkAudit(
   ok(Opt.some(r))
 
 proc checkDaemonConfig*(
-    dc: LcnDaemonConfig, trust: TrustInput, hooksBuild = HooksBuild, checkKey = true
+    dc: LcnDaemonConfig, trust: TrustFileState, hooksBuild = HooksBuild, checkKey = true
 ): Result[DaemonConfig, string] =
   ## Checks 2 to 4 of DAEMON.md §3 on a decoded value. `hooksBuild` is this
   ## build's: a test passes `false` to check a packaged logosd's refusal.

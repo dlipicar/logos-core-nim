@@ -491,7 +491,7 @@ proc compose*(s: Session, c: DaemonConfig, exe = ""): Result[Composition, string
 proc prepareDaemon*(
     s: Session,
     bytes: openArray[byte],
-    trust: TrustInput,
+    trust: TrustFileState,
     hooksBuild = HooksBuild,
     checkKey = true,
     exe = "",

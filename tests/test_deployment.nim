@@ -42,7 +42,7 @@ when defined(posix):
     ../src/logos_core/daemon/
       [assemble, ctlwire, daemon_config_types, logging, session, sessioninit]
   from ../src/logos_core/daemon/compose import prepareDaemon
-  from ../src/logos_core/daemon/trustfile import TrustInput, floorFile
+  from ../src/logos_core/daemon/trustfile import TrustFileState, floorTrust
   import
     logos_sdk/testing/kitbuild,
     ./support/[loaderharness, modulehostbuild, shortdir, slowdown]
@@ -677,7 +677,7 @@ when defined(posix):
       # module of the name passes logosd's checks, and binding refuses it as a
       # provider that is no Logos system module.
       check facts["credential_store"].getStr == "none"
-      let floor = TrustInput(file: floorFile())
+      let floor = TrustFileState(file: floorTrust())
       let s = Session(dir: makeShortBase("dplcs") / "s")
       let plain = prepareDaemon(s, dc.encode.get, floor).expect("init's configuration")
       check plain.composition.appConfig.modules.allIt(

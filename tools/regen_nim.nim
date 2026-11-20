@@ -16,6 +16,8 @@ proc main() =
   echo daemonConfigTypesPath
   writeFile(trustTypesPath, generatedTrustTypes().get)
   echo trustTypesPath
+  writeFile(trustdocTypesPath, generatedTrustdocTypes().get)
+  echo trustdocTypesPath
   writeFile(evstoreTypesPath, generatedEvstoreTypes().get)
   echo evstoreTypesPath
   writeFile(ctlTypesPath, generatedCtlTypes().get)

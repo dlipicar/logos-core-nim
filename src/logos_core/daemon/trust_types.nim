@@ -10,7 +10,7 @@ import logos_sdk/codegen/common_types
 export nimrt, common_types
 
 const
-  primaryDocument = "; logosd\'s trust input and its continuity record, and the binding of a\x0A; call-evidence key (Tier 4b step 4b-6; DECISIONS I95, G297, G299). Each is one\x0A; Logos deterministic-CBOR value in a file of its own; docs/DAEMON.md documents\x0A; them.\x0A\x0A; logos-core-nim.trust.v1, <session>/trust.cbor: the revisioned trust file\x0A; (G137; PACKAGE MANAGER l.395-400). development is D27\'s switch. Tier 5 adds\x0A; the package-signing anchors. Without the file the compiled-in floor applies:\x0A; revision 1, development false.\x0Alcn.trust_file = {\x0A  format: \"logos-core-nim.trust.v1\",\x0A  revision: uint64,\x0A  development: bool,\x0A}\x0A\x0A; logos-core-nim.trust-mark.v1, <session>/state/trust-mark.cbor: the highest\x0A; revision used and the digest of that revision\'s bytes (BLAKE3-256).\x0Alcn.trust_mark = {\x0A  format: \"logos-core-nim.trust-mark.v1\",\x0A  revision: uint64,\x0A  digest: bstr .size 32,\x0A}\x0A\x0A; logos-core-nim.evidence-key.v1, <session>/keys/evidence-<kid>.cbor: the\x0A; call-evidence key a kid names, and the one Runtime it signs for (CAPABILITY\x0A; AUTHORITY l.1265, l.1290). kid is the first 16 bytes of BLAKE3-256 of the\x0A; public key. A retired key keeps its binding, with retired_ms, and loses its\x0A; secret half.\x0Alcn.ev_key_binding = {\x0A  format: \"logos-core-nim.evidence-key.v1\",\x0A  kid: bstr .size 16,\x0A  runtime_instance_id: tstr .size (1..128),\x0A  public_key: bstr .size 48,\x0A  created_ms: uint64,\x0A  ? retired_ms: uint64,\x0A}\x0A"
+  primaryDocument = "; logosd\'s trust continuity record and the binding of a call-evidence key\x0A; (Tier 4b step 4b-6; DECISIONS I95, G297, G299). Each is one Logos\x0A; deterministic-CBOR value in a file of its own; docs/DAEMON.md documents\x0A; them. The trust file itself, lcn.package_trust, is package/trustdoc.cddl\x0A; (G396).\x0A\x0A; logos-core-nim.trust-mark.v1, <session>/state/trust-mark.cbor: the highest\x0A; revision of the trust file used and the digest of that revision\'s bytes\x0A; (BLAKE3-256; PACKAGE MANAGER l.401-406).\x0Alcn.trust_mark = {\x0A  format: \"logos-core-nim.trust-mark.v1\",\x0A  revision: uint64,\x0A  digest: bstr .size 32,\x0A}\x0A\x0A; logos-core-nim.evidence-key.v1, <session>/keys/evidence-<kid>.cbor: the\x0A; call-evidence key a kid names, and the one Runtime it signs for (CAPABILITY\x0A; AUTHORITY l.1265, l.1290). kid is the first 16 bytes of BLAKE3-256 of the\x0A; public key. A retired key keeps its binding, with retired_ms, and loses its\x0A; secret half.\x0Alcn.ev_key_binding = {\x0A  format: \"logos-core-nim.evidence-key.v1\",\x0A  kid: bstr .size 16,\x0A  runtime_instance_id: tstr .size (1..128),\x0A  public_key: bstr .size 48,\x0A  created_ms: uint64,\x0A  ? retired_ms: uint64,\x0A}\x0A"
   interfaceDocuments: array[0, string] = []
   supportingDocuments: array[0, string] = []
 
@@ -39,11 +39,6 @@ type
     retired_ms*: Opt[uint64]
     runtime_instance_id*: string
 
-  LcnTrustFile* = object
-    development*: bool
-    format*: string = "logos-core-nim.trust.v1"
-    revision*: uint64
-
   LcnTrustMark* = object
     digest*: seq[byte]
     format*: string = "logos-core-nim.trust-mark.v1"
@@ -53,10 +48,6 @@ proc toCbor*(x: LcnEvKeyBinding): CborValue
 proc fromChecked*(T: type LcnEvKeyBinding, v: CborValue): LcnEvKeyBinding
 proc stepEncLcnEvKeyBinding*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnEvKeyBinding*(w: var DecWork, v: CborValue, dst: pointer)
-proc toCbor*(x: LcnTrustFile): CborValue
-proc fromChecked*(T: type LcnTrustFile, v: CborValue): LcnTrustFile
-proc stepEncLcnTrustFile*(w: var EncWork, src: pointer, dst: ptr CborValue)
-proc stepDecLcnTrustFile*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LcnTrustMark): CborValue
 proc fromChecked*(T: type LcnTrustMark, v: CborValue): LcnTrustMark
 proc stepEncLcnTrustMark*(w: var EncWork, src: pointer, dst: ptr CborValue)
@@ -109,35 +100,6 @@ proc fromChecked*(T: type LcnEvKeyBinding, v: CborValue): LcnEvKeyBinding =
   runDec(stepDecLcnEvKeyBinding, v, addr r)
   r
 
-proc stepEncLcnTrustFile*(w: var EncWork, src: pointer, dst: ptr CborValue) =
-  let x {.used.} = cast[ptr LcnTrustFile](src)
-  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
-  dst[] = node
-  var k = 0
-  node.entries[k].key = cbor("development")
-  node.entries[k].value = cbor(x.development)
-  inc k
-  node.entries[k].key = cbor("format")
-  node.entries[k].value = cbor("logos-core-nim.trust.v1")
-  inc k
-  node.entries[k].key = cbor("revision")
-  node.entries[k].value = cbor(uint64(x.revision))
-  inc k
-
-proc stepDecLcnTrustFile*(w: var DecWork, v: CborValue, dst: pointer) =
-  let r = cast[ptr LcnTrustFile](dst)
-  r[] = LcnTrustFile()
-  r.development = asBool(v.lookup("development").get)
-  r.revision = uint64(v.lookup("revision").get.uint)
-
-proc toCbor*(x: LcnTrustFile): CborValue =
-  runEnc(stepEncLcnTrustFile, addr x)
-
-proc fromChecked*(T: type LcnTrustFile, v: CborValue): LcnTrustFile =
-  var r: LcnTrustFile
-  runDec(stepDecLcnTrustFile, v, addr r)
-  r
-
 proc stepEncLcnTrustMark*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   let x {.used.} = cast[ptr LcnTrustMark](src)
   let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
@@ -179,20 +141,6 @@ proc encode*(x: LcnEvKeyBinding): Result[seq[byte], string] =
 proc decode*(T: type LcnEvKeyBinding, data: openArray[byte]): Result[LcnEvKeyBinding, string] =
   ## One deterministic-CBOR `lcn.ev_key_binding` value.
   let v = ?generatedSchema().decodeChecked("lcn.ev_key_binding", data)
-  ok(fromChecked(T, v))
-
-proc fromCbor*(T: type LcnTrustFile, v: CborValue): Result[LcnTrustFile, string] =
-  ## A value checked against `lcn.trust_file`.
-  ?generatedSchema().check("lcn.trust_file", v)
-  ok(fromChecked(T, v))
-
-proc encode*(x: LcnTrustFile): Result[seq[byte], string] =
-  ## Logos deterministic CBOR, checked against `lcn.trust_file`.
-  generatedSchema().encodeChecked("lcn.trust_file", toCbor(x))
-
-proc decode*(T: type LcnTrustFile, data: openArray[byte]): Result[LcnTrustFile, string] =
-  ## One deterministic-CBOR `lcn.trust_file` value.
-  let v = ?generatedSchema().decodeChecked("lcn.trust_file", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type LcnTrustMark, v: CborValue): Result[LcnTrustMark, string] =
