@@ -7,9 +7,10 @@
 ## the received object selects the algorithm, the profile or the context. The
 ## structure is `crypto/cose.nim`'s, shared with call evidence (I85).
 ##
-## The claim schema is the mirrored PM §4.3 block plus the
+## The claim schema is the mirrored PM §4.3 block, which opens with the Package
+## Manager's `_module` rule (PM l.493), plus the
 ## `logos.package_manager.manifest_commitment` rule cut from the mirrored PM §5
-## block, accepted as one supporting schema.
+## block, accepted as one module document.
 
 {.push raises: [].}
 

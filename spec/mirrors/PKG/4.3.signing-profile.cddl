@@ -1,3 +1,5 @@
+_module = "logos_package_manager"
+
 logos.package_manager.package_signing_profile =
   "logos.package-signing.cose-sign1-slh-dsa-sha2-192s"
 

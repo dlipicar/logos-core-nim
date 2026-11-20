@@ -631,6 +631,9 @@ package = "core"
 file = "spec-module-package-manager.md"
 section = "§4"
 
+# PM §4.3: the signing profile. Its block opens with the Package Manager's
+# `_module` rule (PM l.493), which heads the record and claim schemas the
+# package/ modules validate against.
 [[mirror]]
 out = "PKG/4.3.signing-profile.cddl"
 package = "core"
@@ -667,8 +670,7 @@ package = "core"
 file = "spec-module-package-manager.md"
 section = "§11"
 
-# PM §15: the Package Manager module document; its `_module` rule heads the
-# record schema the package/ modules validate against.
+# PM §15: the Package Manager's methods.
 [[mirror]]
 out = "PKG/15.methods.cddl"
 package = "core"

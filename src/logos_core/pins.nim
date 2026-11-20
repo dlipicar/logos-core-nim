@@ -4,9 +4,9 @@
 #!fmt: off
 const
   # spec-module-package-manager.md §4
-  PackageManifestSchemaRoot* = "b3a53cea950337515b843333795c53c58288702e5bf72ad98930e02c7581e0eb"
+  PackageManifestSchemaRoot* = "d517cf20219ced88528df307c1631b2785abf04157a8b3caa9ac351e95a705f6"
   # spec-module-package-manager.md §4
-  PackageManifestSubtreeRoot* = "fbee48aef4b669bd9e4dfec0126f56513f8c626da858121082e5f25b0e236879"
+  PackageManifestSubtreeRoot* = "23de138c1edb5437388a419928f73901ad7ada309b9a357c35ff6690c06f6d78"
   # spec-module-transport.md §1.1, spec/mirrors/TRN/1.1.envelope-primitives.cddl
   TransportPrimitivesDocument* = """
 ; -- primitive types used in the envelope --
@@ -229,6 +229,13 @@ logos.package_manifest.manifest = {
   modules: [* logos.package_manifest.module_declaration],
   variants: [* logos.package_manifest.package_variant],
   ? dependencies: [* logos.package_manifest.package_dependency],
+  ? contract_documents: [* logos.package_manifest.contract_document],
+}
+
+logos.package_manifest.contract_document = {
+  commitment: logos.schema_commitment,
+  schema_artifact: logos.package_manifest.artifact_id,
+  ? input_artifacts: [* logos.package_manifest.artifact_id],
 }
 
 logos.package_manifest.module_declaration = {
@@ -236,6 +243,7 @@ logos.package_manifest.module_declaration = {
   artifact: logos.package_manifest.artifact_id,
   ? primary_contract: logos.schema_commitment,
   ? implements: [* logos.schema_commitment],
+  ? extends: [* logos.schema_commitment],
   ? requires: [* logos.package_manifest.provider_requirement],
   ? requested_permissions: [* logos.package_manifest.requested_permission],
   ? configuration: logos.package_manifest.configuration_declaration,
@@ -263,6 +271,7 @@ logos.package_manifest.requested_permission = {
 logos.package_manifest.package_dependency = {
   package: logos.package_manifest.package_name,
   requirement: logos.package_manifest.package_version_requirement,
+  ? contracts: [* logos.schema_commitment],
 }
 
 logos.package_manifest.package_version_requirement = {
@@ -291,6 +300,8 @@ logos.package_manifest.manifest_artifact = {
 """
   # spec-module-package-manager.md §4.3, spec/mirrors/PKG/4.3.signing-profile.cddl
   PackageSigningProfileDocument* = """
+_module = "logos_package_manager"
+
 logos.package_manager.package_signing_profile =
   "logos.package-signing.cose-sign1-slh-dsa-sha2-192s"
 
@@ -372,8 +383,6 @@ logos.package_manager.resolved_package_dependency = {
 """
   # spec-module-package-manager.md §15, spec/mirrors/PKG/15.methods.cddl
   PackageManagerMethodsDocument* = """
-_module = "logos_package_manager"
-
 logos.package_manager.cursor = tstr .size (1..512)
 logos.package_manager.progress_key = tstr .size (1..128)
 logos.package_manager.progress_phase =
@@ -488,5 +497,6 @@ logos.package_manager.package_error_code =
   "incompatible-platform" /
   "dependency-unavailable" /
   "artifact-integrity-failed" /
-  "signature-verification-failed"
+  "signature-verification-failed" /
+  "unsupported-manifest"
 """

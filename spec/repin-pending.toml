@@ -23,16 +23,10 @@
 closed = ["P1", "P2", "P3", "P4", "P5"]  # sub-steps that have merged; `spectrace pending` fails if one still owns an entry
 
 [mirror]
-"PKG/4.manifest.cddl" = "P7"
-"PKG/4.3.signing-profile.cddl" = "P7"
-"PKG/15.methods.cddl" = "P7"
-"PKG/14.package-errors.cddl" = "P7"
 "IFC/2.6.call-surface.cddl" = "P8"
 "PKG/12.runtime-handoff.cddl" = "P8"
 
 [pin]
-"pkg-manifest-schema-root" = "P7"
-"pkg-manifest-subtree-root" = "P7"
 
 [units.added]
 "BCP-0101" = "P9"
