@@ -380,11 +380,17 @@ G352 and G354 (DECISIONS, "Open items").
   - `describe_provider` asks a discover decision per extended view (r15); `list_modules` reports `extends` (r13).
   - PKG-0338, PKG-0347 and PKG-0351, the handoff's `extends`, are deferred by name to 5-8, and TXT-0545 rides PKG-0351
     there (G391); `spectrace` derives a section-less new-side entry's section from its lines (Q1).
-  - Held on TF-62: the rule for a record that omits a field (IFC-0246's engine half) and RUN-0258's record, so P8 stays
-    open.
+  - Held on TF-62 until P8c: the rule for a record that omits a field (IFC-0246's engine half) and RUN-0258's record.
 
   Claimed: IFC-0957, RUN-1104 and RUN-1105, and IFC-0958's route half; RUN-0265 and RUN-0267 compared; RUN-0268 stale
   (RUN-1105). 11 text entries cleared, TXT-0545 deferred.
+- 2026-11-20, re-pin P8c (I112 part c), the items held on TF-62:
+  - Once a record supplies any contract reference, an omitted primary is none and an omitted `implements` or `extends` is
+    empty, and each is compared with the validated descriptor; a record stating fewer references than its descriptor
+    declares fails at bind (G393, the interim on TF-62 the owner decided 2026-11-20). No fixture needed a change.
+
+  IFC-0246 compared (both halves) and RUN-0258 compared (the stored record of a host-configuration input; the handoff is
+  5-8's). P8 closed.
 
 ## Tiers at f4f83471 (the original plan)
 
