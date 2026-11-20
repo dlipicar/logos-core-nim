@@ -115,8 +115,9 @@ suite "ifc.call-surface: the provider call-surface descriptor (INTERFACE §2.6)"
           else:
             rules[^1][1].add field[0 ..< colon]
     check rules.len == 3
-    check rules[0] == ("provider-call-surface", @["interfaces"], @["primary"])
-    check DescriptorKeys.toSeq.filterIt(it != "primary") == rules[0][1]
+    check rules[0][0] == "provider-call-surface"
+    check rules[0][1] == DescriptorRequired.toSeq
+    check rules[0][2] == DescriptorOptional.toSeq
     check rules[1][0] == "provider-contract-schema"
     check rules[1][1] == ContractEntryKeys.toSeq
     check rules[2][0] == "provider-supporting-schema"

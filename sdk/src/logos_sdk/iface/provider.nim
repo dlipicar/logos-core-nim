@@ -24,8 +24,9 @@ const
   MaxDescriptorInterfaces* = 256 ## [SPEC INTERFACE §2.6] `interfaces` entries
   MaxSupportingNamespaceBytes* = 128
     ## [SPEC INTERFACE §2.6] `provider-supporting-schema.namespace`
-  DescriptorKeys* = ["primary", "interfaces"]
-    ## [SPEC INTERFACE §2.6] `provider-call-surface` (`primary` optional)
+  DescriptorRequired* = ["interfaces"]
+    ## [SPEC INTERFACE §2.6] `provider-call-surface`'s required keys
+  DescriptorOptional* = ["primary", "extends"] ## and its optional ones
   ContractEntryKeys* = ["commitment", "document", "supporting_schemas"]
     ## [SPEC INTERFACE §2.6] `provider-contract-schema`
   SupportingEntryKeys* = ["namespace", "commitment", "document"]
@@ -225,7 +226,7 @@ proc acceptCallSurfaceDescriptor*(
     return err("the descriptor is larger than 8,388,608 bytes")
   let v = decodeCbor(data).valueOr:
     return err("not Logos deterministic CBOR: " & $error)
-  ?closedMap(v, "the descriptor", ["interfaces"], ["primary"])
+  ?closedMap(v, "the descriptor", DescriptorRequired, DescriptorOptional)
   let list = v.lookup("interfaces").get
   if list.kind != ckArray:
     return err("interfaces is not an array")

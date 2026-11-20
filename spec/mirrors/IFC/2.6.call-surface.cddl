@@ -1,6 +1,7 @@
 provider-call-surface = {
     ? primary: provider-contract-schema,
     interfaces: [* provider-contract-schema],
+    ? extends: [+ provider-contract-schema],
 }
 
 provider-contract-schema = {

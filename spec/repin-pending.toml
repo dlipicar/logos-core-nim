@@ -23,7 +23,6 @@
 closed = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"]  # sub-steps that have merged; `spectrace pending` fails if one still owns an entry
 
 [mirror]
-"IFC/2.6.call-surface.cddl" = "P8"
 
 [pin]
 
@@ -46,7 +45,6 @@ closed = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"]  # sub-steps that have merge
 "RUN-1105" = "P8"
 
 [units.changed]
-"IFC-0226" = "P8"
 "IFC-0230" = "P8"
 "IFC-0245" = "P8"
 "IFC-0246" = "P8"
