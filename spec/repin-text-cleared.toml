@@ -1688,8 +1688,8 @@ id = "TXT-0193"
 step = "P4"
 kind = "reword"
 pair = "TXT-0258"
-reading = "'the existing route-revocation policy' becomes 'the in-flight call policy of this section'. §9.3.15 states no in-flight policy: the only one is l.3123 in §9.3.14 (profile or implementation policy), which was the same section before §9.3 was split, so the reading is that one (an editorial remark, I108). Ours is G174 and G260: a revoked route ends an admitted call NOT_AUTHORISED without committing its result, and a transported session answers in-flight Requests NOT_AUTHORISED, then closes. The sentence's case, a disabled listener or export, has no instance here: none can be enabled (G298)."
-compared = "RUNTIME l.3317 at 6cac8335 against l.3459 at 6a4dfa28, l.3123 at 6cac8335, and `endRoute` in src/logos_core/runtime/engine.nim (G174, G260)."
+reading = "'the existing route-revocation policy' becomes 'the in-flight call policy of this section'. §9.3.15 states no in-flight policy: the only one is l.3123 in §9.3.14 (profile or implementation policy), which was the same section before §9.3 was split, so the reading is that one (an editorial remark, I108). Ours, since re-pin P5d replaced G174's interim by RUNTIME l.1271 (G174's P5d note; G260): an admitted call that its route's closure, failure, revocation or expiry ends before a valid final result completes TRANSPORT_ERROR, and a transported session no longer answers in-flight Requests NOT_AUTHORISED (at P4 this reading stated that interim; corrected at P9, Q11). The sentence's case, a disabled listener or export, has no instance here: none can be enabled (G298)."
+compared = "RUNTIME l.3317 at 6cac8335 against l.3459 at 6a4dfa28, l.3123 and l.1271 at 6cac8335, and `endRoute` in src/logos_core/runtime/engine.nim (G174 with its P5d note, G260)."
 
 [[text]]
 id = "TXT-0213"
@@ -2176,16 +2176,16 @@ compared = "RUNTIME l.888 at 6a4dfa28 against TXT-0293 at 6cac8335 and runtime/i
 [[text]]
 id = "TXT-0335"
 step = "P5"
-kind = "removed"
-reading = "§5.2.1 (generated helpers without a route handle) is gone at 6cac8335. The mode was never provided: conformance/claims/RUN.toml marks §5.2.1 out of scope, and generated helpers always take a route handle."
-compared = "RUNTIME l.1101 at 6a4dfa28; no counterpart at 6cac8335."
+kind = "informative"
+reading = "Reworded, not removed: §5.2.1 (the singleton direct-call convenience mode) stays at 6cac8335, and l.1027 routes a no-handle helper's call through the calling module instance's route to the single live instance, where l.1101 used the runtime's default binding for the module name. Nothing changes here: the mode was never provided, conformance/claims/RUN.toml marks §5.2.1 out of scope, and generated helpers always take a route handle. (Recorded as `removed` at P5; corrected at P9, Q11. The frozen list has no new-side entry for l.1027, so no `reword` pair.)"
+compared = "RUNTIME l.1101 at 6a4dfa28 against l.1021-1042 (l.1027) at 6cac8335."
 
 [[text]]
 id = "TXT-0336"
 step = "P5"
-kind = "removed"
-reading = "Goes with §5.2.1 (TXT-0335): no no-handle helper exists, so there is no failure mode to state."
-compared = "RUNTIME l.1117 at 6a4dfa28; no counterpart at 6cac8335."
+kind = "informative"
+reading = "Reworded with §5.2.1 (TXT-0335): l.1038 asks how no-handle helpers fail when that route is not ready, where l.1117 said the default module binding. No no-handle helper exists, so there is no failure mode to state. (Recorded as `removed` at P5; corrected at P9, Q11.)"
+compared = "RUNTIME l.1117 at 6a4dfa28 against l.1038 at 6cac8335."
 
 [[text]]
 id = "TXT-0541"
@@ -3532,7 +3532,7 @@ site = "src/logos_core/runtime/realizer.nim"
 id = "TXT-0345"
 step = "P6"
 kind = "holds"
-reading = "Configuration takes `configuration-schema-mismatch` and its detail from Interface §5.1 (sdk/src/logos_sdk/iface/outcome.nim), only for a caller that may see the schema."
+reading = "Interface §5.1 depends on Configuration for the accepted configuration-schema semantics behind `configuration-schema-mismatch`'s validation detail (an upward exception). Ours: the reason and its detail are Interface §5.1's (sdk/src/logos_sdk/iface/outcome.nim), staged against the accepted configuration schema and given only to a caller that may see the schema. (P6 stated the dependency the other way round; corrected at P9, Q11.)"
 compared = "BCP l.83 at 6cac8335 against runtime/invoke.nim stage and engine.nim's detail check, and the TC test."
 site = "tests/test_config.nim"
 named = "one not of the root carries configuration-schema-mismatch"
@@ -3744,8 +3744,8 @@ compared = "SEC l.473 at 6a4dfa28 against l.474 at 6cac8335."
 id = "TXT-0566"
 step = "P6"
 kind = "informative"
-reading = "Binds deployments on iOS, outside Tier 5."
-compared = "SEC l.476 at 6cac8335."
+reading = "Descriptive at 6cac8335: an iOS deployment cannot rely on arbitrary post-install native module loading (was MUST NOT; SEC-0044 retired). It binds nothing, and nothing here is built for iOS. (P6 read it as binding iOS deployments; corrected at P9, Q11.)"
+compared = "SEC l.476 at 6cac8335 against l.475 at 6a4dfa28."
 
 [[text]]
 id = "TXT-0450"
