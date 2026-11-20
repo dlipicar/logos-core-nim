@@ -7,6 +7,8 @@ import unittest2
 import logos_sdk/base/hex
 import logos_sdk/[cbor, pins]
 import logos_sdk/crypto/blake3
+import logos_sdk/iface/accept
+from logos_sdk/iface/surface import schemaCommitment
 import ../src/logos_core/package/lgx
 import zlib/zlib_api
 
@@ -693,3 +695,229 @@ suite "pkg.lgx: manifests, signatures and artifacts in the archive (PM §3, §7.
       check hostPathRules() == folding
     else:
       check hostPathRules() == PathRules()
+
+# Contract documents ----------------------------------------------------------------
+
+const
+  unitsDoc = "units.label = tstr\n"
+  dialOld =
+    "_interface = \"dial\"\n\ndial.turn_request = {\n  by: units.label,\n}\n" &
+    "dial.turn_response = {}\n"
+  dialNew = dialOld & "dial.reset_request = {}\ndial.reset_response = {}\n"
+  gaugeDoc =
+    "_interface = \"gauge\"\n\ngauge.read_request = {}\ngauge.read_response = {}\n"
+
+proc rootOf(
+    doc: string,
+    ifaces: openArray[string] = [],
+    supp: openArray[string] = [],
+    opts = AcceptOptions(byOwnName: true),
+): Digest =
+  let r = acceptContractSet(doc, ifaces, supp, opts)
+  if r.isErr:
+    checkpoint r.error
+  r.get.primary.root
+
+proc implementing(root: Digest): string =
+  "_implements = [h'" & toHex(root) & "']\n"
+
+let
+  dialNewRoot = rootOf(dialNew, [], [unitsDoc])
+  alphaOld =
+    "_module = \"alpha_module\"\n" & implementing(dialNewRoot) &
+    "\nalpha.ping_request = {}\nalpha.ping_response = {\n  n: units.label,\n}\n"
+  alphaNew = alphaOld & "alpha.pong_request = {}\nalpha.pong_response = {}\n"
+  alphaChanged =
+    "_module = \"alpha_module\"\n" & implementing(dialNewRoot) &
+    "\nalpha.ping_request = {}\nalpha.ping_response = {}\n"
+  alphaIface =
+    "_interface = \"alpha\"\n\nalpha.ping_request = {}\nalpha.ping_response = {\n" &
+    "  n: units.label,\n}\n"
+  alphaNewC = schemaCommitment(rootOf(alphaNew, [dialNew], [unitsDoc]))
+  alphaOldC = schemaCommitment(rootOf(alphaOld, [dialNew], [unitsDoc]))
+  alphaChangedC = schemaCommitment(rootOf(alphaChanged, [dialNew], [unitsDoc]))
+  alphaIfaceC = schemaCommitment(rootOf(alphaIface, [], [unitsDoc]))
+  dialNewC = schemaCommitment(dialNewRoot)
+  dialOldC = schemaCommitment(rootOf(dialOld, [], [unitsDoc]))
+  gaugeC = schemaCommitment(rootOf(gaugeDoc))
+  unitsC = schemaCommitment(rootOf(unitsDoc))
+  docs = @[
+    ("c-alpha-changed", alphaChanged),
+    ("c-alpha-iface", alphaIface),
+    ("c-alpha-new", alphaNew),
+    ("c-alpha-old", alphaOld),
+    ("c-dial-new", dialNew),
+    ("c-dial-old", dialOld),
+    ("c-extra", "extra.n = uint64\n"),
+    ("c-gauge", gaugeDoc),
+    ("c-units", unitsDoc),
+  ]
+
+type Entry = tuple[commitment: CborValue, schema: string, inputs: seq[string]]
+
+let
+  alphaNewE: Entry = (alphaNewC, "c-alpha-new", @["c-dial-new", "c-units"])
+  alphaOldE: Entry = (alphaOldC, "c-alpha-old", @["c-dial-new", "c-units"])
+  alphaChangedE: Entry = (alphaChangedC, "c-alpha-changed", @["c-dial-new", "c-units"])
+  alphaIfaceE: Entry = (alphaIfaceC, "c-alpha-iface", @["c-units"])
+  dialNewE: Entry = (dialNewC, "c-dial-new", @["c-units"])
+  dialOldE: Entry = (dialOldC, "c-dial-old", @["c-units"])
+  gaugeE: Entry = (gaugeC, "c-gauge", newSeq[string]())
+  everyEntry = @[alphaNewE, alphaOldE, dialNewE, dialOldE]
+
+proc byBytes(xs: openArray[CborValue]): seq[CborValue] =
+  result = @xs
+  result.sort(
+    proc(a, b: CborValue): int =
+      cmpBytes(encodeCbor(a), encodeCbor(b))
+  )
+
+proc contractPackage(
+    entries: openArray[Entry],
+    primary = Opt.some(alphaNewC),
+    implements = @[dialNewC],
+    extends = @[alphaOldC, dialOldC],
+    documents = docs,
+    module = 0,
+): seq[byte] =
+  ## The base package with these schema documents in both variants (as
+  ## `schema/<id>.cddl`), these `contract_documents` entries, and these
+  ## contracts on the module declaration `module`.
+  var linux = linuxFiles
+  var darwin = darwinFiles
+  for (id, text) in documents:
+    linux.add(("schema/" & id & ".cddl", b(text)))
+    darwin.add(("schema/" & id & ".cddl", b(text)))
+  let v = manifestValue()
+  for (vi, files) in [(0, linux), (1, darwin)]:
+    let arts = v.lookup("variants").get.items[vi].lookup("artifacts").get
+    for (id, _) in documents:
+      arts.items.add(artifact(id, "schema", "schema/" & id & ".cddl", files))
+  var listed: seq[Entry] = @entries
+  listed.sort(
+    proc(a, b: Entry): int =
+      cmpBytes(encodeCbor(a.commitment), encodeCbor(b.commitment))
+  )
+  var values: seq[CborValue]
+  for e in listed:
+    var fields =
+      @[(cbor("commitment"), e.commitment), (cbor("schema_artifact"), cbor(e.schema))]
+    if e.inputs.len > 0:
+      fields.add((cbor("input_artifacts"), cborArray(e.inputs.mapIt(cbor(it)))))
+    values.add(cborMap(fields))
+  if values.len > 0:
+    v.entries.add((cbor("contract_documents"), cborArray(values)))
+  let d = v.lookup("modules").get.items[module]
+  if primary.isSome:
+    d.entries.add((cbor("primary_contract"), primary.get))
+  if implements.len > 0:
+    d.entries.add((cbor("implements"), cborArray(byBytes(implements))))
+  if extends.len > 0:
+    d.entries.add((cbor("extends"), cborArray(byBytes(extends))))
+  pack(v, linux, darwin)
+
+suite "pkg.lgx: contract documents and extensions (PM §4, §9)":
+  test "[PKG-0579] [TXT-0457] each contract document constructs its commitment from the selected variant's documents":
+    let p = contractPackage(everyEntry)
+    check opened(p) == "ok"
+    check opened(p, darwinHost) == "ok"
+    let pkg = openLgx(p, trust, linuxHost, DefaultLgxLimits, PathRules()).get
+    check pkg.contracts.mapIt(encodeCbor(schemaCommitment(it.primary.root))) ==
+      byBytes(everyEntry.mapIt(it.commitment)).mapIt(encodeCbor(it))
+    # The earlier concrete contract is built with the interface it selects.
+    check pkg.contracts.anyIt(it.primary.source == alphaOld and it.interfaces.len == 1)
+    # One byte changed in a supporting document (its hash updated with it).
+    var changed = docs
+    changed[^1] = ("c-units", "units.label = bstr\n")
+    check opened(contractPackage(everyEntry, documents = changed)) == "invalid-package"
+
+  test "[PKG-0579] [TXT-0457] a document that cannot be constructed, or an entry that is not a contract":
+    var broken = docs
+    broken[^1] = ("c-units", "units.label = \n")
+    check opened(contractPackage(everyEntry, documents = broken)) == "invalid-package"
+    # An unused input and a repeated one.
+    let unused: Entry = (dialOldC, "c-dial-old", @["c-extra", "c-units"])
+    check opened(contractPackage([alphaNewE, dialNewE, unused])) == "invalid-package"
+    let repeated: Entry = (dialOldC, "c-dial-old", @["c-units", "c-units"])
+    check opened(contractPackage([alphaNewE, dialNewE, repeated])) == "invalid-package"
+    # An entry whose document is a supporting schema.
+    let supportingEntry: Entry = (unitsC, "c-units", newSeq[string]())
+    check opened(contractPackage([supportingEntry], Opt.none(CborValue), @[], @[])) ==
+      "invalid-package"
+
+  test "[TXT-0458] [IMPL-DECISION G392] each document is Logos-defined or ordinary by its own contract name":
+    let logosModule =
+      "_module = \"logos_probe\"\n\nlogos_probe.ping_request = {}\n" &
+      "logos_probe.ping_response = {}\n"
+    let logosIface =
+      "_interface = \"logos.probe\"\n\nlogos.probe.read_request = {}\n" &
+      "logos.probe.read_response = {}\n"
+    let usesLogos =
+      "_module = \"probe_module\"\n" & implementing(rootOf(logosIface)) &
+      "\nprobe.ping_request = {}\nprobe.ping_response = {}\n"
+    # (`_module` is not committed, so its declarations differ from logosModule's.)
+    let reservedInOrdinary =
+      "_module = \"probe_module\"\n\nlogos_probe.poke_request = {}\n" &
+      "logos_probe.poke_response = {}\n"
+    let named = @[
+      ("p-logos-iface", logosIface),
+      ("p-logos-module", logosModule),
+      ("p-reserved", reservedInOrdinary),
+      ("p-uses-logos", usesLogos),
+    ]
+    let held: seq[Entry] = @[
+      (schemaCommitment(rootOf(logosModule)), "p-logos-module", newSeq[string]()),
+      (schemaCommitment(rootOf(logosIface)), "p-logos-iface", newSeq[string]()),
+      (
+        schemaCommitment(rootOf(usesLogos, [logosIface])),
+        "p-uses-logos",
+        @["p-logos-iface"],
+      ),
+    ]
+    let none = Opt.none(CborValue)
+    check opened(contractPackage(held, none, @[], @[], named)) == "ok"
+    # An ordinary document that declares a reserved name, whatever its
+    # commitment under the system options.
+    let reserved: Entry = (
+      schemaCommitment(rootOf(reservedInOrdinary, opts = AcceptOptions(system: true))),
+      "p-reserved",
+      newSeq[string](),
+    )
+    check opened(contractPackage(held & @[reserved], none, @[], @[], named)) ==
+      "invalid-package"
+
+  test "[PKG-0580] [PKG-0589] [IMPL-DECISION G392] an extends entry is extended by the declaring module's contracts":
+    # Holds: the primary extends the earlier concrete contract, dial the earlier dial.
+    check opened(contractPackage(everyEntry)) == "ok"
+    # Every declared contract has an entry and none extends a changed declaration.
+    let changedExtends = @[alphaChangedC, dialOldC]
+    check opened(
+      contractPackage(
+        [alphaNewE, alphaChangedE, dialNewE, dialOldE], extends = changedExtends
+      )
+    ) == "invalid-package"
+    # The declared contract of the namespace has an entry and does not extend it,
+    # while another declared contract has none.
+    check opened(
+      contractPackage([alphaNewE, alphaChangedE, dialOldE], extends = changedExtends)
+    ) == "invalid-package"
+    # The same namespace with the other role.
+    check opened(
+      contractPackage(
+        [alphaNewE, alphaIfaceE, dialOldE], extends = @[alphaIfaceC, dialOldC]
+      )
+    ) == "invalid-package"
+    # Every declared contract has an entry and none shares the namespace.
+    check opened(contractPackage([alphaNewE, dialNewE, gaugeE], extends = @[gaugeC])) ==
+      "invalid-package"
+    # The pair has no entry (dial's own contract), so the Package Manager cannot
+    # decide and the Runtime validates.
+    check opened(contractPackage([alphaNewE, dialOldE], extends = @[dialOldC])) == "ok"
+    # Every declaration of the manifest counts, not only the selected variant's:
+    # beta_module is in the linux variant only.
+    let onBeta = contractPackage(
+      [alphaNewE, alphaChangedE, dialNewE, dialOldE],
+      extends = changedExtends,
+      module = 1,
+    )
+    check opened(onBeta, darwinHost) == "invalid-package"

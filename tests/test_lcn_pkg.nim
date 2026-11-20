@@ -110,21 +110,27 @@ suite "pkg.cli: lcn-pkg producer commands":
     let ordered = work / "ordered"
     put(ordered / "linux-x86_64" / "lib" / "libalpha.so", "ALPHA for linux")
     put(ordered / "linux-x86_64" / "schema" / "alpha.cddl", "alpha = uint\n")
+    put(ordered / "linux-x86_64" / "schema" / "beta.cddl", "beta = uint\n")
+    put(ordered / "linux-x86_64" / "schema" / "gamma.cddl", "gamma = uint\n")
     let src = work / "ordered.edn"
     put(
       src,
       "{\"package\": \"logos.example\", \"version\": \"0.1.0\", " &
         "\"modules\": [{\"module\": \"alpha_module\", \"artifact\": \"alpha\", " &
-        "\"extends\": [" & commitment(2) & ", " & commitment(1) & "]}], " &
+        "\"primary_contract\": " & commitment(7) & ", " & "\"extends\": [" &
+        commitment(2) & ", " & commitment(1) & "]}], " &
         "\"variants\": [{\"id\": \"linux-x86_64\", \"platform\": {\"os\": \"linux\"}, " &
         "\"artifacts\": [{\"id\": \"alpha\", \"kind\": \"module-binary\", " &
         "\"path\": \"lib/libalpha.so\", \"hash\": h''}, {\"id\": \"alpha-schema\", " &
-        "\"kind\": \"schema\", \"path\": \"schema/alpha.cddl\", \"hash\": h''}]}], " &
+        "\"kind\": \"schema\", \"path\": \"schema/alpha.cddl\", \"hash\": h''}, " &
+        "{\"id\": \"beta-schema\", \"kind\": \"schema\", \"path\": \"schema/beta.cddl\", " &
+        "\"hash\": h''}, {\"id\": \"gamma-schema\", \"kind\": \"schema\", " &
+        "\"path\": \"schema/gamma.cddl\", \"hash\": h''}]}], " &
         "\"dependencies\": [{\"package\": \"logos.base\", \"requirement\": " &
         "{\"kind\": \"compatible\", \"version\": \"1.0.0\"}, \"contracts\": [" &
         commitment(4) & ", " & commitment(3) & "]}], " & "\"contract_documents\": [" &
         "{\"commitment\": " & commitment(6) &
-        ", \"schema_artifact\": \"alpha-schema\", \"input_artifacts\": [\"alpha\", \"alpha-schema\"]}, " &
+        ", \"schema_artifact\": \"alpha-schema\", \"input_artifacts\": [\"gamma-schema\", \"beta-schema\"]}, " &
         "{\"commitment\": " & commitment(5) &
         ", \"schema_artifact\": \"alpha-schema\"}]}",
     )
@@ -135,7 +141,7 @@ suite "pkg.cli: lcn-pkg producer commands":
       m.modules[0].extends.len == 2
       m.dependencies[0].contracts.len == 2
       m.contractDocuments.len == 2
-      m.contractDocuments[1].inputArtifacts == @["alpha", "alpha-schema"]
+      m.contractDocuments[1].inputArtifacts == @["gamma-schema", "beta-schema"]
 
   test "sign: a local key and an external signer (--emit-tbs, --attach-sig) differ only in the hedged signature":
     let tbs = work / "tbs.bin"

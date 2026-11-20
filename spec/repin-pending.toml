@@ -23,7 +23,6 @@
 closed = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"]  # sub-steps that have merged; `spectrace pending` fails if one still owns an entry
 
 [mirror]
-"IFC/2.6.call-surface.cddl" = "P8"
 
 [pin]
 
@@ -31,24 +30,11 @@ closed = ["P1", "P2", "P3", "P4", "P5", "P6", "P7"]  # sub-steps that have merge
 "BCP-0101" = "P9"
 "BCP-0102" = "P9"
 "BCP-0103" = "P9"
-"CMT-0242" = "P8"
 "IFC-0957" = "P8"
-"IFC-0958" = "P8"
-"IFC-0968" = "P8"
-"IFC-0969" = "P8"
-"PKG-0577" = "P8"
-"PKG-0578" = "P8"
-"PKG-0579" = "P8"
-"PKG-0580" = "P8"
-"PKG-0589" = "P8"
-"PKG-0590" = "P8"
 "RUN-1104" = "P8"
 "RUN-1105" = "P8"
 
 [units.changed]
-"IFC-0226" = "P8"
-"IFC-0230" = "P8"
-"IFC-0245" = "P8"
 "IFC-0246" = "P8"
 "PKG-0338" = "P8"
 "PKG-0347" = "P8"
@@ -158,88 +144,6 @@ class = "todo"
 what = "**Module provider:** The Runtime-known, route-facing exposure of schema-defined method or event behavior from a module instance. One provider record may expose the module's primary concrete contract and exact implemented interface contract views. Every route selects exactly one of those contracts. A local provider is backed by a local module instance. A remote module facade is a local provider record that represents a module instance owned by another Runtime. A provider does not introduce a separate module implementation or lifecycle."
 
 [[text]]
-id = "TXT-0526"
-step = "P8"
-spec = "CMT"
-line = "966"
-side = "new"
-section = "§9.1"
-class = "todo"
-what = "**Contract extension.** A contract B extends a contract A when all of the following hold:"
-
-[[text]]
-id = "TXT-0527"
-step = "P8"
-spec = "CMT"
-line = "968"
-side = "new"
-section = "§9.1"
-class = "todo"
-what = "both schema roots are constructed under the same semantic commitment-model revision;"
-
-[[text]]
-id = "TXT-0528"
-step = "P8"
-spec = "CMT"
-line = "969"
-side = "new"
-section = "§9.1"
-class = "todo"
-what = "both have the same schema namespace;"
-
-[[text]]
-id = "TXT-0529"
-step = "P8"
-spec = "CMT"
-line = "970"
-side = "new"
-section = "§9.1"
-class = "todo"
-what = "both are concrete module contracts with the same `_module` value, or both are interface contracts;"
-
-[[text]]
-id = "TXT-0530"
-step = "P8"
-spec = "CMT"
-line = "971"
-side = "new"
-section = "§9.1"
-class = "todo"
-guard = true
-what = "every `schema-declaration` of A is a `schema-declaration` of B with the identical kind, qualified name, and body; and"
-
-[[text]]
-id = "TXT-0531"
-step = "P8"
-spec = "CMT"
-line = "972"
-side = "new"
-section = "§9.1"
-class = "todo"
-what = "every implemented-interface root of A is an implemented-interface root of B."
-
-[[text]]
-id = "TXT-0532"
-step = "P8"
-spec = "CMT"
-line = "975"
-side = "new"
-section = "§9.1"
-class = "todo"
-what = "Every method and event identity of A is then also a method or event identity of B."
-
-[[text]]
-id = "TXT-0533"
-step = "P8"
-spec = "CMT"
-line = "976"
-side = "new"
-section = "§9.1"
-source = "review"
-class = "behaviour"
-what = "A contract that changes or omits a declaration of A does not extend A."
-
-[[text]]
 id = "TXT-0535"
 step = "P8"
 spec = "IFC"
@@ -248,70 +152,6 @@ side = "new"
 section = "§1.2"
 class = "todo"
 what = "Such a view selects the earlier schema root and contains only its declarations; each of its methods and events is the same declaration, with the same implementation, as in the extending contract."
-
-[[text]]
-id = "TXT-0536"
-step = "P8"
-spec = "IFC"
-line = "204"
-side = "new"
-section = "§1.2"
-class = "todo"
-what = "Adding declarations is the only change an extension permits."
-
-[[text]]
-id = "TXT-0538"
-step = "P8"
-spec = "IFC"
-line = "1693"
-side = "new"
-section = "§2.6"
-class = "todo"
-guard = true
-what = "Each `extends` entry carries an earlier contract that the `primary` contract or one `interfaces` contract of this descriptor extends under LOGOS-MODULE-COMMITMENT-MODEL."
-
-[[text]]
-id = "TXT-0539"
-step = "P8"
-spec = "IFC"
-line = "1694"
-side = "new"
-section = "§2.6"
-class = "todo"
-guard = true
-what = "An entry for an earlier concrete module contract follows the rules for `primary`, and an entry for an earlier interface contract follows the rules for `interfaces`."
-
-[[text]]
-id = "TXT-0540"
-step = "P8"
-spec = "IFC"
-line = "1695"
-side = "new"
-section = "§2.6"
-class = "todo"
-guard = true
-what = "An `extends` entry adds no method or event: each of its declarations is a declaration of the contract that extends it."
-
-[[text]]
-id = "TXT-0457"
-step = "P8"
-spec = "PKG"
-line = "356"
-side = "new"
-section = "§4"
-class = "todo"
-guard = true
-what = "Each entry names the `schema` artifact that holds the contract document for that commitment and, in `input_artifacts`, the `schema` artifacts that hold the interface and supporting schema documents needed to construct it."
-
-[[text]]
-id = "TXT-0458"
-step = "P8"
-spec = "PKG"
-line = "359"
-side = "new"
-section = "§4"
-class = "todo"
-what = "A document that defines a contract under a name reserved by LOGOS-MODULE-INTERFACE Section 1.3 is validated as a Logos-defined contract, and every other document as an ordinary contract; carrying such a document grants no authority to provide that contract."
 
 [[text]]
 id = "TXT-0545"

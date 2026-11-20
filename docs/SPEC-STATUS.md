@@ -357,6 +357,19 @@ G352 and G354 (DECISIONS, "Open items").
 
   Claimed: CFG-0151, CFG-0153, CFG-0156, LDR-0167 to LDR-0191 and BCP-0104. 54 text entries cleared; BCP-0098,
   CFG-0046, CFG-0145, SEC-0021 and SEC-0057 retired.
+- 2026-11-20, re-pin P8a (I112), contract extension in the SDK and the Package Manager at 6cac8335:
+  - COMMITMENT §9.1's relation is decided on two constructed models (`extendsContract`); a model no document built is
+    refused, and `_module` is compared as written (TF-55; G392).
+  - A binding keeps the earlier contracts it extends, and the descriptor carries them in `extends`: each accepted as its own
+    set, related to the described contract of its namespace, out of the binding's set rules, identity checked across the
+    three arrays (I67 revised; G392 r2-r7). `matchesContracts` takes the extended set. An earlier root answers `logos.schema`
+    with its own documents.
+  - The Package Manager builds every contract document from the selected variant and compares its root, judges reserved
+    names per document, and checks each `extends` entry against the declaration's contracts under G392's rule (I37).
+  - After P8a no record can state `extends`, so no route selects an earlier root; P8b adds the Runtime.
+
+  Claimed: CMT-0242, IFC-0958 (its SDK half until P8b), IFC-0968, IFC-0969, PKG-0577 to PKG-0580, PKG-0589 and PKG-0590;
+  IFC-0226, IFC-0230 and IFC-0245 compared. 14 text entries cleared. IFC-0246 stays pending until P8b.
 
 ## Tiers at f4f83471 (the original plan)
 

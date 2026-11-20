@@ -3753,3 +3753,93 @@ step = "P6"
 kind = "informative"
 reading = "A reference entry."
 compared = "SEC l.588 at 6cac8335."
+
+# P8a: the descriptor mirror --------------------------------------------------------------------------------------
+
+[[units]]
+id = "IFC-0226"
+compared = "IF l.1683-1686 at 6a4dfa28 had no `extends`; l.1654-1658 at 6cac8335 add `? extends: [+ provider-contract-schema]`. spec/mirrors/IFC/2.6.call-surface.cddl is rewritten from the text; test_call_surface's [IFC-0226] test reads the regenerated mirror and checks its required and optional keys against DescriptorRequired and DescriptorOptional, which the descriptor's closed-map check uses."
+
+# P8a: contract extension (CMT §9.1) ------------------------------------------------------------------------------
+
+[[text]]
+id = "TXT-0526"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0527"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0528"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0529"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0530"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0531"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0532"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"
+
+[[text]]
+id = "TXT-0533"
+step = "P8"
+test = "sdk/tests/test_commitment.nim"
+
+# P8a: the descriptor's extends (IF §2.6) -------------------------------------------------------------------------
+
+[[units]]
+id = "IFC-0230"
+compared = "IF l.1704 at 6a4dfa28 limited `interfaces` to 256 entries; l.1675-1676 at 6cac8335 limit `extends` too. provider.nim's MaxDescriptorExtends is checked before the entries are parsed and when a binding is encoded; test_call_surface's [IFC-0230] test refuses 257 of each."
+
+[[units]]
+id = "IFC-0245"
+compared = "IF l.1740 at 6a4dfa28 rejected a bare-name collision across the described contracts; l.1712-1715 at 6cac8335 name the `primary` and `interfaces` contracts, so an `extends` entry, which repeats its successor's bare names, is not a collision, and duplicate contract identity is read across all three arrays (G392). The eight existing [IFC-0245] cases stand; a new one shows both."
+
+[[text]]
+id = "TXT-0536"
+step = "P8"
+test = "sdk/tests/test_call_surface.nim"
+
+[[text]]
+id = "TXT-0538"
+step = "P8"
+test = "sdk/tests/test_call_surface.nim"
+
+[[text]]
+id = "TXT-0539"
+step = "P8"
+test = "sdk/tests/test_call_surface.nim"
+
+[[text]]
+id = "TXT-0540"
+step = "P8"
+test = "sdk/tests/test_call_surface.nim"
+
+# P8a: contract documents and extensions in the Package Manager (PM §4, §9) ---------------------------------------
+
+[[text]]
+id = "TXT-0457"
+step = "P8"
+test = "tests/test_lgx.nim"
+
+[[text]]
+id = "TXT-0458"
+step = "P8"
+test = "tests/test_lgx.nim"

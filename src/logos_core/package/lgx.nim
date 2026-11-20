@@ -13,7 +13,10 @@ import results
 import zlib/zlib_api
 import logos_sdk/base/[hex, nfc]
 import logos_sdk/cbor/utf8
+import logos_sdk/cbor
 import logos_sdk/crypto/blake3
+import logos_sdk/iface/accept
+from logos_sdk/iface/surface import schemaCommitment
 import ./[errors, manifest, signing]
 
 export results, errors, manifest, signing
@@ -69,6 +72,10 @@ type
     artifacts*: seq[SelectedArtifact] ## the selected variant's, in manifest order
     modules*: seq[ModuleDeclaration]
       ## [SPEC PM §5, §7.1] the selected module declarations, in manifest order
+    contracts*: seq[ContractSet]
+      ## [SPEC PM §4 l.355-359] each `contract_documents` entry's contract,
+      ## constructed from the selected variant's documents, in manifest order.
+      ## Carrying one grants no authority to provide it (l.359).
 
 const DefaultLgxLimits* = LgxLimits(
   compressed: 1 shl 30,
@@ -625,6 +632,124 @@ func checkInstallPaths*(
             return err("a character Windows does not allow in " & p)
   ok()
 
+# Contract documents ----------------------------------------------------------------
+
+func documentText(data: seq[byte]): string =
+  result = newString(data.len)
+  for i, b in data:
+    result[i] = char(b)
+
+proc buildContracts(
+    m: Manifest, bytes: Table[string, seq[byte]]
+): Result[seq[ContractSet], PackageError] =
+  ## [SPEC PM §4 l.356-359] Each `contract_documents` entry's contract,
+  ## constructed from the selected variant's documents: its `schema_artifact`
+  ## the contract document, its `input_artifacts` the interfaces (by their
+  ## `_interface` metadata) and supporting schemas it needs. A document that
+  ## cannot be constructed, an entry whose document is a supporting schema and
+  ## a root that differs from the commitment are `invalid-package` (l.358;
+  ## I37). [IMPL-DECISION G392] Each document is validated as Logos-defined or
+  ## ordinary by its own contract name (l.359), and each supporting schema and
+  ## each interface with one supporting set is accepted once per open.
+  let opts = AcceptOptions(byOwnName: true)
+  var supporting = initTable[string, Contract]()
+  var interfaces = initTable[(string, seq[string]), Contract]()
+  var built: seq[ContractSet]
+  for c in m.contractDocuments:
+    let what = "contract document " & c.schemaArtifact
+    var ifaceIds, suppIds: seq[string]
+    for id in c.inputArtifacts:
+      if declaredRole(documentText(bytes.getOrDefault(id))) == srInterface:
+        ifaceIds.add(id)
+      else:
+        suppIds.add(id)
+    var supp: seq[Contract]
+    for id in suppIds:
+      if id notin supporting:
+        let doc = acceptDocument(
+          documentText(bytes.getOrDefault(id)), pinnedContext(), opts
+        ).valueOr:
+          return err(invalid(what & ": input " & id & ": " & error))
+        if doc.model.role != srSupporting:
+          return err(
+            invalid(
+              what & ": input " & id & " is a " & $doc.model.role &
+                " schema, neither an interface nor a supporting schema"
+            )
+          )
+        supporting[id] = doc
+      supp.add(supporting.getOrDefault(id))
+    var ifaces: seq[Contract]
+    let suppKey = suppIds.sorted
+    for id in ifaceIds:
+      if (id, suppKey) notin interfaces:
+        let doc = acceptDocument(
+          documentText(bytes.getOrDefault(id)), dependencyContext(supp), opts
+        ).valueOr:
+          return err(invalid(what & ": input " & id & ": " & error))
+        interfaces[(id, suppKey)] = doc
+      ifaces.add(interfaces.getOrDefault((id, suppKey)))
+    let set = acceptContractSetUsing(
+      documentText(bytes.getOrDefault(c.schemaArtifact)), ifaces, supp, opts
+    ).valueOr:
+      return err(invalid(what & ": " & error))
+    if set.primary.model.role notin {srModule, srInterface}:
+      # [SPEC PM §4 l.356] the entry names a contract document
+      return err(invalid(what & " is a supporting schema, not a contract"))
+    if encodeCbor(schemaCommitment(set.primary.root)) != encodeCbor(c.commitment):
+      return err(invalid(what & " does not construct the entry's commitment"))
+    built.add(set)
+  ok(built)
+
+proc checkExtensions(m: Manifest, built: seq[ContractSet]): Result[void, PackageError] =
+  ## [SPEC PM §4 l.360, §9 l.1141, l.1143] Each `extends` commitment with an
+  ## entry, for every module declaration of the manifest, against the
+  ## declaration's own contracts (`primary_contract` and `implements`) that
+  ## have entries. [IMPL-DECISION G392] It holds when one of them extends it.
+  ## It fails when every declared contract has an entry and none extends it,
+  ## or when the declared contract of its namespace has an entry and does not
+  ## extend it (another role included). Otherwise the Package Manager cannot
+  ## construct the pair, and the Runtime validates the provider.
+  var byCommitment = initTable[seq[byte], Contract]()
+  for i, c in m.contractDocuments:
+    byCommitment[encodeCbor(c.commitment)] = built[i].primary
+  for d in m.modules:
+    var declared = d.implements
+    if d.primaryContract.isSome:
+      declared.insert(d.primaryContract.get, 0)
+    var have: seq[Contract]
+    for c in declared:
+      let k = encodeCbor(c)
+      if k in byCommitment:
+        have.add(byCommitment.getOrDefault(k))
+    for e in d.extends:
+      let k = encodeCbor(e)
+      if k notin byCommitment:
+        continue
+      let a = byCommitment.getOrDefault(k)
+      var holds = false
+      for b in have:
+        if extendsContract(b.model, a.model).isOk:
+          holds = true
+      if holds:
+        continue
+      if have.len == declared.len:
+        return err(
+          invalid(
+            "module " & d.module & ": none of its contracts extends the extends entry " &
+              a.model.namespace
+          )
+        )
+      for b in have:
+        if b.model.namespace == a.model.namespace:
+          let why = extendsContract(b.model, a.model).error
+          return err(
+            invalid(
+              "module " & d.module & ": its contract " & b.model.namespace & " " & why
+            )
+          )
+  ok()
+
 # Opening a package -----------------------------------------------------------------
 
 proc openLgx*(
@@ -645,8 +770,11 @@ proc openLgx*(
   ## (`artifact-integrity-failed`, M25) and each file declared exactly once
   ## (`invalid-package`); the selected variant's paths under the installation's
   ## rules (`invalid-package`); its artifacts within the extracted-size limit
-  ## and matching their hashes (`artifact-integrity-failed`). The target
-  ## platform comes from protected deployment policy (PM §7.1).
+  ## and matching their hashes (`artifact-integrity-failed`); each contract
+  ## document constructing its commitment, and each `extends` entry extended
+  ## by the declaration's contracts where both have entries (`invalid-package`,
+  ## PM §4 l.358-360). The target platform comes from protected deployment
+  ## policy (PM §7.1).
   let a = ?readLgx(data, limits)
   let manifestCbor = a.file(ManifestCborPath).valueOr:
     return err(invalid("the package has no manifest.cbor"))
@@ -734,6 +862,11 @@ proc openLgx*(
         integrity("artifact " & art.id & " does not match its hash " & art.hash.toHex)
       )
     pkg.artifacts.add(SelectedArtifact(artifact: art, data: bytes))
+  var byId = initTable[string, seq[byte]]()
+  for s in pkg.artifacts:
+    byId[s.artifact.id] = s.data
+  pkg.contracts = ?buildContracts(m, byId)
+  ?checkExtensions(m, pkg.contracts)
   var present = initHashSet[string]()
   for art in v.artifacts:
     present.incl(art.id)

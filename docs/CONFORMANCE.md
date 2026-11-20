@@ -521,6 +521,22 @@ Not claimed: erasure on remote paths. `tls-tcp` gives none and carries no marked
 or on `quic` whose permitted scope includes a marked method is refused (G277, `runtime/remotemarked`,
 called from 5-7a; RUN-1163 and TRN-0398 are deferred to it).
 
+### What the re-pin's P8a changes
+
+Contract extension at 6cac8335 (DECISIONS I112, G392), in the SDK and the Package Manager:
+
+- **The relation** (COMMITMENT §9.1): claimed for two documents this implementation constructs. A claim alone never
+  establishes it (CMT-0242).
+- **The descriptor's `extends`** (INTERFACE §2.6): limits, order, identity across the three arrays, each entry built by the
+  rules of its role and related to the described contract of its namespace (IFC-0968, IFC-0969). IFC-0246's comparison of
+  supplied references stays pending until P8b, which applies it to records.
+- **Schema answers** for an earlier root (IFC-0958): claimed by the binding's answer. No route selects an earlier root until
+  P8b lets a record state `extends`.
+- **The Package Manager** (PM §4, §9): every contract document is built from the selected variant and compared with its
+  commitment, and each `extends` entry is checked against the declaration's contracts when the Package Manager can build the
+  pair (PKG-0577 to PKG-0580, PKG-0589, PKG-0590). When it cannot, the Runtime validates the provider (PM l.1143); that half
+  is P8b's.
+
 ## Properties not claimed
 
 - A complete Logos module system (BCP §5.1; owner decision 10 (a), K18; DECISIONS G310, I97): there
