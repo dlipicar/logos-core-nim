@@ -15,10 +15,10 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import logos_sdk/codegen/[invokert, common_mirrors]
+import logos_sdk/codegen/[invokert, consumert, common_mirrors]
 import ./vault_module_types
 
-export invokert, common_mirrors, vault_module_types
+export invokert, consumert, common_mirrors, vault_module_types
 
 const
   primaryDocument = "; -- metadata --\x0A_module = \"vault_module\"\x0A_sensitive = [\"vault.exchange_request\", \"vault.exchange_response\", \"vault.fetch_response\", \"vault.store_request\"]\x0A\x0A; Input for tests/generated/vault_module_*: a provider whose contract marks\x0A; payloads (INTERFACE \xC2\xA71.2.1; Tier 4b step 4b-3b, DECISIONS I92). `peek` marks\x0A; nothing, `store` its request, `fetch` its response and `exchange` both\x0A; (tests/kit/vault_impl.nim).\x0A\x0Avault.peek_request = {\x0A  slot: uint32,\x0A}\x0A\x0Avault.peek_response = {\x0A  stored: bool,\x0A  size: uint32,\x0A}\x0A\x0Avault.store_request = {\x0A  slot: uint32,\x0A  secret: bstr .size (1..256),\x0A  ? note: tstr .size (1..256),\x0A}\x0A\x0Avault.store_response = {\x0A  stored: bool,\x0A}\x0A\x0Avault.fetch_request = {\x0A  slot: uint32,\x0A}\x0A\x0Avault.fetch_response = {\x0A  secret: bstr .size (0..256),\x0A  ? note: tstr .size (1..64),\x0A}\x0A\x0Avault.exchange_request = {\x0A  slot: uint32,\x0A  secret: bstr .size (1..256),\x0A}\x0A\x0Avault.exchange_response = {\x0A  previous: bstr .size (0..256),\x0A}\x0A"
@@ -297,6 +297,72 @@ proc callClear3(p1: ptr LogosResponseOwner, p7: ptr bool) =
   ## resets every output object without reading it.
   clearOwner(p1)
   resetOutput(p7)
+
+# Over a wrapped route handle (consumert, DECISIONS G339).
+
+proc invoke*(route: RouteHandle, request: VaultExchangeRequest): Result[VaultExchangeResponse, InvocationFailure] =
+  ## `vault.exchange` through `route` under its operation rules.
+  ?route.beginOperation()
+  defer:
+    route.endOperation()
+  invoke(route.raw, request)
+
+proc prepareInvoke*(route: RouteHandle, request: VaultExchangeRequest, onDone: CallDone[VaultExchangeResponse], user: pointer = nil, timeoutMs: uint64 = 0): Result[PreparedCall, InvocationFailure] =
+  ## `vault.exchange` through `route`, prepared and not yet submitted
+  ## (INTERFACE §2.9.1).
+  let t = toCbor(request)
+  var params = encodeCbor(t)
+  wipe(t)
+  result = prepareTyped(route, "exchange", params, VaultExchangeResponse, onDone, user, timeoutMs, marked = true)
+  wipe(params)
+
+proc invoke*(route: RouteHandle, request: VaultFetchRequest): Result[VaultFetchResponse, InvocationFailure] =
+  ## `vault.fetch` through `route` under its operation rules.
+  ?route.beginOperation()
+  defer:
+    route.endOperation()
+  invoke(route.raw, request)
+
+proc prepareInvoke*(route: RouteHandle, request: VaultFetchRequest, onDone: CallDone[VaultFetchResponse], user: pointer = nil, timeoutMs: uint64 = 0): Result[PreparedCall, InvocationFailure] =
+  ## `vault.fetch` through `route`, prepared and not yet submitted
+  ## (INTERFACE §2.9.1).
+  let t = toCbor(request)
+  var params = encodeCbor(t)
+  wipe(t)
+  result = prepareTyped(route, "fetch", params, VaultFetchResponse, onDone, user, timeoutMs, marked = true)
+  wipe(params)
+
+proc invoke*(route: RouteHandle, request: VaultPeekRequest): Result[VaultPeekResponse, InvocationFailure] =
+  ## `vault.peek` through `route` under its operation rules.
+  ?route.beginOperation()
+  defer:
+    route.endOperation()
+  invoke(route.raw, request)
+
+proc prepareInvoke*(route: RouteHandle, request: VaultPeekRequest, onDone: CallDone[VaultPeekResponse], user: pointer = nil, timeoutMs: uint64 = 0): Result[PreparedCall, InvocationFailure] =
+  ## `vault.peek` through `route`, prepared and not yet submitted
+  ## (INTERFACE §2.9.1).
+  let t = toCbor(request)
+  var params = encodeCbor(t)
+  wipe(t)
+  result = prepareTyped(route, "peek", params, VaultPeekResponse, onDone, user, timeoutMs)
+  wipe(params)
+
+proc invoke*(route: RouteHandle, request: VaultStoreRequest): Result[VaultStoreResponse, InvocationFailure] =
+  ## `vault.store` through `route` under its operation rules.
+  ?route.beginOperation()
+  defer:
+    route.endOperation()
+  invoke(route.raw, request)
+
+proc prepareInvoke*(route: RouteHandle, request: VaultStoreRequest, onDone: CallDone[VaultStoreResponse], user: pointer = nil, timeoutMs: uint64 = 0): Result[PreparedCall, InvocationFailure] =
+  ## `vault.store` through `route`, prepared and not yet submitted
+  ## (INTERFACE §2.9.1).
+  let t = toCbor(request)
+  var params = encodeCbor(t)
+  wipe(t)
+  result = prepareTyped(route, "store", params, VaultStoreResponse, onDone, user, timeoutMs)
+  wipe(params)
 
 proc vaultModuleCallsLayout*(): seq[(string, int)] =
   ## [IMPL] Each mirror's size, alignment and member offsets, by C name (tests).

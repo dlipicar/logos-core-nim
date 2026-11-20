@@ -6,7 +6,8 @@ sit above it. Seven rules keep that shape:
 
   sdk-closed          the SDK imports nothing outside the SDK
   base-below-binding  the SDK's base imports neither `codegen`, `kit` nor `testing`
-  kit-facade          what generated kits import never reaches `rcclient` or `rc_types`
+  kit-facade          what generated kits and calls import (each `kit_facade` root) never
+                      reaches `rcclient` or `rc_types`
   core-below-daemon   core imports nothing from the daemon or the CLI
   daemon-no-tls       the daemon's and CLI's closure reaches no TLS engine (owner: no TLS in logosd)
   daemon-allowlist    the daemon and the CLI import only the reviewed core modules
@@ -364,14 +365,17 @@ def check(root, config):
             ("tools/lint/layers.toml", 0, "daemon-allowlist", f"stale entry: nothing imports {target}")
         )
 
-    facade = config["kit_facade"]
-    if facade in edges:
-        seen = closure([facade], edges)
-        for target in config["kit_forbidden"]:
-            if target in seen:
-                findings.append((facade, 1, "kit-facade", f"reaches {chain(seen, target)}"))
-    elif strict:
-        findings.append((facade, 0, "kit-facade", "the facade does not exist"))
+    roots = config["kit_facade"]
+    if isinstance(roots, str):
+        roots = [roots]
+    for facade in roots:
+        if facade in edges:
+            seen = closure([facade], edges)
+            for target in config["kit_forbidden"]:
+                if target in seen:
+                    findings.append((facade, 1, "kit-facade", f"reaches {chain(seen, target)}"))
+        elif strict:
+            findings.append((facade, 0, "kit-facade", "the facade does not exist"))
 
     seen = closure([p for p in files if place[p] == "daemon_cli"], edges)
     for target in config["daemon_tls_forbidden"]:
@@ -416,7 +420,11 @@ def check(root, config):
 
 SELF_CONFIG = {
     "strict": False,
-    "kit_facade": "sdk/src/logos_sdk/kit.nim",
+    "kit_facade": [
+        "sdk/src/logos_sdk/kit.nim",
+        "sdk/src/logos_sdk/codegen/invokert.nim",
+        "sdk/src/logos_sdk/codegen/consumert.nim",
+    ],
     "kit_forbidden": ["sdk/src/logos_sdk/kit/rcclient.nim", "sdk/src/logos_sdk/kit/rc_types.nim"],
     "daemon_tls_forbidden": [
         "src/logos_core/transport/tls/boring.nim",
@@ -441,6 +449,8 @@ SELF_CONFIG = {
 CLEAN_TREE = {
     "sdk/src/logos_sdk/base/hex.nim": "import std/strutils\n",
     "sdk/src/logos_sdk/codegen/kitrt.nim": "import ../base/hex\n",
+    "sdk/src/logos_sdk/codegen/invokert.nim": "import ./kitrt\n",
+    "sdk/src/logos_sdk/codegen/consumert.nim": "import ./kitrt\n",
     "sdk/src/logos_sdk/kit/rc_types.nim": "import ../codegen/kitrt\n",
     "sdk/src/logos_sdk/kit/rcclient.nim": "import ./rc_types\n",
     "sdk/src/logos_sdk/kit.nim": "import ./codegen/kitrt\nexport kitrt\n",
@@ -465,6 +475,8 @@ PLANTS = [
     ("base-below-binding", "sdk/src/logos_sdk/base/bad.nim", "import ../testing/helper\n"),
     ("kit-facade", "sdk/src/logos_sdk/kit.nim", "import ./kit/rcclient\n"),
     ("kit-facade", "sdk/src/logos_sdk/codegen/kitrt.nim", "import ../kit/rc_types\n"),
+    ("kit-facade", "sdk/src/logos_sdk/codegen/invokert.nim", "import ../kit/rc_types\n"),
+    ("kit-facade", "sdk/src/logos_sdk/codegen/consumert.nim", "import ../kit/rcclient\n"),
     ("core-below-daemon", "src/logos_core/runtime/bad.nim", "import ../daemon/main\n"),
     ("core-below-daemon", "src/logos_core/runtime/bad.nim", "import ../../logosd\n"),
     ("daemon-no-tls", "src/logos_core/runtime/host.nim", "import ../transport/tls/boring\n"),
@@ -551,11 +563,12 @@ def self_test():
     if not any("stale entry" in f[3] for f in run(CLEAN_TREE, stale)):
         failures.append("a stale allowlist entry was accepted")
 
-    no_facade = {k: v for k, v in CLEAN_TREE.items() if k != "sdk/src/logos_sdk/kit.nim"}
-    if run(no_facade, SELF_CONFIG):
-        failures.append("a missing facade failed outside strict")
-    if not any(f[2] == "kit-facade" for f in run(no_facade, strict)):
-        failures.append("strict accepted a missing facade")
+    for root in SELF_CONFIG["kit_facade"]:
+        no_facade = {k: v for k, v in CLEAN_TREE.items() if k != root}
+        if run(no_facade, SELF_CONFIG):
+            failures.append(f"a missing facade root failed outside strict: {root}")
+        if not any(f[2] == "kit-facade" for f in run(no_facade, strict)):
+            failures.append(f"strict accepted a missing facade root: {root}")
 
     for failure in failures:
         print("self-test:", failure)

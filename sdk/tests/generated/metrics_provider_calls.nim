@@ -12,10 +12,10 @@
 #!fmt: off
 {.push raises: [], gcsafe.}
 
-import logos_sdk/codegen/[invokert, common_mirrors]
+import logos_sdk/codegen/[invokert, consumert, common_mirrors]
 import ./metrics_provider_types
 
-export invokert, common_mirrors, metrics_provider_types
+export invokert, consumert, common_mirrors, metrics_provider_types
 
 const
   primaryDocument = "; -- metadata --\x0A_interface = \"metrics_provider\"\x0A\x0Ametrics_provider.snapshot_request = {}\x0A\x0Ametrics_provider.snapshot_response = {\x0A  count: uint64,\x0A}\x0A"
@@ -69,6 +69,24 @@ proc callClear0(p1: ptr LogosResponseOwner, p2: ptr uint64) =
   ## resets every output object without reading it.
   clearOwner(p1)
   resetOutput(p2)
+
+# Over a wrapped route handle (consumert, DECISIONS G339).
+
+proc invoke*(route: RouteHandle, request: MetricsProviderSnapshotRequest): Result[MetricsProviderSnapshotResponse, InvocationFailure] =
+  ## `metrics_provider.snapshot` through `route` under its operation rules.
+  ?route.beginOperation()
+  defer:
+    route.endOperation()
+  invoke(route.raw, request)
+
+proc prepareInvoke*(route: RouteHandle, request: MetricsProviderSnapshotRequest, onDone: CallDone[MetricsProviderSnapshotResponse], user: pointer = nil, timeoutMs: uint64 = 0): Result[PreparedCall, InvocationFailure] =
+  ## `metrics_provider.snapshot` through `route`, prepared and not yet submitted
+  ## (INTERFACE §2.9.1).
+  let t = toCbor(request)
+  var params = encodeCbor(t)
+  wipe(t)
+  result = prepareTyped(route, "snapshot", params, MetricsProviderSnapshotResponse, onDone, user, timeoutMs)
+  wipe(params)
 
 proc metricsProviderCallsLayout*(): seq[(string, int)] =
   ## [IMPL] Each mirror's size, alignment and member offsets, by C name (tests).
