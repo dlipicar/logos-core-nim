@@ -9,12 +9,12 @@ reason = "An illustrative block: the layer diagram of the specification set and 
 # bcp-non-production-doc (DECISIONS I95, K23, D27)
 [[item]]
 ids = ["BCP-0094"]
-reason = "The deployment documentation part: docs/DAEMON.md §6 states that the development switch makes the deployment non-production, what it enables (allow-all, test_hooks) and where the designation shows (the start log's NON-PRODUCTION warning and ready line, the deployment field of every logosctl JSON envelope, the banner of its text output). The diagnostics part is tested: test_logosd [BCP-0094] (start log, online and offline commands, text and JSON) and test_ctl_module [BCP-0094] (each response's deployment follows the handoff)."
+reason = "The deployment documentation part: docs/DAEMON.md §6 states that the development switch makes the deployment non-production, what it enables (allow-all, test_hooks, development trust anchors since step 5-3a-2, G137) and where the designation shows (the start log's NON-PRODUCTION warning and ready line, the deployment field of every logosctl JSON envelope, the banner of its text output). The diagnostics part is tested: test_logosd [BCP-0094] (start log, online and offline commands, text and JSON) and test_ctl_module [BCP-0094] (each response's deployment follows the handoff)."
 
 # bcp-switch-gates (DECISIONS I95, D27, G300)
 [[item]]
 ids = ["BCP-0096"]
-reason = "What the switch gates, found by a grep for `development` over src/: daemon/config.nim check 3 (allow-all and test_hooks are accepted only with it on) and the designation (daemon/assemble.nim's warning, ready line and presentation handoff; logosctl.nim's output). Nothing under runtime/, authority/, orchestration/ or transport/ reads it, so the Capability Authority's policy evaluation, trust continuity (trustfile.nim, which writes it but checks revisions the same either way), the host-configuration checks and every Core check run unchanged. test_logosd [BCP-0096] shows one: with the switch on under capability-authority, `module stop logos_module_loader` is still NOT_AUTHORISED; test_daemon_config's continuity rows run with the switch on as well."
+reason = "What the switch gates, found by a grep for `development` over src/: daemon/config.nim check 3 (allow-all and test_hooks are accepted only with it on) and the designation (daemon/assemble.nim's warning, ready line and presentation handoff; logosctl.nim's output). Since step 5-3a-2 it also puts the trust file's development anchors in force (package/trustdoc.nim inForce, which acceptedSigning applies and trust show displays; G137), and nothing else in the file depends on it: the rules, key separation and continuity (daemon/trustfile.nim, which writes it but checks revisions the same either way) run the same with it on or off (test_daemon_config's continuity rows and test_trustdoc's development-anchor case). Nothing under runtime/, authority/, orchestration/ or transport/ reads it, so the Capability Authority's policy evaluation, the host-configuration checks and every Core check run unchanged. test_logosd [BCP-0096] shows one: with the switch on under capability-authority, `module stop logos_module_loader` is still NOT_AUTHORISED; test_daemon_config's continuity rows run with the switch on as well."
 
 # bcp-fixed-profiles (DECISIONS I97)
 [[item]]
@@ -100,7 +100,7 @@ reason = "docs/DEPLOYMENT.md row 1 and §1: no Package Manager is deployed, so t
 # bcp-deploy-protected-inputs (DECISIONS I97, G309)
 [[item]]
 ids = ["BCP-0074"]
-reason = "docs/DEPLOYMENT.md row 2 and §2: each protected input (daemon-config with the policy, module configuration values and state_transfers; the trust file and its mark; the evidence key and its binding) with its representation, who writes it, its validation at set and at every start, and replacement at the next start; revocation of a grant or an execution is immediate (CA §8), a withdrawn switch, a rotated key and a changed policy apply at the next start. Every part Supported."
+reason = "docs/DEPLOYMENT.md row 2 and §2: each protected input (daemon-config with the policy, module configuration values and state_transfers; the package trust file, lcn.package_trust since step 5-3a-2, and its mark; the evidence key and its binding) with its representation, who writes it (the trust file: init and logosctl trust's writers), its validation at set or by every writer and at every start, and replacement at the next start; revocation of a grant or an execution is immediate (CA §8), a withdrawn switch, a removed anchor or name, a rotated key and a changed policy apply at the next start. Every part Supported."
 
 # bcp-deploy-policy (DECISIONS I97, G309)
 [[item]]
@@ -115,7 +115,7 @@ reason = "docs/DEPLOYMENT.md rows 4a and 4b and §4: the local profile logos.loc
 # bcp-deploy-trust (DECISIONS I97, G309)
 [[item]]
 ids = ["BCP-0042"]
-reason = "docs/DEPLOYMENT.md rows 5a to 5d and §5: call-evidence signing is Supported (one key per session bound to the Runtime, rotated offline; G149). Package-signing trust is None: the carrier, the revisioned trust file, exists and holds no anchors (G299). Package provenance and source evidence: None. Remote Runtime enrollment: None. Tier 5 is expected to change all three."
+reason = "docs/DEPLOYMENT.md rows 5a to 5d and §5: call-evidence signing is Supported (one key per session bound to the Runtime, rotated offline; G149). Package-signing trust is Supported since step 5-3a-2: the package trust file holds the anchors, each kid's key and exact names and its development marker under one revision, administered offline by logosctl trust (G396, G397; tests tagged PKG-0418 to PKG-0421 in tests/test_daemon_config.nim and tests/test_logosd.nim). Package provenance and source evidence: None, nothing selected and a selection refused until step 5-11 (G398). Remote Runtime enrollment: None. Tier 5 is expected to change both."
 
 # bcp-deploy-loader (DECISIONS I97, G309, G312)
 [[item]]
