@@ -4,7 +4,7 @@
 ##   <session>/                 0700  $HOME/.logos-core by default
 ##     lock                           held by logosd while it runs, and by offline writers
 ##     daemon-config.cbor       0600  lcn.daemon_config
-##     trust.cbor               0600  lcn.trust_file (absent: the compiled-in floor)
+##     trust.cbor               0600  lcn.package_trust (absent: the compiled-in floor)
 ##     keys/                    0700  evidence keys and their bindings
 ##     state/                   0700  trust-mark.cbor, store/, modules/, evidence/
 ##     work/                    0700  runtime.work_dir; never emptied (restart locks)

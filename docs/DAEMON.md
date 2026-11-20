@@ -52,7 +52,7 @@ marked field, as the library does (G277).
 <session>/                 0700  $HOME/.logos-core by default
   lock                           held by logosd while it runs, and by offline writers
   daemon-config.cbor       0600  lcn.daemon_config (§3)
-  trust.cbor               0600  lcn.trust_file (§6; absent: the compiled-in floor)
+  trust.cbor               0600  lcn.package_trust (§6; absent: the compiled-in floor)
   keys/                    0700  evidence keys and their bindings (§9)
   state/                   0700  trust-mark.cbor, store/, modules/, evidence/
   work/                    0700  runtime.work_dir; never emptied (restart locks)
@@ -345,29 +345,72 @@ writes `true`.
 
 ## 6. The trust file and the development switch
 
-`<session>/trust.cbor` is the revisioned trust input (PACKAGE MANAGER l.401-406): a revision and the
-development switch. Tier 5 adds the package-signing anchors. Without the file, the compiled-in floor
-applies: revision 1, switch off. `state/trust-mark.cbor` records the highest revision used and the
-BLAKE3-256 digest of its bytes, written durably before that revision is used.
+`<session>/trust.cbor` is the package trust file (PACKAGE MANAGER l.401-449, l.733-745): one revision
+covering the development switch, the package-signing profile and anchors, and the catalog and provenance
+selections (DECISIONS G396, G398). Its schema is core's, `src/logos_core/package/trustdoc.cddl`, since the
+Package Manager reads the same document. Without the file, the compiled-in floor applies: revision 1,
+switch off, no anchor, nothing selected. `state/trust-mark.cbor` records the highest revision used and
+the BLAKE3-256 digest of its bytes, written durably before that revision is used.
 
 ```cddl
-; logosd's trust input and its continuity record, and the binding of a
-; call-evidence key (Tier 4b step 4b-6; DECISIONS I95, G297, G299). Each is one
-; Logos deterministic-CBOR value in a file of its own; docs/DAEMON.md documents
-; them.
+; The package trust file, and the Tier 4b trust file it replaces (Tier 5 step
+; 5-3a-2; DECISIONS G137, G299, G396, G398; C2, C3). Each is one Logos
+; deterministic-CBOR value; docs/DAEMON.md §6 documents them.
 
-; logos-core-nim.trust.v1, <session>/trust.cbor: the revisioned trust file
-; (G137; PACKAGE MANAGER l.395-400). development is D27's switch. Tier 5 adds
-; the package-signing anchors. Without the file the compiled-in floor applies:
-; revision 1, development false.
+; logos-core-nim.trust.v2, <session>/trust.cbor: the package trust file
+; (PACKAGE MANAGER l.401-449, l.733-745). One revision covers every field.
+; Closed: an unknown field is refused. development is D27's switch.
+lcn.package_trust = {
+  format: "logos-core-nim.trust.v2",
+  revision: uint64,
+  development: bool,
+  signing: lcn.trust_signing,
+  catalog: lcn.trust_selection,
+  provenance: lcn.trust_selection,
+}
+
+; The baseline package-signing profile (PACKAGE MANAGER l.485-488) and every
+; anchor, in strictly ascending kid byte order (by rule).
+lcn.trust_signing = {
+  profile: "logos.package-signing.cose-sign1-slh-dsa-sha2-192s",
+  anchors: [* lcn.trust_anchor],
+}
+
+; One signer: its kid, its key, the exact names it may sign (non-empty and in
+; strictly ascending UTF-8 byte order, by rule), and whether it is a
+; development anchor, in force only while `development` is on (G137).
+lcn.trust_anchor = {
+  kid: bstr .size (1..128),
+  public_key: bstr .size 48,
+  packages: [* tstr .size (1..128)],
+  development: bool,
+}
+
+; A profile selection. An empty section selects none (PACKAGE MANAGER l.736). A
+; selected profile this build does not support is refused (l.745; C3, C9).
+lcn.trust_selection = {
+  ? selected: tstr .size (1..128),
+}
+
+; logos-core-nim.trust.v1: the Tier 4b trust file (G299). Still read, as the
+; v2 content with no anchor and nothing selected; never written.
 lcn.trust_file = {
   format: "logos-core-nim.trust.v1",
   revision: uint64,
   development: bool,
 }
+```
+
+```cddl
+; logosd's trust continuity record and the binding of a call-evidence key
+; (Tier 4b step 4b-6; DECISIONS I95, G297, G299). Each is one Logos
+; deterministic-CBOR value in a file of its own; docs/DAEMON.md documents
+; them. The trust file itself, lcn.package_trust, is package/trustdoc.cddl
+; (G396).
 
 ; logos-core-nim.trust-mark.v1, <session>/state/trust-mark.cbor: the highest
-; revision used and the digest of that revision's bytes (BLAKE3-256).
+; revision of the trust file used and the digest of that revision's bytes
+; (BLAKE3-256; PACKAGE MANAGER l.401-406).
 lcn.trust_mark = {
   format: "logos-core-nim.trust-mark.v1",
   revision: uint64,
@@ -389,7 +432,30 @@ lcn.ev_key_binding = {
 }
 ```
 
-At each start logosd reads the file and the mark and decides:
+What the schema does not say (`package/trustdoc.nim`; key separation is `daemon/trustfile.nim`'s):
+
+- **Canonical form.** Anchors in strictly ascending `kid` byte order, so no two share a kid; each
+  anchor's `packages` non-empty and in strictly ascending UTF-8 byte order, so each name once. One
+  content has one encoding, so the mark's digest names contents, not spellings.
+- **Names are exact.** Compared byte for byte, never folded or normalized; no name is special (`*`
+  authorizes only a package named `*`).
+- **Keys** are any 48 bytes; two kids may share a key. No anchor may use a call-evidence key of the
+  session, retired ones included (§9). A start reads the bindings for this only when the file names an
+  anchor, and a binding it cannot read then refuses the start.
+- **Bounds.** The file is at most 1 MiB; that is its only bound beyond the schema's.
+- **Revision.** Not below the floor's, 1.
+- **Development anchors** (`development: true`) are in force only while the file's `development` switch
+  is on: turning the switch off withdraws them in the same revision.
+- **Selections.** No catalog profile is built, and no provenance profile until Tier 5 step 5-11: a file
+  that selects either is refused, naming the profile, before continuity, so a refused revision never moves
+  the mark.
+- **Format v1** (`logos-core-nim.trust.v1`, Tier 4b) is still read, as the v2 content with no anchor and
+  nothing selected, with the digest of its own bytes, so a Tier 4b session keeps its continuity. Every
+  writer writes v2.
+
+At each start logosd reads and decodes the file, applies the rules, refuses an anchor whose key is an
+evidence key, builds the package-signing trust input from the anchors in force, and only then reads the
+mark and decides, so nothing is refused after the mark moved:
 
 | Mark | File | Decision |
 |---|---|---|
@@ -398,6 +464,10 @@ At each start logosd reads the file and the mark and decides:
 | revision r | revision = r, same digest | accepted (an identical replay) |
 | revision r | revision = r, other digest | refused: a changed file needs a higher revision |
 | revision r | revision < r | refused: rollback |
+
+A session without `trust.cbor` reads the v2 floor, whose digest is not the Tier 4b floor's: when its mark
+holds revision 1 with the v1 floor's digest, the refusal names the fix, `logosctl trust reestablish
+--revision 1`.
 
 A refusal is exit 1. logosd never creates a mark. `logosctl init` writes the file and its mark together;
 `logosctl trust reestablish --revision N` writes a mark from the current file when the owner names its

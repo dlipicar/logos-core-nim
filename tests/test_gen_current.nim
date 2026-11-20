@@ -19,6 +19,7 @@ suite "core.nim-types: core's generated modules (D29)":
     check generatedHostConfigTypes().get == readFile(hostConfigTypesPath)
     check generatedDaemonConfigTypes().get == readFile(daemonConfigTypesPath)
     check generatedTrustTypes().get == readFile(trustTypesPath)
+    check generatedTrustdocTypes().get == readFile(trustdocTypesPath)
     check generatedEvstoreTypes().get == readFile(evstoreTypesPath)
     check generatedCtlTypes().get == readFile(ctlTypesPath)
     check generatedLogosctlTypes().get == readFile(logosctlTypesPath)
@@ -57,8 +58,8 @@ suite "core.nim-types: core's generated modules (D29)":
     for path in [
       caTypesPath, caKitPath, ldrTypesPath, ldrKitPath, policyTypesPath, stateTypesPath,
       orchTypesPath, orchConfigTypesPath, orchKitPath, orchStateTypesPath,
-      daemonConfigTypesPath, trustTypesPath, evstoreTypesPath, ctlTypesPath,
-      logosctlTypesPath, logosctlKitPath, cliTypesPath, lcnCallTypesPath,
+      daemonConfigTypesPath, trustTypesPath, trustdocTypesPath, evstoreTypesPath,
+      ctlTypesPath, logosctlTypesPath, logosctlKitPath, cliTypesPath, lcnCallTypesPath,
       lcnCallConfigTypesPath, lcnCallKitPath,
     ]:
       checkpoint path

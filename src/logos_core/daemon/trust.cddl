@@ -1,20 +1,12 @@
-; logosd's trust input and its continuity record, and the binding of a
-; call-evidence key (Tier 4b step 4b-6; DECISIONS I95, G297, G299). Each is one
-; Logos deterministic-CBOR value in a file of its own; docs/DAEMON.md documents
-; them.
-
-; logos-core-nim.trust.v1, <session>/trust.cbor: the revisioned trust file
-; (G137; PACKAGE MANAGER l.395-400). development is D27's switch. Tier 5 adds
-; the package-signing anchors. Without the file the compiled-in floor applies:
-; revision 1, development false.
-lcn.trust_file = {
-  format: "logos-core-nim.trust.v1",
-  revision: uint64,
-  development: bool,
-}
+; logosd's trust continuity record and the binding of a call-evidence key
+; (Tier 4b step 4b-6; DECISIONS I95, G297, G299). Each is one Logos
+; deterministic-CBOR value in a file of its own; docs/DAEMON.md documents
+; them. The trust file itself, lcn.package_trust, is package/trustdoc.cddl
+; (G396).
 
 ; logos-core-nim.trust-mark.v1, <session>/state/trust-mark.cbor: the highest
-; revision used and the digest of that revision's bytes (BLAKE3-256).
+; revision of the trust file used and the digest of that revision's bytes
+; (BLAKE3-256; PACKAGE MANAGER l.401-406).
 lcn.trust_mark = {
   format: "logos-core-nim.trust-mark.v1",
   revision: uint64,
