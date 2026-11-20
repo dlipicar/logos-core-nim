@@ -37,8 +37,9 @@
 ## - `sub-end <slot or rc> <tag or null>`: `observe_subscription_end` on that
 ##   route handle or the probe's binding, with a null handler for `null`; a
 ##   reported end would be appended to `subends` as `<tag> <id> <code>`;
-## - `prepare <slot> <call> <method> <hex params> <timeout ms or ->`, its
-##   completion appended to `done` as `<call> <code> <hex value or message>`;
+## - `prepare <slot or rc> <call> <method> <hex params> <timeout ms or ->`, on
+##   that route handle or the probe's binding, its completion appended to
+##   `done` as `<call> <code> <hex value or message>`;
 ##   `submit <call>`, `cancel <call>`, `release-call <call>`;
 ## - `release <slot>`.
 ##
@@ -309,9 +310,11 @@ proc command(p: ptr Probe, line: string): string =
         return "no route"
       return resultLine(h.vtable.observeSubscriptionEnd(h, handler, p.newTag(w[2])))
     of "prepare":
-      let h = addr p.routes[parseInt(w[1])]
-      if h.vtable == nil:
-        return "no route"
+      var h: ptr LogosRouteHandle = nil
+      if w[1] != "rc":
+        h = addr p.routes[parseInt(w[1])]
+        if h.vtable == nil:
+          return "no route"
       var params = unhex(w[4])
       var opts = LogosAsyncOptions(
         abiVersion: AsyncCallAbiVersion,
@@ -325,15 +328,27 @@ proc command(p: ptr Probe, line: string): string =
         complete: onDone,
         userData: p.newTag(w[2]),
       )
-      let r = h.vtable.prepareCall(
-        h,
-        cstring(w[3]),
-        ptrOf(params),
-        csize_t(params.len),
-        addr opts,
-        addr cbs,
-        addr p.calls[parseInt(w[2])],
-      )
+      let r =
+        if h == nil:
+          p.rc.vtable.prepareCall(
+            p.rc,
+            cstring(w[3]),
+            ptrOf(params),
+            csize_t(params.len),
+            addr opts,
+            addr cbs,
+            addr p.calls[parseInt(w[2])],
+          )
+        else:
+          h.vtable.prepareCall(
+            h,
+            cstring(w[3]),
+            ptrOf(params),
+            csize_t(params.len),
+            addr opts,
+            addr cbs,
+            addr p.calls[parseInt(w[2])],
+          )
       wipe(params) # [DECISIONS I92] the call keeps its own copy
       return resultLine(r)
     of "submit", "cancel", "release-call":
