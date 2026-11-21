@@ -1005,3 +1005,114 @@ suite "commitment: choice selection plans":
     ]:
       checkpoint bad
       check not set.validates(0, thing, parseDiag(bad).get)
+
+  test "[IMPL-DECISION I101] a planned set holds the plans selectionPlan builds and validates as its set does":
+    var ctx = pinnedContext()
+    ctx.supporting = @[supporting.get]
+    let m = build(
+      module(
+        """
+demo.k = "a" / "b"
+demo.t = {kind: demo.k, v: uint8 / tstr} / {kind: "c", ? next: demo.t / [* demo.t]}
+demo.u = {c: metrics_types.counter / tstr, e: logos.error_code / [uint8]}
+"""
+      ),
+      ctx,
+    )
+    let set = schemaSetFor(m, ctx)
+    let p = planned(set)
+    check p.schemaSet.docs.len == set.docs.len
+    # The set and its plans are the planned set's own: nothing outside reaches them.
+    check not compiles(p.base)
+    check not compiles(p.plans)
+    var choices: seq[(int, SchemaNode)]
+    proc collect(d: int, n: SchemaNode) =
+      case n.kind
+      of snMap:
+        for f in n.fields:
+          collect(d, f.node)
+      of snList:
+        collect(d, n.element)
+      of snTuple:
+        for x in n.items:
+          collect(d, x)
+      of snChoice:
+        choices.add((d, n))
+        for x in n.arms:
+          collect(d, x)
+      else:
+        discard
+
+    for d, doc in set.docs:
+      for decl in doc.declarations:
+        if decl.kind != dkMethod:
+          collect(d, decl.body)
+    # The module's own choices, and those of the common and supporting documents
+    # its references reach.
+    check choices.anyIt(it[0] == 0) and choices.anyIt(it[0] > 0)
+    proc text(x: SelectionPlan): string =
+      if x.isNil:
+        return "none"
+      if x.leaf:
+        return "arm " & $x.arm
+      result = $x.test & " " & x.field & " ["
+      for (o, child) in x.branches:
+        result.add($o.kind)
+        case o.kind
+        of ocMajor:
+          result.add(" " & $o.major)
+        of ocLiteral:
+          result.add(" " & toDiag(o.literal))
+        of ocLength:
+          result.add(" " & $o.length)
+        else:
+          discard
+        result.add(": " & text(child) & "; ")
+      result.add("]")
+
+    for (d, n) in choices:
+      checkpoint $d & " " & diag(n)
+      check p.planOf(d, n).isSome
+      check text(p.planOf(d, n).get) == text(set.selectionPlan(d, n).get)
+    # The same checks: every value is accepted or rejected as without the plans,
+    # with the same path to what is rejected.
+    for (name, values) in [
+      (
+        "demo.t",
+        @[
+          "{\"kind\": \"a\", \"v\": 1}", "{\"kind\": \"b\", \"v\": \"s\"}",
+          "{\"kind\": \"c\"}",
+          "{\"kind\": \"c\", \"next\": {\"kind\": \"a\", \"v\": 2}}",
+          "{\"kind\": \"c\", \"next\": [{\"kind\": \"c\"}, {\"kind\": \"b\", \"v\": 3}]}",
+          "{\"kind\": \"a\", \"v\": 256}", "{\"kind\": \"a\", \"v\": true}",
+          "{\"kind\": \"d\"}", "{\"kind\": \"a\"}", "{\"kind\": \"c\", \"v\": 1}",
+          "{\"kind\": \"c\", \"next\": [{\"kind\": \"c\"}, {\"kind\": \"b\", \"v\": -1}]}",
+          "{\"kind\": \"c\", \"next\": 7}", "[]", "1",
+        ],
+      ),
+      (
+        "demo.u",
+        @[
+          "{\"c\": \"x\", \"e\": 3}", "{\"c\": 5, \"e\": [9]}",
+          "{\"c\": \"x\", \"e\": 10}", "{\"c\": -1, \"e\": 3}",
+          "{\"c\": \"x\", \"e\": [256]}", "{\"c\": \"x\"}",
+        ],
+      ),
+    ]:
+      var accepted, rejected = 0
+      for v in values:
+        checkpoint name & " " & v
+        let value = parseDiag(v).get
+        let want = set.validatePath(0, m.body(name), value)
+        check p.validatePath(0, m.body(name), value) == want
+        check p.validates(0, m.body(name), value) == want.isOk
+        if want.isOk:
+          inc accepted
+        else:
+          inc rejected
+      check accepted > 0 and rejected > 0
+    # A choice the set's declarations do not hold is planned when it is met.
+    let other = build(module("demo.t = uint8 / tstr")).body("demo.t")
+    check p.planOf(0, other).isNone
+    check p.validates(0, other, parseDiag("\"s\"").get)
+    check not p.validates(0, other, parseDiag("true").get)
