@@ -12,6 +12,8 @@ import std/[os, strutils, times]
 import unittest2
 from chronos import finished, value
 import logos_sdk/codegen/[callrt, confinedcalls, consumert]
+from logos_sdk/codegen/confinedrt import
+  packGate, unpackGate, gateNext, GateMaxGen, GateMaxSlots
 import logos_sdk/testing/kitruntime
 import logos_sdk/testing/fixtures/ledger_impl
 import
@@ -469,6 +471,8 @@ var
   fakeCancels: Atomic[int]
   fakeCancelCompletes: Atomic[bool] ## `cancel` completes the call CANCELLED
   fakeTimeout: Atomic[int] ## the latest prepared call's deadline, 0 for none
+  fakePrepares: Atomic[int] ## calls prepared
+  deliveries: Atomic[int] ## events `deliver` handed to a subscription
   ownerReleases: Atomic[int]
   ownerReleaseThread: Atomic[uint64]
   delivering {.threadvar.}: bool
@@ -582,6 +586,7 @@ proc fakePrepareOp(
   {.cast(gcsafe).}:
     fakeCallbacks = callbacks[]
     outCall[] = LogosAsyncCall(vtable: addr fakeCallVtable, state: addr fakeState)
+  fakePrepares += 1
   fakeTimeout.store(
     if options.hasTimeout:
       int(options.timeoutMs)
@@ -633,6 +638,8 @@ proc resetFake() =
   fakeCancels.store(0)
   fakeCancelCompletes.store(false)
   fakeTimeout.store(0)
+  fakePrepares.store(0)
+  deliveries.store(0)
   ownerReleases.store(0)
   routeToWrap = LogosRouteHandle(vtable: addr fakeVtable, state: addr fakeState)
 
@@ -646,6 +653,7 @@ proc deliver(value: uint64) {.gcsafe.} =
         if f.active:
           targets.add((f.handler, f.user))
   for (handler, user) in targets:
+    deliveries += 1
     delivering = true
     handler(
       "meter.changed_event",
@@ -698,6 +706,49 @@ proc deliverInsideHook(
 
 proc report(ctx: ptr LogosModuleContext): string =
   probe(ctx, 14)[1].note
+
+proc resetDestroy() =
+  ## The fixture's destroy modes and counters (DECISIONS G437).
+  destroyMode.store(0)
+  destroyStarted.store(false)
+  destroyReturned.store(false)
+  streamed.store(0)
+  streamedDuring.store(0)
+  lateCalls.store(0)
+  residualDone.store(0)
+  posts.store(0)
+  postThreads.store(0)
+
+proc completeInDestroy(a: (int, int)) {.thread.} =
+  ## Completes the latest prepared call `a[0]` ms after `destroyModule` began,
+  ## once `a[1]` calls were prepared, as a binding's thread does.
+  let (delayMs, prepared) = a
+  for _ in 0 ..< 20_000:
+    if destroyStarted.load and fakePrepares.load >= prepared:
+      break
+    sleep(1)
+  sleep(delayMs)
+  completeFake("destroy")
+
+var deliveredInDestroy: Atomic[int]
+
+proc deliverInDestroy(i: int) {.thread.} =
+  ## Two `meter.changed_event`s once `destroyModule` began.
+  for _ in 0 ..< 20_000:
+    if destroyStarted.load:
+      break
+    sleep(1)
+  let before = deliveries.load
+  deliver(5)
+  deliver(6)
+  deliveredInDestroy.store(deliveries.load - before)
+
+proc streamedAtLeast(n: int): bool =
+  for _ in 0 ..< 5000:
+    if streamed.load >= n:
+      return true
+    sleep(1)
+  false
 
 # Provider invocations the test builds (DECISIONS G338) -------------------------------
 #
@@ -1054,6 +1105,19 @@ suite "confined kit: publication (DECISIONS G337)":
     check seenCount("flood") == 30
     sleep(20)
     check seenCount("flood") == 30
+
+suite "confined kit: the module thread's dispatcher (DECISIONS G438)":
+  setup:
+    resetRuntime()
+
+  test "[IMPL-DECISION G438] the dispatcher is made before the kit registers anything: it held only chronos's own descriptor":
+    # What teardown leaves out of its count is what the dispatcher held when it
+    # was made: none on 4.4.1, the wake-up descriptor alone on chronos's main
+    # line. The kit's signal, registered by `arm`, is never among them.
+    let ctx = openLedger()
+    let line = probe(ctx, 27)[1].note
+    check probe(ctx, 29)[1].note == (if line == "main line": "1" else: "0")
+    ledgerDestroy(ctx)
 
 suite "confined kit: lifecycle and foreign threads (DECISIONS G335)":
   setup:
@@ -1493,3 +1557,238 @@ suite "confined kit: the deferred provider (DECISIONS G338)":
     check f.value.error.code == ecNotReady
     check fakeTimeout.load == 0
     discard h.release()
+
+suite "confined kit: what runs while destroyModule runs (DECISIONS G437)":
+  setup:
+    resetRuntime()
+    resetFake()
+    resetDestroy()
+
+  test "[IMPL-DECISION G437] destroyModule awaits a callback a foreign C thread posts 50 ms in":
+    let ctx = openLedger()
+    let freedBefore = freed.load
+    destroyMode.store(1)
+    let started = epochTime()
+    ledgerDestroy(ctx)
+    # Under the order before G437 the callback was dropped, and only the
+    # fixture's 5 s bound ended the wait: the 1 s bound catches that.
+    check epochTime() - started < 1.0
+    check destroyNote() == "woke=true"
+    check posts.load == 1
+    when defined(gcOrc):
+      check freed.load == freedBefore + 1
+
+  test "[IMPL-DECISION G437] destroyModule awaits invokeAsync; the completion arrives 100 ms into destroyModule":
+    let ctx = openLedger()
+    check probe(ctx, 10)[1].note == "subscribed"
+    destroyMode.store(2)
+    var t: Thread[(int, int)]
+    createThread(t, completeInDestroy, (100, 1))
+    let started = epochTime()
+    ledgerDestroy(ctx)
+    joinThread(t)
+    check epochTime() - started < 1.0
+    check destroyNote() == "ok:destroy"
+    check ownerReleases.load == 1
+    check fakeCallReleases.load == 1
+    check fakeReleased.load
+
+  test "[IMPL-DECISION G437] destroyModule awaits publishAsync: ok, and the publish callback saw the event":
+    let ctx = openLedger()
+    destroyMode.store(3)
+    ledgerDestroy(ctx)
+    check destroyNote() == "ok"
+    check seenCount("destroy") == 1
+
+  test "[IMPL-DECISION G437] posts queued by a destroyModule that returns without yielding never run":
+    let ctx = openLedger()
+    let freedBefore = freed.load
+    destroyMode.store(4)
+    ledgerDestroy(ctx)
+    check destroyNote() == "posted"
+    check posts.load == 0
+    check postThreads.load == 0
+    when defined(gcOrc):
+      check freed.load == freedBefore + 1
+
+  test "[IMPL-DECISION G437] events are dropped from the start of destroy, while destroyModule awaits":
+    let ctx = openLedger()
+    check probe(ctx, 10)[1].note == "subscribed"
+    deliver(1)
+    check ctx.report.startsWith("seen=1 ")
+    destroyMode.store(5)
+    deliveredInDestroy.store(0)
+    var t: Thread[int]
+    createThread(t, deliverInDestroy, 0)
+    ledgerDestroy(ctx)
+    joinThread(t)
+    check deliveredInDestroy.load == 2 # both reached the kit's subscription
+    check destroyNote() == "woke=true seen=1"
+
+  test "[IMPL-DECISION G437] [IFC-0769] a handler that ignored its cancellation past the unwinding's bound finishes during destroyModule: NOT_READY once":
+    let ctx = openLedger()
+    check probe(ctx, 10)[1].note == "subscribed"
+    let fi = prepareFake(0, "wait", request(LedgerWaitRequest(channel: 12, value: 3)))
+    submit(ctx, fi)
+    discard probe(ctx, 1) # its handler awaits its call, prepared and submitted
+    check fakePrepares.load == 1
+    let freedBefore = freed.load
+    destroyMode.store(6)
+    var t: Thread[(int, int)]
+    createThread(t, completeInDestroy, (500, 1))
+    let started = epochTime()
+    ledgerDestroy(ctx)
+    joinThread(t)
+    let took = epochTime() - started
+    check took >= 1.5 and took < 10.0 # the unwinding's 2 s bound passed first
+    check destroyNote() == "residual=1"
+    check fakeCancels.load == 0 # `noCancel`: its call was never cancelled
+    check fi.exactlyOnce
+    check fi.status.error.code == ecNotReady
+    when defined(gcOrc):
+      check freed.load == freedBefore + 1 # its frames ended: nothing abandoned
+    clearFake(fi)
+
+  test "[IMPL-DECISION G437] a foreign stream that destroyModule stops and joins: no callback after it returned":
+    let ctx = openLedger()
+    let freedBefore = freed.load
+    check probe(ctx, 24)[1].note == "streaming"
+    check streamedAtLeast(20)
+    ledgerDestroy(ctx)
+    check lateCalls.load == 0
+    when defined(gcOrc):
+      check freed.load == freedBefore + 1
+
+  test "[IMPL-DECISION G437] a foreign stream while destroyModule awaits a delayed post: callbacks run during it, none after it returned":
+    let ctx = openLedger()
+    let freedBefore = freed.load
+    check probe(ctx, 24)[1].note == "streaming"
+    check streamedAtLeast(20)
+    destroyMode.store(7)
+    ledgerDestroy(ctx)
+    check destroyNote() == "woke=true"
+    check streamedDuring.load > 0
+    check lateCalls.load == 0
+    when defined(gcOrc):
+      check freed.load == freedBefore + 1
+
+# The post gate (DECISIONS G440) ---------------------------------------------------------
+#
+# A post that comes after `_MODULE_destroy` returned breaks the module's duty
+# (MODULE-KIT §3); these cases break it on purpose, and the gate must refuse it
+# instead of reaching the freed context.
+
+proc posterOf(ctx: ptr LogosModuleContext): pointer =
+  ## The instance's poster value, from `probe` 28.
+  cast[pointer](uint(parseBiggestUInt(probe(ctx, 28)[1].note)))
+
+suite "confined kit: the post gate (DECISIONS G440)":
+  setup:
+    resetRuntime()
+    resetFake()
+    resetDestroy()
+    refusedPoster.store(nil)
+
+  test "[IMPL-DECISION G440] the packing: never null, a round trip, the last generation retires its slot":
+    check packGate(0, 0) != nil
+    for slot in [0, 1, GateMaxSlots - 1]:
+      for gen in [0'u64, 1, GateMaxGen - 1, GateMaxGen]:
+        let p = packGate(slot, gen)
+        check p != nil
+        check unpackGate(p).slot == slot and unpackGate(p).gen == gen
+    # The largest value fills 64 bits exactly: no generation wraps into the slot.
+    check cast[uint64](packGate(GateMaxSlots - 1, GateMaxGen)) == high(uint64)
+    check unpackGate(nil).gen > GateMaxGen # null names no generation a slot is at
+    check gateNext(0).gen == 1 and not gateNext(0).retired
+    check gateNext(GateMaxGen - 1).gen == GateMaxGen and
+      not gateNext(GateMaxGen - 1).retired
+    check gateNext(GateMaxGen).gen == GateMaxGen + 1 and gateNext(GateMaxGen).retired
+
+  test "[IMPL-DECISION G440] post and lcn_kit_post after _MODULE_destroy returned are refused; fn never runs":
+    let ctx = openLedger()
+    let p = posterOf(ctx)
+    postFromNim(p)
+    check postFromC(p)
+    discard probe(ctx, 1) # queued after both callbacks
+    check posts.load == 2
+    check postThreads.load == 0
+    let freedBefore = freed.load
+    ledgerDestroy(ctx)
+    when defined(gcOrc):
+      check freed.load == freedBefore + 1 # the instance is gone
+    postFromNim(p)
+    check postFromC(p)
+    check posts.load == 2
+
+  test "[IMPL-DECISION G440] deliveries, end reports and a completion for handles destroyModule left unreleased are dropped through the gate":
+    let ctx = openLedger()
+    check probe(ctx, 10)[1].note == "subscribed"
+    check probe(ctx, 13, 1)[1].note == "submitted"
+    let freedBefore = freed.load
+    destroyMode.store(8)
+    ledgerDestroy(ctx)
+    check destroyNote() == "left"
+    when defined(gcOrc):
+      check freed.load == freedBefore + 1 # its handlers' user value is gone
+    check not fakeReleased.load # the module's duty, broken on purpose
+    check fakeCallReleases.load == 0
+    let h = leftRoute
+    check pendingTasks(h) == 0
+    let delivered = deliveries.load
+    deliver(1)
+    check deliveries.load == delivered + 1 # it reached the kit's subscription
+    check pendingTasks(h) == 0 # its task was dropped, and its count went with it
+    completeFake("late")
+    check ownerReleases.load == 1
+    endSubscription(ecModule)
+    check pendingTasks(h) == 0
+    endRoute(ecNotReady)
+    check pendingTasks(h) == 0
+    check lateCalls.load == 0 # no handler ran
+
+  test "[IMPL-DECISION G440] a poster an initModule gave away before it failed is refused":
+    var inp = ledgerInput(stateDir = "/refuse-poster")
+    var ctx: ptr LogosModuleContext
+    check ledgerInit(addr inp, addr ctx).code == CErrorCode(ord(ecModule))
+    check ctx == nil
+    let p = refusedPoster.load
+    check p != nil
+    postFromNim(p)
+    check postFromC(p)
+    check posts.load == 0
+
+  test "[IMPL-DECISION G440] a slot reused by the next context refuses the old poster; the new poster works":
+    let a = openLedger()
+    let pa = posterOf(a)
+    ledgerDestroy(a)
+    let b = openLedger()
+    let pb = posterOf(b)
+    check unpackGate(pb).slot == unpackGate(pa).slot # the last slot freed goes first
+    check unpackGate(pb).gen == unpackGate(pa).gen + 1
+    postFromNim(pa)
+    check postFromC(pa)
+    discard probe(b, 1)
+    check posts.load == 0
+    postFromNim(pb)
+    check postFromC(pb)
+    discard probe(b, 1)
+    check posts.load == 2
+    check postThreads.load == 0
+    ledgerDestroy(b)
+
+  test "[IMPL-DECISION G440] a foreign stream posting through destroy and on into the slot's next context: each post served or refused, none run after the return (20 cycles)":
+    var ctx = openLedger()
+    for i in 0 ..< 20:
+      check probe(ctx, 24)[1].note == "streaming"
+      check streamedAtLeast(1 + i mod 5)
+      destroyMode.store(9)
+      ledgerDestroy(ctx)
+      check destroyNote() == "streaming"
+      # The next context most likely takes the same slot, a generation on,
+      # while the stream still posts with the old value.
+      ctx = openLedger()
+      sleep(2)
+      check stopLeftStream() > 0
+      check lateCalls.load == 0
+      resetDestroy()
+    ledgerDestroy(ctx)

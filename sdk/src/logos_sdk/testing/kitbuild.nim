@@ -12,6 +12,14 @@
 ## [DECISIONS I92] A suite built with `-d:lcnWipeAudit` (`test_wipe_routes`)
 ## builds its libraries and children as audit builds too (`kitAudit`): the free
 ## scan, on the Nim heap through `malloc`, in their own variant directory.
+##
+## [DECISIONS G438] A confined kit library is built strict by default
+## (`-d:lcnKitStrictDestroy`): its destroy aborts when the module left
+## something registered with its module thread's dispatcher, so the suite fails
+## at that destroy. Turning it off takes a reason, which is written beside the
+## library and to stdout; the variant directory's name says which (`-strict`),
+## so a strict and a lenient library never share a path. This helper is for
+## test suites only and never builds a release library.
 
 import std/[os, osproc, strutils]
 when defined(posix):
@@ -136,14 +144,26 @@ proc exportListFlags*(tree: KitTree, kit: string): seq[string] =
     @["--passL:-Wl,--version-script=" & locate(tree.generated, kit & "_kit.map")]
 
 proc buildKitLibraryIn*(
-    tree: KitTree, source, name: string, mm = kitMm, exports = ""
+    tree: KitTree,
+    source, name: string,
+    mm = kitMm,
+    exports = "",
+    strictDestroy = true,
+    reason = "",
 ): string =
   ## The kit source `source` as `lib<name>` under the tree's build directory,
   ## in `<variant>/`, built with `mm` (by default this build's) and, when
-  ## `exports` names a kit, linked with that kit's export list.
+  ## `exports` names a kit, linked with that kit's export list. A confined kit
+  ## is strict about destroy unless `strictDestroy` is false, which takes a
+  ## `reason` (DECISIONS G438).
+  doAssert strictDestroy or reason.strip.len > 0,
+    name & ": building a kit library without strict destroy takes a reason"
   let (compiler, _) = kitCompiler()
-  let dir = tree.build / kitVariantOf(mm)
+  let dir = tree.build / (kitVariantOf(mm) & (if strictDestroy: "-strict" else: ""))
   createDir(dir)
+  if not strictDestroy:
+    writeFile(dir / (name & ".lenient"), reason & "\n")
+    echo "kitbuild: lib", name, " without strict destroy: ", reason
   result = dir / (DynlibFormat % name)
   let output =
     when defined(posix):
@@ -176,6 +196,8 @@ proc buildKitLibraryIn*(
     if mm != "refc":
       args.add("-d:" & kitSanitizer)
   args.add(kitAuditFlags(false))
+  if strictDestroy:
+    args.add("-d:lcnKitStrictDestroy")
   args.add(kitSwitches()[0])
   if exports.len > 0:
     args.add(tree.exportListFlags(exports))
@@ -200,8 +222,16 @@ proc buildKitLibraryIn*(
     discard posix.close(lock) # releases the lock
   doAssert code == 0, "building " & source & " failed:\n" & log
 
-template buildKitLibrary*(source, name: string, mm = kitMm, exports = ""): string =
+template buildKitLibrary*(
+    source, name: string, mm = kitMm, exports = "", strictDestroy = true, reason = ""
+): string =
   ## `buildKitLibraryIn` with the calling suite's tree.
   buildKitLibraryIn(
-    kitTreeOf(instantiationInfo(fullPaths = true).filename), source, name, mm, exports
+    kitTreeOf(instantiationInfo(fullPaths = true).filename),
+    source,
+    name,
+    mm,
+    exports,
+    strictDestroy,
+    reason,
   )

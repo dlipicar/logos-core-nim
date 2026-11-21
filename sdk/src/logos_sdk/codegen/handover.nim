@@ -37,6 +37,11 @@ type
     node*: Node
     run*: TaskFn
     counted*: bool ## counts against the context's delivery bound
+    duringDestroy*: bool
+      ## [DECISIONS G437] still runs while the module is destroyed, until its
+      ## instance is released: the completion of something the module started
+      ## (a prepared call's, a cancellation notice). Every other task is dropped
+      ## from the start of destroy.
 
   PostTaskFn* =
     proc(context: pointer, task: ptr TaskNode): bool {.nimcall, gcsafe, raises: [].}

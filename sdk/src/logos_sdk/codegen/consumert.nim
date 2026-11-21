@@ -106,8 +106,10 @@ import std/[atomics, locks]
 import results
 import ../abi/[checks, types]
 import ../iface/outcome
-import ../base/wipe
+import ../base/[testhooks, wipe]
 import ./[handover, kitrt]
+
+testHooksMarker("consumert")
 from ./nimrt import wipeTyped
 
 export results, types, outcome, kitrt, handover
@@ -614,6 +616,7 @@ proc queueEnd(s: ptr SubObj, d: Dispatcher, reason: CErrorCode): bool =
   s.endReason = reason
   s.endTask.run = runEnd
   s.endTask.counted = false
+  s.endTask.duringDestroy = false # G437: an end report, dropped once destroy begins
   discard d.post(d.context, addr s.endTask)
   true
 
@@ -661,6 +664,7 @@ proc queueEvent(
   let e = cast[ptr EventTask](allocShared0(sizeof(EventTask) + n))
   e.task.run = runEvent
   e.task.counted = true
+  e.task.duringDestroy = false # G437: an event, dropped once destroy begins
   e.sub = s
   e.len = n
   if n > 0:
@@ -713,6 +717,7 @@ proc onRouteEndCb(reason: CErrorCode, userData: pointer) {.cdecl, gcsafe, raises
       if open:
         h.endTask.run = runRouteEnd
         h.endTask.counted = false
+        h.endTask.duringDestroy = false # G437: dropped once destroy begins
         discard h.dispatch.post(h.dispatch.context, addr h.endTask)
   elif h.onRouteEnd != nil:
     enterCallback(h)
@@ -802,6 +807,14 @@ proc wrapRoute*(
   if r2.code != 0:
     return err(fail(h, r2, "observe_subscription_end"))
   ok(h)
+
+when defined(lcnTestHooks):
+  proc pendingTasks*(h: RouteHandle): int =
+    ## [DECISIONS G440] Test hook: the tasks queued for `h` and its
+    ## subscriptions that have neither run nor been dropped.
+    acquire(h.stateLock)
+    result = h.pending
+    release(h.stateLock)
 
 proc release*(h: RouteHandle): Result[void, InvocationFailure] =
   ## Releases the handle: waits for operations on other threads, then for
@@ -1150,6 +1163,9 @@ proc onCompleteCb(
     c.queued.store(true)
     c.doneTask.run = runDone
     c.doneTask.counted = false
+    c.doneTask.duringDestroy = true
+      # G437: a completion of what the module started, which `destroyModule` may
+      # await (`invokeAsync` included)
     discard c.dispatch.post(c.dispatch.context, addr c.doneTask)
     return
   var st = checkCompletion(status, response, len, owner)

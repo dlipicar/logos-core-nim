@@ -17,6 +17,19 @@
 const TestHooksMarker* = "LCN_TEST_" & "HOOKS_BUILD"
   ## Joined here so this source never holds the marker itself.
 
+const StrictDestroyMarker* = "LCN_KIT_STRICT_" & "DESTROY_BUILD"
+  ## [DECISIONS G438] Joined here so this source never holds the marker itself.
+
+template strictDestroyMarker*() =
+  ## [DECISIONS G438] Under `lcnKitStrictDestroy` (a confined kit that aborts
+  ## when destroy left something registered: test builds only), the C symbol
+  ## `lcn_kit_strict_destroy_build` holding `StrictDestroyMarker`, which the
+  ## flake check `no-test-hooks` looks for in every deployment output; nothing
+  ## otherwise.
+  when defined(lcnKitStrictDestroy):
+    let lcnKitStrictDestroyBuild {.exportc: "lcn_kit_strict_destroy_build", used.}:
+      cstring = StrictDestroyMarker
+
 template testHooksMarker*(name: static string) =
   ## Under `lcnTestHooks`, the C symbol `lcn_test_hooks_<name>` holding the
   ## marker; nothing otherwise.
