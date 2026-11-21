@@ -6777,7 +6777,8 @@ their history.
   seen included, without the Nim heap. **Destroy:** `destroyModule` and the release run on the module
   thread, the publisher thread delivers what was queued and exits, the module thread answers what is
   left NOT_READY and tears down its dispatcher, both threads are joined; a failed initialization joins
-  them the same way, dropping queued events. **The host's SIGPIPE (P5, G340):** confined kit libraries
+  them the same way, dropping queued events. What still runs while `destroyModule` runs is G437 (N-1e).
+  **The host's SIGPIPE (P5, G340):** confined kit libraries
   are built with `--import:logos_sdk/base/hostsignals` and the generated export template restores the
   disposition last.
 - **Tests:** `sdk/tests/test_kit_confined.nim` (in process, all three builds): every entry kind handed
@@ -6875,6 +6876,8 @@ their history.
     - For a Runtime that destroys with submitted invocations outstanding, `_MODULE_destroy` now stops
       that residual work (l.2100) before the author's `destroyModule`. First every new job answers
       NOT_READY (the instance is detached; `disposed`, which drops posted tasks, is set only after).
+      **See G437 (N-1e):** `disposed` is now set only once `destroyModule`'s future has finished,
+      and events and end reports are dropped from the start of destroy.
       Then each waiting `async` handler's future is cancelled as `request_cancel` would, and the kit
       awaits up to 2 s (`UnwindMs`, fixed) for the outstanding invocations while the instance still
       lives. The wait is an `await`, never a nested poll, since destroy may run inside a handler's
@@ -7163,10 +7166,15 @@ their history.
   reason: inline re-entry polls the dispatcher inside a `poll`, which chronos tolerates only while
   `chronosStrictReentrancy` is off (`config.nim:113`), and a later chronos may turn it on;
   `confinedrt` refuses to compile under it. The libraries' own chronos commits (storage `2d81a762`,
-  delivery `0de7b335`, both declaring 4.4.0) are for the packaging step or N-4 to check (plan P7).
+  delivery `0de7b335`, both declaring 4.4.0) are tested by two more checks (G439).
   The guide states the build line and the floor (`sdk/docs/MODULE-KIT.md` §8).
+- **Amended (N-1e, G439):** **`kit-toolchains-storage-2d81a762`** and
+  **`kit-toolchains-delivery-0de7b335`** run the same suites with the kit libraries built against each
+  library's own chronos, and the stew, bearssl or httputils it locks at another revision than core;
+  `kit-toolchains-isolated` keeps that to those two checks.
 - **Status:** export lists and the Mac toolchain probe built 2026-11-16 (I101, N-1 sub-part 1);
-  `kit-toolchains` and the chronos range 2026-11-20 (sub-part 6), the check split per set 2026-11-21. The packaging is the split's.
+  `kit-toolchains` and the chronos range 2026-11-20 (sub-part 6), the check split per set 2026-11-21,
+  the chronos variants 2026-11-21 (N-1e, G439). The packaging is the split's.
 
 ### G342 — Modules built with the other memory manager
 - **Kind:** Choice [IMPL] · **Specs:** INTERFACE §2.6-§2.8; TIER5-PLAN §7 A7.
@@ -7217,6 +7225,287 @@ their history.
 - **Decision:** (c). **Status:** OPEN.
 
 ---
+
+### G437 — What runs while a confined kit's `destroyModule` runs
+- **Kind:** IMPL · **Specs:** INTERFACE l.1949-1962 (destroy), l.2116-2117 (work that cannot
+  quiesce); RUNTIME l.3713-3716, l.3739; TIER5-PLAN N-1; plan `tier5-plans/stepN-1e-plan.md` §A
+  (Fable's P1 on N-3's plan, then Fable's check of the plan).
+- **Before.** `destroyTask` set `disposed` before it called the generated dispose, and three paths
+  read it: posted callbacks (`post`, `lcn_kit_post`) were dropped, consumer tasks ran with `drop`
+  (events, end reports, and the completions of prepared calls and `invokeAsync`), and publication
+  replies were never completed. A `destroyModule` that awaited any of them never resumed, and the
+  stop deadline ended the host. The guide promised that dropping starts when `destroyModule`
+  returns. The order came in with N-1.3 (fdbd7aa), with no reason recorded.
+- **Decision.**
+  - kitgen's confined template splits the dispose in two. `<prefix>KitDispose` returns
+    `destroyModule`'s own future, or nil when `destroyModule` is synchronous; `<prefix>KitRelease`
+    does the `GC_unref`. `confinedDestroy(module, dispose, release)` takes both, so every generated
+    confined kit is regenerated against it (N-3's and N-4's once their base has this).
+  - `destroyTask` awaits that future under `noCancel(join(f))`, so the release is reached even when
+    `destroyModule` fails, then sets `disposed` and calls the release in one step, with no await
+    between them. The order lives in `confinedrt`, not in each generated kit.
+  - While it waits, the context keeps `destroyModule`'s future (`GC_ref`'d). The instance counts as
+    released as soon as that future has finished, so what is served in the turns between
+    `destroyModule`'s return and the release is dropped as after the release.
+  - Two flags. `destroying`, set when `destroyTask` starts: events and end reports (`runEvent`,
+    `runEnd`, `runRouteEnd`) are dropped from then on. Released (above): posted callbacks,
+    completions (`runDone`, and the kit's own cancellation notice `runCancel`) and publication replies
+    run until then. `TaskNode.duringDestroy` marks the two kinds of completion; every other consumer
+    task is dropped from the start of destroy. The scoped-publication waits end on the released flag.
+  - **A change:** before, events and end reports were still delivered during the unwinding (up to
+    2 s, G338), since `disposed` was set after it. Now they are dropped from the start of destroy.
+    Nothing a `destroyModule` awaits needs them, and an event handler started during destroy could
+    itself be left suspended.
+- **What this means for handlers still running.** An `async` handler holds the instance through its
+  environment. A plain handler blocked in a nested poll holds only its route's `{.cursor.}`, which orc
+  does not count: residual work that existed before, not something every handler is protected from.
+  A handler whose unwinding waited for a completion arriving after the 2 s bound now finishes during
+  `destroyModule` instead of being abandoned; its invocation still completes once, NOT_READY, since
+  `unwindDeferred` leaves what is outstanding to teardown. A handler that ignored its cancellation can
+  be woken while `destroyModule` awaits. That is memory-safe for `async` handlers and outside the
+  contract (INTERFACE l.2116-2117); timers could already wake it before.
+- **For the guide** (MODULE-KIT §3): `destroyModule` may await a callback a foreign thread posts, a
+  prepared call's or `invokeAsync`'s completion, and `publishAsync`. Events and end reports are not
+  delivered once destroy has begun, and posts still queued when `destroyModule` returns are dropped.
+  Whether the Runtime still admits a call made during destroy is another matter: ordinary paths close
+  at stop and at shutdown (RUNTIME l.3713-3716), so cleanup that needs another module belongs in a
+  preparation method (l.3739).
+- **Not covered:** the inner job of an inline re-entry and synchronous entries still running at
+  destroy (both still run after `destroyModule`, as G338 records); `isCancelled` for plain handlers
+  once destroy has begun; the W-case for marked wipes on the cancellation path (G338).
+- **Tests:** `sdk/tests/test_kit_confined.nim` "what runs while destroyModule runs" (8 cases, orc,
+  refc and orc-release). The ledger fixture's `destroyModule` is `async` and awaits only when the test
+  sets `destroyMode`, so every other case keeps its synchronous behaviour; `foreign_lib.c` gains a
+  delayed single post and a stream that posts until stopped. Cases: (a) a callback a foreign C thread
+  posts 50 ms in, destroy under 1 s, the instance freed (orc); (b) `invokeAsync` completed by a binding
+  thread 100 ms in; (c) `publishAsync`, ok, seen by the publish callback; (d) posts queued by a
+  `destroyModule` that returns without yielding never run; (e) events delivered while `destroyModule`
+  awaits reach the kit and are dropped; (f) a `wait` 12 handler under `noCancel` whose completion
+  comes after the 2 s bound finishes during `destroyModule`, NOT_READY once, the instance freed (orc);
+  (g1) a foreign stream `destroyModule` stops and joins, no callback after it returned; (g2) the same
+  while `destroyModule` first awaits a delayed post, callbacks during it, none after. Each wait in the
+  fixture is bounded by 5 s with `race`, never `withTimeout`, which cancels the call it bounds and
+  waits for that. Run by hand once under the order before (`disposed` set at the start of destroy):
+  a, b, c, e, f and g2 fail, none hangs; d and g1 pass under both orders.
+- **Status:** built 2026-11-21 (Tier 5 step N-1e, part A).
+
+### G438 — Closing a confined kit's module-thread dispatcher, and what destroy left
+- **Kind:** IMPL · **Specs:** INTERFACE l.1949-1962, l.2100 (residual work); chronos's main line after
+  v4.4.0, which logos-storage-nim (2d81a762) and logos-delivery (0de7b335) pin; TIER5-PLAN N-1; plan
+  `tier5-plans/stepN-1e-plan.md` §B (W2-P's P7 check; Fable's checks,
+  `tier5-plans/fable-checks/stepN-1e-plan.md`).
+- **Found** (W2-P, Mac, 1c0530b). On that line each POSIX dispatcher owns a wake-up descriptor (an
+  eventfd on Linux, a socket pair on macOS), and only `closeThreadDispatcher()` closes it. The kit's
+  teardown closed the selector and dropped the dispatcher, so every module thread leaked it:
+  test_kit_mixed MX-1 counted 41 descriptors against 21 under either library's chronos. On the lock's
+  chronos 4.4.1 it passes.
+  - **Linux:** confirmed by W2-P's `p7-toolchains` check on framework.lan (2026-11-21,
+    `tier5-plans/stepW2-P-spike.md` §2). Without this decision, MX-1 counted 24 descriptors against
+    14 under both libraries' chronos: one eventfd per dispatcher.
+  - **With W2-P's scratch copy of the fix**, these pass under both: test_kit_mixed (orc) 4/4,
+    test_kit_dylib (refc) 16/16, run.mixed (orc) 3/3, and test_kit_confined 39/39 under orc and refc.
+    Each kit's C named the library's chronos.
+- **Decision.** At teardown, after the kit's own signal is closed (so its registration never counts)
+  and the dispatcher's callbacks are cleared, `confinedrt.closeDispatcher`:
+  - counts the descriptors left: the open ones (`/proc/self/fd`, `/dev/fd`, else each below
+    `min(RLIMIT_NOFILE, 65536)` that `fcntl` accepts) the selector `contains`, less those it held when
+    it was made. `moduleMain` now makes the dispatcher before `arm` registers the kit's signal (it was
+    made inside `arm`) and notes those: chronos's wake-up descriptor on the main line, none on 4.4.1.
+  - On the main line (`when declared(closeThreadDispatcher) and defined(posix)`), when nothing is
+    left, checks through chronos's public API only, since its POSIX close raises a Defect on anything
+    left and on a failed unregistration (kqueue `getKey`/`addKey`, epoll likewise at 2d81a762): exactly
+    one descriptor was noted; the selector `contains` it; `unregister2` of it succeeds; the selector's
+    `isEmpty` is read; `registerHandle2` puts it back and `contains` holds again. When all pass and
+    the selector was empty, it calls `closeThreadDispatcher()` and writes its diagnostic, if any. Past
+    these checks nothing in that close raises.
+  - Otherwise, and always on 4.4.1 and on Windows (whose close asserts what cannot be checked first;
+    until M12), it takes the old path: the selector's `close2` and `setThreadDispatcher(nil)`. Never
+    both.
+  - **What is left is never closed.** The kit doesn't own it: the module's stream or a library thread
+    may still close it, by when its number may be reused, in logosd perhaps for one of the Runtime's
+    own. With no thread left it is a leaked descriptor, not residual work, so INTERFACE l.2100 holds;
+    closing it is the module's duty. Unregistering what is left so that the wake-up descriptor could
+    still be closed is not done: the scan sees descriptors but not signal or process registrations,
+    and chronos offers no full public listing across G341's range.
+  - **Reported** in one stderr line, as the kit's fatal path writes, naming the module: "destroy left
+    at least N descriptor(s)", a lower bound since a closed descriptor still registered is invisible
+    to the scan, or "other registrations" when only `isEmpty` saw something. 4.4.1 exports no
+    `isEmpty`, so there a signal, process or closed-but-registered leftover goes unseen.
+  - **Strict mode.** Built with `lcnKitStrictDestroy`, the kit aborts after that line, so a module's
+    own suite fails at the destroy that missed a close. The define is set only in the test
+    configuration files (`sdk/tests/config.nims`, `tests/config.nims`, for in-process kits) and on
+    `kitbuild`'s command line, never in the root `config.nims`, which every build reads. `kitbuild`
+    builds strict by default (`strictDestroy`); turning it off takes a reason, written beside the
+    library (`<name>.lenient`) and to its log, and the variant directory's name says which (`-strict`),
+    so a lenient test never loads a strict library of the same name. A strict build holds the marker
+    `LCN_KIT_STRICT_DESTROY_BUILD` (`base/testhooks.strictDestroyMarker`); `no-test-hooks` fails when a
+    deployment output holds it and requires it in `tests/support/strictprobe.nim` built with the
+    define. MODULE-KIT §8: kitbuild never builds a release library. N-4's hosted cases build their
+    module with kitbuild, so a registration storage or libp2p leaves at stop aborts them until the leak
+    is fixed or the reason recorded.
+  - The stderr line carries the module's name: `confinedInit` takes it (`name`), and the generated
+    kit passes its `moduleName`, so every confined kit is regenerated.
+- **A late cross-thread wake-up** (Fable §6.1). A thread that still holds this dispatcher's handle
+  after destroy and calls chronos's cross-thread `callSoon` writes to the wake-up descriptor. Before,
+  that descriptor was leaked but open; once closed, its number may be reused, in logosd perhaps for one
+  of the Runtime's descriptors. Such a thread is residual work the module must stop or join (l.2100);
+  chronos calls closing in that state undefined, and the kit cannot see it, since the cross-thread
+  queue is private. This is the risk closing adds. MODULE-KIT §3: before `destroyModule` returns, the
+  module stops or joins every thread it gave that handle to.
+- **The kit's own posts** never touch the wake-up descriptor: `post`, `lcn_kit_post` and the consumer
+  dispatcher's `postTask` check `closed` under the context's lock and only then fire the kit's own
+  signal, and teardown sets `closed` before it closes that signal, so a post after the last drain is
+  refused and its node freed. A post after `_MODULE_destroy` returned is G440's gate. The window
+  between the last drain and the return is too short to hit from a test without a hook in the
+  runtime, so G440's foreign-stream case, which posts through the whole destroy, covers both refusals.
+- **For the guide** (MODULE-KIT §3, §8): `destroyModule` closes every stream and transport the module
+  opened; a descriptor registered with chronos is unregistered before it is closed; what is left is
+  reported and stays open; test builds abort there; threads holding the dispatcher handle are stopped
+  or joined first; kitbuild never builds a release library.
+- **Tests:** `sdk/tests/test_kit_dylib.nim` "what a confined kit's destroy leaves registered", each
+  case in a child process (this program run again) over the strict ledger library and a lenient one
+  (`kitledgerp`): `probe` 25 leaves a pipe end registered (the lenient library writes the line, "at
+  least 1 descriptor", and returns; the strict one aborts with it); `probe` 26 closes it while still
+  registered (on the main line "other registrations", lenient returns, strict aborts; on 4.4.1 no
+  line in either mode, as above); a clean destroy writes no line in either mode. `probe` 27 says
+  which chronos the library has, since under `kit-toolchains`' variant (G439) the library and the
+  host differ. **The 200-cycle case** (moved from N-4; G439 runs it under the variant too): the strict
+  confined ledger library initialized, called once and destroyed 200 times in one process (G111),
+  after 10 warm-up cycles; the same open descriptors and threads as after the warm-up, and resident
+  memory grown by under 1 MiB (it rarely returns to the byte; Mac 2026-11-21: 16 KiB orc, 0 refc,
+  16 KiB orc-release). It is the regression check for the wake-up descriptor: without this decision
+  each cycle leaks one (Linux) or two (macOS).
+- **Status:** built 2026-11-21 (Tier 5 step N-1e, part B).
+
+### G439 — A chronos variant in `kit-toolchains`: the kits under the libraries' own chronos
+- **Kind:** IMPL · **Specs:** none (a test of G341's range); TIER5-PLAN N-1; plan
+  `tier5-plans/stepN-1e-plan.md` §C (W2-P's P7 recipe; Fable, `tier5-plans/fable-checks/stepW2-P-plan.md`
+  §8 and `tier5-plans/fable-checks/stepN-1e-plan.md` §8); amends G341.
+- **Found** (W2-P, P7). `kit-toolchains` tested switch sets only, always over the lock's chronos 4.4.1.
+  logos-storage-nim pins chronos `2d81a762` and logos-delivery `0de7b335`, both on chronos's main line
+  after v4.4.0, where each POSIX dispatcher owns a wake-up descriptor (G438). A `--path` in
+  `LCN_KIT_SWITCHES` loses to `nimble.paths`, so W2-P's first try compiled 4.4.1 without an error.
+- **Decision.** Two more Linux checks beside the per-set ones, one per library revision:
+  `kit-toolchains-storage-2d81a762` and `kit-toolchains-delivery-0de7b335`. Each runs its set's suites
+  (`test_kit_dylib` under refc, `run.mixed` and `test_kit_mixed` under orc) with the kit libraries built
+  against the library's chronos and the packages it locks at another revision than core: storage's stew
+  `85c6e313` (0.5.3) and bearssl `38a5622b` (0.2.15); delivery's stew `6a930214` (0.6.3) and httputils
+  `97eafdb8` (0.6.0). Core's lock supplies the rest. The host programs keep 4.4.1, as in a node whose
+  Runtime is built from core's lock and whose module libraries are built from their own.
+  - **The sources** are fixed-output fetches of the commits W2-P fetched under the owner's D-4
+    (`tier5-plans/stepW2-P-downloads.md`), each named `<package>-<rev8>` so the kits' generated C names
+    the revision. Their hashes match W2-P's checkouts on framework.lan (2026-11-21).
+  - **What each library keeps at core's revision:** storage's httputils (0.5.1 `7d771ca3`) and
+    delivery's bearssl (0.2.13 `b6c9a389`); results (0.5.1 `df8113dd`) is the same in all three locks.
+    Each variant names its kept packages' revisions, and evaluation fails if core's lock moves one: the
+    variant would then test a library's chronos beside a package that library does not use, and needs a
+    fetch. Storage locks unittest2 0.2.6 where core locks 0.3.0; the variant keeps core's, which no kit
+    source imports, so it is in no kit library.
+  - **The swap** is the define `lcnKitVariant`, which only kit compiles get (in `LCN_KIT_SWITCHES`). It is
+    read by the check's own copy of `config.nims`; the repository's copy is untouched. The copy's paths
+    file is `nimble.paths` with each swapped package's entry replaced, never added in front. So no
+    module of core's copy can fill a gap in the library's (Fable, `stepW2-P-plan.md` §8).
+  - **Asserted in each check:**
+    - **The host.** Each suite's host compile (`nim dump` of its own project file, so its directory's
+      `config.nims` is in the chain) has the same search paths, lazy paths and defined symbols under the
+      check's `config.nims` as under the repository's, and no `lcnKitVariant`.
+    - **The kits.** Every kit build is made with `-d:nimBetterRun`, so its nimcache record lists every
+      file it read. Every record lists some files; some kit read the variant's chronos; no kit read a
+      file of a swapped package from core's set. The property asserted is "removed", not "shadowed".
+      These records are used instead of a separate `nim dump`, which would have to repeat kitbuild's
+      arguments exactly (Fable, `stepN-1e-plan.md` §8).
+    - **The generated C.** The kits' C names the variant's chronos and never core's.
+    - Absence is asserted only for the swapped packages; the kept ones are the library's own.
+  - **`kit-toolchains-isolated`** guards the rest. No source that every other check builds from names
+    `lcnKitVariant`. The per-set checks' derivations are those made without the variants; that holds by
+    construction and guards against later wiring. It is compared in this one check, so evaluating any
+    other check does not instantiate them twice.
+  - **The 200-cycle case** (G438) runs in `test_kit_dylib` under both variants, and under 4.4.1 in the
+    ordinary checks. It requires descriptors and threads back to the warm-up's and resident memory grown
+    by under 1 MiB.
+- **The plan's two sentences, corrected** (Fable, `stepN-1e-plan.md` §8.2). Part C's first bullet gives
+  each variant its library's stew, bearssl and httputils; that holds only because the package each
+  library keeps is at core's revision. The dump bullet names four of core's packages that may not
+  appear; for each library it is three.
+- **By hand before the first merge** (the plan's fallback, kept as a record). On the Mac, 2026-11-21,
+  at b570078 (parts A, B and D), W2-P's recipe was run over W2-P's checkouts: a define-selected paths
+  file in a temporary `config.nims`. Under storage's set with chronos `2d81a762` and under delivery's
+  with `0de7b335`, the results were:
+  - MX-1 to MX-4 (`test_kit_mixed`, orc) pass.
+  - `test_kit_dylib` passes 20 of 20 under refc and orc. That includes G438's leftover cases and the
+    200-cycle case; resident memory grew by 0 KiB under refc and 16 KiB under orc.
+  - Every kit build's record listed its files. 9 of the 23 read the variant's chronos and stew; the
+    others read no chronos at all. None read chronos, stew or the third swapped package from core's
+    set, and none read bearssl or httputils.
+  - The three suites' host dumps were the same under either `config.nims`.
+
+  framework.lan runs the two checks themselves before the merge.
+- **Not covered:** W2-P.2's G435 changes how kitbuild passes paths (`hostPathArgs`, only for a tree
+  that sets none). This tree sets them, so the variant is unaffected; it is checked again once W2-P.2
+  lands.
+- **Status:** built 2026-11-21 (Tier 5 step N-1e, part C).
+
+### G440 — A post gate that outlives a confined kit's context
+- **Kind:** IMPL · **Specs:** INTERFACE l.2100 (residual work); planning's ruling; TIER5-PLAN N-1; plan
+  `tier5-plans/stepN-1e-plan.md` §D (Fable's checks G1-G8, `tier5-plans/fable-checks/stepN-1e-plan.md`
+  §7).
+- **Found.** A confined kit's poster, `lcn_kit_post`'s `void *` and its consumer dispatcher's
+  `context` were the context's own address. A post that came after `_MODULE_destroy` returned (a
+  foreign thread the module never stopped, a route handle, subscription or prepared call it never
+  released, whose binding still delivers) took a lock in freed memory: in a direct placement,
+  logosd's.
+- **Decision.** Every such post goes through a gate whose memory is never freed; a late one is
+  refused. A refused post is a much smaller failure than a use after free. The same rule Fable gave
+  N-3's glue: whatever a late caller checks lives in memory that is never freed.
+  - **One pointer-sized value (G1).** The poster, `lcn_kit_post`'s argument and the dispatcher's
+    `context` are one value packing a slot of the gate's table (the low 20 bits: about a million
+    contexts alive at once) and that slot's generation (the high 44, stored as generation + 1), so it
+    is never null: null still means a plain kit, and `post` dies on it. Our targets are 64-bit
+    (`static: doAssert`); a 32-bit target would need its own layout. `ModuleServices` keeps the value
+    (`gate`), so `poster(s)` and the dispatcher read no context memory, even on a copy of the services
+    that outlived destroy; `onItsModuleThread(d)` compares it with the calling module thread's own
+    context's.
+  - **The table never moves (G2).** A static directory of chunk pointers, 1,024 slots a chunk, chunk 0
+    in static storage; another chunk is allocated with the C allocator only when one library has more
+    instances alive at once, published with an atomic store and never freed. Zeroed memory is an empty
+    table, so nothing needs module initialization. Each kit library has its own table.
+  - **A slot** holds a lock, its generation and the live context (nil when none). Free slots are on a
+    list under a table lock (an atomic flag), taken only to hand out and take back a slot and never
+    held with a slot lock (G3).
+  - **Lifetime (G3).** `confinedInit` takes a slot right after the context's locks, before either
+    thread starts, since `initModule` may give its poster away at once; no slot is an init failure.
+    `freeContext` clears the slot first, under its lock alone, and moves its generation on, so destroy
+    (after both threads are joined) and each of `confinedInit`'s failure paths retire it. A slot whose
+    generation would pass the maximum is retired, never reused, which closes ABA.
+  - **Lock order:** the slot's lock, then the context's, in `post`, `lcn_kit_post` and the consumer
+    dispatcher's `postTask`; the slot's lock is held until the context's is released, so the context
+    cannot be freed between the check and its use. It cannot deadlock destroy (G4): firing the signal
+    does not wait, and destroy takes the slot's lock only after both threads are joined.
+  - **Refusals.** A stale generation or a cleared slot is refused. A refused `post` frees its node and
+    never calls `fn`; the payload stays the caller's. A refused `postTask` runs its task with drop, as
+    a post after the last drain already did, and in both refusals only after releasing the slot's lock
+    (G5): the task takes the consumer runtime's locks and may free its owner. That is safe after
+    destroy: the owner is kept by its pending count, and the dispatcher record is a value copied into
+    each handle, so the context was the only thing that pointed into freed memory.
+  - **Every platform.** Only the kit's own locks and C memory, so Windows runs the same code.
+  - **The cost:** one more lock per post.
+  - **Not a licence (G8).** The gate protects the Runtime's memory. A thread that still posts after
+    destroy is residual work (l.2100), and the guide keeps the module's duty to stop posting and
+    release its handles before `destroyModule` returns (MODULE-KIT §3).
+- **Tests:** `sdk/tests/test_kit_confined.nim` "the post gate", in process, each breaking the module's
+  duty on purpose: the packing (never null, a round trip, the largest value fills 64 bits, the last
+  generation retires its slot, through `gateNext` with forced generations); `post` and `lcn_kit_post`
+  from a foreign C thread after `_MODULE_destroy` returned (refused, `fn` never runs); deliveries, a
+  subscription end, a route end and a completion for a handle, subscription and prepared call
+  `destroyModule` left unreleased (destroy mode 8; each dropped, the handle's pending count back to 0
+  through the consumert test hook `pendingTasks`, no handler runs); the poster an `initModule` gave
+  away before it failed (refused); a slot reused by the next context (a generation on; the old poster
+  refused, the new one served); and a foreign stream that posts through destroy and on into the
+  slot's next context, 20 cycles (destroy mode 9; no callback after the return). The fixture's
+  handlers count a call after the return in `lateCalls`. The last case was run once by hand under
+  AddressSanitizer and once under ThreadSanitizer before the merge; CI's sanitizer groups run the
+  suite.
+- **Status:** built 2026-11-21 (Tier 5 step N-1e, part D).
 
 ### G317 — The reverse mapper's input set
 - **Kind:** IMPL (gaps Q1, Q4; reading Q6) · **Specs:** INTERFACE §3 · **Plan:** `tier5-plans/step5-1-reverse-mapper.md` §4.1. Section and Q numbers below are the plan's; `l.` cites are INTERFACE.
@@ -7583,6 +7872,10 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G396 | the package trust file v2 | FREE | 9 |
 | G397 | `logosctl trust` for the package trust file, and key separation | FREE | 9 |
 | G398 | catalog and provenance selections in the package trust file | FREE (C3, C9) | 9 |
+| G437 | what runs while a confined kit's `destroyModule` runs | IMPL | 12 |
+| G438 | closing a confined kit's module-thread dispatcher, and what destroy left | IMPL | 12 |
+| G439 | a chronos variant in `kit-toolchains`: the kits under the libraries' own chronos | IMPL | 12 |
+| G440 | a post gate that outlives a confined kit's context | IMPL | 12 |
 
 ---
 

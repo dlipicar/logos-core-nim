@@ -74,6 +74,9 @@ type
     publishUserData: pointer
     invocationAccess: LogosInvocationAccess
     confined: pointer ## a confined kit's context (`confinedrt`), else nil
+    gate: pointer
+      ## [DECISIONS G440] a confined kit's post gate value: what its poster and
+      ## its dispatcher's context carry, never its context's address; else nil
     confinedPublish: ConfinedPublishFn
     dispatch: Dispatcher ## where its route handles' callbacks run (G339)
 
@@ -308,15 +311,20 @@ proc moduleServices*(input: ptr LogosModuleInitInput): ModuleServices =
   )
 
 proc withConfined*(
-    s: ModuleServices, confined: pointer, publish: ConfinedPublishFn, post: PostTaskFn
+    s: ModuleServices,
+    confined, gate: pointer,
+    publish: ConfinedPublishFn,
+    post: PostTaskFn,
 ): ModuleServices =
-  ## [DECISIONS G337, G339] `s` for an instance of the confined context
+  ## [DECISIONS G337, G339, G440] `s` for an instance of the confined context
   ## `confined`: its events are queued by `publish`, and its route handles'
-  ## callbacks are posted to its module thread by `post`.
+  ## callbacks are posted to its module thread by `post` through `gate`, the
+  ## context's post gate value.
   result = s
   result.confined = confined
+  result.gate = gate
   result.confinedPublish = publish
-  result.dispatch = Dispatcher(context: confined, post: post)
+  result.dispatch = Dispatcher(context: gate, post: post)
 
 proc dispatcher*(s: ModuleServices): Dispatcher =
   ## [DECISIONS G339, P2] What the consumer helpers wrap this instance's route
@@ -327,6 +335,11 @@ proc dispatcher*(s: ModuleServices): Dispatcher =
 proc confinedOf*(s: ModuleServices): pointer =
   ## The confined context these services belong to; nil for a plain kit.
   s.confined
+
+proc gateOf*(s: ModuleServices): pointer =
+  ## [DECISIONS G440] The post gate value of the confined context these
+  ## services belong to; nil for a plain kit. Reads no context memory.
+  s.gate
 
 proc hasPublish*(s: ModuleServices): bool =
   not s.publishFn.isNil

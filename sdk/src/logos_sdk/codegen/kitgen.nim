@@ -516,24 +516,27 @@ proc kitParts(
         "    GC_ref(instance)\n" &
         "    return Result[pointer, InvocationFailure].ok(cast[pointer](instance))\n\n" &
         "  proc " & prefix &
-        "KitDispose(p: pointer): Future[void] {.async: (raises: []).} =\n" &
-        "    let instance = cast[T](p)\n" &
+        "KitDispose(p: pointer): FutureBase {.nimcall, gcsafe, raises: [].} =\n" &
+        "    ## `destroyModule`'s own future, or nil once a synchronous one returned\n" &
+        "    ## (DECISIONS G437).\n" & "    let instance = cast[T](p)\n" &
         "    when compiles(destroyModule(instance)):\n" &
         "      when typeof(destroyModule(instance)) is void:\n" &
         "        destroyModule(instance)\n" & "      else:\n" &
-        "        let f = destroyModule(instance)\n" &
-        "        if not f.finished():\n          await noCancel(join(f))\n" &
-        "    GC_unref(instance)\n\n" & "  proc " & prefix &
-        "KitName(): cstring {.exportc: \"" & sym("name") &
+        "        return FutureBase(destroyModule(instance))\n\n" & "  proc " & prefix &
+        "KitRelease(p: pointer) {.nimcall, gcsafe, raises: [].} =\n" &
+        "    ## The instance's release, in the step that drops what is still queued\n" &
+        "    ## (DECISIONS G437).\n" & "    GC_unref(cast[T](p))\n\n" & "  proc " &
+        prefix & "KitName(): cstring {.exportc: \"" & sym("name") &
         "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
         "    system.cstring(moduleName)\n\n" & "  proc " & prefix &
         "KitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: \"" &
         sym("init") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
         "    kitEnter()\n    confinedInit(input, outContext, declaresEvents, " & prefix &
-        "KitCreate)\n\n" & "  proc " & prefix &
+        "KitCreate, name = system.cstring(moduleName))\n\n" & "  proc " & prefix &
         "KitDestroy(module: ptr LogosModuleContext) {.exportc: \"" & sym("destroy") &
         "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
-        "    kitEnter()\n    confinedDestroy(module, " & prefix & "KitDispose)\n"
+        "    kitEnter()\n    confinedDestroy(module, " & prefix & "KitDispose, " & prefix &
+        "KitRelease)\n"
     )
     if live:
       o.add(

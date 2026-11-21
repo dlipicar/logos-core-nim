@@ -23,7 +23,9 @@
 ## cancelled meanwhile (a submitted invocation's cancellation, G338); 10 calls
 ## `meter.read` of channel `value` with `invokeAsync` through the handle `probe`
 ## 10 wrapped, with a deadline of `millis` when nonzero; 11 sleeps `millis`
-## and ignores a cancellation (`noCancel`). `seal` (marked)
+## and ignores a cancellation (`noCancel`); 12 calls `meter.read` of channel
+## `value` through that handle and ignores a cancellation (`noCancel`), so its
+## handler outlives the unwinding of a destroy (G437). `seal` (marked)
 ## returns its secret reversed and masked. Every response names its handler's
 ## thread. The kit also exports `_MODULE_async_api` (`--async-api`).
 ##
@@ -47,7 +49,21 @@
 ## from a chronos timer `value` ms later; 22 reads `posts`, `postThreads` and
 ## how many of this instance's `post` publications the kit refused (its queue
 ## full); 23 reads how many `wait` 9 handlers of the library saw cancelled and
-## how many sleep now (`<cancelled> <sleeping>`).
+## how many sleep now (`<cancelled> <sleeping>`); 24 starts a foreign C thread
+## that posts a callback touching the instance until `destroyModule` stops it.
+## For G438's leftover cases, `probe` 25 registers a pipe's read end with the
+## module thread's dispatcher and never unregisters it; 26 does the same and
+## closes it without unregistering it; 27 names the chronos the library was
+## built with (`main line` once it has `closeThreadDispatcher`, else `4.4.1`).
+## For G440's post gate, `probe` 28 answers this instance's poster value in
+## decimal, and an `initModule` given the state directory `/refuse-poster`
+## keeps its poster in `refusedPoster`, then fails. `probe` 29 answers how
+## many registrations the module thread's dispatcher held when it was made (a
+## test hook; `no hooks` in a library built without them).
+##
+## `destroyModule` is `async` [DECISIONS G437], and awaits only when the test
+## set `destroyMode` before the destroy; every other destroy returns without
+## yielding, as a synchronous one does.
 
 {.used.} # imported by the tests for the C symbols it exports
 import std/[atomics, os, strutils, tables]
@@ -59,6 +75,43 @@ import ../../kit/routes
 proc foreignPost(
   poster: pointer, fn: PostFn, threads, count: cint
 ): cint {.importc: "lcn_foreign_post", cdecl, gcsafe, raises: [].}
+
+proc foreignPostLater(
+  poster: pointer, fn: PostFn, payload: pointer, delayMs: cint
+): pointer {.importc: "lcn_foreign_post_later", cdecl, gcsafe, raises: [].}
+
+proc foreignLaterJoin(
+  later: pointer
+) {.importc: "lcn_foreign_later_join", cdecl, gcsafe, raises: [].}
+
+proc foreignStreamStart(
+  poster: pointer, fn: PostFn, payload: pointer
+): pointer {.importc: "lcn_foreign_stream_start", cdecl, gcsafe, raises: [].}
+
+proc foreignStreamStop(
+  stream: pointer
+): clong {.importc: "lcn_foreign_stream_stop", cdecl, gcsafe, raises: [].}
+
+when defined(posix):
+  proc cPipe(fds: var array[2, cint]): cint {.importc: "pipe", header: "<unistd.h>".}
+  proc cClose(fd: cint): cint {.importc: "close", header: "<unistd.h>".}
+
+proc leaveRegistered(closeIt: bool): string =
+  ## [DECISIONS G438] A pipe's read end registered with this thread's
+  ## dispatcher and never unregistered; closed too when `closeIt`.
+  when defined(posix):
+    var fds: array[2, cint]
+    if cPipe(fds) != 0:
+      return "no pipe"
+    discard cClose(fds[1])
+    if register2(AsyncFD(fds[0])).isErr:
+      discard cClose(fds[0])
+      return "not registered"
+    if closeIt:
+      discard cClose(fds[0])
+    "registered"
+  else:
+    "posix only"
 
 type
   FreedMark = object
@@ -83,6 +136,9 @@ type
     refused: int ## `post` publications the kit refused
     set: RouteSet ## from `probe` 18
     routeId: string
+    wake: Future[void] ## what a destroy mode awaits a foreign post for
+    stream: pointer ## the foreign stream `probe` 24 started
+    streamed: int ## its callbacks that ran
 
 var
   destroyed*: Atomic[int] ## instances `destroyModule` has seen
@@ -94,6 +150,31 @@ var
   probeHook*: proc(m: Ledger, value: uint64): string {.nimcall, gcsafe, raises: [].}
     ## what `probe` 8 calls; the test sets it
   routeToWrap*: LogosRouteHandle ## what `probe` 10 wraps; the test sets it
+  destroyMode*: Atomic[int]
+    ## [DECISIONS G437] What the next `destroyModule` awaits, set by the test and
+    ## taken back to 0 by that destroy: 0 nothing; 1 a callback a foreign thread
+    ## posts 50 ms later; 2 `meter.read` of channel 7 through `invokeAsync`; 3
+    ## `publishAsync`; 4 nothing, after two foreign threads posted 10 callbacks
+    ## each; 5 as 1, 300 ms later, then reads what its handlers saw; 6 until a
+    ## `wait` 12 handler finished; 7 as 1, 100 ms later. Each wait is bounded by
+    ## 5 s. Every mode then stops `probe` 24's stream. [DECISIONS G440] Two
+    ## modes break the module's duty on purpose: 8 leaves its wrapped route
+    ## handle, subscription and prepared call unreleased (in `leftRoute` and
+    ## `leftCall`), and 9 leaves `probe` 24's stream running (in `leftStream`,
+    ## for `stopLeftStream`).
+  destroyStarted*: Atomic[bool] ## a `destroyModule` began
+  destroyReturned*: Atomic[bool] ## a `destroyModule` returned
+  streamed*: Atomic[int] ## stream callbacks that ran
+  streamedDuring*: Atomic[int] ## of them, while `destroyModule` ran
+  lateCalls*: Atomic[int] ## of them, after `destroyModule` returned
+  residualDone*: Atomic[int] ## `wait` 12 handlers that finished
+  refusedPoster*: Atomic[pointer] ## the poster a failed `initModule` gave away
+  leftRoute*: RouteHandle ## destroy mode 8: the handle left unreleased
+  leftCall*: PreparedCall ## destroy mode 8: the call left unreleased
+  leftStream*: Atomic[pointer] ## destroy mode 9: the stream left running
+  destroyNoteLen: Atomic[int]
+  destroyNoteText: array[64, char]
+    ## what the last `destroyModule` noted: plain memory, read on the test's thread
 
 when defined(gcOrc) or defined(gcArc) or defined(gcAtomicArc):
   # Only where the count is checked: Nim 2.2 refuses this `=destroy` form under
@@ -108,12 +189,32 @@ when defined(gcOrc) or defined(gcArc) or defined(gcAtomicArc):
 proc threadNumber(): uint64 =
   uint64(getThreadId())
 
+proc setDestroyNote(s: string) =
+  let n = min(s.len, destroyNoteText.len)
+  {.cast(gcsafe).}:
+    for i in 0 ..< n:
+      destroyNoteText[i] = s[i]
+  destroyNoteLen.store(n)
+
+proc destroyNote*(): string =
+  ## What the last `destroyModule` noted; read once the destroy returned.
+  let n = destroyNoteLen.load
+  result = newString(n)
+  {.cast(gcsafe).}:
+    for i in 0 ..< n:
+      result[i] = destroyNoteText[i]
+
 proc initModule(
     _: type Ledger, init: ModuleInit
 ): Future[Result[Ledger, InvocationFailure]] {.async: (raises: []).} =
   if init.stateDir == Opt.some("/refuse"): # refuse to start
     return Result[Ledger, InvocationFailure].err(
       failure(ecModule, "the state directory says no")
+    )
+  if init.stateDir == Opt.some("/refuse-poster"): # give the poster away, then fail
+    refusedPoster.store(cast[pointer](init.services.poster))
+    return Result[Ledger, InvocationFailure].err(
+      failure(ecModule, "the state directory says no, after the poster went")
     )
   try:
     await sleepAsync(1.milliseconds)
@@ -127,16 +228,6 @@ proc initModule(
     )
   )
 
-proc destroyModule(m: Ledger) =
-  m.kept = nil
-  if not m.call.isNil:
-    discard m.call.release()
-  if not m.set.isNil:
-    discard m.set.close() # the route it holds too
-  elif not m.route.isNil:
-    discard m.route.release()
-  destroyed += 1
-
 proc callerNote(r: Result[Caller, InvocationFailure]): string =
   if r.isOk:
     r.unsafeGet.moduleInstance.get("")
@@ -149,7 +240,157 @@ proc statusNote(r: Result[void, InvocationFailure]): string =
   else:
     $r.unsafeError.code
 
+proc onPosted(payload: pointer) {.cdecl, gcsafe, raises: [].} =
+  if not onConfinedThread():
+    postThreads += 1
+  posts += 1
+
+proc onWoken(payload: pointer) {.cdecl, gcsafe, raises: [].} =
+  let m = cast[Ledger](payload)
+  posts += 1
+  if not m.wake.isNil and not m.wake.finished():
+    m.wake.complete()
+
+proc onStreamed(payload: pointer) {.cdecl, gcsafe, raises: [].} =
+  let m = cast[Ledger](payload)
+  inc m.streamed # touches the instance
+  streamed += 1
+  if destroyReturned.load:
+    lateCalls += 1
+  elif destroyStarted.load:
+    streamedDuring += 1
+
+proc within5s(f: FutureBase): Future[bool] {.async: (raises: []).} =
+  ## Whether `f` finished within 5 s. Unlike `withTimeout`, it never cancels `f`
+  ## and waits for that: a call whose completion was dropped would never end.
+  let guard = sleepAsync(5.seconds)
+  try:
+    discard await race(f, guard)
+  except CancelledError:
+    discard
+  guard.cancelSoon()
+  f.finished()
+
+proc awaitWake(m: Ledger, delayMs: int): Future[bool] {.async: (raises: []).} =
+  ## A callback a foreign thread posts `delayMs` later, awaited for up to 5 s.
+  m.wake = newFuture[void]("ledger wake")
+  let later = foreignPostLater(
+    cast[pointer](m.services.poster), onWoken, cast[pointer](m), cint(delayMs)
+  )
+  if later.isNil:
+    return false
+  let woke = await within5s(m.wake)
+  foreignLaterJoin(later)
+  woke
+
+proc readThrough(m: Ledger): Future[string] {.async: (raises: []).} =
+  ## `meter.read` of channel 7 through `invokeAsync`, awaited for up to 5 s.
+  if m.route.isNil:
+    return "no route"
+  let f = m.route.invokeAsync(MeterReadRequest(channel: 7))
+  if not await within5s(f):
+    return "guard"
+  try:
+    let r = f.read()
+    if r.isOk:
+      "ok:" & r.unsafeGet.label
+    else:
+      $r.unsafeError.code
+  except CatchableError:
+    "failed"
+
+proc seenNote(m: Ledger): string =
+  var values: seq[string]
+  for v in m.seen:
+    values.add($v)
+  values.join(",")
+
+proc destroyModule(m: Ledger) {.async: (raises: []).} =
+  destroyStarted.store(true)
+  var note = ""
+  case destroyMode.exchange(0)
+  of 1:
+    note = "woke=" & $(await m.awaitWake(50))
+  of 2:
+    note = await m.readThrough()
+  of 3:
+    let f = m.services.publishAsync(LedgerPostedEvent(key: "destroy", total: 1))
+    note =
+      if not await within5s(f):
+        "guard"
+      else:
+        try:
+          statusNote(f.read())
+        except CatchableError:
+          "failed"
+  of 4:
+    let poster = cast[pointer](m.services.poster)
+    note = (if foreignPost(poster, onPosted, 2, 10) == 0: "posted" else: "no threads")
+  of 5:
+    note = "woke=" & $(await m.awaitWake(300)) & " seen=" & m.seenNote
+  of 6:
+    var waited = 0
+    while residualDone.load == 0 and waited < 5000:
+      try:
+        await sleepAsync(10.milliseconds)
+      except CancelledError:
+        break
+      waited += 10
+    note = "residual=" & $residualDone.load
+  of 7:
+    note = "woke=" & $(await m.awaitWake(100))
+  of 8:
+    {.cast(gcsafe).}:
+      leftRoute = m.route
+      leftCall = m.call
+    m.route = nil
+    m.call = PreparedCall()
+    note = "left"
+  of 9:
+    leftStream.store(m.stream)
+    m.stream = nil
+    note = "streaming"
+  else:
+    discard
+  if not m.stream.isNil:
+    discard foreignStreamStop(m.stream)
+    m.stream = nil
+  m.kept = nil
+  if not m.call.isNil:
+    discard m.call.release()
+  if not m.set.isNil:
+    discard m.set.close() # the route it holds too
+  elif not m.route.isNil:
+    discard m.route.release()
+  destroyed += 1
+  setDestroyNote(note)
+  destroyReturned.store(true)
+
+proc stopLeftStream*(): int =
+  ## [DECISIONS G440] Stops the stream destroy mode 9 left running: how many
+  ## posts it made, -1 when there was none.
+  let s = leftStream.exchange(nil)
+  if s.isNil:
+    -1
+  else:
+    int(foreignStreamStop(s))
+
+proc postFromNim*(poster: pointer) =
+  ## [DECISIONS G440] One `post` of a counted callback through `poster`.
+  post(Poster(poster), onPosted, nil)
+
+proc postFromC*(poster: pointer): bool =
+  ## [DECISIONS G440] One `lcn_kit_post` of a counted callback through
+  ## `poster`, from a foreign C thread this joins.
+  let later = foreignPostLater(poster, onPosted, nil, 0)
+  if later.isNil:
+    return false
+  foreignLaterJoin(later)
+  true
+
 proc ledgerOf(user: pointer): Ledger =
+  if destroyReturned.load:
+    lateCalls += 1 # [DECISIONS G440] a handler of an instance already gone
   let m = cast[Ledger](user)
   if not m.services.onItsModuleThread():
     inc m.offThread
@@ -260,11 +501,6 @@ proc publishLater(m: Ledger, millis: uint64) {.async: (raises: []).} =
   except CancelledError:
     return
   discard m.services.publish(LedgerPostedEvent(key: "timer", total: millis))
-
-proc onPosted(payload: pointer) {.cdecl, gcsafe, raises: [].} =
-  if not onConfinedThread():
-    postThreads += 1
-  posts += 1
 
 proc `post`(
     m: Ledger, request: LedgerPostRequest
@@ -387,6 +623,23 @@ proc `probe`(
     note = $posts.load & " " & $postThreads.load & " " & $m.refused
   of 23:
     note = $cancelledWaits.load & " " & $sleepingWaits.load
+  of 24:
+    if m.stream.isNil:
+      m.stream = foreignStreamStart(
+        cast[pointer](m.services.poster), onStreamed, cast[pointer](m)
+      )
+    note = (if m.stream.isNil: "no stream" else: "streaming")
+  of 25:
+    note = leaveRegistered(closeIt = false)
+  of 26:
+    note = leaveRegistered(closeIt = true)
+  of 27:
+    note = (when declared(closeThreadDispatcher): "main line" else: "4.4.1")
+  of 28:
+    note = $cast[uint](cast[pointer](m.services.poster))
+  of 29:
+    note = (when declared(notedRegistrations): $notedRegistrations()
+    else: "no hooks")
   else:
     discard
   ok(LedgerProbeResponse(value: request.value, thread: threadNumber(), note: note))
@@ -451,6 +704,15 @@ proc `wait`(
   of 11:
     await noCancel(sleepAsync(int(request.millis).milliseconds))
     note = "slept"
+  of 12:
+    if m.route.isNil:
+      note = "no route"
+    else:
+      let r = await noCancel(
+        m.route.invokeAsync(MeterReadRequest(channel: uint32(request.value)))
+      )
+      note = (if r.isOk: "ok:" & r.unsafeGet.label else: $r.unsafeError.code)
+      residualDone += 1
   else:
     discard
   Result[LedgerWaitResponse, InvocationFailure].ok(

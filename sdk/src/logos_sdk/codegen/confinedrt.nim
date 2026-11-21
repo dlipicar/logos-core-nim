@@ -61,6 +61,12 @@
 ## directly. C code linked into the module library calls it as
 ## `lcn_kit_post`.
 ##
+## **The post gate** (G440). The poster and the dispatcher's context are not
+## the context's address but a value naming a slot of a table that is never
+## freed, and the slot's generation; a post that comes once the context was
+## freed finds the slot moved on and is refused. A safety net for the
+## Runtime's memory, not permission to post late.
+##
 ## **Consumer callbacks** (G339). The context's dispatcher (`withConfined`,
 ## `ModuleServices.dispatcher`) lets the consumer helpers (`consumert`) queue
 ## task nodes for the module thread: a copied delivery, counted against the
@@ -75,7 +81,11 @@
 ## left with NOT_READY, closes its signal and tears down its dispatcher; both
 ## threads are joined and the context freed before `_MODULE_destroy` returns.
 ## A failed initialization joins both threads the same way, dropping the
-## queued events.
+## queued events. While `destroyModule` runs (G437), posted callbacks,
+## completions and publication replies still run, so it may await them;
+## events and end reports are dropped from the start of destroy. Once
+## `destroyModule`'s future has finished, the instance is released in the same
+## step, and nothing queued runs after that.
 ##
 ## **Deferred provider** (DECISIONS G338). With `lcn-gen kit --confined
 ## --async-api` the kit exports `_MODULE_async_api` (INTERFACE §2.9.2). Its
@@ -100,13 +110,13 @@
 
 {.push raises: [], gcsafe.}
 
-import std/[locks, typedthreads]
+import std/[atomics, locks, typedthreads]
 import results
 import chronos/[asyncloop, config, threadsync]
 import ../cbor
 import ../abi/[checks, types]
 import ../iface/[outcome, payload]
-import ../base/[perthread, wipe]
+import ../base/[perthread, testhooks, wipe]
 import ./[handover, kitrt]
 
 when defined(posix):
@@ -259,9 +269,16 @@ type
     signal: ThreadSignalPtr
     module: Thread[ptr ConfinedObj]
     services: ModuleServices
+    name: cstring ## the module's name, static in the library; nil for none
+    gate: pointer ## [DECISIONS G440] this context's post gate value
     # Module thread only.
     instance: pointer
-    disposed: bool
+    destroying: bool
+      ## [DECISIONS G437] destroy has begun: events and end reports are dropped
+    disposing: pointer
+      ## [DECISIONS G437] while `destroyModule` runs: its future (`GC_ref`'d), so
+      ## what is served once it has finished is dropped as after the release
+    disposed: bool ## [DECISIONS G437] the instance is released
     ending: bool ## the module thread is tearing down
     # The publisher.
     pubLock: Lock
@@ -293,13 +310,14 @@ type
   CreateFuture* = Future[Result[pointer, InvocationFailure]].Raising([])
   RouteFuture* = Future[Result[seq[byte], InvocationFailure]].Raising([])
   ApplyFuture* = Future[Result[void, InvocationFailure]].Raising([])
-  DisposeFuture* = Future[void].Raising([])
 
   ConfinedCreate* = proc(init: ModuleInit): CreateFuture {.nimcall, gcsafe, raises: [].}
     ## Runs the author's `initModule` and returns its instance, `GC_ref`'d.
-  ConfinedDispose* =
-    proc(instance: pointer): DisposeFuture {.nimcall, gcsafe, raises: [].}
-    ## Runs the author's `destroyModule`, if any, and `GC_unref`s the instance.
+  ConfinedDispose* = proc(instance: pointer): FutureBase {.nimcall, gcsafe, raises: [].}
+    ## [DECISIONS G437] Runs the author's `destroyModule`, if any: nil once a
+    ## synchronous one has returned, else its own future.
+  ConfinedRelease* = proc(instance: pointer) {.nimcall, gcsafe, raises: [].}
+    ## [DECISIONS G437] `GC_unref`s the instance: its release.
   ConfinedRoute* = proc(
     instance: pointer,
     bare: string,
@@ -321,7 +339,8 @@ type
 
   Poster* = distinct pointer
     ## [IMPL] What `post` takes: valid from `initModule` until `_MODULE_destroy`
-    ## returns.
+    ## returns. A post after that is refused (DECISIONS G440): a safety net,
+    ## not permission.
 
   PublishRefusal* = object
     ## [DECISIONS G337] The publish callback's last refusal of a queued event.
@@ -598,6 +617,23 @@ proc publishEncodedAsync*(
 
 # Statuses back on the module thread --------------------------------------------------
 
+proc released(ctx: ptr ConfinedObj): bool =
+  ## [DECISIONS G437] The module thread: the instance is released, or
+  ## `destroyModule` has returned and its release is a few turns away. Posted
+  ## callbacks, completions and publication replies are dropped from then on.
+  if ctx.disposed:
+    return true
+  if ctx.disposing == nil:
+    return false
+  let f {.cursor.} = cast[FutureBase](ctx.disposing)
+  f.finished()
+
+proc dropTask(ctx: ptr ConfinedObj, t: ptr TaskNode): bool =
+  ## [DECISIONS G437] Whether a queued task is dropped: every task once the
+  ## instance is released; from the start of destroy, all but the completions
+  ## of what the module started.
+  ctx.released or (ctx.destroying and not t.duringDestroy)
+
 proc settleReply(ctx: ptr ConfinedObj, item: ptr PubItem) =
   ## Completes an answered publication's future; after the instance's release
   ## the future is let go without resuming anyone.
@@ -609,7 +645,7 @@ proc settleReply(ctx: ptr ConfinedObj, item: ptr PubItem) =
       let d {.cursor.} = cast[DrainFuture](job.drained)
       if not d.finished():
         d.complete()
-  if not ctx.disposed and not ctx.ending and not reply.finished():
+  if not ctx.released and not ctx.ending and not reply.finished():
     case item.kind
     of pkInstance:
       reply.complete(publishCode(item.rc, $item.itemName))
@@ -714,6 +750,7 @@ type
 
   DestroyArgs = object
     dispose: ConfinedDispose
+    release: ConfinedRelease
 
   ApplyArgs = object
     apply: ConfinedApply
@@ -798,18 +835,28 @@ proc unwindDeferred(ctx: ptr ConfinedObj) {.async: (raises: []).} =
 proc destroyTask(job: ptr ConfinedJob) {.async: (raises: []).} =
   let a = cast[ptr DestroyArgs](job.args)
   let ctx = job.ctx
-  # [DECISIONS G338] No new job reaches the instance (each answers NOT_READY);
-  # running handlers keep their own reference to it until it is disposed.
-  # `disposed` waits for the unwinding: it drops posted tasks, and a cancelled
-  # handler may await a completion that arrives as one.
+  # [DECISIONS G337, G338, G437] No new job reaches the instance (each answers
+  # NOT_READY), and events and end reports are dropped from here. Posted
+  # callbacks, completions and publication replies still run through the
+  # unwinding and `destroyModule`, which may await them, until `destroyModule`
+  # has returned; then the instance is released in the same step as
+  # `disposed` is set, so nothing served after its release runs.
+  ctx.destroying = true
   let instance = ctx.instance
   ctx.instance = nil
   await unwindDeferred(ctx)
-  ctx.disposed = true
   if instance != nil:
     let f = a.dispose(instance)
-    if not f.finished():
+    if f != nil and not f.finished():
+      GC_ref(f)
+      ctx.disposing = cast[pointer](f)
+      # A failed or cancelled `destroyModule` still reaches the release.
       await noCancel(join(f))
+      ctx.disposing = nil
+      GC_unref(f)
+  ctx.disposed = true
+  if instance != nil:
+    a.release(instance)
   var outcome = Result[void, InvocationFailure].ok()
   finishJob(job, nil, outcome)
 
@@ -1092,11 +1139,11 @@ proc runNode(ctx: ptr ConfinedObj, n: ptr Node) =
     let p = cast[ptr PostNode](n)
     let (fn, payload) = (p.fn, p.payload)
     cFree(p)
-    if not ctx.disposed:
+    if not ctx.released:
       fn(payload)
   of nkTask:
     let t = cast[ptr TaskNode](n)
-    t.run(t, ctx.disposed)
+    t.run(t, ctx.dropTask(t))
 
 proc serve(ctx: ptr ConfinedObj) =
   ## Runs what is queued, one node at a time, answered publications first; a
@@ -1172,13 +1219,13 @@ proc deferredScopedPublish(
   inc job.inflight
   let saved = swapConfinedScope(nil)
   var queued = ctx.tryQueue(item, wantRoom = true)
-  while not queued and not ctx.disposed:
+  while not queued and not ctx.released:
     let room = ctx.waitRoom()
-    while not room.finished() and not ctx.disposed:
+    while not room.finished() and not ctx.released:
       poll()
     queued = ctx.tryQueue(item, wantRoom = true)
   if queued:
-    while not reply.finished() and not ctx.disposed:
+    while not reply.finished() and not ctx.released:
       poll()
   discard swapConfinedScope(saved)
   if not queued:
@@ -1214,6 +1261,130 @@ proc scopedPublish(
   release(ctx.lock)
   ctx.pollUntil(addr mail.done)
   readCopy(mail.status)
+
+# The module thread's dispatcher at teardown (DECISIONS G438) ------------------------
+
+strictDestroyMarker()
+
+var ownRegistered {.threadvar.}: seq[cint]
+  ## [DECISIONS G438] The open descriptors the module thread's dispatcher held
+  ## when it was made, before the kit registered its signal: chronos's own
+  ## wake-up descriptor on its main line after v4.4.0, none on 4.4.1.
+
+when defined(lcnTestHooks):
+  testHooksMarker("confinedrt")
+
+  proc notedRegistrations*(): int =
+    ## [DECISIONS G438] Test hook, on a module thread: how many registrations
+    ## its dispatcher held when it was made, before the kit registered
+    ## anything (`ownRegistered`).
+    ownRegistered.len
+
+when defined(posix):
+  proc cDirfd(d: ptr DIR): cint {.importc: "dirfd", header: "<dirent.h>".}
+
+  iterator openDescriptors(): cint =
+    ## The process's open descriptors: `/proc/self/fd` or `/dev/fd`, else each
+    ## one below `min(RLIMIT_NOFILE, 65536)` that `fcntl` accepts. The listing's
+    ## own descriptor is left out.
+    var listed = false
+    for path in ["/proc/self/fd", "/dev/fd"]:
+      let d = opendir(cstring(path))
+      if d != nil:
+        let own = cDirfd(d)
+        while true:
+          let e = readdir(d)
+          if e == nil:
+            break
+          let name = cast[cstring](addr e.d_name[0])
+          var fd = 0
+          var digits = 0
+          for c in name:
+            if c notin {'0' .. '9'} or digits == 9:
+              digits = -1
+              break
+            fd = fd * 10 + (ord(c) - ord('0'))
+            inc digits
+          if digits > 0 and cint(fd) != own:
+            yield cint(fd)
+        discard closedir(d)
+        listed = true
+        break
+    if not listed:
+      var limit: RLimit
+      var top = 1024
+      if getrlimit(RLIMIT_NOFILE, limit) == 0:
+        top = int(min(int64(limit.rlim_cur), 65536'i64))
+      for fd in 0 ..< top:
+        if fcntl(cint(fd), F_GETFD) != -1:
+          yield cint(fd)
+
+proc registeredBy(disp: PDispatcher): seq[cint] =
+  ## The open descriptors `disp` holds; none off POSIX.
+  when defined(posix):
+    for fd in openDescriptors():
+      if disp.contains(AsyncFD(fd)):
+        result.add(fd)
+
+proc writeLine(ctx: ptr ConfinedObj, text: string) =
+  let line =
+    "logos module kit (confined): " & (if ctx.name == nil: "a module"
+    else: $ctx.name) & ": " & text & "\n"
+  discard cWrite(2, cstring(line), csize_t(line.len))
+
+proc reportLeft(ctx: ptr ConfinedObj, what: string) =
+  ## [DECISIONS G438] What the module left registered with its thread's
+  ## dispatcher: one line on stderr, the descriptors left open. A strict build
+  ## (`lcnKitStrictDestroy`, test builds only) then aborts, so the module's own
+  ## suite fails at the destroy that missed a close.
+  ctx.writeLine(
+    "destroy left " & what &
+      " registered with the module thread's dispatcher; the kit leaves them open"
+  )
+  when defined(lcnKitStrictDestroy):
+    when defined(posix):
+      # A host's own SIGABRT handler (a Nim program's allocates) would not let
+      # the abort through.
+      discard signal(SIGABRT, SIG_DFL)
+    cAbort()
+
+proc closeDispatcher(ctx: ptr ConfinedObj, disp: PDispatcher) =
+  ## [DECISIONS G438] Closes the module thread's dispatcher once the kit's own
+  ## signal is closed and its callbacks cleared. On chronos's main line, which
+  ## gives each dispatcher a wake-up descriptor only `closeThreadDispatcher`
+  ## closes, that is called when nothing else is registered: every step checked
+  ## through the public API first, since its close raises a Defect on anything
+  ## left. Otherwise, and on 4.4.1 and Windows, the selector is closed and the
+  ## dispatcher dropped, as before. The kit never closes what the module left.
+  when defined(posix):
+    var left = 0
+    for fd in openDescriptors():
+      if disp.contains(AsyncFD(fd)) and fd notin ownRegistered:
+        inc left
+  when declared(closeThreadDispatcher) and defined(posix):
+    if left == 0 and ownRegistered.len == 1:
+      let own = ownRegistered[0]
+      let selector = disp.getIoHandler()
+      if own in selector and selector.unregister2(own).isOk:
+        let empty = selector.isEmpty()
+        if selector.registerHandle2(own, {Event.Read}, SelectorData()).isOk and
+            own in selector:
+          if empty:
+            ownRegistered = @[]
+            let diagnostic = closeThreadDispatcher()
+            if diagnostic.isSome:
+              ctx.writeLine("closing the module thread's dispatcher: " & diagnostic.get)
+            return
+          ctx.reportLeft("other registrations")
+  when defined(posix):
+    if left > 0:
+      ctx.reportLeft(
+        "at least " & $left & (if left == 1: " descriptor" else: " descriptors")
+      )
+  ownRegistered = @[]
+  when not defined(windows):
+    discard disp.getIoHandler().close2()
+  setThreadDispatcher(nil)
 
 proc teardown(ctx: ptr ConfinedObj) =
   ## [DECISIONS G335] The module thread's last act: answers what is still
@@ -1274,15 +1445,16 @@ proc teardown(ctx: ptr ConfinedObj) =
   roomWaiters = @[]
   discard ctx.signal.close()
   let disp = getThreadDispatcher()
-  when not defined(windows):
-    discard disp.getIoHandler().close2()
   disp.callbacks.clear()
-  setThreadDispatcher(nil)
+  ctx.closeDispatcher(disp)
 
 proc moduleMain(ctx: ptr ConfinedObj) {.thread.} =
   ownCtx = ctx
   enterThread()
   enterConfinedThread()
+  # [DECISIONS G438] The dispatcher before anything registers with it: what it
+  # registered when it was made is chronos's own, closed with it.
+  ownRegistered = registeredBy(getThreadDispatcher())
   ctx.arm()
   ctx.serve()
   while true:
@@ -1372,7 +1544,160 @@ proc stopThreads(ctx: ptr ConfinedObj, deliver: bool) =
   release(ctx.lock)
   joinThread(ctx.module)
 
+# The post gate (DECISIONS G440) -----------------------------------------------------
+#
+# A poster and the confined dispatcher's context carry one pointer-sized value
+# naming a slot of a table that is never freed, and the slot's generation. The
+# slot points to the context while it lives; `freeContext` clears it and moves
+# its generation on, so a post that comes later finds a stale value and is
+# refused instead of reaching freed memory. A post holds its slot's lock until
+# it has released the context's, so the context cannot go meanwhile. The table
+# only grows, by chunks allocated once with the C allocator and published with
+# an atomic store, since posts run on threads the Nim runtime never saw; a slot
+# whose generations are used up is retired. Nothing here needs module
+# initialization: zeroed memory is a valid empty table.
+
+static:
+  doAssert sizeof(pointer) == 8,
+    "the post gate packs a slot and a generation into 64 bits (DECISIONS G440)"
+
+const
+  GateSlotBits* = 20 ## [DECISIONS G440] about a million contexts alive at once
+  GateGenBits* = 44
+  GateMaxSlots* = 1 shl GateSlotBits
+  GateMaxGen* = (1'u64 shl GateGenBits) - 2
+    ## the last generation a slot is handed out with; stored as generation + 1,
+    ## it fills the 44 bits
+  GateChunkSlots = 1024
+  GateChunks = GateMaxSlots div GateChunkSlots
+
+type
+  GateSlot = object
+    lock: Lock
+    gen: uint64 ## under `lock`; past `GateMaxGen` once retired
+    ctx: ptr ConfinedObj ## under `lock`: the live context, else nil
+    nextFree: int ## under the table lock: the next free slot, -1 for none
+
+  GateChunk = array[GateChunkSlots, GateSlot]
+
+var
+  gateFirst: GateChunk ## chunk 0
+  gateDir: array[GateChunks, Atomic[pointer]] ## chunks 1 and on, never freed
+  gateUsed: Atomic[int] ## slots handed out at least once
+  gateTableBusy: Atomic[bool]
+    ## the table lock, taken only to hand out and take back a slot: a flag, so
+    ## that it needs no initialization
+  gateFreeNext: int ## under the table lock: the free list's head + 1, 0 for none
+
+proc gateTableAcquire() =
+  while gateTableBusy.exchange(true, moAcquire):
+    cpuRelax()
+
+proc gateTableRelease() =
+  gateTableBusy.store(false, moRelease)
+
+proc gateChunk(c: int): ptr GateChunk =
+  if c == 0:
+    addr gateFirst
+  else:
+    cast[ptr GateChunk](gateDir[c].load(moAcquire))
+
+proc packGate*(slot: int, gen: uint64): pointer =
+  ## [DECISIONS G440] The value naming `slot` at `gen`: never nil.
+  cast[pointer](((gen + 1) shl GateSlotBits) or uint64(slot))
+
+proc unpackGate*(p: pointer): tuple[slot: int, gen: uint64] =
+  ## [DECISIONS G440] The slot and generation `p` names; nil names no generation
+  ## a slot is ever at.
+  let v = cast[uint64](p)
+  (int(v and uint64(GateMaxSlots - 1)), (v shr GateSlotBits) - 1)
+
+proc gateNext*(gen: uint64): tuple[gen: uint64, retired: bool] =
+  ## [DECISIONS G440] A slot's generation once its context was freed, and
+  ## whether the slot is retired, never handed out again.
+  (gen + 1, gen + 1 > GateMaxGen)
+
+proc gateSlot(i: int): ptr GateSlot =
+  ## Slot `i` once it was handed out; else nil.
+  if i < 0 or i >= gateUsed.load(moAcquire):
+    return nil
+  let chunk = gateChunk(i div GateChunkSlots)
+  if chunk == nil:
+    return nil
+  addr chunk[i mod GateChunkSlots]
+
+proc gateOpen(ctx: ptr ConfinedObj): pointer =
+  ## A slot for `ctx`, the last one freed first; nil when the table is full or
+  ## out of memory.
+  gateTableAcquire()
+  var i = gateFreeNext - 1
+  if i >= 0:
+    gateFreeNext = gateSlot(i).nextFree + 1
+  else:
+    i = gateUsed.load(moRelaxed)
+    if i >= GateMaxSlots:
+      gateTableRelease()
+      return nil
+    let c = i div GateChunkSlots
+    if gateChunk(c) == nil:
+      let chunk = cCalloc(1, csize_t(sizeof(GateChunk)))
+      if chunk == nil:
+        gateTableRelease()
+        return nil
+      gateDir[c].store(chunk, moRelease)
+    let fresh = addr gateChunk(c)[i mod GateChunkSlots]
+    initLock(fresh.lock)
+    fresh.gen = 0
+    gateUsed.store(i + 1, moRelease)
+  # The slot is this context's alone now: off the free list and not live. Its
+  # lock is never taken with the table lock held (Fable G3).
+  gateTableRelease()
+  let s = gateSlot(i)
+  acquire(s.lock)
+  s.ctx = ctx
+  result = packGate(i, s.gen)
+  release(s.lock)
+
+proc gateClose(p: pointer) =
+  ## Clears the slot `p` names and moves its generation on, under its lock
+  ## alone, then frees the slot unless it is retired.
+  if p == nil:
+    return
+  let (i, gen) = unpackGate(p)
+  let s = gateSlot(i)
+  if s == nil:
+    return
+  acquire(s.lock)
+  if s.gen != gen:
+    release(s.lock)
+    die("the post gate: a context's slot moved on before it was freed")
+  s.ctx = nil
+  let (next, retired) = gateNext(s.gen)
+  s.gen = next
+  release(s.lock)
+  if not retired:
+    gateTableAcquire()
+    s.nextFree = gateFreeNext - 1
+    gateFreeNext = i + 1
+    gateTableRelease()
+
+proc gateEnter(p: pointer): tuple[slot: ptr GateSlot, ctx: ptr ConfinedObj] =
+  ## The live context `p` names, with its slot's lock held; no context and no
+  ## lock held when `p` is stale or names no slot.
+  let (i, gen) = unpackGate(p)
+  let s = gateSlot(i)
+  if s == nil:
+    return (nil, nil)
+  acquire(s.lock)
+  if s.gen != gen or s.ctx == nil:
+    release(s.lock)
+    return (nil, nil)
+  (s, s.ctx)
+
 proc freeContext(ctx: ptr ConfinedObj) =
+  # [DECISIONS G440] First: a post from now on finds the slot cleared, and one
+  # in progress, which holds the slot's lock, ends before this goes on.
+  gateClose(ctx.gate)
   deinitLock(ctx.lock)
   deinitLock(ctx.pubLock)
   deinitCond(ctx.pubCond)
@@ -1388,6 +1713,7 @@ proc confinedInit*(
     create: ConfinedCreate,
     maxEvents = DefaultMaxEvents,
     maxBytes = DefaultMaxBytes,
+    name: cstring = nil,
 ): LogosResult =
   ## [SPEC INTERFACE §2.6; DECISIONS G335] `_MODULE_init` of a confined kit:
   ## the input is checked here; the context's threads start and the author's
@@ -1412,7 +1738,16 @@ proc confinedInit*(
   ctx.maxEvents = max(maxEvents, 1)
   ctx.maxBytes = max(maxBytes, 1)
   ctx.maxDeliveries = DefaultMaxDeliveries
-  ctx.services = moduleServices(input).withConfined(ctx, queuePublish, postTask)
+  ctx.name = name
+  # [DECISIONS G440] Before any thread starts: a failed `initModule` may give
+  # its poster away, and every failure path below retires the slot.
+  ctx.gate = gateOpen(ctx)
+  if ctx.gate == nil:
+    discard ctx.signal.close()
+    freeContext(ctx)
+    return failureResult(moduleError("the post gate has no free slot"))
+  ctx.services =
+    moduleServices(input).withConfined(ctx, ctx.gate, queuePublish, postTask)
   try:
     createThread(ctx.publisher, publisherMain, ctx)
   except ResourceExhaustedError:
@@ -1440,7 +1775,9 @@ proc confinedInit*(
     return
   outContext[] = cast[ptr LogosModuleContext](ctx)
 
-proc confinedDestroy*(module: ptr LogosModuleContext, dispose: ConfinedDispose) =
+proc confinedDestroy*(
+    module: ptr LogosModuleContext, dispose: ConfinedDispose, release: ConfinedRelease
+) =
   ## [SPEC INTERFACE §2.6, l.1949-1962] `_MODULE_destroy` of a confined kit:
   ## the author's hook and the instance's release on the module thread, then
   ## the queued events delivered, then both threads joined and the context
@@ -1450,7 +1787,7 @@ proc confinedDestroy*(module: ptr LogosModuleContext, dispose: ConfinedDispose) 
   let ctx = module.confinedOf
   if ctx.onModuleThread:
     die("_MODULE_destroy was called on its own module thread")
-  var a = DestroyArgs(dispose: dispose)
+  var a = DestroyArgs(dispose: dispose, release: release)
   discard handOff(ctx, launchDestroy, addr a, nil)
   ctx.stopThreads(deliver = true)
   freeContext(ctx)
@@ -1551,6 +1888,7 @@ proc confinedSubmit*(
   dj.route = route
   dj.refs = 1
   dj.cancelTask.run = runCancel
+  dj.cancelTask.duringDestroy = true
   acquire(ctx.lock)
   if ctx.stopping:
     release(ctx.lock)
@@ -1690,17 +2028,18 @@ proc lastPublishRefusal*(s: ModuleServices): Opt[PublishRefusal] =
   release(ctx.pubLock)
 
 proc poster*(s: ModuleServices): Poster =
-  ## [IMPL] What `post` takes for this instance (null for a plain kit).
-  Poster(s.confinedOf)
+  ## [IMPL] What `post` takes for this instance (null for a plain kit): its
+  ## post gate value (DECISIONS G440), read without touching the context.
+  Poster(s.gateOf)
 
 proc post*(p: Poster, fn: PostFn, payload: pointer) =
   ## [IMPL] Runs `fn(payload)` on the module thread. Any thread, one the Nim
   ## runtime never saw included: only the C allocator, and a failure aborts. A
-  ## callback still queued at destroy is dropped without running, so `fn`
-  ## owns `payload` only once it runs; stop posting before `destroyModule`
-  ## returns.
-  let ctx = cast[ptr ConfinedObj](p)
-  if ctx == nil or fn == nil:
+  ## callback still runs while `destroyModule` runs, which may await it; one
+  ## still queued when `destroyModule` has returned is dropped without running
+  ## (DECISIONS G437), so `fn` owns `payload` only once it runs; stop posting
+  ## before `destroyModule` returns.
+  if pointer(p) == nil or fn == nil:
     die("post: a null poster or callback")
   let n = cast[ptr PostNode](cMalloc(csize_t(sizeof(PostNode))))
   if n == nil:
@@ -1708,37 +2047,53 @@ proc post*(p: Poster, fn: PostFn, payload: pointer) =
   n.node = Node(kind: nkPost)
   n.fn = fn
   n.payload = payload
+  # [DECISIONS G440] The slot's lock first, held until the context's is
+  # released: a stale poster is refused, and the context cannot be freed
+  # meanwhile.
+  let (slot, ctx) = gateEnter(pointer(p))
+  if ctx == nil:
+    cFree(n)
+    return
   acquire(ctx.lock)
   if ctx.closed:
     release(ctx.lock)
+    release(slot.lock)
     cFree(n)
     return
   ctx.enqueue(addr n.node)
   # Under the lock: the module thread closes its signal only after `closed`.
   fire(ctx.signal)
   release(ctx.lock)
+  release(slot.lock)
 
 proc postTask(context: pointer, task: ptr TaskNode): bool =
   ## [DECISIONS G339, P1] The confined dispatcher's `post`: queues a task its
   ## owner keeps in C memory for the module thread; false when the task is
   ## counted and the context's delivery bound is reached. A task posted after
-  ## the module thread's last drain is dropped here. Any thread; never waits
-  ## or allocates.
-  let ctx = cast[ptr ConfinedObj](context)
+  ## the module thread's last drain, or once the context is freed (DECISIONS
+  ## G440), is dropped here, after every lock is released. Any thread; never
+  ## waits or allocates.
   task.node.kind = nkTask
+  let (slot, ctx) = gateEnter(context)
+  if ctx == nil:
+    task.run(task, true)
+    return true
   acquire(ctx.lock)
   if ctx.closed:
     release(ctx.lock)
+    release(slot.lock)
     task.run(task, true)
     return true
   if task.counted:
     if ctx.deliveries >= ctx.maxDeliveries:
       release(ctx.lock)
+      release(slot.lock)
       return false
     inc ctx.deliveries
   ctx.enqueue(addr task.node)
   fire(ctx.signal)
   release(ctx.lock)
+  release(slot.lock)
   true
 
 proc setDeliveryBound*(s: ModuleServices, events: int) =
@@ -1766,4 +2121,4 @@ proc onItsModuleThread*(s: ModuleServices): bool =
 proc onItsModuleThread*(d: Dispatcher): bool =
   ## Whether `d` is a confined kit's dispatcher and the calling thread its
   ## module thread.
-  d.confined and cast[ptr ConfinedObj](d.context).onModuleThread
+  d.confined and ownCtx != nil and ownCtx.gate == d.context
