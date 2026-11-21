@@ -1439,8 +1439,7 @@ suite "run.async: starvation (DECISIONS I88, deviation 5)":
 # One payload depth setting ----------------------------------------------------------------
 
 let
-  shapesSet =
-    acceptContractSet(readFile(repo / fixtureDir / "shapes_module.cddl")).tryGet
+  shapesSet = acceptContractSet(readFile(fixtureDir / "shapes_module.cddl")).tryGet
   shapesRoot = shapesSet.primary.root
   shapesSchema = encodeCbor(schemaResponse(shapesSet, shapesRoot).tryGet)
   shapesStatic = checkStaticRegistration("shapes", shapesModuleStaticSymbols()).tryGet
