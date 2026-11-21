@@ -7054,7 +7054,10 @@ their history.
   mixed consumer calling a hosted mixed provider.
 - **Result:** passes on the Mac under orc (refc modules), refc (orc modules, the inverse pairing),
   orc-release, ASan and TSan, and in the orc and refc variants with modules built by Nim 2.2.4 (G341).
-  A7's refc host flavour is not needed so far. Linux waits for framework.lan.
+  On x86_64-linux (framework.lan, 2026-11-20, at N-1 sub-part 4's tip 3f739f8) `run.mixed` passes
+  under orc, refc and orc-release, as do `test_kit_mixed` under orc and orc-release and
+  `test_kit_dylib`'s other-manager ledger in all three; no sanitizer runs there yet. A7's refc host
+  flavour is not needed so far.
 - **Limits** (accepted by the planning session, 2026-11-16): a refc library is built without the
   sanitizer, beside a sanitized host: refc's conservative stack scan does not see what AddressSanitizer
   moves to its fake stacks, and a refc build under `-d:asan` fails on its own (UBSan: a cell with no
