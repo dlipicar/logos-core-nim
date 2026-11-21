@@ -1394,9 +1394,14 @@ suite "pkg.resolver: dependency resolution (PM §11)":
       let o = u.resolveName("R")
       (o.chosen("R").installed, o.chosen("R").source)
 
-    check rootSource([2]) == (true, Opt.some(source("R", "1.0.0", 2)))
-    check rootSource([1, 2]) == (true, Opt.some(source("R", "1.0.0", 1)))
-    check rootSource([]) == (true, Opt.none(PackageSource))
+    # Each result is bound before `check`: a tuple a nested proc returns, passed to
+    # `check`'s inline iterator, is never destroyed under ARC/ORC (upstream draft 182).
+    let retainedOnly = rootSource([2])
+    check retainedOnly == (true, Opt.some(source("R", "1.0.0", 2)))
+    let bothListed = rootSource([1, 2])
+    check bothListed == (true, Opt.some(source("R", "1.0.0", 1)))
+    let noneListed = rootSource([])
+    check noneListed == (true, Opt.none(PackageSource))
     # An explicitly supplied source is kept too.
     let u = Universe()
     u.install("R", "1.0.0")

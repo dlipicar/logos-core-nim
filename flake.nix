@@ -677,60 +677,83 @@
             python3 ${./tools/lint/layers.py} --config ${./tools/lint/layers.toml}
             touch $out
           '';
-        }
-        // lib.optionalAttrs s.pkgs.stdenv.hostPlatform.isLinux {
-          # [DECISIONS G341] The test kit libraries built with the switches the node's libraries
-          # build with (`LCN_KIT_SWITCHES`, `testing/kitbuild`), on this toolchain: logos-storage-nim
-          # 4fe02344's (`config.nims`; `-d:chronosHandleException` changes how `async` procs
-          # compile) and logos-delivery d20ee361's library set (`config.nims`,
-          # `library/config.nims`). Under each, refc libraries in a refc host (`test_kit_dylib`,
-          # the confined sensor included) and in orc Runtimes and Module Hosts (`run.mixed`, and
-          # `test_kit_mixed`'s confined ledger), the node's pairing.
-          kit-toolchains =
+          # The suites a change can reach (tools/affected_suites.py, wave 2's merge rule 1): its
+          # planted cases, and on this tree the suites the rule names for genfixtures.nim,
+          # DAEMON.md and commitment/choice.nim.
+          affected-suites =
             let
-              switchSets = [
-                "--threads:on --tlsEmulation:off --opt:speed --excessiveStackTrace:on -d:metrics -d:nimTypeNames --styleCheck:usages --styleCheck:error --fieldChecks:on --warningAsError:ProveField:on --legacy:procParamTypeBackendAliases -d:withoutPCRE -d:nimOldCaseObjects -d:chronosHandleException -d:release"
-                "--threads:on --deepcopy:on -d:nimOldCaseObjects -d:nimTypeNames -d:metrics"
-              ];
+              tool = lib.fileset.toSource {
+                root = ./tools;
+                fileset = lib.fileset.unions [
+                  ./tools/affected_suites.py
+                  ./tools/lint/layers.py
+                ];
+              };
             in
-            s.nimDerivation {
-              name = "kit-toolchains";
-              src = s.nimSources;
-              buildPhase = ''
-                runHook preBuild
-                for set in ${lib.escapeShellArgs switchSets}; do
-                  export LCN_KIT_SWITCHES="$set"
-                  echo "kit-toolchains: $set"
+            s.pkgs.runCommand "affected-suites" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
+              cd ${s.nimSources}
+              python3 -I ${tool}/affected_suites.py --self-test --root .
+              touch $out
+            '';
+        }
+        // lib.optionalAttrs s.pkgs.stdenv.hostPlatform.isLinux (
+          let
+            # [DECISIONS G341] The test kit libraries built with the switches the node's libraries
+            # build with (`LCN_KIT_SWITCHES`, `testing/kitbuild`), on this toolchain. Under each
+            # set, refc libraries in a refc host (`test_kit_dylib`, the confined sensor included)
+            # and in orc Runtimes and Module Hosts (`run.mixed`, and `test_kit_mixed`'s confined
+            # ledger), the node's pairing. [IMPL] One check per set, so CI can build them in
+            # parallel: as one check they took 57 minutes on x86_64 (run 44888184613), 35.5 for
+            # storage's set and 21.7 for delivery's.
+            kitToolchains =
+              set: switches:
+              s.nimDerivation {
+                name = "kit-toolchains-${set}";
+                src = s.nimSources;
+                buildPhase = ''
+                  runHook preBuild
+                  export LCN_KIT_SWITCHES=${lib.escapeShellArg switches}
+                  echo "kit-toolchains-${set}: $LCN_KIT_SWITCHES"
                   nim c -r --mm:refc --outdir:build sdk/tests/test_kit_dylib.nim
                   nim c -r --mm:orc --outdir:build tests/test_hosted_routes.nim 'run.mixed:*::*'
                   nim c -r --mm:orc --outdir:build tests/test_kit_mixed.nim
-                done
-                runHook postBuild
-              '';
-            };
-        }
+                  runHook postBuild
+                '';
+              };
+          in
+          {
+            # logos-storage-nim 4fe02344's switches (`config.nims`; `-d:chronosHandleException`
+            # changes how `async` procs compile).
+            kit-toolchains-storage = kitToolchains "storage" "--threads:on --tlsEmulation:off --opt:speed --excessiveStackTrace:on -d:metrics -d:nimTypeNames --styleCheck:usages --styleCheck:error --fieldChecks:on --warningAsError:ProveField:on --legacy:procParamTypeBackendAliases -d:withoutPCRE -d:nimOldCaseObjects -d:chronosHandleException -d:release";
+            # logos-delivery d20ee361's library set (`config.nims`, `library/config.nims`).
+            kit-toolchains-delivery = kitToolchains "delivery" "--threads:on --deepcopy:on -d:nimOldCaseObjects -d:nimTypeNames -d:metrics";
+          }
+        )
       );
 
-      # Every check in exactly one group, so CI can run each Linux leg as parallel jobs
+      # Every check in exactly one group, so CI can run each leg as parallel jobs
       # (.github/workflows/ci.yml): one runner took over two hours for all of them on x86_64.
       # A check whose name ends in no known variant goes to `orc-spec`, so a new variant is
       # still built. `nix build .#ciGroups.asan` builds one group locally.
       #
-      # `ciShards` splits each group into `ciShardCount group` parts, `<group>-1` to `<group>-N`,
-      # heaviest check first, each to the part with the least weight so far (`ciWeights`; ties to
-      # the lower part, equal weights by name). Every check is placed exactly once whatever the
-      # weights say, and evaluation fails if a group's parts do not hold its checks exactly once.
-      # The Linux jobs build shards: on 36f355c (2026-11-14) the x86_64 asan and msan groups passed
-      # the 90-minute job limit and tsan took 81 minutes; on 5ddd886 and eed9d58 (2026-11-15) the
-      # second x86_64 asan and msan shards of two did; and on b3af640 (2026-11-16) msan's second of
-      # three did. Those parts were dealt round-robin by name. On 5887c5a (2026-11-16) x86_64
-      # tsan's second shard of two took 81 minutes, asan's second of three 74, and msan's four 55
-      # to 68. A shard took about 7 minutes plus its checks' build and test time over the runner's
-      # four parallel builds, and the slow shards held the heaviest suites together. asan and msan
-      # now have four and five parts, tsan three: on that run's times each comes to about 45 to 55
-      # minutes. On dc2e7ef (2026-11-16) they took 25 to 66 minutes, so the weights are now the mean
-      # of two runs; orc-spec's checks, `<suite>-orc`, had found no weight. The counts must match
-      # the `shard` lists in ci.yml.
+      # [IMPL] `ciShards` splits each group into `ciShardCount group` parts, `<group>-1` to
+      # `<group>-N`: heaviest check first, each to the part with the least weight so far (ties to
+      # the lower part, equal weights by name). On Linux a part whose heaviest check weighs at least
+      # `ciHeadMinutes` has it as its head (`ciShardHeads.<label>`) and the rest as its tail
+      # (`ciShardTails.<label>`); CI builds the head on one build slot from the job's start and the
+      # tail beside it on the runner's other three. Nix starts a build's checks in no order of
+      # weight, and every job first spends about 8 minutes building Nim, so a shard took about as
+      # long as its heaviest check's start plus its length: on 0a459c9 (2026-11-21, run 44888184613)
+      # the x86_64 asan and msan shards that held test_lcn_call (80 and 73 minutes) and orc-spec's
+      # with kit-toolchains (57 minutes, now one check per switch set) passed the 90-minute limit,
+      # and the slowest tsan shard took 83. A simulation of that run's weights with random start
+      # orders put each group's slowest shard, 9 times in 10, at 59 to 69 minutes with these counts
+      # and heads, asan's at 87 and msan's at 80 while test_lcn_call alone takes as long. Every
+      # check is placed exactly once whatever the weights say: evaluation fails if a group's heads
+      # and tails do not hold its checks exactly once, or if a check heads two shards. The counts
+      # must match the `shard` lists in ci.yml. macOS builds refc and orc-release whole and orc-spec
+      # as two parts, without heads (its runners have three cores, and the weights are x86_64 Linux
+      # times).
       legacyPackages = forAllSystems (
         system:
         let
@@ -759,51 +782,37 @@
                 path = checks.${name};
               }) names
             );
+          isLinux = bySystem.${system}.pkgs.stdenv.hostPlatform.isLinux;
           ciShardCount =
             group:
-            if group == "msan" then
-              5
-            else if group == "asan" then
-              4
-            else if group == "tsan" then
-              3
+            if isLinux then
+              {
+                orc-spec = 4;
+                refc = 3;
+                orc-release = 2;
+                asan = 4;
+                tsan = 4;
+                msan = 5;
+              }
+              .${group} or 2
+            else if group == "orc-spec" then
+              2
             else
-              2;
-          # A suite's weight: its build and test minutes on x86_64 CI, the mean of its asan, tsan
-          # and msan checks in runs 43909188165 (5887c5a) and 43942225210 (dc2e7ef, 2026-11-16),
-          # for the twelve heaviest suites. Every other check weighs `ciDefaultWeight`, about the
-          # mean of the rest (5.6). An orc-spec check `<suite>-orc` weighs as its suite. A suite
-          # missing here, or a weight gone stale, only balances the parts worse. To refresh, take
-          # each suite's first and last `nix build -L` line in a run's sanitizer jobs.
-          ciWeights = {
-            test_boundary_invariance = 35;
-            test_logosd = 35;
-            # [N-2b] an estimate until a CI run measures it: in-process logosd with hosted
-            # lcn_call and providers, as test_hosted.
-            test_lcn_call = 18;
-            # [N-2d] an estimate: test_lcn_call's logosd with audit builds of the hosts and kits.
-            test_wipe_cli = 12;
-            # [N-1.6] an estimate: three suites under two switch sets, without sanitizers.
-            kit-toolchains = 30;
-            test_hosted_routes = 27;
-            test_wipe_routes = 18;
-            test_hosted = 18;
-            test_authority = 17;
-            test_host = 16;
-            test_orchestration = 14;
-            test_ctl_module = 13;
-            test_routes_ca = 13;
-            test_config = 12;
-            test_deployment = 12;
-          };
-          ciDefaultWeight = 6;
+              1;
+          ciHeadMinutes = if isLinux then 25 else null;
+          # [IMPL] A check's weight: its minutes on x86_64 Linux CI, from its first to its last
+          # `nix build -L` line in the job that built it (nix/ci-weights.json, which
+          # tools/ci_weights.py writes from a run's job logs; see its header for refreshing it). A
+          # suite costs very differently per group (test_lcn_call: over 80 minutes under asan, 15
+          # under orc-release on 0a459c9), so each check has its own. A check the file lacks weighs
+          # its group's mean there, and 6 minutes without one or without the file: a weight missing
+          # or gone stale only balances the parts worse, and never fails evaluation.
+          ciWeights =
+            if builtins.pathExists ./nix/ci-weights.json then lib.importJSON ./nix/ci-weights.json else { };
+          weight = name: ciWeights.minutes.${name} or ciWeights.groupMeans.${groupOf name} or 6;
           shardOf =
-            group: n: names:
+            n: names:
             let
-              weight =
-                name:
-                ciWeights.${lib.removeSuffix "-${if group == "orc-spec" then "orc" else group}" name}
-                  or ciDefaultWeight;
               heaviestFirst = lib.sort (
                 a: b: weight a > weight b || (weight a == weight b && a < b)
               ) names;
@@ -826,27 +835,57 @@
                   loads = lib.genList (_: 0) n;
                   parts = lib.genList (_: [ ]) n;
                 } heaviestFirst).parts;
-            in
-            assert lib.sort lib.lessThan (lib.concatLists parts) == lib.sort lib.lessThan names;
-            parts;
-          shardsOf =
-            group: names:
-            let
-              parts = shardOf group (ciShardCount group) names;
-            in
-            lib.listToAttrs (
-              lib.imap0 (
-                i: part:
+              # A part's head is its first check, the heaviest, when it weighs `ciHeadMinutes`.
+              split =
+                part:
                 let
-                  label = "${group}-${toString (i + 1)}";
+                  first = builtins.head part;
+                  headed = part != [ ] && ciHeadMinutes != null && weight first >= ciHeadMinutes;
                 in
-                lib.nameValuePair label (farm label part)
-              ) parts
-            );
+                {
+                  head = if headed then first else null;
+                  tail = if headed then builtins.tail part else part;
+                };
+              shards = map split parts;
+              members = s: lib.optional (s.head != null) s.head ++ s.tail;
+            in
+            assert lib.sort lib.lessThan (lib.concatMap members shards) == lib.sort lib.lessThan names;
+            shards;
+          # Each shard's head and tail, by label `<group>-<i>`. Evaluating any one evaluates its
+          # group's parts with the assertion above, and every head with the one below.
+          layout =
+            let
+              byLabel = lib.concatMapAttrs (
+                group: names:
+                lib.listToAttrs (
+                  lib.imap0 (i: shard: lib.nameValuePair "${group}-${toString (i + 1)}" shard) (
+                    shardOf (ciShardCount group) names
+                  )
+                )
+              ) groups;
+              heads = lib.filter (h: h != null) (lib.mapAttrsToList (_: s: s.head) byLabel);
+            in
+            assert lib.length (lib.unique heads) == lib.length heads;
+            byLabel;
+          sum = names: lib.foldl' (total: name: total + weight name) 0 names;
         in
         {
           ciGroups = lib.mapAttrs farm groups;
-          ciShards = lib.concatMapAttrs shardsOf groups;
+          ciShards = lib.mapAttrs (
+            label: s: farm label (lib.optional (s.head != null) s.head ++ s.tail)
+          ) layout;
+          ciShardHeads = lib.mapAttrs (_: s: checks.${s.head}) (lib.filterAttrs (_: s: s.head != null) layout);
+          ciShardTails = lib.mapAttrs (label: s: farm "${label}-tail" s.tail) layout;
+          # The same parts as data, with their weights: `nix eval --json
+          # <flake>#legacyPackages.x86_64-linux.ciLayout` shows how a change spreads the checks.
+          # `head` is "" for a part without one; CI reads it to choose how to build the part.
+          ciLayout = lib.mapAttrs (_: s: rec {
+            head = if s.head == null then "" else s.head;
+            headMinutes = if s.head == null then 0 else weight s.head;
+            tailMinutes = sum s.tail;
+            minutes = headMinutes + tailMinutes;
+            checks = lib.optional (s.head != null) s.head ++ s.tail;
+          }) layout;
         }
       );
 

@@ -207,10 +207,12 @@ nix flake check -L
 
 CI splits the checks into groups: `orc-spec` (orc, nph, lint and the spec checks), `refc`,
 `orc-release`, and on Linux `asan`, `tsan` and `msan`. On macOS `refc` and `orc-release` are one job
-each and `orc-spec` runs as two shards; on Linux each group runs as two shards, `ciShards.<group>-1`
-and `<group>-2`, `tsan` as three (`tsan-3`), `asan` as four (`asan-3`, `asan-4`) and `msan` as five
-(`msan-3` to `msan-5`). The heaviest suites' measured times (`ciWeights` in `flake.nix`) balance the
-shards. The Nimble tasks run as three shards on Linux and two on macOS (`LCN_SHARD`). A third job runs
+each and `orc-spec` runs as two shards; on Linux `orc-spec` runs as four shards, `ciShards.orc-spec-1`
+to `orc-spec-4`, `refc` as three, `orc-release` as two, `asan` and `tsan` as four and `msan` as five.
+Each check's minutes in a saved CI run (`nix/ci-weights.json`, written by `tools/ci_weights.py`)
+balance the shards, and a Linux shard whose heaviest check takes 25 minutes or more builds it as its
+head (`ciShardHeads.<shard>`) beside the rest (`ciShardTails.<shard>`); `ciLayout` shows the split as
+data. The Nimble tasks run as three shards on Linux and two on macOS (`LCN_SHARD`). A third job runs
 the Nimble path on Windows (`windows-2025`, four shards of `nimble test` under orc, and the Windows
 probes; DECISIONS G334). One group or one shard builds alone with:
 
@@ -220,6 +222,15 @@ nix build -L --keep-going .#ciGroups.asan
 
 ```bash
 nix build -L --keep-going .#ciShards.asan-1
+```
+
+The suites a change can reach, from its merge base to the merged tree: imports followed
+transitively, test support modules included, and the documents, contracts, fixtures and kit
+sources the suites name by path (`--why` prints how each suite is reached, `--variant orc` the
+flake checks):
+
+```bash
+python3 -I tools/affected_suites.py "$(git merge-base master HEAD)" HEAD
 ```
 
 ```bash

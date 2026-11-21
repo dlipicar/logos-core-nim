@@ -103,9 +103,9 @@ proc kitCompiler(): (string, string) =
 
 proc kitSwitches(): (seq[string], string) =
   ## [DECISIONS G341] A module library's own switch set and its variant
-  ## suffix: `LCN_KIT_SWITCHES` when it is set (the `kit-toolchains` check
-  ## builds the libraries with logos-storage-nim's and logos-delivery's
-  ## switches), split on white space and passed after the kit's own, so a
+  ## suffix: `LCN_KIT_SWITCHES` when it is set (the `kit-toolchains-storage`
+  ## and `kit-toolchains-delivery` checks build the libraries with
+  ## logos-storage-nim's and logos-delivery's switches), split on white space and passed after the kit's own, so a
   ## switch it repeats wins; else none.
   let set = getEnv("LCN_KIT_SWITCHES").strip
   if set.len == 0:
