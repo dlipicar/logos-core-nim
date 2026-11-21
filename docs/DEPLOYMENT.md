@@ -157,7 +157,8 @@ Item 2. Each is a file of the session, owned by its user, mode 0600 in 0700 dire
 route take effect at once, while logosd runs (CA §8; [HOST-CONFIG.md](HOST-CONFIG.md), "Under
 `capability-authority`", Authority over time). A withdrawn development switch, a removed trust anchor or
 package name, a rotated evidence key and a changed policy take effect at the next start, since every
-input is read once.
+input is read once. A removal that names an anchor or package name the file does not hold withdraws
+nothing and is refused, so a mistyped revocation is reported, not taken for one (BCP l.364).
 
 ## 3. Authority policy
 

@@ -1383,7 +1383,7 @@ suite "dc.trustctl: the logosctl trust writers over the package trust file [IMPL
     check establishTrust(s).isOk
     check s.markRevision == 6
 
-  test "[IMPL-DECISION G397] a change that changes nothing writes nothing: names already present, an absent name or anchor removed, the same anchor again, the switch as it is":
+  test "[IMPL-DECISION G397] a change that adds or sets what is already so writes nothing: names already present, the same anchor again, the switch as it is":
     let s = freshSession()
     discard initTrust(s, development = false).get
     let org = anchorOf("org", ["logos.storage"])
@@ -1391,8 +1391,6 @@ suite "dc.trustctl: the logosctl trust writers over the package trust file [IMPL
     let before = s.fileBytes
     for (what, next) in [
       ("names already present", s.current.withNames(kid "org", ["logos.storage"])),
-      ("an absent name removed", s.current.withoutNames(kid "org", ["logos.chat"])),
-      ("an absent anchor removed", okDoc(s.current.withoutAnchor(kid "dev"))),
       ("the same anchor again", s.current.withAnchor(org)),
       ("the switch as it is", okDoc(s.current.withDevelopment(false))),
     ]:
@@ -1405,7 +1403,7 @@ suite "dc.trustctl: the logosctl trust writers over the package trust file [IMPL
     check not f.commit(f.current.withDevelopment(false)).get.changed
     check not fileExists(f.trustPath)
 
-  test "[PKG-0107] [PKG-0072] [PKG-0434] [PKG-0435] the writers' refusals write nothing: a kid already an anchor, an unknown kid, the last name removed, a name or kid out of bounds, a key not of 48 bytes, an evidence key":
+  test "[PKG-0107] [PKG-0072] [PKG-0434] [PKG-0435] the writers' refusals write nothing: a kid already an anchor, an unknown kid, a withdrawal of what is not there, the last name removed, a name or kid out of bounds, a key not of 48 bytes, an evidence key":
     let s = freshSession()
     discard initTrust(s, development = false).get
     let k = createEvidenceKey(s.keysDir, "rt-1").get
@@ -1434,6 +1432,16 @@ suite "dc.trustctl: the logosctl trust writers over the package trust file [IMPL
         "names removed from an unknown kid",
         s.current.withoutNames(kid "dev", ["logos.chat"]),
         "no anchor has kid 646576",
+      ),
+      (
+        "an absent anchor removed",
+        s.current.withoutAnchor(kid "dev"),
+        "no anchor has kid 646576",
+      ),
+      (
+        "an absent name removed",
+        s.current.withoutNames(kid "org", ["logos.chat"]),
+        "authorizes no package named \"logos.chat\"; no name was removed",
       ),
       (
         "the last name removed",
@@ -1467,6 +1475,37 @@ suite "dc.trustctl: the logosctl trust writers over the package trust file [IMPL
       let r = s.commit(next)
       check r.isErr and refusal in r.error
       check s.fileBytes == before
+    # A withdrawal names the kid alone: adding is no answer to it.
+    check s.current.withoutAnchor(kid "dev").error == "no anchor has kid 646576"
+    check s.current.withoutNames(kid "dev", ["x"]).error == "no anchor has kid 646576"
+
+  test "[IMPL-DECISION G397] remove-names is all or nothing: one name the anchor does not authorize, byte for byte, refuses the change, naming every such name":
+    let s = freshSession()
+    discard initTrust(s, development = false).get
+    let composed = "caf\u00e9"
+    discard s.commit(
+      s.current.withAnchor(anchorOf("org", ["logos.chat", "logos.storage", composed]))
+    ).get
+    let before = s.fileBytes
+    # Another case, a repeated name, and the decomposed form of a present name.
+    let r = s.commit(
+      s.current.withoutNames(
+        kid "org",
+        ["logos.chat", "Logos.Storage", "logos.wallet", "logos.wallet", "cafe\u0301"],
+      )
+    )
+    check r.isErr
+    check r.error ==
+      "kid " & toHex(kid "org") &
+      " authorizes no package named \"Logos.Storage\", \"logos.wallet\", " &
+      "cafe\u0301".escape & "; no name was removed"
+    check s.fileBytes == before
+    check s.current.signing.anchors[0].packages ==
+      @[composed, "logos.chat", "logos.storage"]
+    # Every name present: removed, the next revision.
+    let done = s.commit(s.current.withoutNames(kid "org", ["logos.chat", composed])).get
+    check done.changed and done.state.file.revision == 3
+    check done.state.file.signing.anchors[0].packages == @["logos.storage"]
 
   test "[IMPL-DECISION G398] [PKG-0169] [PKG-0435] a file logosd refuses: every writer refuses it and says to correct the file; reestablish writes no mark; a change that removes what is refused is written":
     let s = freshSession()

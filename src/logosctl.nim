@@ -1439,12 +1439,7 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
     )
 
   proc trustWritten(
-      s: Session,
-      command: string,
-      ch: TrustChange,
-      what: string,
-      extra: JsonNode,
-      why = "",
+      s: Session, command: string, ch: TrustChange, what: string, extra: JsonNode
   ): Done =
     ## [G397; Q16] A writer's answer: the revision written, or unchanged.
     let rev = $ch.state.file.revision
@@ -1455,8 +1450,7 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
       if ch.changed:
         "trust revision " & rev & ": " & what & "; it applies at the next start"
       else:
-        "unchanged at trust revision " & rev & ": " &
-          (if why.len > 0: why & "; " else: "") & "nothing was written"
+        "unchanged at trust revision " & rev & ": nothing was written"
     s.offline(command, j, text)
 
   proc cmdTrust(c: Cli, s: Session): Result[Done, Fail] =
@@ -1467,17 +1461,9 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
         return err(fail(ExitUsage, error))
       let mark = readMark(s).valueOr:
         return err(fail(ExitUsage, error))
-      let continuity = block:
-        let d = decide(t, mark)
-        if d.isErr:
-          "refused: " & d.error
-        elif d.get == cAccept:
-          "accepted (the revision in use)"
-        else:
-          "accepted at the next start (a higher revision)"
       # [G397] The file is decoded without the rules, so a refused one shows,
       # with the reason logosd's start would give.
-      let refused = block:
+      let refusal = block:
         let keys = trustEvidenceKeys(s, [t.file])
         if keys.isErr:
           Opt.some("the evidence keys: " & keys.error)
@@ -1487,11 +1473,23 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
             Opt.some(v.error)
           else:
             Opt.none(string)
+      # [G396] A start applies the rules before continuity, so a file they
+      # refuse never reaches it.
+      let continuity = block:
+        let d = decide(t, mark)
+        if refusal.isSome:
+          "not reached: a start refuses the file before continuity (see refusal)"
+        elif d.isErr:
+          "refused: " & d.error
+        elif d.get == cAccept:
+          "accepted (the revision in use)"
+        else:
+          "accepted at the next start (a higher revision)"
       var j = trustJson(t.file)
       j["file"] = %t.present
       j["continuity"] = %continuity
-      if refused.isSome:
-        j["refused"] = %refused.get
+      if refusal.isSome:
+        j["refusal"] = %refusal.get
       if mark.isSome:
         j["mark"] = %*{
           "revision": mark.get.revision, "digest": toHex(mark.get.digest).toLowerAscii
@@ -1505,8 +1503,8 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
       rows.add(trustRows(t.file))
       rows.add(@["mark", (if mark.isSome: $mark.get.revision else: "none")])
       rows.add(@["continuity", continuity])
-      if refused.isSome:
-        rows.add(@["refused", refused.get])
+      if refusal.isSome:
+        rows.add(@["refusal", refusal.get])
       var text = table(["FIELD", "VALUE"], rows)
       if t.file.signing.anchors.len > 0:
         text.add("\n\n" & anchorsTable(t.file))
@@ -1546,7 +1544,7 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
             )
           )
         of "remove":
-          Result[LcnPackageTrust, string].ok(cur.file.withoutAnchor(kid))
+          cur.file.withoutAnchor(kid)
         of "add-names":
           cur.file.withNames(kid, names)
         else:
@@ -1554,12 +1552,6 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
       let f = next.valueOr:
         return err(fail(ExitUsage, error))
       let ch = ?trustCommit(s, cur, f)
-      # [G397; Q16] Withdrawing a kid that is not there changes nothing; the
-      # answer names it, so a mistyped kid is not taken for a withdrawal.
-      var absent = op == "remove"
-      for a in cur.file.signing.anchors:
-        if a.kid == kid:
-          absent = false
       let what =
         case op
         of "add": "anchor added"
@@ -1572,7 +1564,6 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
           ch,
           what & " (kid " & toHex(kid) & ")",
           %*{"kid": toHex(kid)},
-          why = (if absent: "no anchor has kid " & toHex(kid) else: ""),
         )
       )
     of "development":
@@ -1585,21 +1576,21 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
       let cur = readTrust(s).valueOr:
         return err(fail(ExitUsage, error))
       let ch = ?trustCommit(s, cur, cur.file.withDevelopment(v == "on"))
-      # [G137] How many development anchors enter or leave force with it.
-      var moved = 0
-      if ch.changed:
-        for a in ch.state.file.signing.anchors:
-          if a.development:
-            inc moved
+      # [G137] The anchors the file marks `development`: those that enter or
+      # leave force with a change, and are in or out of force without one.
+      var marked = 0
+      for a in ch.state.file.signing.anchors:
+        if a.development:
+          inc marked
       let anchors =
-        $moved & " development anchor" & (if moved == 1: " " else: "s ") &
-        (if v == "on": "enter" else: "leave") & (if moved == 1: "s" else: "") & " force"
+        $marked & " development anchor" & (if marked == 1: " " else: "s ") &
+        (if v == "on": "enter" else: "leave") & (if marked == 1: "s" else: "") & " force"
       ok(
         s.trustWritten(
           "trust development",
           ch,
           "development switch " & v & ", " & anchors,
-          %*{"development": ch.state.file.development, "development_anchors": moved},
+          %*{"development": ch.state.file.development, "development_anchors": marked},
         )
       )
     of "reestablish":

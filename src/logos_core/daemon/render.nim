@@ -152,13 +152,17 @@ func table*(header: openArray[string], rows: openArray[seq[string]]): string =
 # The package trust file (G397) --------------------------------------------------------
 
 func kidText*(kid: openArray[byte]): Opt[string] =
-  ## A kid as text when it is printable ASCII, as `lcn-pkg sign --kid` takes
-  ## it; otherwise it is shown in hex only.
+  ## [G397] A kid as text when it is printable ASCII, as `lcn-pkg sign --kid`
+  ## takes it, so the text can be passed back to `--kid`; otherwise it is
+  ## shown in hex only. A text beginning `hex:` is hex only too: `--kid`
+  ## would read it as hex digits, a different kid.
   var t = newString(kid.len)
   for i, b in kid:
     if b < 0x20 or b > 0x7e:
       return Opt.none(string)
     t[i] = char(b)
+  if t.startsWith("hex:"):
+    return Opt.none(string)
   Opt.some(t)
 
 func selectionJson(x: LcnTrustSelection): JsonNode =
@@ -174,8 +178,9 @@ func selectionText(x: LcnTrustSelection): string =
 
 proc trustJson*(t: LcnPackageTrust): JsonNode =
   ## [G89; G397] `trust show`'s file: the CBOR's fields, keys and kids in
-  ## hex, and per anchor its kid as text when printable and whether it is in
-  ## force.
+  ## hex, and per anchor its kid as text (`kidText`) and `in_force`, what the
+  ## file says (its switch and the anchor's marker), not what a running
+  ## logosd uses.
   var anchors = newJArray()
   for a in t.signing.anchors:
     var j = %*{
