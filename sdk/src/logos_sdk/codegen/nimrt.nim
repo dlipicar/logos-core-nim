@@ -5,7 +5,10 @@
 ## input set. Its decoders check a
 ## value against the declaration first (INTERFACE §4.5: deterministic CBOR, then
 ## the schema) and only then convert it; choice arms are picked by the
-## structural selection plan (COMMITMENT §3.1), never by trial.
+## structural selection plan (COMMITMENT §3.1), never by trial. Loading builds
+## the plan of every choice the documents' values reach, once, with the set it
+## belongs to (`choice.PlannedSet`, DECISIONS I101): a check selects arms by
+## those plans and still validates the whole value.
 ##
 ## Marked payloads (INTERFACE §1.2.1, l.380-386; DECISIONS G276, G278): for a
 ## request or response declaration that `_sensitive` marks, `check` reports a
@@ -27,7 +30,9 @@ export cbor, results, sequtils, perthread, wipe
 
 type
   GeneratedSchema* = object
-    sets: seq[SchemaSet] ## one per document, each with that document first
+    sets: seq[PlannedSet]
+      ## one per document, each with that document first, and with the plans
+      ## of every choice its values reach (DECISIONS I101)
     bodies: Table[string, (int, SchemaNode)] ## declaration -> (document, body)
     plans: Table[string, SelectionPlan] ## `<declaration>#<path>` -> plan
     marked: HashSet[string]
@@ -59,7 +64,7 @@ proc addPlans(
     for i, item in n.items:
       g.addPlans(doc, owner, path & ("tuple_" & $i), item)
   of snChoice:
-    let plan = selectionPlan(g.sets[doc], 0, n)
+    let plan = g.sets[doc].planOf(0, n)
     doAssert plan.isSome, "an accepted choice has a selection plan"
     g.plans[choiceKey(owner, path)] = plan.get
     for i, a in n.arms:
@@ -69,7 +74,7 @@ proc addPlans(
 
 proc add(g: var GeneratedSchema, set: SchemaSet) =
   let doc = g.sets.len
-  g.sets.add(set)
+  g.sets.add(planned(set))
   for d in set.docs[0].declarations:
     if d.kind != dkMethod:
       g.bodies[d.name] = (doc, d.body)
@@ -131,6 +136,8 @@ proc check*(
   let (doc, body) = g.bodies.getOrDefault(declaration, (-1, nil))
   if doc < 0:
     return err(declaration & " is not declared")
+  # [IMPL] (DECISIONS I101) Over the plans built at load: the whole value is
+  # validated, as by `SchemaSet`'s `validatePath`, without replanning a choice.
   g.sets[doc].validatePath(0, body, v).isOkOr:
     if g.marks(declaration):
       return err("not a " & declaration & " value")
@@ -160,7 +167,7 @@ proc commitment*(
   let (doc, _) = g.bodies.getOrDefault(declaration, (-1, nil))
   if doc < 0:
     return err(declaration & " is not declared")
-  let r = ?g.sets[doc].normalize(0, declaration, v)
+  let r = ?g.sets[doc].schemaSet.normalize(0, declaration, v)
   let root = ?valueRoot(r)
   ok((r.subtreeRoot, root))
 
