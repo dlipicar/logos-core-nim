@@ -6,8 +6,14 @@
 ##   `true`/`false`, text as given, byte strings as hex, a text-literal choice
 ##   as its text. A structured field (map, list, tuple) is refused: the whole
 ##   request goes with `--request`.
-## - `key=@FILE`: a text field (the bytes must be UTF-8) or a byte-string field,
-##   from a descriptor the launcher passed.
+## - `key=@FILE`: a field from a descriptor the launcher passed. A text field
+##   takes the file's bytes (UTF-8) and a byte-string field takes them as they
+##   are. Any other scalar, and a literal, takes the file's text less one
+##   trailing "\n", read as `key=value` would read it (G349 N-2d). In a choice
+##   each alternative reads the file by its own rule.
+## - A marked request (N-2d) is given only as `key=@FILE`: no message quotes
+##   its input or names an argument that is not a field, a structured field is
+##   refused, and every copy made here is wiped.
 ## - `--request` (plan R4: `--json` is logosctl's output flag; the wire field
 ##   keeps the name `json`): the whole request as one JSON object, read as G89 writes it:
 ##   byte strings as hex text, integers beyond ±2^53 as decimal text. JSON
@@ -27,7 +33,7 @@ from std/json import escapeJson
 import results
 import logos_sdk/cbor
 import logos_sdk/commitment
-import logos_sdk/base/hex
+import logos_sdk/base/[hex, wipe]
 import logos_sdk/iface/surface
 
 export results
@@ -54,10 +60,15 @@ type
   Conv = object ## Why a node does not read an input.
     hard: bool ## refuse outright: not "this alternative does not apply"
     structured: bool ## the node is a map, list or tuple
+    quoted: bool ## `msg` quotes the input: never shown for a marked request
     msg: string
 
 func mismatch(msg: string, structured = false): Conv =
   Conv(hard: false, structured: structured, msg: msg)
+
+func quotedMismatch(msg: string): Conv =
+  ## A mismatch whose message quotes the input.
+  Conv(hard: false, quoted: true, msg: msg)
 
 func refusal(msg: string): Conv =
   Conv(hard: true, msg: msg)
@@ -189,9 +200,10 @@ func topMap(sh: RequestShape): Result[(int, SchemaNode), string] =
     )
   ok((d, x))
 
-func fieldList*(sh: RequestShape): string =
+func fieldList*(sh: RequestShape, marked = false): string =
   ## The request's fields: `name: type`, `name?:` for an optional one, and
-  ## `(--request)` after a structured one.
+  ## `(--request)` after a structured one; for a `marked` request, which
+  ## takes no `--request`, `(structured)`.
   let t = sh.topMap()
   if t.isErr:
     return "(" & typeText(sh.set, 0, sh.body) & ")"
@@ -202,13 +214,13 @@ func fieldList*(sh: RequestShape): string =
   for f in m.fields:
     var p = f.name & (if f.optional: "?: " else: ": ") & typeText(sh.set, d, f.node)
     if isStructured(sh.set, d, f.node):
-      p.add(" (--request)")
+      p.add(if marked: " (structured)" else: " (--request)")
     parts.add(p)
   parts.join(", ")
 
 # Scalars -----------------------------------------------------------------------------
 
-func parseMagnitude(s: string): Opt[uint64] =
+func parseMagnitude(s: openArray[char]): Opt[uint64] =
   ## Decimal digits only, at least one, within uint64.
   if s.len == 0:
     return Opt.none(uint64)
@@ -247,17 +259,12 @@ func signedRange(k: ScalarKind): (int64, int64) =
 func integerFromText(k: ScalarKind, text: string): Result[CborValue, Conv] =
   ## A decimal integer of kind `k`, in its range.
   let neg = text.len > 0 and text[0] == '-'
-  let mag = parseMagnitude(
-    if neg:
-      text[1 .. ^1]
-    else:
-      text
-  ).valueOr:
-    return err(mismatch(escapeJson(text) & " is not a decimal " & $k))
+  let mag = parseMagnitude(text.toOpenArray(ord(neg), text.high)).valueOr:
+    return err(quotedMismatch(escapeJson(text) & " is not a decimal " & $k))
   case k
   of skUint8, skUint16, skUint32, skUint64:
     if neg or mag > unsignedMax(k):
-      return err(mismatch(escapeJson(text) & " is outside " & $k))
+      return err(quotedMismatch(escapeJson(text) & " is outside " & $k))
     ok(cbor(mag))
   else:
     let (lo, hi) = signedRange(k)
@@ -266,11 +273,11 @@ func integerFromText(k: ScalarKind, text: string): Result[CborValue, Conv] =
       if mag == 0:
         return ok(cbor(0'u64))
       if mag - 1 > uint64(-(lo + 1)):
-        return err(mismatch(escapeJson(text) & " is outside " & $k))
+        return err(quotedMismatch(escapeJson(text) & " is outside " & $k))
       ok(cborNint(mag - 1))
     else:
       if mag > uint64(hi):
-        return err(mismatch(escapeJson(text) & " is outside " & $k))
+        return err(quotedMismatch(escapeJson(text) & " is outside " & $k))
       ok(cbor(mag))
 
 func sizeOk(n: SchemaNode, len: int): bool =
@@ -279,11 +286,16 @@ func sizeOk(n: SchemaNode, len: int): bool =
   let (lo, hi) = n.size.get
   uint64(len) >= lo and uint64(len) <= hi
 
+func sizeMismatch(n: SchemaNode, len: int): Conv =
+  ## [G349 N-2d] It states the length only: a length is not the value.
+  let (lo, hi) = n.size.get
+  mismatch($n.scalar & " of " & $len & " bytes, not " & $lo & " to " & $hi)
+
 func sized(n: SchemaNode, v: CborValue, len: int): Result[CborValue, Conv] =
+  ## `v`, or a size mismatch; `v` is wiped then.
   if not sizeOk(n, len):
-    let (lo, hi) = n.size.get
-    return
-      err(mismatch($n.scalar & " of " & $len & " bytes, not " & $lo & " to " & $hi))
+    wipe(v)
+    return err(sizeMismatch(n, len))
   ok(v)
 
 func scalarFromText(n: SchemaNode, text: string): Result[CborValue, Conv] =
@@ -295,15 +307,17 @@ func scalarFromText(n: SchemaNode, text: string): Result[CborValue, Conv] =
     of "false":
       ok(cbor(false))
     else:
-      err(mismatch(escapeJson(text) & " is not true or false"))
+      err(quotedMismatch(escapeJson(text) & " is not true or false"))
   of skUint8, skUint16, skUint32, skUint64, skInt8, skInt16, skInt32, skInt64:
     integerFromText(n.scalar, text)
   of skTstr:
     sized(n, cbor(text), text.len)
   of skBstr:
-    let b = fromHex(text).valueOr:
-      return err(mismatch(escapeJson(text) & " is not hex"))
-    sized(n, cbor(b), b.len)
+    var b = fromHex(text).valueOr:
+      return err(quotedMismatch(escapeJson(text) & " is not hex"))
+    let r = sized(n, cbor(b), b.len)
+    wipe(b)
+    r
 
 func literalValue(l: ScalarData): CborValue =
   case l.kind
@@ -345,9 +359,17 @@ func literalFromText(l: ScalarData, text: string): Result[CborValue, Conv] =
     let b = fromHex(text)
     if b.isOk:
       got = Opt.some(cbor(b.get))
-  if got.isSome and encodeCbor(got.get) == encodeCbor(want):
+  var same = false
+  if got.isSome:
+    var a = encodeCbor(got.get)
+    var b = encodeCbor(want)
+    same = a == b
+    wipe(a)
+    wipe(b)
+    wipe(got.get)
+  if same:
     return ok(want)
-  err(mismatch(escapeJson(text) & " is not " & toDiag(want)))
+  err(quotedMismatch(escapeJson(text) & " is not " & toDiag(want)))
 
 # Choices -----------------------------------------------------------------------------
 
@@ -358,29 +380,47 @@ proc choose(
     s: SchemaSet, d: int, x: SchemaNode, path: string, read: Reader
 ): Result[CborValue, Conv] =
   ## [G349] The one value the alternatives read; none is a mismatch, several
-  ## different ones are ambiguous.
+  ## different ones are ambiguous. [N-2d] Every reading not returned, and
+  ## each reading's encoding, is wiped: the input may be marked.
   var found: seq[CborValue] = @[]
   var seen: seq[seq[byte]] = @[]
   var anyStructured = false
+  var anyQuoted = false
   var reasons: seq[string] = @[]
+  template drop() =
+    for e in seen.mitems:
+      wipe(e)
+    for v in found:
+      wipe(v)
+
   for arm in x.arms:
     let r = read(d, arm)
     if r.isOk:
       if s.validatePath(d, arm, r.get).isErr:
+        wipe(r.get)
         continue
-      let e = encodeCbor(r.get)
+      var e = encodeCbor(r.get)
       if e notin seen:
-        seen.add(e)
+        seen.add(move e)
         found.add(r.get)
+      else:
+        wipe(e)
+        wipe(r.get)
     elif r.error.hard:
+      drop()
       return err(r.error)
     else:
       anyStructured = anyStructured or r.error.structured
+      anyQuoted = anyQuoted or r.error.quoted
       if r.error.msg.len > 0 and r.error.msg notin reasons:
         reasons.add(r.error.msg)
+  for e in seen.mitems:
+    wipe(e)
   if found.len == 1:
     return ok(found[0])
   if found.len > 1:
+    for v in found:
+      wipe(v)
     return err(
       refusal(
         path & ": the alternatives of " & typeText(s, d, x) &
@@ -390,7 +430,9 @@ proc choose(
   var msg = "matches none of " & typeText(s, d, x)
   if reasons.len > 0:
     msg.add(" (" & reasons.join("; ") & ")")
-  err(mismatch(msg, anyStructured))
+  var c = mismatch(msg, anyStructured)
+  c.quoted = anyQuoted
+  err(c)
 
 # key=value and key=@FILE -------------------------------------------------------------
 
@@ -418,56 +460,169 @@ proc readText(
   of snLocalRef, snImportedRef:
     err(refusal(path & ": an unresolved reference"))
 
+proc fileText(
+    data: seq[byte],
+    read: proc(text: string): Result[CborValue, Conv] {.gcsafe, raises: [].},
+): Result[CborValue, Conv] =
+  ## [G349 N-2d; IMPL] A file for a scalar that is not a string, or for a
+  ## literal: its text, less exactly one trailing "\n", read as `key=value`
+  ## reads the text. The
+  ## copy is wiped after use.
+  var last = data.len
+  if last > 0 and data[last - 1] == byte('\n'):
+    dec last
+  var t = newString(last)
+  for i in 0 ..< last:
+    t[i] = char(data[i])
+  let r = read(t)
+  wipe(t)
+  r
+
 proc readFileData(
     s: SchemaSet, doc: int, n: SchemaNode, data: seq[byte], path: string
 ): Result[CborValue, Conv] =
+  ## [G349 N-2d; IMPL] `NAME=@FILE` for any scalar or literal: a text or byte
+  ## string is the file's bytes as they are, any other kind `fileText`'s text;
+  ## a union's arms each read by their own rule.
   let (d, x) = deref(s, doc, n).valueOr:
     return err(refusal(path & ": " & error))
   case x.kind
   of snPrimitive:
     case x.scalar
     of skTstr:
+      # The file's bytes as they are; one copy, moved into the value.
       if not isValidUtf8(data):
         return err(mismatch("the file is not UTF-8 text"))
+      if not sizeOk(x, data.len):
+        return err(sizeMismatch(x, data.len))
       var t = newString(data.len)
       for i, b in data:
         t[i] = char(b)
-      sized(x, cbor(t), data.len)
+      ok(CborValue(kind: ckText, text: move t, validUtf8: true))
     of skBstr:
-      sized(x, cbor(data), data.len)
+      if not sizeOk(x, data.len):
+        return err(sizeMismatch(x, data.len))
+      ok(cbor(data))
     else:
-      err(mismatch($x.scalar & " takes key=value, not a file"))
+      fileText(
+        data,
+        proc(text: string): Result[CborValue, Conv] =
+          scalarFromText(x, text),
+      )
   of snLiteral:
-    err(mismatch("a literal takes key=value, not a file"))
+    fileText(
+      data,
+      proc(text: string): Result[CborValue, Conv] =
+        literalFromText(x.literal, text),
+    )
   of snMap, snList, snTuple:
     err(mismatch("structured", structured = true))
   of snChoice:
+    # The arms see the file through a pointer: a closure that captured `data`
+    # would copy it into its environment, released unwiped at this proc's end.
+    let bytes = unsafeAddr data
     choose(
       s,
       d,
       x,
       path,
       proc(dd: int, arm: SchemaNode): Result[CborValue, Conv] =
-        readFileData(s, dd, arm, data, path),
+        readFileData(s, dd, arm, bytes[], path),
     )
   of snLocalRef, snImportedRef:
     err(refusal(path & ": an unresolved reference"))
 
-proc fromArgs*(sh: RequestShape, args: openArray[ArgInput]): Result[CborValue, string] =
-  ## [D26 (a); G349] The request map from named arguments.
+func fieldOf(m: SchemaNode, name: string): Opt[SchemaField] =
+  for f in m.fields:
+    if f.name == name:
+      return Opt.some(f)
+  Opt.none(SchemaField)
+
+proc checkMarkedNames*(
+    sh: RequestShape, names: openArray[string]
+): Result[void, string] =
+  ## [G349 N-2d] A marked request's arguments, by name alone, before any file
+  ## is read: one map, each name one of its fields, given once, none
+  ## structured. A name that is not a field is not quoted: a mistyped line can
+  ## put anything there.
+  let (d, m) = sh.topMap().valueOr:
+    return err(
+      "the request of " & sh.methodName &
+        " is not one map, and a marked request is given only field by field"
+    )
+  var given: seq[string] = @[]
+  for name in names:
+    let f = m.fieldOf(name).valueOr:
+      return err(
+        sh.methodName & " has no field of an argument given; its fields: " &
+          sh.fieldList(marked = true)
+      )
+    if name in given:
+      return err(name & " is given twice")
+    given.add(name)
+    if isStructured(sh.set, d, f.node):
+      return err(
+        name & " is " & typeText(sh.set, d, f.node) &
+          ", and a structured field of a marked request cannot be given yet"
+      )
+  ok()
+
+proc fileLimit*(sh: RequestShape, name: string, most: int): int =
+  ## [G349 N-2d] The most bytes worth reading for `name=@FILE`: one more than
+  ## a text or byte-string field's `.size` bound, so a longer file is refused
+  ## without reading the rest; `most` for any other field.
+  let t = sh.topMap()
+  if t.isErr:
+    return most
+  let (d, m) = t.get
+  let f = m.fieldOf(name)
+  if f.isNone:
+    return most
+  let r = deref(sh.set, d, f.get.node)
+  if r.isErr:
+    return most
+  let x = r.get[1]
+  if x.kind == snPrimitive and x.scalar in {skTstr, skBstr} and x.size.isSome:
+    let hi = x.size.get[1]
+    if hi < uint64(most):
+      return int(hi) + 1
+  most
+
+proc wipeInputs*(inputs: var seq[ArgInput]) =
+  ## Every argument's text or file bytes.
+  for a in inputs.mitems:
+    if a.isFile:
+      wipe(a.data)
+    else:
+      wipe(a.text)
+  inputs.setLen(0)
+
+proc fromArgs*(
+    sh: RequestShape, args: openArray[ArgInput], marked = false
+): Result[CborValue, string] =
+  ## [D26 (a); G349] The request map from named arguments. [N-2d] For a
+  ## `marked` request no message quotes the input, and the fields read so far
+  ## are wiped when one fails.
   let (d, m) = ?sh.topMap()
   var entries: seq[CborEntry] = @[]
   var given: seq[string] = @[]
+  template fail(msg: string) =
+    for e in entries:
+      wipe(e[1])
+    return err(msg)
+
   for a in args:
     if a.name in given:
-      return err(a.name & " is given twice")
+      fail(a.name & " is given twice")
     given.add(a.name)
-    var field = Opt.none(SchemaField)
-    for f in m.fields:
-      if f.name == a.name:
-        field = Opt.some(f)
+    let field = m.fieldOf(a.name)
     if field.isNone:
-      return err(
+      if marked:
+        fail(
+          sh.methodName & " has no field of an argument given; its fields: " &
+            sh.fieldList(marked = true)
+        )
+      fail(
         sh.methodName & " has no field " & escapeJson(a.name) & "; its fields: " &
           sh.fieldList()
       )
@@ -480,21 +635,29 @@ proc fromArgs*(sh: RequestShape, args: openArray[ArgInput]): Result[CborValue, s
     if r.isErr:
       let e = r.error
       if e.structured and not e.hard:
-        return err(
+        if marked:
+          fail(
+            a.name & " is " & typeText(sh.set, d, f.node) &
+              ", and a structured field of a marked request cannot be given yet"
+          )
+        fail(
           a.name & " is " & typeText(sh.set, d, f.node) &
             ": give the whole request with --request"
         )
       if e.hard:
-        return err(e.msg)
-      return err(a.name & ": " & e.msg)
+        fail(e.msg)
+      if marked and e.quoted:
+        fail(a.name & ": the file does not read as " & typeText(sh.set, d, f.node))
+      fail(a.name & ": " & e.msg)
     entries.add((cbor(a.name), r.get))
   var missing: seq[string] = @[]
   for f in m.fields:
     if not f.optional and f.name notin given:
       missing.add(f.name)
   if missing.len > 0:
-    return err(
-      sh.methodName & " needs " & missing.join(", ") & "; its fields: " & sh.fieldList()
+    fail(
+      sh.methodName & " needs " & missing.join(", ") & "; its fields: " &
+        sh.fieldList(marked)
     )
   ok(cborMap(entries))
 
@@ -914,9 +1077,15 @@ proc fromJson*(sh: RequestShape, text: string): Result[CborValue, string] =
     return err(r.error.msg)
   ok(r.get)
 
-proc checkRequest*(sh: RequestShape, v: CborValue): Result[void, string] =
+proc checkRequest*(
+    sh: RequestShape, v: CborValue, marked = false
+): Result[void, string] =
   ## The assembled value against the request rule, before anything is sent.
+  ## [G278; G349 N-2d] For a `marked` request the message has no path: the
+  ## keys of a map with free keys are payload.
   sh.set.validatePath(0, sh.body, v).isOkOr:
+    if marked:
+      return err("the request does not match " & sh.methodName & "'s request rule")
     var parts: seq[string] = @[]
     for p in error:
       parts.add(toDiag(p))

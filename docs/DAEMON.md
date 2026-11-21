@@ -970,10 +970,13 @@ lcn.cli_refused = {
 ### Arguments and output (G349)
 
 - **Arguments** are named only (D26): `NAME=VALUE` for a scalar field of the request, `NAME=@FILE` (or
-  `@-` for stdin) for a text or byte string read from the passed descriptor (text must be UTF-8; at most 16
-  MiB), or `--request '{…}'` for the whole request as JSON (structured fields, unions, arrays). Values are
-  typed from the method's request rule: integers in decimal, `true`/`false`, text as given, byte strings
-  as hex (or raw from `@FILE`), a text-literal choice as its text. An unknown field, a structured field
+  `@-` for stdin) for one read from the passed descriptor, or `--request '{…}'` for the whole request as
+  JSON (structured fields, unions, arrays). Values are typed from the method's request rule: integers in
+  decimal, `true`/`false`, text as given, byte strings as hex, a text-literal choice as its text. From
+  `@FILE`, a text or byte string is the file's bytes as they are (text must be UTF-8), and any other kind
+  is the file's text less exactly one trailing newline (`echo 3 > n`); in a union each alternative reads
+  the file by its own rule, so `12` and a newline is refused for `uint32 / tstr` as ambiguous. A file is
+  read up to 16 MiB, or up to its field's `.size` bound and one byte more, and refused past either. An unknown field, a structured field
   given as `NAME=VALUE`, a value that a union's alternatives read differently, and a float are refused
   (exit 1) with the field's name and the request's fields. The value is checked against the request rule
   before it is sent; the provider's host checks it again.
@@ -981,10 +984,21 @@ lcn.cli_refused = {
   envelope with the response rendered as G89 writes values, or the response in diagnostic notation. Text
   a provider supplied (an error message or detail) is labelled "(declared)" and has control characters
   replaced. Every output carries the `NON-PRODUCTION deployment` line when the switch is on.
-- **Marked methods** (a request or response with a marked field) are refused, naming the method: their
-  values would reach a terminal. Do not type a secret for one even so: a value typed on the command
-  line is also in the shell's history and in the process's arguments, whether or not it is refused
-  (and until step N-2d the launcher and `lcn_call` do not erase it either; CONFORMANCE.md).
+- **Marked methods** (a request or response with a marked field; G349's N-2d amendment, INTERFACE §1.4.1)
+  are called on the local node only. A marked request takes each field from a file, `NAME=@FILE` or
+  `NAME=@-`: a `NAME=VALUE` or `--request` for one is refused before anything is read (exit 1), since a
+  value on the command line is in the shell's history and in the process's arguments, which nothing
+  erases; do not type a secret there even so. A structured field of a marked request cannot be given
+  yet (there is no `--request @FILE`). A marked response is written to stdout only, as any response, and
+  never to a failure or the log. The launcher and `lcn_call` erase every copy they make of a marked
+  request or response, whatever the outcome: a refusal, a provider's failure, a cancel, a reader that
+  closed stdout. Their messages name the field and the request's fields, never a value: a type error
+  says the file does not read as the field's type, and a size error states the length. A marked method
+  is refused (exit 1) on another node (a remote path has no erasure promise, INTERFACE l.373) and by a
+  refc build of `lcn_call` (G277). `@-` on a terminal echoes what is typed, and the newline that ends it
+  is part of a text or byte value (use `printf %s`, or a file without one). Text a provider puts in its
+  own failure is its own and is shown "(declared)": a provider that quotes a secret there discloses it
+  (CONFORMANCE.md).
 - **`describe`** lists the provider's contract views (primary, interfaces, extended views) with their
   roots, the roots its module record carries, and the selected contract's methods (request fields and
   response rule) and events.
@@ -997,7 +1011,7 @@ lcn.cli_refused = {
 | Exit | Meaning |
 |---|---|
 | 0 | done |
-| 1 | refused before anything was called: usage, an unknown node, module, method or event, invalid arguments, a marked method, a refused frame |
+| 1 | refused before anything was called: usage, an unknown node, module, method or event, invalid arguments, a marked value on the command line, a marked method on another node, a refused frame |
 | 2 | no daemon, `lcn_call` not reachable or not started before `--timeout`, busy or closing past it, or **the outcome unknown**: a `TRANSPORT_ERROR`, `TIMEOUT` or a `CANCELLED` nobody asked for after the call was sent, or a lost `done`. The provider may have run the call. |
 | 4 | a Runtime Control failure: `NOT_AUTHORISED`, `NOT_READY`, an error arm, a continuation fault, with code and message |
 | 5 | the provider's error channel answered the call (`METHOD_NOT_FOUND`, `INVALID_PARAMS`, `MODULE_ERROR`): the code and the provider's declared text |

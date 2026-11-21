@@ -68,6 +68,7 @@ when defined(posix):
       trustfile,
     ]
   import ./logos_core/cli/[cli_types, launcher]
+  from logos_sdk/codegen/nimrt import wipeTyped
 
   const
     Usage =
@@ -959,22 +960,35 @@ offline (the session's files; writers hold its lock):
   proc argsOf(c: Cli, files: var seq[cint]): Result[seq[LcnCliArg], Fail] =
     ## [D26 (a); G349] `NAME=VALUE`, or `NAME=@FILE` (`@-`: stdin) passed as a
     ## descriptor; lcn_call types each from the method's request rule.
+    ##
+    ## [N-2d] The launcher has no schema, so it treats every argument as one
+    ## that may be marked: a malformed one is named by its position, never
+    ## echoed, and the copies made here are wiped (`launch` wipes the
+    ## message). The process's own argv is not erased: lcn_call refuses an
+    ## inline value for a marked request.
     var args: seq[LcnCliArg]
     var stdinUsed = false
-    for a in c.args[3 .. ^1]:
+    for k in 3 ..< c.args.len:
+      template a(): untyped =
+        c.args[k]
+
       let eq = a.find('=')
       if eq <= 0:
-        return err(usage("an argument is NAME=VALUE or NAME=@FILE, got " & a))
+        return err(
+          usage(
+            "argument " & $(k - 2) & " after the method is not NAME=VALUE or NAME=@FILE"
+          )
+        )
       let name = a[0 ..< eq]
-      let value = a[eq + 1 .. ^1]
-      if not value.startsWith("@"):
+      if a.len <= eq + 1 or a[eq + 1] != '@':
         args.add(
           LcnCliArg(
             kind: LcnCliArgKind.lcn_Cli_text_arg,
-            arm_lcn_Cli_text_arg: LcnCliTextArg(name: name, value: value),
+            arm_lcn_Cli_text_arg: LcnCliTextArg(name: name, value: a[eq + 1 .. ^1]),
           )
         )
         continue
+      let value = a[eq + 1 .. ^1]
       if files.len >= MaxFileArgs:
         return err(usage("at most " & $MaxFileArgs & " @FILE arguments"))
       let path = value[1 .. ^1]
@@ -1062,31 +1076,31 @@ offline (the session's files; writers hold its lock):
       for f in files:
         if f > 0:
           discard posix.close(f)
-    let command = ?c.commandOf(files)
+    var command = ?c.commandOf(files)
     let cancelFd = ?cancelOnSignals()
-    let r = launch(
-      Launch(
-        cliSocket: cliSocketOf(s),
-        ctlSocket: socketOf(s),
-        message: LcnCliMessage(
-          target: c.opt("node"),
-          output: LcnCliOutput(
-            kind: if c.json: LcnCliOutputKind.Json else: LcnCliOutputKind.Text
-          ),
-          # [G349] A stream has no deadline; `--timeout` bounds activation.
-          deadline_ms: (
-            if c.args[0] in ["subscribe", "events"]: Opt.none(uint32)
-            else: Opt.some(uint32(c.timeoutMs))
-          ),
-          command: command,
+    var l = Launch(
+      cliSocket: cliSocketOf(s),
+      ctlSocket: socketOf(s),
+      message: LcnCliMessage(
+        target: c.opt("node"),
+        output: LcnCliOutput(
+          kind: if c.json: LcnCliOutputKind.Json else: LcnCliOutputKind.Text
         ),
-        stdoutFd: 1,
-        stderrFd: 2,
-        files: files,
-        timeoutMs: c.timeoutMs,
-        cancelFd: cancelFd,
-      )
+        # [G349] A stream has no deadline; `--timeout` bounds activation.
+        deadline_ms: (
+          if c.args[0] in ["subscribe", "events"]: Opt.none(uint32)
+          else: Opt.some(uint32(c.timeoutMs))
+        ),
+        command: move command,
+      ),
+      stdoutFd: 1,
+      stderrFd: 2,
+      files: files,
+      timeoutMs: c.timeoutMs,
+      cancelFd: cancelFd,
     )
+    let r = launch(l)
+    wipeTyped(l.message) # [N-2d] the arguments' values
     if r.isErr:
       return err(fail(r.error.exit, r.error.message, r.error.code))
     ok(r.get)

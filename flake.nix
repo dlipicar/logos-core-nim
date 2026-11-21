@@ -170,6 +170,7 @@
                   "test_realizer.nim"
                   "test_routes.nim"
                   "test_storage_fetch.nim"
+                  "test_wipe_cli.nim"
                   "test_wipe_routes.nim"
                 ];
             }
@@ -780,6 +781,8 @@
             # [N-2b] an estimate until a CI run measures it: in-process logosd with hosted
             # lcn_call and providers, as test_hosted.
             test_lcn_call = 18;
+            # [N-2d] an estimate: test_lcn_call's logosd with audit builds of the hosts and kits.
+            test_wipe_cli = 12;
             # [N-1.6] an estimate: three suites under two switch sets, without sanitizers.
             kit-toolchains = 30;
             test_hosted_routes = 27;

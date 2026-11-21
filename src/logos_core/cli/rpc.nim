@@ -9,7 +9,10 @@
 ## half-close). The completion copies the outcome into shared memory and
 ## releases the response owner at once, so no response buffer is held past
 ## the completion (IF l.3927). The error channel's code, message and detail are
-## kept for the launcher.
+## kept for the launcher. [N-2d] The shared copy is zeroed when it is released
+## (`free`); the response's own copy belongs to the caller, which wipes it
+## once decoded. The completion runs on a thread the collector does not own,
+## so it cannot make that copy itself.
 ##
 ## [G348; plan R5 §3.5 step 7] `prepare_call` on a route handle holds the
 ## handle's lock (IF l.1935: operations on one handle are serialized). A
@@ -28,6 +31,7 @@
 import std/locks
 import results
 import logos_sdk/abi/[checks, types]
+import logos_sdk/base/wipe
 from logos_sdk/codegen/kitrt import callbackEnter
 import logos_sdk/iface/outcome
 import logos_sdk/kit/rc_types
@@ -95,8 +99,9 @@ proc shareRaw(p: pointer, len: int): SharedBuf =
     result.len = len
 
 proc free(b: var SharedBuf) =
-  if b.data != nil:
-    deallocShared(b.data)
+  ## [N-2d; SPEC INTERFACE l.361, l.385] Zeroed before release, for every
+  ## call: the response may be a marked payload.
+  freeWiped(b.data, b.len)
   b = SharedBuf()
 
 proc bytesOf(b: SharedBuf): seq[byte] =

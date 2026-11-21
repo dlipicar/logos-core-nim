@@ -31,6 +31,11 @@
 ## The caller seeds the path with the first target it called (its node's
 ## Runtime id and the selected provider), so a continuation back to it is a
 ## cycle.
+##
+## [G349 N-2d; SPEC INTERFACE l.373] `nextHop` is never asked for a marked
+## method: `commands.runCall` calls one on the local Runtime only, whose
+## binding answers no continuation. A remote path for a marked payload stays
+## prohibited, so 5-7a's wiring must keep that refusal before any hop.
 
 {.push raises: [], gcsafe.}
 

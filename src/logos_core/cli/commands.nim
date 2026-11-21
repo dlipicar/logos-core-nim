@@ -14,10 +14,14 @@
 ##   provider extends (R l.90-91). The surface projected to it (`schemaResponse`) is
 ##   accepted again (`acceptSchemaResponse`): the set the arguments are typed
 ##   by, and the bytes `materialize_route` takes (IF l.3905).
-## - **Call.** The method by its bare or its qualified name. A marked request
-##   or response is refused before any route (IF l.368-369). The arguments are
+## - **Call.** The method by its bare or its qualified name. The arguments are
 ##   typed (`args.nim`), the value validated, and the call made through a
 ##   leased route (`routes.nim`) with the command's deadline.
+## - **Marked payloads (G349 N-2d; IF §1.4.1).** A method that marks its request
+##   or response is called on the local Runtime only (IF l.373), by a build
+##   that erases (orc, arc; G277), and a marked request only from files
+##   (`NAME=@FILE`, `NAME=@-`): each refusal comes before any file is read
+##   (IF l.368-369). `runCall` wipes every copy at its last use.
 ## - **Retry (G348; plan §3.5 step 8).** An ended handle is never leased (rule
 ##   1). A call is made once more, on a new route and within what remains of
 ##   the deadline, only when `prepare_call` failed with NOT_READY,
@@ -40,7 +44,7 @@ import std/[algorithm, atomics, json, locks, monotimes, strutils, tables, times]
 import results
 import logos_sdk/cbor
 import logos_sdk/commitment
-import logos_sdk/base/hex
+import logos_sdk/base/[hex, wipe]
 import logos_sdk/hash/hashinput
 import logos_sdk/iface/[accept, provider, surface]
 import logos_sdk/kit/rc_types
@@ -142,6 +146,9 @@ proc targetBinding(
     env: Env, name: string
 ): Result[ptr LogosRuntimeControlBinding, Stop] =
   ## [G347] The binding a node name stands for: `local` only, until 5-7a.
+  ## [G349 N-2d] A marked method is never called through another binding:
+  ## `runCall` refuses it unless the target is `local`, so 5-7a's node
+  ## bindings, and `hops.nextHop`, never see a marked payload.
   if not validNodeName(name):
     return err(refused("a node name is [a-z][a-z0-9_-], at most 63 bytes"))
   if name != LocalNode:
@@ -154,11 +161,29 @@ proc targetBinding(
 
 # Input -----------------------------------------------------------------------------------
 
-proc readAll(fd, cancelFd: cint, what: string): Result[seq[byte], Stop] =
-  ## A passed descriptor's bytes to its end, at most `MaxFileBytes`.
+proc grow(data: var seq[byte], need: int) =
+  ## [N-2d] Room for `need` bytes: new storage, the old zeroed, so no
+  ## reallocation leaves a copy of a file's bytes behind.
+  if data.capacity >= need:
+    return
+  var bigger = newSeqOfCap[byte](max(need, 2 * data.capacity))
+  bigger.add(data)
+  wipe(data)
+  data = move bigger
+
+proc readAll(
+    fd, cancelFd: cint, what: string, limit: int, data: var seq[byte]
+): Result[void, Stop] =
+  ## A passed descriptor's bytes to its end into `data`, at most `limit`: a
+  ## longer file is refused after `limit` bytes, the rest never read. [N-2d]
+  ## The bytes are read into `data`'s own storage, grown by `grow`; on every
+  ## error it is wiped.
   when defined(posix):
-    var data: seq[byte] = @[]
-    var buf = newSeq[byte](ReadChunk)
+    data = newSeqOfCap[byte](min(limit, ReadChunk))
+    template fail(s: Stop) =
+      wipe(data)
+      return err(s)
+
     while true:
       var p: array[2, TPollfd]
       p[0] = TPollfd(fd: fd, events: POLLIN)
@@ -167,37 +192,72 @@ proc readAll(fd, cancelFd: cint, what: string): Result[seq[byte], Stop] =
       if n < 0:
         if errno == EINTR:
           continue
-        return err(refused(what & ": poll: " & $strerror(errno)))
+        fail(refused(what & ": poll: " & $strerror(errno)))
       if cancelFd >= 0 and (p[1].revents and (POLLIN or POLLHUP or POLLERR)) != 0:
-        return err(cancelled())
-      let r = read(fd, addr buf[0], buf.len)
+        fail(cancelled())
+      let want = min(ReadChunk, limit - data.len)
+      if want <= 0:
+        # `limit` bytes are in; one more says the file is longer.
+        var one: byte
+        let r = read(fd, addr one, 1)
+        if r < 0 and (errno == EINTR or errno == EAGAIN or errno == EWOULDBLOCK):
+          continue
+        secureZero(addr one, 1)
+        if r == 0:
+          break
+        if r < 0:
+          fail(refused(what & ": " & $strerror(errno)))
+        if limit < MaxFileBytes:
+          fail(refused(what & " is longer than its field's " & $(limit - 1) & " bytes"))
+        fail(refused(what & " is larger than 16 MiB"))
+      let at = data.len
+      data.grow(at + want)
+      data.setLen(at + want)
+      let r = read(fd, addr data[at], want)
       if r < 0:
+        data.setLen(at)
         if errno == EINTR or errno == EAGAIN or errno == EWOULDBLOCK:
           continue
-        return err(refused(what & ": " & $strerror(errno)))
+        fail(refused(what & ": " & $strerror(errno)))
+      data.setLen(at + r)
       if r == 0:
         break
-      if data.len + r > MaxFileBytes:
-        return err(refused(what & " is larger than 16 MiB"))
-      data.add(buf.toOpenArray(0, r - 1))
-    ok(data)
+    ok()
   else:
     err(refused("@FILE is not supported on this platform"))
 
-proc argInputs(c: Ctx, args: seq[LcnCliArg]): Result[seq[ArgInput], Stop] =
+proc argInputs(
+    c: Ctx, sh: RequestShape, args: openArray[LcnCliArg], marked: bool
+): Result[seq[ArgInput], Stop] =
+  ## The arguments with each file's bytes read. [N-2d] For a `marked` request
+  ## a file is read up to its field's bound (`fileLimit`); on any error the
+  ## files read so far are wiped.
   var out0: seq[ArgInput] = @[]
+  template fail(s: Stop) =
+    wipeInputs(out0)
+    return err(s)
+
   for a in args:
     case a.kind
     of LcnCliArgKind.lcn_Cli_text_arg:
-      let t = a.arm_lcn_Cli_text_arg
-      out0.add(ArgInput(name: t.name, isFile: false, text: t.value))
+      out0.add(
+        ArgInput(
+          name: a.arm_lcn_Cli_text_arg.name,
+          isFile: false,
+          text: a.arm_lcn_Cli_text_arg.value,
+        )
+      )
     of LcnCliArgKind.lcn_Cli_file_arg:
       let f = a.arm_lcn_Cli_file_arg
       let i = int(f.fd)
       if i < 2 or i >= c.fds.len:
-        return err(refused(f.name & ": no such descriptor"))
-      let data = ?readAll(c.fds[i], c.cancelFd, f.name & "=@FILE")
-      out0.add(ArgInput(name: f.name, isFile: true, data: data))
+        fail(refused(f.name & ": no such descriptor"))
+      let limit = (if marked: sh.fileLimit(f.name, MaxFileBytes) else: MaxFileBytes)
+      var data: seq[byte]
+      let r = readAll(c.fds[i], c.cancelFd, f.name & "=@FILE", limit, data)
+      if r.isErr:
+        fail(r.error)
+      out0.add(ArgInput(name: f.name, isFile: true, data: move data))
   ok(out0)
 
 # The provider ----------------------------------------------------------------------------
@@ -589,8 +649,24 @@ proc callWithRetry(
       break
   ok(outcome)
 
+func markedInputRefusal(bare: string): Stop =
+  refused(
+    bare & "'s request is marked: give each field as NAME=@FILE or NAME=@- " &
+      "(a value on the command line is not erased; INTERFACE §1.4.1)"
+  )
+
 proc runCall(c: Ctx, cmd: LcnCliCallCommand): Result[void, Stop] =
   ## [G348, G349] One typed call through a leased route.
+  ##
+  ## [G349 N-2d; SPEC INTERFACE §1.4.1] A marked method is called only on the
+  ## local Runtime, in a build that erases (orc, arc), with every field of a
+  ## marked request from a file: each refusal comes before any file is read.
+  ## Every copy is wiped at its last use (IF l.361, l.364): the inputs, the
+  ## typed value and its encoding once encoded, the params once no retry can
+  ## need them (`prepare_call` keeps its own copy, IF l.1994), the response
+  ## once decoded, the value once written. lcn_call wipes them for every
+  ## call (IF l.385 allows it); only a marked response's output and a marked
+  ## request's typing differ.
   let p = ?c.provider(cmd.provider)
   let m = p.surface.methodNamed(cmd.`method`).valueOr:
     return err(
@@ -599,24 +675,47 @@ proc runCall(c: Ctx, cmd: LcnCliCallCommand): Result[void, Stop] =
           p.surface.methodNames
       )
     )
-  if m.sensitiveRequest or m.sensitiveResponse:
-    # [SPEC INTERFACE l.368-369; G349 Q2] No path for marked payloads here.
-    return err(
-      refused(m.bare & " carries marked payloads; this CLI does not handle them yet")
-    )
+  let marked = m.sensitiveRequest or m.sensitiveResponse
+  if marked:
+    when not ChannelsMove:
+      # [G277] A refc Module Host refuses the marked route only at
+      # materialization, after the inputs were read.
+      return err(
+        refused(
+          m.bare & " carries marked payloads, which this build of lcn_call " &
+            "does not erase (" & MarkedUnsupportedByHost & ")"
+        )
+      )
+    if c.target != LocalNode:
+      # [SPEC INTERFACE l.373; G347] `targetBinding` admits `local` only today;
+      # a remote node (5-7a) must not carry a marked payload either.
+      return err(
+        refused(
+          m.bare &
+            " carries marked payloads, which have no remote path (INTERFACE l.373)"
+        )
+      )
   let sh = requestShape(p.set, m).valueOr:
     return err(refused(error))
-  var value: CborValue
-  if cmd.json.isSome:
-    value = fromJson(sh, cmd.json.get).valueOr:
-      return err(refused(m.bare & ": " & error & "; fields: " & sh.fieldList))
-  else:
-    let inputs = ?c.argInputs(cmd.args.get(@[]))
-    value = fromArgs(sh, inputs).valueOr:
-      return err(refused(m.bare & ": " & error & "; fields: " & sh.fieldList))
-  checkRequest(sh, value).isOkOr:
-    return err(refused(error))
-  let params = encodeCbor(value)
+  if m.sensitiveRequest:
+    if cmd.json.isSome:
+      return err(markedInputRefusal(m.bare))
+    # A mistyped name can hold anything a user typed: these copies are wiped
+    # on every return (W-13c).
+    var names: seq[string] = @[]
+    defer:
+      for n in names.mitems:
+        wipe(n)
+    if cmd.args.isSome:
+      for a in cmd.args.get:
+        case a.kind
+        of LcnCliArgKind.lcn_Cli_text_arg:
+          return err(markedInputRefusal(m.bare))
+        of LcnCliArgKind.lcn_Cli_file_arg:
+          names.add(a.arm_lcn_Cli_file_arg.name)
+    checkMarkedNames(sh, names).isOkOr:
+      return
+        err(refused(m.bare & ": " & error & "; fields: " & sh.fieldList(marked = true)))
   let root = ?p.memberRoot(m.doc, m.name)
   let spec = RouteSpec(
     key: routeKey(c.target, p.address, p.selected, "methods", root),
@@ -625,12 +724,49 @@ proc runCall(c: Ctx, cmd: LcnCliCallCommand): Result[void, Stop] =
     access: LogosNSRuntimeControlRouteAccess(methods: Opt.some(@[@root])),
     schema: p.schema,
   )
-  let outcome = ?c.callWithRetry(spec, m.bare, params)
-  if outcome.cancelled:
+  var params: seq[byte]
+  # The marked scope has the validator wipe its own temporaries too.
+  markedScope(m.sensitiveRequest):
+    var value: CborValue
+    if cmd.json.isSome:
+      value = fromJson(sh, cmd.json.get).valueOr:
+        return err(refused(m.bare & ": " & error & "; fields: " & sh.fieldList))
+    else:
+      var inputs: seq[ArgInput] = @[]
+      if cmd.args.isSome:
+        inputs = ?c.argInputs(sh, cmd.args.get, m.sensitiveRequest)
+      let typed = fromArgs(sh, inputs, m.sensitiveRequest)
+      wipeInputs(inputs)
+      value = typed.valueOr:
+        return err(
+          refused(
+            m.bare & ": " & error & "; fields: " & sh.fieldList(m.sensitiveRequest)
+          )
+        )
+    checkRequest(sh, value, m.sensitiveRequest).isOkOr:
+      wipe(value)
+      return err(refused(error))
+    params = encodeCbor(value)
+    wipe(value)
+  var outcome = c.callWithRetry(spec, m.bare, params)
+  wipe(params)
+  if outcome.isErr:
+    return err(outcome.error)
+  if outcome.get.cancelled:
+    if outcome.get.ok:
+      wipe(outcome.value.response)
     return err(cancelled())
-  if not outcome.ok:
-    return err(classify(outcome))
-  let v = decodeCbor(outcome.response).valueOr:
+  if not outcome.get.ok:
+    return err(classify(outcome.get))
+  var v: CborValue
+  var decoded = false
+  markedScope(m.sensitiveResponse):
+    let d = decodeCbor(outcome.value.response)
+    wipe(outcome.value.response)
+    if d.isOk:
+      v = d.get
+      decoded = true
+  if not decoded:
     return err(
       Stop(
         exit: ExitProvider,
@@ -638,7 +774,13 @@ proc runCall(c: Ctx, cmd: LcnCliCallCommand): Result[void, Stop] =
         message: "the response is not Logos deterministic CBOR",
       )
     )
-  c.pres.doneValue(v).isOkOr:
+  let written =
+    if m.sensitiveResponse:
+      c.pres.doneMarked(v)
+    else:
+      c.pres.doneValue(v)
+  wipe(v)
+  written.isOkOr:
     return err(outputStop(error))
   ok()
 
@@ -946,8 +1088,9 @@ proc runEvents(c: Ctx, cmd: LcnCliEventsCommand): Result[void, Stop] =
 func what(cmd: LcnCliCommand): string =
   case cmd.kind
   of LcnCliCommandKind.lcn_Cli_call_command:
-    let x = cmd.arm_lcn_Cli_call_command
-    "call " & x.provider.module & "." & x.`method`
+    # Fields, not a `let` copy of the command, which holds argument values.
+    "call " & cmd.arm_lcn_Cli_call_command.provider.module & "." &
+      cmd.arm_lcn_Cli_call_command.`method`
   of LcnCliCommandKind.lcn_Cli_describe_command:
     "describe " & cmd.arm_lcn_Cli_describe_command.provider.module
   of LcnCliCommandKind.lcn_Cli_subscribe_command:
