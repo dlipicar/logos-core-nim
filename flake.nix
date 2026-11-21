@@ -39,6 +39,16 @@
           )
         )
       );
+      # [G433] Our packages' versions live in their nimble files, read here as the Nim pin is;
+      # lint-packaging refuses a version written in this file.
+      versionOf =
+        file:
+        let
+          lines = lib.splitString "\n" (builtins.readFile file);
+        in
+        lib.head (lib.head (lib.remove null (map (builtins.match "^version = \"([0-9.]+)\".*") lines)));
+      coreVersion = versionOf ./logos_core.nimble;
+      sdkVersion = versionOf ./sdk/logos_sdk.nimble;
 
       perSystem =
         system:
@@ -283,11 +293,11 @@
           # INTERFACE §2.1-§2.3, §2.5, §5.2 C type headers (types only, D29).
           lcnGen = nimDerivation {
             pname = "lcn-gen";
-            version = "0.0.1";
+            version = sdkVersion;
             src = nimSources;
             buildPhase = ''
               runHook preBuild
-              nim c -d:release --outdir:build/bin src/lcn_gen.nim
+              nim c -d:release --outdir:build/bin sdk/src/lcn_gen.nim
               runHook postBuild
             '';
             installPhase = ''
@@ -300,7 +310,7 @@
           # hosted module instance, started by the Runtime from `runtime.module_host`.
           logosModuleHost = nimDerivation {
             pname = "logos-module-host";
-            version = "0.0.1";
+            version = coreVersion;
             src = nimSources;
             buildPhase = ''
               runHook preBuild
@@ -316,7 +326,7 @@
           # PM §3, §4, §4.3, §7.1 package tools (a subset: no fetch or install).
           lcnPkg = nimDerivation {
             pname = "lcn-pkg";
-            version = "0.0.1";
+            version = coreVersion;
             src = nimSources;
             buildPhase = ''
               runHook preBuild
@@ -359,7 +369,7 @@
           # puts them. [G343] logosd is built with the BLAKE3-256 of liblcn_call's final
           # store file, and the library is copied after the fixup, so no strip or patchelf
           # changes the bytes the Module Loader checks against that digest.
-          daemonVersion = "0.0.1";
+          daemonVersion = coreVersion;
           logosd = nimDerivation {
             pname = "logosd";
             version = daemonVersion;
@@ -613,7 +623,7 @@
         // {
           nph = s.pkgs.runCommand "nph-check" { nativeBuildInputs = [ s.nph ]; } ''
             cd ${s.nimSources}
-            nph --check src sdk/src sdk/tests tests logos_core.nimble config.nims
+            nph --check src sdk/src sdk/tests tests logos_core.nimble sdk/logos_sdk.nimble config.nims
             touch $out
           '';
           # The test-hook rule (sdk/src/logos_sdk/base/testhooks.nim; D27 revised 2026-11-13, I89):

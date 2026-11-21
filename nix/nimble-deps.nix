@@ -8,7 +8,14 @@
   hashesFile,
 }:
 let
-  locked = removeAttrs (builtins.fromJSON (builtins.readFile lockFile)).packages [ "nim" ];
+  # [G433] Locks are made with --useSystemNim, which writes no `nim` entry: one means a lock made
+  # without the flag. lint-packaging refuses it too.
+  packages = (builtins.fromJSON (builtins.readFile lockFile)).packages;
+  locked =
+    if packages ? nim then
+      throw "nimble.lock has a nim entry, so it was made without --useSystemNim. Lock again with the flag."
+    else
+      packages;
   pinned = builtins.fromJSON (builtins.readFile hashesFile);
 
   matches =

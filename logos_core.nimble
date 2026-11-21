@@ -1,13 +1,13 @@
 # Package
 
-version = "0.0.1"
+version = "0.1.0"
 author = "Dario Gabriel Lipicar"
 description = "The Logos Core module specs in Nim"
 license = "MIT OR Apache-2.0"
 srcDir = "src"
-installExt = @["nim"]
-bin = @["lcn_gen", "lcn_pkg", "logos_module_host"]
-namedBin["lcn_gen"] = "lcn-gen"
+installExt = @["nim", "c", "h", "cddl", "exports", "map"]
+installFiles = @["logos_core/crypto/slhdsa/LICENSE", "logos_core/crypto/slhdsa/VERSION"]
+bin = @["lcn_pkg", "logos_module_host"]
 namedBin["lcn_pkg"] = "lcn-pkg"
 namedBin["logos_module_host"] = "logos-module-host"
 # logosd and logosctl need unix-stream sockets, peer credentials and signals: POSIX hosts
@@ -110,7 +110,7 @@ task build_runtime_lib,
     elif defined(windows): "logos_runtime.dll"
     else: "liblogos_runtime.so"
   ) & " src/liblogos_runtime.nim"
-  exec "nim r --hints:off --outdir:build/tools src/lcn_gen.nim logos-runtime --out:" &
+  exec "nim r --hints:off --outdir:build/tools sdk/src/lcn_gen.nim logos-runtime --out:" &
     dir
 
 task regen,
