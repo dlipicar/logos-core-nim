@@ -17,7 +17,7 @@ when defined(posix):
   import logos_sdk/kit/rc_types
   import ../src/logos_core/daemon/render
   import ../src/logos_core/transport/io/sock
-  import ../src/logos_core/cli/[args, fdpass, present, wire]
+  import ../src/logos_core/cli/[args, fdpass, markedout, present, wire]
   from ../src/logos_core/cli/commands import
     Stop, classify, retryable, contractViews, projectView
   from ../src/logos_core/cli/rpc import CallResult, Failure
@@ -407,18 +407,164 @@ cliargs.multi_response = {}
       let r = shapeOf("multi").fromArgs(@[text("kind", "a")])
       check r.isErr and "--request" in r.error
 
-    test "@FILE: text must be UTF-8, byte strings are raw, other kinds take key=value":
+    test "@FILE: text must be UTF-8, byte strings are raw, other kinds read the file's text":
       let ok1 =
         shapeOf("go").fromArgs(@[text("n", "1"), file("t", @[0x68'u8, 0xC3, 0xA9])])
       check ok1.isOk and ok1.get.field("t") == cbor("hé")
       check shapeOf("go").fromArgs(@[text("n", "1"), file("t", @[0xFF'u8])]).isErr
       let raw = typed(file("b", @[0'u8, 1, 2]))
       check raw.isOk and raw.get.field("b") == cbor(@[0'u8, 1, 2])
-      check shapeOf("go").fromArgs(@[file("n", @[0x31'u8]), text("t", "x")]).isErr
+      # [G349 N-2d] Other kinds: the file's text less one trailing "\n", read as
+      # key=value reads it; a text field keeps its newline.
+      let n1 = shapeOf("go").fromArgs(@[file("n", @[0x31'u8, 0x0A]), text("t", "x")])
+      check n1.isOk and n1.get.field("n") == cbor(1'u64)
+      let n2 = shapeOf("go").fromArgs(@[file("n", @[0x31'u8]), text("t", "x")])
+      check n2.isOk and n2.get.field("n") == cbor(1'u64)
+      check shapeOf("go")
+        .fromArgs(@[file("n", @[0x31'u8, 0x0A, 0x0A]), text("t", "x")]).isErr
+      check shapeOf("go")
+        .fromArgs(@[file("n", @[0x31'u8, 0x0D, 0x0A]), text("t", "x")]).isErr
+      let t1 = shapeOf("go").fromArgs(@[text("n", "1"), file("t", @[0x68'u8, 0x0A])])
+      check t1.isOk and t1.get.field("t") == cbor("h\n")
+      let flag =
+        typed(file("flag", @[byte('t'), byte('r'), byte('u'), byte('e'), 0x0A]))
+      check flag.isOk and flag.get.field("flag") == cbor(true)
+      let lit = typed(file("lit", @[byte('7'), 0x0A]))
+      check lit.isOk and lit.get.field("lit") == cbor(7'u64)
+      let mode =
+        typed(file("mode", @[byte('s'), byte('l'), byte('o'), byte('w'), 0x0A]))
+      check mode.isOk and mode.get.field("mode") == cbor("slow")
+      # In a choice each alternative reads by its own rule: "12\n" is 12 for
+      # uint32 and "12\n" for tstr, two values, so it is ambiguous.
+      let amb = typed(file("either", @[byte('1'), byte('2'), 0x0A]))
+      check amb.isErr and "ambiguous" in amb.error
       # tstr / bstr: UTF-8 bytes read both ways; other bytes only as bstr
       check typed(file("raw", @[0x61'u8])).isErr
       let only = typed(file("raw", @[0xFF'u8]))
       check only.isOk and only.get.field("raw") == cbor(@[0xFF'u8])
+
+  suite "cli.marked: a marked request's arguments (G349 N-2d; IF §1.4.1) [IMPL]":
+    test "no message quotes the input or an argument's name that is not a field":
+      let bad = shapeOf("go").fromArgs(
+          @[file("n", @[byte('Q'), byte('Z'), byte('X')]), file("t", @[0x68'u8])],
+          marked = true,
+        )
+      check bad.isErr and "QZX" notin bad.error and
+        "n: the file does not read as uint32" in bad.error
+      let plain = shapeOf("go").fromArgs(
+          @[file("n", @[byte('Q'), byte('Z'), byte('X')]), file("t", @[0x68'u8])]
+        )
+      check plain.isErr and "QZX" in plain.error
+      let unknown =
+        shapeOf("go").fromArgs(@[file("SECRETNAME", @[0x31'u8])], marked = true)
+      check unknown.isErr and "SECRETNAME" notin unknown.error and
+        "no field of an argument given" in unknown.error and
+        "point?: cliargs.point (map) (structured)" in unknown.error
+      let choice = shapeOf("go").fromArgs(
+          @[
+            file("n", @[0x31'u8]),
+            file("t", @[0x68'u8]),
+            file("mode", @[byte('Q'), byte('Z')]),
+          ],
+          marked = true,
+        )
+      check choice.isErr and "QZ" notin choice.error
+
+    test "a size mismatch states the length only":
+      let long = shapeOf("go").fromArgs(
+          @[file("n", @[0x31'u8]), file("t", newSeq[byte](9))], marked = true
+        )
+      check long.isErr and "tstr of 9 bytes, not 1 to 8" in long.error
+
+    test "the names are checked before any file is read":
+      let sh = shapeOf("go")
+      check sh.checkMarkedNames(["n", "t", "b"]).isOk
+      let u = sh.checkMarkedNames(["n", "SECRETNAME"])
+      check u.isErr and "SECRETNAME" notin u.error
+      let d = sh.checkMarkedNames(["n", "n"])
+      check d.isErr and "twice" in d.error
+      let p = sh.checkMarkedNames(["point"])
+      check p.isErr and "structured" in p.error and "--request" notin p.error
+      let multi = shapeOf("multi").checkMarkedNames(["kind"])
+      check multi.isErr and "not one map" in multi.error
+
+    test "a file is read up to one byte past its field's .size bound":
+      let sh = shapeOf("go")
+      check sh.fileLimit("t", 1 shl 24) == 9
+      check sh.fileLimit("n", 1 shl 24) == 1 shl 24
+      check sh.fileLimit("b", 1 shl 24) == 1 shl 24
+      check sh.fileLimit("nope", 1 shl 24) == 1 shl 24
+
+    test "the request check names no path":
+      let sh = shapeOf("go")
+      let wrong = cborMap((cbor("n"), cbor("x")), (cbor("t"), cbor("hi")))
+      let plain = sh.checkRequest(wrong)
+      check plain.isErr and "at [" in plain.error
+      let marked = sh.checkRequest(wrong, marked = true)
+      check marked.isErr and "at [" notin marked.error
+
+    test "the inputs are wiped":
+      var inputs = @[file("b", @[1'u8, 2, 3]), text("t", "secret")]
+      wipeInputs(inputs)
+      check inputs.len == 0
+
+  suite "cli.markedout: a marked response's line equals the usual one (G89; G349 N-2d) [IMPL]":
+    proc usualJson(v: CborValue): string =
+      terminalSafe(
+        $envelope("non-production", "call vault_module.fetch", true).withResult(
+          jsonOf(v)
+        )
+      ) & "\n"
+
+    proc usualText(v: CborValue): string =
+      terminalSafe(toDiag(v)) & "\n"
+
+    proc values(): seq[CborValue] =
+      result = @[
+        cbor(0'u64),
+        cbor(9_007_199_254_740_992'u64),
+        cbor(9_007_199_254_740_993'u64),
+        cbor(high(uint64)),
+        cborNint(0),
+        cborNint(9_007_199_254_740_991'u64),
+        cborNint(9_007_199_254_740_992'u64),
+        cborNint(high(uint64)),
+        cbor(newSeq[byte]()),
+        cbor(@[0'u8, 0xAB, 0xFF]),
+        cbor(""),
+        cbor("plain"),
+        cbor("q\"b\\s/\n\r\t\b\f\v\x00\x07\x0E\x1F end"),
+        cbor("del\x7F c1\xC2\x80\xC2\x9F not\xC2\xA0 lone\xC2"),
+        cbor("é ü 漢"),
+        CborValue(kind: ckText, text: "\xFF\xFE", validUtf8: false),
+        cborArray(),
+        cborArray(cbor(1'u64), cbor("a"), cborArray(cbor(true))),
+        cborMap(),
+        cborMap((cbor("secret"), cbor(@[1'u8, 2])), (cbor("note"), cbor("n"))),
+        cborMap((cbor(1'u64), cbor("int")), (cbor("1"), cbor("text"))),
+        cborMap(
+          (cbor("1"), cbor("text")),
+          (cbor(1'u64), cbor("int")),
+          (cbor("x"), cbor(2'u64)),
+        ),
+        cborMap((cborArray(cbor("k\x7F")), cbor(1'u64)), (cbor(@[9'u8]), cbor(2'u64))),
+        CborValue(kind: ckTag, tag: 24, content: cbor(@[1'u8])),
+        CborValue(kind: ckTag, tag: high(uint64), content: cbor("t")),
+        CborValue(kind: ckSimple, simple: SimpleFalse),
+        CborValue(kind: ckSimple, simple: SimpleTrue),
+        CborValue(kind: ckSimple, simple: SimpleNull),
+        CborValue(kind: ckSimple, simple: SimpleUndefined),
+        CborValue(kind: ckSimple, simple: 16),
+      ]
+
+    test "JSON: the envelope, byte for byte":
+      for v in values():
+        check markedJsonLine("non-production", "call vault_module.fetch", v) ==
+          usualJson(v)
+
+    test "text: diagnostic notation, byte for byte":
+      for v in values():
+        check markedTextLine(v) == usualText(v)
 
   suite "cli.json: --request as G89 writes values (D26 (a), G349)":
     test "the whole request, as key=value would give it":

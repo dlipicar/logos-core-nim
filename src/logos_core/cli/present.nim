@@ -23,7 +23,9 @@
 import std/[json, strutils]
 import results
 import logos_sdk/cbor
+import logos_sdk/base/wipe
 import ../daemon/render
+import ./markedout
 
 export results, json
 
@@ -143,6 +145,22 @@ proc done*(p: Presenter, value: JsonNode, text: string): Result[void, SinkError]
 proc doneValue*(p: Presenter, v: CborValue): Result[void, SinkError] =
   ## A response value: G89's JSON, or diagnostic notation.
   p.done(jsonOf(v), toDiag(v))
+
+proc doneMarked*(p: Presenter, v: CborValue): Result[void, SinkError] =
+  ## [SPEC INTERFACE l.360-361; G349 (N-2d)] A marked response: the line
+  ## `doneValue` writes, built by `markedout` in one buffer of its final size
+  ## and wiped after the write, whether or not the write completed. It goes to
+  ## the launcher's stdout only (IF l.375), never to a failure or the log.
+  if not p.json and p.nonProduction:
+    ?p.output.line(Banner)
+  var text =
+    if p.json:
+      markedJsonLine(p.deployment, p.command, v)
+    else:
+      markedTextLine(v)
+  let r = p.output.put(text)
+  wipe(text)
+  r
 
 proc failed*(
     p: Presenter, code, message: string, detail = Opt.none(seq[byte]), declared = false

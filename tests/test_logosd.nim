@@ -1148,6 +1148,13 @@ when defined(posix):
       let pe = c.ctl("call", "meter_module", "read", "channel=13")
       checkpoint pe.stderr
       check pe.code == 5
+      # [G349 N-2d] A malformed argument is named by its position, never
+      # echoed: the launcher cannot tell a marked one.
+      let typo = c.ctl("call", "meter_module", "read", "QZXtypo7")
+      checkpoint typo.stderr
+      check typo.code == 1
+      check "QZXtypo7" notin typo.stdout & typo.stderr
+      check "argument 1 after the method" in typo.stderr
       check d.stopped == 0
       check hostsGone()
 

@@ -138,7 +138,7 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-4, 5-9 | the Windows readings: logosd's own user; the build key | one user is not a security boundary (G58's non-claim); keyed on the OS and `afunix.sys` builds (5-4's G332, G333) | decided 2026-11-17 (owner) |
 | 5-11 | NP-13 | provenance attests the assembled archive | open (E3) |
 | 5-13 | TF-43 (G310); the units still deferred | the member set of E1; E2's relabels | open (E1, E2, E3) |
-| N-2 | marked methods through the CLI | refused, naming the method (INTERFACE l.368-369); local-only support later (N-2d), non-local targets refused | decided 2026-11-17 (owner) |
+| N-2 | marked methods through the CLI | local targets only (INTERFACE l.368-369, l.373): a marked request from files or stdin, a marked response to stdout, every copy erased; non-local targets refused | decided 2026-11-17 (owner); built in N-2d (G349, I102) |
 
 Unanswered upstream and bearing on Tier 5: NP-12 to NP-14 (NP-11 is settled by text: PM l.964, l.1172, and
 NP-15 by PM l.1096-1101 at 6cac8335),

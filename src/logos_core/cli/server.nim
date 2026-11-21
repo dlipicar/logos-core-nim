@@ -31,8 +31,9 @@
 import std/[atomics, locks, monotimes, times]
 import results
 import logos_sdk/abi/types
-import logos_sdk/base/[perthread, testhooks]
+import logos_sdk/base/[perthread, testhooks, wipe]
 import logos_sdk/codegen/kitrt
+from logos_sdk/codegen/nimrt import wipeTyped
 import logos_sdk/iface/outcome
 from logos_sdk/kit/rcclient import checkBinding, `$`
 import ../runtime/bell
@@ -206,10 +207,20 @@ proc serve(s: ptr Server, worker: int, c: Conn) =
   withLock s.lock:
     while not s.serving and not s.closing:
       wait(s.cond, s.lock)
-  let m = decodeMessage(req.get.bytes)
+  # [N-2d; SPEC INTERFACE l.361, l.385] The frame and the message may hold an
+  # argument's value, and which method is marked is known only later: both are
+  # wiped for every request, the frame once decoded, the message on every
+  # return.
+  var m = decodeMessage(req.get.bytes)
+  wipe(req.value.bytes)
+  var job = Job(fds: fds, cancelFd: c.fd)
+  if m.isOk:
+    job.msg = move m.value
+  defer:
+    wipeTyped(job.msg)
   let checked =
     if m.isOk:
-      checkMessage(m.get, fds.len)
+      checkMessage(job.msg, fds.len)
     else:
       Result[void, string].err(m.error)
   if checked.isErr:
@@ -220,8 +231,7 @@ proc serve(s: ptr Server, worker: int, c: Conn) =
     )
     s.reply(c.fd, refusedReply(LcnCliRefusedReasonChoiceKind.Protocol, checked.error))
     return
-  let msg = m.get
-  let stream = msg.isStream
+  let stream = job.msg.isStream
   case s.take(stream)
   of 1:
     closeAll(fds)
@@ -237,13 +247,13 @@ proc serve(s: ptr Server, worker: int, c: Conn) =
     closeAll(fds)
     s.give(stream)
     return
-  let d = commands.run(s.env, Job(msg: msg, fds: fds, cancelFd: c.fd))
+  let d = commands.run(s.env, job)
   closeAll(fds) # [G344] before `done`: a reader of a pipe sees its end
   s.give(stream)
   logInfo(
-    "lcn_call: " & d.what & " node " & targetOf(msg) & " from uid " & $c.uid & " pid " &
-      pidText(c.pid) & ": exit " & $d.exit & (if d.code.len > 0: " " & d.code
-    else: "")
+    "lcn_call: " & d.what & " node " & targetOf(job.msg) & " from uid " & $c.uid &
+      " pid " & pidText(c.pid) & ": exit " & $d.exit &
+      (if d.code.len > 0: " " & d.code else: "")
   )
   s.reply(c.fd, doneReply(d.exit))
 

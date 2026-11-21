@@ -665,6 +665,15 @@ adds end-to-end evidence for RUN-1095 and TRN-0392 in logosd: a grant `lcn_call`
 revoked, ends its subscription with `NOT_AUTHORISED` while the route stays usable, and the stream reports
 it (exit 6). Events cannot be marked (INTERFACE §1.2.1 l.215), so streams add no marked payload.
 
+### What Tier 5 step N-2d changes
+
+`logosctl call` of a marked method on the local node (DECISIONS I102; G349's N-2d amendment). No unit
+changes status. IFC-0575 gains evidence for a consumer outside the Runtime and the kits: `lcn_call` and
+the launcher erase every copy they make of a marked request or response, which `tests/test_wipe_cli.nim`
+(W-13) checks with the free scan in `lcn_call`'s audit Module Host, in the providers' and in the
+launcher's process, on success, refusal, provider failure, cancel and a closed stdout. A marked value
+reaches `lcn_call` only from a passed file, so none is in a process's arguments.
+
 ## Properties not claimed
 
 - A complete Logos module system (BCP §5.1; owner decision 10 (a), K18; DECISIONS G310, I97): there
@@ -720,12 +729,19 @@ it (exit 6). Events cannot be marked (INTERFACE §1.2.1 l.215), so streams add n
     done with it.
   - **Values on the stack**: fixed-size values held in locals (a digest, a scalar) are not zeroed;
     every heap and shared-heap copy is.
-  - **Argument text typed for a marked method, until step N-2d** (DECISIONS I102, G349; planning,
-    2026-11-20): `lcn_call` refuses a method with a marked request or response before any route,
-    so no marked value reaches a provider or comes back. But `key=value` or `--request` text typed for
-    such a method crosses the launcher and the `lcn_call` instance in the `cli.v1` frame, and their
-    buffers hold it, unwiped, until the refusal and after it. N-2d erases every buffer in both,
-    with a wipe-audit test.
+  - **A marked value typed on the command line** (DECISIONS I102, G349's N-2d amendment): `logosctl`
+    takes its arguments from the process's argv, which it does not erase, and the shell keeps its
+    history. `lcn_call` refuses a marked request given as `NAME=VALUE` or `--request` before reading
+    anything, so the value reaches no provider; the launcher, which has no schema, sends it in the
+    `cli.v1` frame, and both wipe their copies of that frame. A marked value is given from a file or
+    stdin (DAEMON.md §7a).
+  - **What a marked response's reader keeps**: `lcn_call` writes a marked response to the stdout the
+    launcher passed and wipes its own copies; sensitivity does not protect plaintext from its
+    intended recipient (INTERFACE l.380-381), and a terminal, pipe or file that receives it is the user's.
+  - **A provider's own failure text**: a provider that puts a marked value in its failure message or
+    detail sends it to the caller, and `lcn_call` shows it, labelled "(declared)", without erasing its
+    copies of that text. §1.4.1 binds the marked request and response; the kits' typed consumers erase
+    a failure's text too (DECISIONS I115), `lcn_call` does not yet [IMPL].
 
 ## Unix-stream endpoints and peer checks
 
