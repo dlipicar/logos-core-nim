@@ -14,7 +14,7 @@
 ## libraries (`support/testroute`): caller, helpers and provider then each run
 ## on a Nim runtime of their own.
 
-import std/[dynlib, os, osproc, strutils, typedthreads]
+import std/[dynlib, os, osproc, streams, strutils, typedthreads]
 import unittest2
 import logos_sdk/base/perthread
 import logos_sdk/iface/[accept, provider]
@@ -315,16 +315,41 @@ proc openDescriptors(): int =
     for _ in walkDir("/dev/fd"):
       inc result
 
-proc leftoverRun(path: string, channel: int): tuple[output: string, code: int] =
-  ## [DECISIONS G438] The leftover cases' child on the library at `path`.
+const childTimedOut = -1 ## what `leftoverRun` answers for a child it killed
+
+proc leftoverRun(
+    path: string, channel: int, seconds = 120
+): tuple[output: string, code: int] =
+  ## [DECISIONS G438] The leftover cases' child on the library at `path`, with
+  ## its exit code as a shell gives it (128 and the signal for a signal). One
+  ## still running after `seconds` is killed and answers `childTimedOut`, so a
+  ## hang fails its case instead of holding the suite.
   putEnv(leftoverChildVar, path & "|" & $channel)
   try:
-    let (output, code) = execCmdEx(quoteShell(getAppFilename()))
-    result = (output, code)
+    let child = startProcess(getAppFilename(), options = {poStdErrToStdOut})
+    try:
+      var waited = 0
+      while child.running and waited < seconds * 1000:
+        sleep(20)
+        waited += 20
+      if child.running:
+        child.kill()
+        discard child.waitForExit()
+        result.code = childTimedOut
+      else:
+        result.code = child.waitForExit()
+      result.output = child.outputStream.readAll()
+    finally:
+      child.close()
   finally:
     delEnv(leftoverChildVar)
 
-const leftLine = "logos module kit (confined): ledger_module: destroy left "
+const
+  kitLine = "logos module kit (confined): "
+  leftLine = kitLine & "ledger_module: destroy left "
+  replacedLine =
+    kitLine &
+    "ledger_module: destroy found the module thread's dispatcher closed or replaced"
 
 proc routeTo(lib: Library, ctx: ptr LogosModuleContext): ptr TestRoute =
   ## A route bound directly to a module library's instance.
@@ -875,6 +900,38 @@ suite "ifc.kit: what a confined kit's destroy leaves registered (DECISIONS G438)
         check strictCode == 0
         check leftLine notin strict
         check "destroyed" in strict
+
+  test "[IMPL-DECISION G438] a module that replaced its thread's dispatcher: one line saying so and nothing counted; the strict library aborts with that line":
+    when not defined(posix):
+      skip()
+    else:
+      # Destroy mode 10 (`probe` 30): without the check, 4.4.1 would count
+      # nothing and the main line the new dispatcher's wake-up descriptor.
+      let (lenient, lenientCode) = leftoverRun(ledgerLenientPath, 30)
+      checkpoint lenient
+      check lenientCode == 0
+      check "probe: armed" in lenient
+      check replacedLine in lenient
+      check lenient.count(kitLine) == 1
+      check "destroyed" in lenient
+      let (strict, strictCode) = leftoverRun(ledgerPath, 30)
+      checkpoint strict
+      check strictCode notin [0, childTimedOut]
+      check replacedLine in strict
+      check leftLine notin strict
+      check "destroyed" notin strict
+
+  test "[IMPL-DECISION G438] die on a module thread ends the process by SIGABRT: the host's own handler never runs (upstream draft 190)":
+    when not defined(posix):
+      skip()
+    else:
+      # `probe` 31 posts a null callback. A debug host's Nim handler would
+      # allocate on the module thread, which its runtime never started, and hang.
+      let (output, code) = leftoverRun(ledgerLenientPath, 31, seconds = 60)
+      checkpoint output
+      check code == 128 + SIGABRT
+      check (kitLine & "post: a null poster or callback") in output
+      check "destroyed" notin output
 
   test "[IMPL-DECISION G438] a clean destroy writes no line, lenient or strict":
     when not defined(posix):

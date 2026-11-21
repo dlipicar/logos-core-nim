@@ -13,7 +13,8 @@ import unittest2
 from chronos import finished, value
 import logos_sdk/codegen/[callrt, confinedcalls, consumert]
 from logos_sdk/codegen/confinedrt import
-  packGate, unpackGate, gateNext, GateMaxGen, GateMaxSlots
+  packGate, unpackGate, gateNext, GateMaxGen, GateMaxSlots, failSignalClose,
+  failedSignalFd, failInitAt
 import logos_sdk/testing/kitruntime
 import logos_sdk/testing/fixtures/ledger_impl
 import
@@ -329,6 +330,28 @@ proc openDescriptors(): int =
     for _ in walkDir("/dev/fd"):
       inc result
 
+when defined(posix):
+  from std/posix import pipe, dup, dup2, close, read, fcntl, F_GETFD
+
+  proc capturingStderr(body: proc()): string =
+    ## What `body` writes on descriptor 2, up to 4 KiB.
+    var fds: array[2, cint]
+    doAssert pipe(fds) == 0
+    let saved = dup(2)
+    discard dup2(fds[1], 2)
+    discard close(fds[1])
+    try:
+      body()
+    finally:
+      discard dup2(saved, 2)
+      discard close(saved)
+    var buf: array[4096, char]
+    let n = read(fds[0], addr buf[0], buf.len)
+    discard close(fds[0])
+    if n > 0:
+      result = newString(n)
+      copyMem(addr result[0], addr buf[0], n)
+
 # Threads the tests start ------------------------------------------------------------
 
 const
@@ -353,6 +376,31 @@ for i in 0 ..< workers:
   workerWho[i] = Who(id: cstring(workerIds[i]))
   workerCtx[i] =
     LogosInvocationContext(vtable: addr whoVtable, state: addr workerWho[i])
+
+const initFailureMessages = [
+  "the post gate has no free slot", "the module's publisher thread did not start",
+  "the module thread did not start",
+]
+
+var initFailures: array[3, tuple[code: int, named, noContext: bool, before, after: int]]
+
+proc failingInit(step: int) {.thread.} =
+  ## [DECISIONS G438] On a thread that never had a chronos dispatcher: an init
+  ## failing at `step` (`failInitAt`), and the open descriptors around it.
+  {.cast(gcsafe).}:
+    var inp = ledgerInput()
+    var ctx: ptr LogosModuleContext
+    failInitAt = step
+    let before = openDescriptors()
+    let r = ledgerInit(addr inp, addr ctx)
+    let after = openDescriptors()
+    initFailures[step - 1] = (
+      int(r.code),
+      r.message != nil and $r.message == initFailureMessages[step - 1],
+      ctx == nil,
+      before,
+      after,
+    )
 
 proc sameModuleThread(t: uint64) =
   var expected = 0'u64
@@ -1118,6 +1166,46 @@ suite "confined kit: the module thread's dispatcher (DECISIONS G438)":
     let line = probe(ctx, 27)[1].note
     check probe(ctx, 29)[1].note == (if line == "main line": "1" else: "0")
     ledgerDestroy(ctx)
+
+  test "[IMPL-DECISION G438] the kit's own signal that chronos could not close: one line saying so, its descriptor out of the count; the strict build goes on":
+    when not defined(posix):
+      skip()
+    else:
+      # `failSignalClose` leaves what chronos leaves when it cannot unregister:
+      # the first descriptor open and registered. Counted, it would abort here.
+      let ctx = openLedger()
+      failSignalClose = true
+      let output = capturingStderr(
+        proc() =
+          ledgerDestroy(ctx)
+      )
+      checkpoint output
+      check (
+        "logos module kit (confined): ledger_module: the kit's own signal could " &
+        "not be closed (a test's failed unregister)"
+      ) in output
+      check "destroy left" notin output
+      let fd = failedSignalFd
+      failedSignalFd = -1
+      check fd >= 0
+      check fcntl(fd, F_GETFD) != -1 # open, as chronos leaves it
+      discard close(fd)
+
+  test "[IMPL-DECISION G438] an init that fails before the module thread starts makes no chronos dispatcher on the calling thread":
+    when not defined(posix):
+      skip()
+    else:
+      # chronos's close of the signal would make one there, with a descriptor.
+      for step in 1 .. 3:
+        var t: Thread[int]
+        createThread(t, failingInit, step)
+        joinThread(t)
+        let f = initFailures[step - 1]
+        checkpoint initFailureMessages[step - 1]
+        check f.code == ord(ecModule)
+        check f.named
+        check f.noContext
+        check f.after == f.before
 
 suite "confined kit: lifecycle and foreign threads (DECISIONS G335)":
   setup:
