@@ -4,10 +4,10 @@
 ## call goes through the exported C functions; their results are checked with
 ## the ABI caller's own rules (`abi/checks`).
 
-import std/[os, osproc, strutils, typedthreads]
+import std/[algorithm, os, osproc, sequtils, strutils, typedthreads]
 import unittest2
 import logos_sdk/cbor
-import logos_sdk/iface/[accept, provider]
+import logos_sdk/iface/[accept, cmap, provider]
 from logos_sdk/codegen/callrt import
   arenaBlocks, failArenaAllocation, CallArena, text, release
 from logos_sdk/codegen/common_mirrors import
@@ -24,10 +24,10 @@ from ./generated/quiet_module_kit import nil
 import
   logos_sdk/testing/fixtures/
     [meter_impl, sensor_impl, shapes_impl, tuner_impl, beacon_impl],
-  ./kit/quiet_impl
+  ./kit/[quiet_impl, metrics_only_impl, gauge_impl, tally_impl, idle_impl]
 import logos_sdk/pins
 from logos_sdk/codegen/kitgen import
-  KitConfiguration, KitOptions, configurationSet, kitModule
+  KitConfiguration, KitOptions, configurationSet, kitModule, kitSymbols
 
 {.compile("kit/typed_linked.c", "-Werror=incompatible-pointer-types").}
 
@@ -139,6 +139,130 @@ proc beaconDispatch(
 ): LogosResult {.
   importc: "logos_beacon_module_MODULE_dispatch", cdecl, gcsafe, raises: []
 .}
+
+# [DECISIONS G339] The INTERFACE l.2833-2840 cases' kits (`sdk/tests/kit/`).
+proc metricsOnlyName(): cstring {.
+  importc: "logos_metrics_only_module_MODULE_name", cdecl, gcsafe, raises: []
+.}
+
+proc metricsOnlyInit(
+  input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext
+): LogosResult {.
+  importc: "logos_metrics_only_module_MODULE_init", cdecl, gcsafe, raises: []
+.}
+
+proc metricsOnlyDestroy(
+  module: ptr LogosModuleContext
+) {.importc: "logos_metrics_only_module_MODULE_destroy", cdecl, gcsafe, raises: [].}
+
+proc metricsOnlyCallSurface(
+  outLen: ptr csize_t
+): ptr uint8 {.
+  importc: "logos_metrics_only_module_MODULE_call_surface", cdecl, gcsafe, raises: []
+.}
+
+proc metricsOnlyFree(
+  module: ptr LogosModuleContext, p: pointer
+) {.importc: "logos_metrics_only_module_MODULE_free", cdecl, gcsafe, raises: [].}
+
+proc metricsOnlyDispatch(
+  module: ptr LogosModuleContext,
+  methodName: cstring,
+  params: ptr UncheckedArray[uint8],
+  paramsLen: csize_t,
+  outResponse: ptr ptr UncheckedArray[uint8],
+  outResponseLen: ptr csize_t,
+): LogosResult {.
+  importc: "logos_metrics_only_module_MODULE_dispatch", cdecl, gcsafe, raises: []
+.}
+
+proc metricsOnlySnapshot(
+  module: ptr LogosModuleContext, owner: ptr LogosResponseOwner, outCount: ptr uint64
+): LogosResult {.
+  importc: "logos_metrics_only_module_CALL_metrics_provider_Snapshot",
+  cdecl,
+  gcsafe,
+  raises: []
+.}
+
+proc gaugeInit(
+  input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext
+): LogosResult {.importc: "logos_gauge_module_MODULE_init", cdecl, gcsafe, raises: [].}
+
+proc gaugeDestroy(
+  module: ptr LogosModuleContext
+) {.importc: "logos_gauge_module_MODULE_destroy", cdecl, gcsafe, raises: [].}
+
+proc gaugeCallSurface(
+  outLen: ptr csize_t
+): ptr uint8 {.
+  importc: "logos_gauge_module_MODULE_call_surface", cdecl, gcsafe, raises: []
+.}
+
+proc gaugeFree(
+  module: ptr LogosModuleContext, p: pointer
+) {.importc: "logos_gauge_module_MODULE_free", cdecl, gcsafe, raises: [].}
+
+proc gaugeDispatch(
+  module: ptr LogosModuleContext,
+  methodName: cstring,
+  params: ptr UncheckedArray[uint8],
+  paramsLen: csize_t,
+  outResponse: ptr ptr UncheckedArray[uint8],
+  outResponseLen: ptr csize_t,
+): LogosResult {.
+  importc: "logos_gauge_module_MODULE_dispatch", cdecl, gcsafe, raises: []
+.}
+
+proc tallyInit(
+  input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext
+): LogosResult {.importc: "logos_tally_module_MODULE_init", cdecl, gcsafe, raises: [].}
+
+proc tallyDestroy(
+  module: ptr LogosModuleContext
+) {.importc: "logos_tally_module_MODULE_destroy", cdecl, gcsafe, raises: [].}
+
+proc tallyCallSurface(
+  outLen: ptr csize_t
+): ptr uint8 {.
+  importc: "logos_tally_module_MODULE_call_surface", cdecl, gcsafe, raises: []
+.}
+
+proc tallyFree(
+  module: ptr LogosModuleContext, p: pointer
+) {.importc: "logos_tally_module_MODULE_free", cdecl, gcsafe, raises: [].}
+
+proc tallyDispatch(
+  module: ptr LogosModuleContext,
+  methodName: cstring,
+  params: ptr UncheckedArray[uint8],
+  paramsLen: csize_t,
+  outResponse: ptr ptr UncheckedArray[uint8],
+  outResponseLen: ptr csize_t,
+): LogosResult {.
+  importc: "logos_tally_module_MODULE_dispatch", cdecl, gcsafe, raises: []
+.}
+
+proc tallySnapshot(
+  module: ptr LogosModuleContext, owner: ptr LogosResponseOwner, outCount: ptr uint64
+): LogosResult {.
+  importc: "logos_tally_module_CALL_metrics_provider_Snapshot",
+  cdecl,
+  gcsafe,
+  raises: []
+.}
+
+proc idleName(): cstring {.
+  importc: "logos_idle_module_MODULE_name", cdecl, gcsafe, raises: []
+.}
+
+proc idleInit(
+  input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext
+): LogosResult {.importc: "logos_idle_module_MODULE_init", cdecl, gcsafe, raises: [].}
+
+proc idleDestroy(
+  module: ptr LogosModuleContext
+) {.importc: "logos_idle_module_MODULE_destroy", cdecl, gcsafe, raises: [].}
 
 proc thLinked(f: ptr ThFns) {.importc: "th_linked", cdecl, gcsafe, raises: [].}
   ## The typed provider functions of the modules linked in, by their header
@@ -1028,3 +1152,202 @@ suite "ifc.kit: the converters' C layout (INTERFACE §2.3) [IMPL]":
           if i < got.get.len and got.get[i] != key & " " & $n:
             checkpoint "C: " & got.get[i] & "  Nim: " & key & " " & $n
             fail()
+
+# Interface-only providers and earlier contracts (DECISIONS G339) -------------------------
+
+proc kitDocument(name: string): string =
+  readFile(repoDir / sdkKitDir / name)
+
+proc surfaceOf(
+    fn: proc(outLen: ptr csize_t): ptr uint8 {.cdecl, gcsafe, raises: [].}
+): seq[byte] =
+  var n: csize_t
+  let p = fn(addr n)
+  @(cast[ptr UncheckedArray[uint8]](p).toOpenArray(0, int(n) - 1))
+
+proc bindingOf(
+    module: string,
+    primary = Opt.none(string),
+    ifaces: openArray[string] = [],
+    extends: openArray[string] = [],
+): ModuleBinding =
+  let r = acceptBinding(module, primary, ifaces, [], AcceptOptions(), extends)
+  if r.isErr:
+    checkpoint r.error
+  r.get
+
+proc metricsOnlyBinding(): ModuleBinding =
+  bindingOf("metrics_only_module", ifaces = [mirror("IFC/3.9.2.interface.cddl")])
+
+proc gaugeBinding(): ModuleBinding =
+  bindingOf(
+    "gauge_module",
+    ifaces = [kitDocument("gauge_interface.cddl")],
+    extends = [kitDocument("gauge_interface_v1.cddl")],
+  )
+
+proc tallyBinding(): ModuleBinding =
+  bindingOf(
+    "tally_module",
+    Opt.some(kitDocument("tally_module.cddl")),
+    [mirror("IFC/3.9.2.interface.cddl")],
+  )
+
+proc declaredFunctions(header, module: string): seq[string] =
+  ## The functions `header` declares for `module`: each `logos_<module>_…(`.
+  let stem = "logos_" & module & "_"
+  var i = 0
+  while true:
+    let at = header.find(stem, i)
+    if at < 0:
+      break
+    var j = at
+    while j < header.len and header[j] in IdentChars:
+      inc j
+    if j < header.len and header[j] == '(' and
+        (at == 0 or header[at - 1] notin IdentChars):
+      result.add(header[at ..< j])
+    i = j
+
+proc typedCount(
+    fn: proc(
+      module: ptr LogosModuleContext,
+      owner: ptr LogosResponseOwner,
+      outCount: ptr uint64,
+    ): LogosResult {.cdecl, gcsafe, raises: [].},
+    ctx: ptr LogosModuleContext,
+): Result[uint64, AbiFailure] =
+  ## A typed `metrics_provider.snapshot` call's count, its owner released.
+  var owner: LogosResponseOwner
+  var n: uint64
+  let st = readStatus(fn(ctx, addr owner, addr n))
+  if not owner.release.isNil:
+    owner.release(owner.state)
+  if st.isErr:
+    return err(st.error)
+  ok(n)
+
+suite "ifc.kit: interface-only providers and earlier contracts (INTERFACE §2.6, §3.9.2; DECISIONS G339) [IMPL]":
+  test "[IMPL-DECISION G339] [IFC-0231] [IFC-0880] [IFC-0881] an interface-only kit describes no primary document and exactly its interface":
+    check $metricsOnlyName() == "metrics_only_module"
+    let bytes = surfaceOf(metricsOnlyCallSurface)
+    let b = metricsOnlyBinding()
+    check bytes == callSurfaceDescriptor(b).get
+    check decodeCbor(bytes).get.lookup("primary").isNone
+    let accepted = acceptCallSurfaceDescriptor(bytes, $metricsOnlyName())
+    check accepted.isOk
+    check accepted.get.primary.isNone and accepted.get.extends.len == 0
+    check accepted.get.interfaces.mapIt(it.root) == b.interfaces.mapIt(it.root)
+
+  test "[IMPL-DECISION G339] [IFC-0880] an interface-only kit answers its interface's method by dispatch and by its typed function, and nothing else":
+    let ctx = newInstance(metricsOnlyInit)
+    let viaDispatch =
+      call(metricsOnlyDispatch, metricsOnlyFree, ctx, "snapshot", diag("{}"))
+    check viaDispatch.status.isOk
+    check viaDispatch.response == diag("{\"count\": 1}")
+    check typedCount(metricsOnlySnapshot, ctx) == Result[uint64, AbiFailure].ok(2)
+    # The §3.9.2 sensor's primary method is no method of this binding.
+    let configure = call(
+      metricsOnlyDispatch,
+      metricsOnlyFree,
+      ctx,
+      "configure",
+      diag("{\"settings\": {\"kind\": \"sensor\", \"limit\": 9}}"),
+    )
+    check configure.code == ecMethodNotFound
+    let invalid =
+      call(metricsOnlyDispatch, metricsOnlyFree, ctx, "snapshot", diag("{\"x\": 1}"))
+    check invalid.code == ecInvalidParams
+    withInstance(ctx, MetricsOnly, m):
+      check m.snapshots.load == 2
+    metricsOnlyDestroy(ctx)
+
+  test "[IMPL-DECISION G339] [IFC-0880] [IFC-0230] an events-only interface: typed publication, every dispatch METHOD_NOT_FOUND, and the earlier contract in `extends`":
+    let bytes = surfaceOf(gaugeCallSurface)
+    let b = gaugeBinding()
+    check b.extends.len == 1
+    check bytes == callSurfaceDescriptor(b).get
+    let accepted = acceptCallSurfaceDescriptor(bytes, "gauge_module")
+    check accepted.isOk
+    check accepted.get.primary.isNone
+    check accepted.get.interfaces.mapIt(it.root) == b.interfaces.mapIt(it.root)
+    check accepted.get.extends.mapIt(it.root) == b.extends.mapIt(it.root)
+    check b.extends[0].root != b.interfaces[0].root
+    withLock publishedLock:
+      published.setLen(0)
+    var i = input()
+    var ctx: ptr LogosModuleContext = nil
+    check checkOutcome(gaugeInit(addr i, addr ctx), contextShape(ctx)).isOk
+    withInstance(ctx, Gauge, g):
+      check g.measure(40).isOk
+      check g.measure(150).isOk
+    withLock publishedLock:
+      check published ==
+        @[
+          ("gauge.level_event", diag("{\"level\": 40}"), "plain"),
+          ("gauge.level_event", diag("{\"level\": 150}"), "plain"),
+          ("gauge.alarm_event", diag("{\"bound\": 100, \"level\": 150}"), "plain"),
+        ]
+      published.setLen(0)
+    for name in ["gauge.level_event", "level", "measure", "snapshot"]:
+      check call(gaugeDispatch, gaugeFree, ctx, name, diag("{}")).code ==
+        ecMethodNotFound
+    gaugeDestroy(ctx)
+
+  test "[IMPL-DECISION G339] [IFC-0880] [IFC-0881] a types-only primary document with an implemented callable interface":
+    let bytes = surfaceOf(tallyCallSurface)
+    let b = tallyBinding()
+    check bytes == callSurfaceDescriptor(b).get
+    let accepted = acceptCallSurfaceDescriptor(bytes, "tally_module")
+    check accepted.isOk
+    check accepted.get.primary.isSome
+    check accepted.get.primary.get.root == b.primary.get.root
+    check accepted.get.interfaces.mapIt(it.root) == b.interfaces.mapIt(it.root)
+    let ctx = newInstance(tallyInit)
+    check call(tallyDispatch, tallyFree, ctx, "snapshot", diag("{}")).response ==
+      diag("{\"count\": 3}")
+    check typedCount(tallySnapshot, ctx) == Result[uint64, AbiFailure].ok(6)
+    tallyDestroy(ctx)
+
+  test "[IMPL-DECISION G339] [IFC-0880] [IFC-0881] a module with lifecycle declarations and no contract is no provider":
+    check $idleName() == "idle_module"
+    check idleModuleStaticSymbols().names ==
+      @[
+        "logos_idle_module_MODULE_name", "logos_idle_module_MODULE_init",
+        "logos_idle_module_MODULE_destroy",
+      ]
+    let (inits, destroys) = (idleInits.load, idleDestroys.load)
+    let ctx = newInstance(idleInit)
+    idleDestroy(ctx)
+    check idleInits.load == inits + 1 and idleDestroys.load == destroys + 1
+    check not bindingOf("idle_module").isProvider
+
+  test "[IMPL-DECISION G339] [IFC-0878] each kit exports exactly the functions the header of its binding declares":
+    for (b, table) in [
+      (metricsOnlyBinding(), metricsOnlyModuleStaticSymbols()),
+      (gaugeBinding(), gaugeModuleStaticSymbols()),
+      (tallyBinding(), tallyModuleStaticSymbols()),
+      (bindingOf("idle_module"), idleModuleStaticSymbols()),
+    ]:
+      checkpoint b.module
+      let header = contractHeader(b.cSchemaSet).get
+      let declared = declaredFunctions(header, b.module)
+      check declared.len >= 3
+      check sorted(table.names) == sorted(declared)
+      check kitSymbols(b).get == table.names
+    # A confined, deferred interface-only kit exports the same and
+    # `_MODULE_async_api` (DECISIONS G338).
+    let b = metricsOnlyBinding()
+    let confined = kitSymbols(
+      b, KitOptions(importPrefix: SdkImportRoot, confined: true, asyncApi: true)
+    )
+    check confined.isOk
+    check sorted(confined.get) ==
+      sorted(
+        metricsOnlyModuleStaticSymbols().names &
+          "logos_metrics_only_module_MODULE_async_api"
+      )
+    let text = kitModule(
+      b, KitOptions(importPrefix: SdkImportRoot, confined: true, asyncApi: true)
+    )
+    check text.isOk and "loadBindingValidator(moduleName, " in text.get

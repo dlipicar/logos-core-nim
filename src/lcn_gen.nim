@@ -22,7 +22,8 @@ Usage:
   lcn-gen nim [--out:DIR] [--import-prefix:P] [--system] [--module:NAME] PRIMARY.cddl
               [--interface:FILE]... [--supporting:FILE]...
   lcn-gen kit [--out:DIR] [--import-prefix:P] [--system] [--confined [--async-api]]
-              PRIMARY.cddl [--interface:FILE]... [--supporting:FILE]...
+              [--module:NAME] [PRIMARY.cddl] [--interface:FILE]...
+              [--supporting:FILE]... [--extends:FILE]...
               [--configuration:FILE --configuration-root:NAME
                [--live-reconfiguration]]
   lcn-gen calls [--out:DIR] [--import-prefix:P] [--system] PRIMARY.cddl
@@ -40,10 +41,13 @@ types        accepts the construction input set (INTERFACE §1.1, §5.3) and
              the --interface documents
 nim-common   writes DIR/common_types.nim (the pinned common schema)
 nim          accepts the set and writes DIR/<module or namespace>_types.nim
-kit          accepts a concrete module document's set and writes the Nim
-             types and DIR/<module>_kit.nim: the module's exported ABI
-             symbols, typed _CALL_ provider functions included, over
-             handlers its author writes in Nim (PROVISIONAL); with
+kit          accepts a concrete module document's set, or with --module and
+             no PRIMARY an interface-only provider's binding (its
+             implemented interfaces are the --interface documents; none: a
+             module with lifecycle symbols only), and writes the Nim types
+             and DIR/<module>_kit.nim: the module's exported ABI symbols,
+             typed _CALL_ provider functions included, over handlers its
+             author writes in Nim (PROVISIONAL); with
              --configuration, also DIR/<module>_configuration_types.nim, and
              the kit checks and delivers the configuration (CONFIG §6, §8);
              also DIR/<module>_kit.exports and DIR/<module>_kit.map, the
@@ -75,6 +79,10 @@ cddl         reads exactly the C headers named, without a preprocessor, and
 --system           the set is a Logos system contract (reserved logos names)
 --interface:FILE   an implemented interface document (repeatable)
 --supporting:FILE  a supporting schema document (repeatable)
+--extends:FILE     kit: an earlier contract that PRIMARY or an interface
+                   extends (COMMITMENT §9.1), carried in the call-surface
+                   descriptor's extends (INTERFACE §2.6; repeatable); its
+                   supporting schemas are among the --supporting documents
 --configuration:FILE
                    kit: the module's configuration schema (CONFIG §2), a
                    supporting schema resolved against the common schema only
@@ -209,7 +217,7 @@ proc main(): int =
     outDir = "."
     prefix = SdkImportRoot
     opts = AcceptOptions()
-    interfaces, supporting: seq[string]
+    interfaces, supporting, extends: seq[string]
     configuration, configurationRoot = ""
     live = false
     confined = false
@@ -243,6 +251,8 @@ proc main(): int =
         interfaces.add(val)
       of "supporting":
         supporting.add(val)
+      of "extends":
+        extends.add(val)
       of "configuration":
         configuration = val
       of "configuration-root":
@@ -264,6 +274,8 @@ proc main(): int =
     return fail("--configuration options apply to kit only\n" & usage)
   if confined and command != "kit":
     return fail("--confined applies to kit only\n" & usage)
+  if extends.len > 0 and command != "kit":
+    return fail("--extends applies to kit only\n" & usage)
   if asyncApi and not confined:
     return fail("--async-api needs kit --confined\n" & usage)
   if (configuration.len > 0) != (configurationRoot.len > 0) or
@@ -300,34 +312,92 @@ proc main(): int =
       return fail(error)
     write(outDir, "common_types.nim", module)
   of "types", "nim", "kit", "calls":
-    if primary.len == 0 and (module.len == 0 or command != "types"):
+    if primary.len == 0 and (module.len == 0 or command notin ["types", "kit"]):
       return fail("no primary document\n" & usage)
-    var sources: seq[string]
+    var sources, earlier: seq[string]
     try:
       for f in (if primary.len > 0: @[primary] else: @[]) & interfaces & supporting:
         sources.add(readFile(f))
+      for f in extends:
+        earlier.add(readFile(f))
     except CatchableError as e:
       return fail(e.msg)
-    if module.len > 0:
-      let first = if primary.len > 0: 1 else: 0
-      let b = acceptBinding(
-        module,
+    let
+      first = if primary.len > 0: 1 else: 0
+      ifaceSources = sources[first ..< first + interfaces.len]
+      suppSources = sources[first + interfaces.len .. ^1]
+
+    proc bindingOf(name: string): Result[ModuleBinding, string] =
+      acceptBinding(
+        name,
         if primary.len > 0:
           Opt.some(sources[0])
         else:
           Opt.none(string),
-        sources[first ..< first + interfaces.len],
-        sources[first + interfaces.len .. ^1],
+        ifaceSources,
+        suppSources,
         opts,
-      ).valueOr:
-        return fail("the module binding is not accepted: " & error)
+        earlier,
+      )
+        .mapErr(
+          proc(e: string): string =
+            "the module binding is not accepted: " & e
+        )
+
+    proc writeKit(b: ModuleBinding, types: string): int =
+      ## [DECISIONS G339, G341] The kit of `b`, its types, its configuration
+      ## types and its export lists.
+      var kopts =
+        KitOptions(importPrefix: prefix, confined: confined, asyncApi: asyncApi)
+      var configTypes = ""
+      if configuration.len > 0:
+        let text =
+          try:
+            readFile(configuration)
+          except CatchableError as e:
+            return fail(e.msg)
+        let cset = configurationSet(text).valueOr:
+          return fail(error)
+        let c = KitConfiguration(set: cset, root: configurationRoot, live: live)
+        kopts.configuration = Opt.some(c)
+        configTypes = configurationTypesModule(b, c, kopts).valueOr:
+          return fail(error)
+      let kit = kitModule(b, kopts, opts.system).valueOr:
+        return fail(error)
+      let header = b.cSchemaSet.headerName
+      var outputs = @[(header & "_types.nim", types)]
+      if configTypes.len > 0:
+        outputs.add((configurationTypesName(b) & ".nim", configTypes))
+      outputs.add((header & "_kit.nim", kit))
+      # [DECISIONS G341] The library's export lists, for its link.
+      let symbols = kitSymbols(b, kopts, opts.system).valueOr:
+        return fail(error)
+      for kind in ExportListKind:
+        let name = exportListName(b, kind)
+        outputs.add((name, exportList(name, symbols, kind)))
+      for (name, text) in outputs:
+        let r = write(outDir, name, text)
+        if r != 0:
+          return r
+      0
+
+    var bound = Opt.none(ModuleBinding)
+    if module.len > 0:
+      let b = bindingOf(module).valueOr:
+        return fail(error)
       if command == "types":
         let header = contractHeader(b.cSchemaSet).valueOr:
           return fail(error)
         return write(outDir, b.cSchemaSet.headerName & "_types.h", header)
-    let set = acceptContractSet(
-      sources[0], sources[1 .. interfaces.len], sources[interfaces.len + 1 .. ^1], opts
-    ).valueOr:
+      bound = Opt.some(b)
+    if primary.len == 0:
+      # [DECISIONS G339] The kit of an interface-only binding (INTERFACE
+      # l.2833-2840), or of a module with lifecycle symbols only.
+      let b = bound.get
+      let types = nimModule(b, NimOptions(importPrefix: prefix), opts.system).valueOr:
+        return fail(error)
+      return writeKit(b, types)
+    let set = acceptContractSet(sources[0], ifaceSources, suppSources, opts).valueOr:
       return fail("the schema set is not accepted: " & error)
     if command == "calls":
       let header = contractHeader(set.cSchemaSet).valueOr:
@@ -350,42 +420,24 @@ proc main(): int =
           return r
       return 0
     if command in ["nim", "kit"]:
-      let module = nimModule(set, NimOptions(importPrefix: prefix), opts.system).valueOr:
+      let types = nimModule(set, NimOptions(importPrefix: prefix), opts.system).valueOr:
         return fail(error)
       if command == "kit":
-        var kopts =
-          KitOptions(importPrefix: prefix, confined: confined, asyncApi: asyncApi)
-        var configTypes = ""
-        if configuration.len > 0:
-          let text =
-            try:
-              readFile(configuration)
-            except CatchableError as e:
-              return fail(e.msg)
-          let cset = configurationSet(text).valueOr:
-            return fail(error)
-          let c = KitConfiguration(set: cset, root: configurationRoot, live: live)
-          kopts.configuration = Opt.some(c)
-          configTypes = configurationTypesModule(set, c, kopts).valueOr:
-            return fail(error)
-        let kit = kitModule(set, kopts, opts.system).valueOr:
-          return fail(error)
-        var outputs = @[(set.cSchemaSet.headerName & "_types.nim", module)]
-        if configTypes.len > 0:
-          outputs.add((configurationTypesName(set) & ".nim", configTypes))
-        outputs.add((set.cSchemaSet.headerName & "_kit.nim", kit))
-        # [DECISIONS G341] The library's export lists, for its link.
-        let symbols = kitSymbols(set, kopts, opts.system).valueOr:
-          return fail(error)
-        for kind in ExportListKind:
-          let name = exportListName(set, kind)
-          outputs.add((name, exportList(name, symbols, kind)))
-        for (name, text) in outputs:
-          let r = write(outDir, name, text)
-          if r != 0:
-            return r
-        return 0
-      return write(outDir, set.cSchemaSet.headerName & "_types.nim", module)
+        let b =
+          if bound.isSome:
+            bound.get
+          elif extends.len > 0:
+            # [SPEC INTERFACE §2.6 l.1693-1696] The set's binding with the
+            # earlier contracts its descriptor carries.
+            let own = set.binding.valueOr:
+              return fail(error)
+            bindingOf(own.module).valueOr:
+              return fail(error)
+          else:
+            set.binding.valueOr:
+              return fail(error)
+        return writeKit(b, types)
+      return write(outDir, set.cSchemaSet.headerName & "_types.nim", types)
     let header = contractHeader(set.cSchemaSet).valueOr:
       return fail(error)
     write(outDir, set.cSchemaSet.headerName & "_types.h", header)

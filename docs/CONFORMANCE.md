@@ -635,6 +635,18 @@ author's. Evidence: `sdk/tests/test_kit_confined.nim` (in process, orc, refc and
 `tests/test_kit_mixed.nim` MX-4 (through the Runtime, `direct_dynamic` and hosted). Nothing changes
 on the Runtime's or the Module Host's side, which already served deferred providers (I78).
 
+Sub-part 5 adds interface-only provider kits (`lcn-gen kit --module:NAME` without a primary
+document, and `--extends` for the descriptor's earlier contracts; G339). No unit changes status:
+INTERFACE l.2833-2840 (IFC-0877 to IFC-0881) were claimed for the C mapping and the reverse mapper,
+and the kit's cases join IFC-0880 and IFC-0881 for the conformance set's other three cases. An
+interface-only kit, an events-only one whose descriptor carries the earlier contract it extends, a
+types-only primary with a callable interface, and a lifecycle-only module each describe exactly
+their binding (IFC-0230, IFC-0231) and export exactly the functions its header declares (IFC-0878).
+Evidence: `sdk/tests/test_kit.nim`, `sdk/tests/test_kit_dylib.nim` and `sdk/tests/test_nimgen.nim`.
+No Runtime or Module Host code changes: both take a provider's binding from its descriptor, with or
+without a primary contract (the interface-only case of `tests/test_events.nim`'s I106 test); no core
+suite loads one of these kits yet.
+
 ### What Tier 5 step N-2b changes
 
 The CLI module `lcn_call` (DECISIONS I102; G343 to G350). No unit changes status. The CLI socket is a

@@ -1171,14 +1171,14 @@ proc methodPieces(
   r
 
 proc setGen(
-    s: ContractSet, schema: string, emitLiterals = false
+    cset: CSchemaSet, contracts: seq[Contract], schema: string, emitLiterals = false
 ): Result[(MGen, seq[MDoc]), string] =
-  ## A generator over the set's documents and the pinned common one, with every
-  ## declared aggregate's converters (`MGen.emitLiterals`).
-  let layout = ?cLayout(s.cSchemaSet)
+  ## A generator over a set's or a binding's documents and the pinned common
+  ## one, with every declared aggregate's converters (`MGen.emitLiterals`).
+  let layout = ?cLayout(cset)
   var docs: seq[MDoc]
   var roots: seq[Digest]
-  for c in s.documents:
+  for c in contracts:
     docs.add(MDoc(model: c.model))
     roots.add(c.root)
   let ctx = pinnedContext()
@@ -1387,13 +1387,13 @@ proc confinedKitCall(
   body
 
 proc kitMirrors*(
-    s: ContractSet, prefix: string, methods: seq[KitMethod], confined = false
+    b: ModuleBinding, prefix: string, methods: seq[KitMethod], confined = false
 ): Result[KitMirrors, string] =
   ## [SPEC INTERFACE §2.4] The typed provider functions of the module binding
-  ## `s`, for `kitgen`; `prefix` starts the exported procs' Nim names. A
+  ## `b`, for `kitgen`; `prefix` starts the exported procs' Nim names. A
   ## `confined` kit's functions hand their work to the module thread
   ## (`confinedrt`) over the route `<prefix>KitRoute` its template defines.
-  var (g, docs) = ?setGen(s, "kitSchema()")
+  var (g, docs) = ?setGen(b.cSchemaSet, b.documents, "kitSchema()")
   let marked = markedHalves(docs)
   var byRequest: Table[string, KitMethod]
   for m in methods:
@@ -1561,7 +1561,8 @@ proc callMirrors*(
   ## `nimgen` type of each declaration) and, for C callers, the bodies of
   ## `lcn_invoke_<namespace>_<Method>` and `lcn_clear_<namespace>_<Method>`,
   ## which the export template defines; `prefix` starts their Nim names.
-  var (g, docs) = ?setGen(s, "callsSchema()", emitLiterals = true)
+  var (g, docs) =
+    ?setGen(s.cSchemaSet, s.documents, "callsSchema()", emitLiterals = true)
   let marked = markedHalves(docs)
   var res = KitMirrors()
   var callProcs: seq[string]
