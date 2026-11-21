@@ -124,11 +124,15 @@ proc replaceDispatcher(): string =
   ## replaced by a new one, which a timer wakes every 2 ms so the kit still sees
   ## its stop. chronos's `setThreadDispatcher` requires an empty callback queue,
   ## which the queue's sentinel never leaves, so it is emptied around the call.
+  ## Popped one by one: under refc a `let` copy of the queue would share its
+  ## storage, and `clear` would empty it too (upstream draft 192).
   let old = getThreadDispatcher()
-  let queued = old.callbacks
-  old.callbacks.clear()
+  var queued: seq[AsyncCallback]
+  while old.callbacks.len > 0:
+    queued.add(old.callbacks.popFirst())
   setThreadDispatcher(newDispatcher())
-  old.callbacks = queued
+  for callback in queued:
+    old.callbacks.addLast(callback)
   tick(nil)
   "replaced"
 
