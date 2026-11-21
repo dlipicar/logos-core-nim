@@ -14,7 +14,8 @@
 ##
 ## The descriptors are the launcher's own (its terminal, a pipe or a file), so
 ## their flags are never changed: a write waits with poll(2) for room or for
-## the launcher's cancel (its connection becoming readable), and writes at most
+## the launcher's cancel (its connection becoming readable), or, for a stream,
+## for the stream's end (`abortFd`), or at most `waitMs`, and writes at most
 ## PIPE_BUF bytes at a time where poll's promise covers no more.
 
 {.push raises: [], gcsafe.}
@@ -36,12 +37,16 @@ const
 type
   SinkError* = enum
     seCancelled = "the launcher cancelled"
+    seAborted = "the stream ended"
     seClosed = "the reader closed the output"
+    seStalled = "the reader took nothing in time"
     seIo = "an output error"
 
   Sink* = object ## One of the launcher's descriptors.
     fd*: cint
     cancelFd*: cint ## the launcher's connection: readable means cancel; -1: none
+    abortFd*: cint ## a stream's end: readable means stop writing; -1: none
+    waitMs*: int ## the longest wait for room; -1: no limit
     regular: bool ## a regular file: writes never wait
 
   Presenter* = object ## One command's output.
@@ -56,7 +61,7 @@ proc sinkOf*(fd, cancelFd: cint): Sink =
     var st: Stat
     if fstat(fd, st) == 0:
       regular = S_ISREG(st.st_mode)
-  Sink(fd: fd, cancelFd: cancelFd, regular: regular)
+  Sink(fd: fd, cancelFd: cancelFd, abortFd: -1, waitMs: -1, regular: regular)
 
 func terminalSafe*(s: string): string =
   ## DEL and the C1 controls (U+0080 to U+009F) as `\u` escapes. They occur in
@@ -82,16 +87,22 @@ proc put*(s: Sink, data: string): Result[void, SinkError] =
     var off = 0
     while off < data.len:
       if not s.regular:
-        var p: array[2, TPollfd]
+        # A negative fd is ignored by poll(2).
+        var p: array[3, TPollfd]
         p[0] = TPollfd(fd: s.fd, events: POLLOUT)
         p[1] = TPollfd(fd: s.cancelFd, events: POLLIN)
-        let n = poll(addr p[0], Tnfds(if s.cancelFd >= 0: 2 else: 1), -1)
+        p[2] = TPollfd(fd: s.abortFd, events: POLLIN)
+        let n = poll(addr p[0], 3, cint(s.waitMs))
         if n < 0:
           if errno == EINTR:
             continue
           return err(seIo)
+        if n == 0:
+          return err(seStalled)
         if s.cancelFd >= 0 and (p[1].revents and (POLLIN or POLLHUP or POLLERR)) != 0:
           return err(seCancelled)
+        if s.abortFd >= 0 and p[2].revents != 0:
+          return err(seAborted)
         if (p[0].revents and (POLLERR or POLLNVAL)) != 0:
           return err(seClosed)
         if (p[0].revents and POLLOUT) == 0 and (p[0].revents and POLLHUP) != 0:

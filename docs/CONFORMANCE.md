@@ -669,6 +669,13 @@ holds, the launcher's uid check). IFC-0942 gains `describe`, which materializes 
 the selected contract. RUN-0174 is re-tested for a Module Host's prepared `establish_route` and
 `renew_route` (`test_hosted_routes` C-2b), which kept no material before this step.
 
+### What Tier 5 step N-2c changes
+
+`logosctl subscribe` and `events` (DECISIONS I102; G346, G349). No unit changes status. `test_lcn_call`
+adds end-to-end evidence for RUN-1095 and TRN-0392 in logosd: a grant `lcn_call` issued itself, once
+revoked, ends its subscription with `NOT_AUTHORISED` while the route stays usable, and the stream reports
+it (exit 6). Events cannot be marked (INTERFACE §1.2.1 l.215), so streams add no marked payload.
+
 ## Properties not claimed
 
 - A complete Logos module system (BCP §5.1; owner decision 10 (a), K18; DECISIONS G310, I97): there

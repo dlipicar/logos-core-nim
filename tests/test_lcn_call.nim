@@ -1,5 +1,5 @@
-## lcn_call, the CLI module, in a logosd in this process (Tier 5 step N-2b;
-## DECISIONS G343-G350; docs/DAEMON.md §7a; plan §5, L-1 to L-10 and L-13).
+## lcn_call, the CLI module, in a logosd in this process (Tier 5 steps N-2b
+## and N-2c; DECISIONS G343-G350; docs/DAEMON.md §7a; plan §5, L-1 to L-13).
 ##
 ## Each case makes a session with `logosctl init`'s library function: the
 ## meter, shapes, vault (orc and arc only, G277) and bulk kit modules hosted as operator providers,
@@ -8,7 +8,8 @@
 ## runs `assembleDaemon` and `startDaemon` as logosd's `main` does, and runs
 ## each command with the launcher's library function (`launch`), as `logosctl
 ## call` does, from the test's threads, with regular files for stdout and
-## stderr. `lcn_call` runs in a Module Host of its own, so the test cannot
+## stderr; a stream (`subscribe`, `events`) runs from a thread of its own,
+## with a pipe for the launcher's cancel. `lcn_call` runs in a Module Host of its own, so the test cannot
 ## reach its globals: what it did is read from exit codes, its output, the
 ## Runtime's records (through the logosctl instance), and the meter's `held`
 ## file (channels 22 and 23 hold a call until the file `open` is in the
@@ -42,6 +43,7 @@ when defined(posix):
   from ../src/logos_core/daemon/compose import cliSocketPath
   import ../src/logos_core/cli/[cli_types, launcher]
   from ../src/logos_core/cli/wire import writeRequest, readReply
+  from ../src/logos_core/runtime/authscopes import caRoots, AuthorityModule
   import logos_sdk/testing/testdirs
   import ./support/[clibuild, modulehostbuild, shortdir, slowdown]
 
@@ -156,41 +158,81 @@ when defined(posix):
     if state.len > 0:
       result.state_assignment = Opt.some(state)
 
-  proc grant(root: seq[byte], actions: openArray[LcnApActionKind]): LcnApRule =
-    ## [DAEMON.md §7a, "Grants"] An operator rule for `lcn_call` on one contract.
+  func cliSubject(): LcnApSubject =
+    LcnApSubject(instances: Opt.some(@[CliInstance]))
+
+  proc accessTo(root: seq[byte], actions: openArray[LcnApActionKind]): LcnApScope =
     var xs: seq[LcnApAction]
     for a in actions:
       xs.add(LcnApAction(kind: a))
     sortSet(xs)
-    LcnApRule(
-      kind: LcnApRuleKind.lcn_Ap_allow,
-      arm_lcn_Ap_allow: LcnApAllow(
-        subject: LcnApSubject(instances: Opt.some(@[CliInstance])),
-        scopes: @[
-          LcnApScope(
-            kind: LcnApScopeKind.lcn_Ap_provider_access,
-            arm_lcn_Ap_provider_access: LcnApProviderAccess(
-              contract: LcnApProviderAccessContractChoice(
-                kind: LcnApProviderAccessContractChoiceKind.logos_Schema_commitment,
-                arm_logos_Schema_commitment: SchemaCommitment(schema_root: root),
-              ),
-              actions: xs,
-            ),
-          )
-        ],
+    LcnApScope(
+      kind: LcnApScopeKind.lcn_Ap_provider_access,
+      arm_lcn_Ap_provider_access: LcnApProviderAccess(
+        contract: LcnApProviderAccessContractChoice(
+          kind: LcnApProviderAccessContractChoiceKind.logos_Schema_commitment,
+          arm_logos_Schema_commitment: SchemaCommitment(schema_root: root),
+        ),
+        actions: xs,
       ),
     )
 
-  const Full = [
-    LcnApActionKind.Discover, LcnApActionKind.Establish_route,
-    LcnApActionKind.Renew_route, LcnApActionKind.Call,
-  ]
+  proc grant(root: seq[byte], actions: openArray[LcnApActionKind]): LcnApRule =
+    ## [DAEMON.md §7a, "Grants"] An operator rule for `lcn_call` on one contract.
+    LcnApRule(
+      kind: LcnApRuleKind.lcn_Ap_allow,
+      arm_lcn_Ap_allow:
+        LcnApAllow(subject: cliSubject(), scopes: @[accessTo(root, actions)]),
+    )
+
+  proc publishes(instance: string, root: seq[byte]): LcnApRule =
+    ## [SPEC CA l.244-247] A delivery needs the provider's `publish-event` as
+    ## well as the subscriber's `subscribe-event`: without it every
+    ## publication is skipped, unseen by the stream.
+    LcnApRule(
+      kind: LcnApRuleKind.lcn_Ap_allow,
+      arm_lcn_Ap_allow: LcnApAllow(
+        subject: LcnApSubject(instances: Opt.some(@[instance])),
+        scopes: @[accessTo(root, [LcnApActionKind.Publish_event])],
+      ),
+    )
+
+  proc selfIssue(root: seq[byte], actions: openArray[LcnApActionKind]): seq[LcnApRule] =
+    ## [SPEC CA l.696-792] `lcn_call` may issue itself grants of `actions` on one
+    ## contract, and revoke the grants it issued.
+    @[
+      LcnApRule(
+        kind: LcnApRuleKind.lcn_Ap_issue,
+        arm_lcn_Ap_issue: LcnApIssue(
+          subject: cliSubject(),
+          targets: LcnApTarget(kind: LcnApTargetKind.Self),
+          scopes: @[accessTo(root, actions)],
+        ),
+      ),
+      LcnApRule(
+        kind: LcnApRuleKind.lcn_Ap_revoke,
+        arm_lcn_Ap_revoke: LcnApRevoke(
+          subject: cliSubject(), targets: LcnApTarget(kind: LcnApTargetKind.Issued)
+        ),
+      ),
+    ]
+
+  const
+    Full = [
+      LcnApActionKind.Discover, LcnApActionKind.Establish_route,
+      LcnApActionKind.Renew_route, LcnApActionKind.Call,
+    ]
+    Streaming = @Full & @[LcnApActionKind.Subscribe_event]
 
   type Shape = object ## What a case changes in the session.
     workers: uint8 = 4
     routeIdleMs: int ## 0: the default
     validityMs: int ## 0: the default
     bulkDiscover: bool = true ## `discover` on bulk, and nothing else
+    bulkStream: bool ## bulk granted as the meter is, its event included
+    meterGrant: bool
+      ## the meter's `subscribe-event` is not in its rule: `lcn_call` issues it
+      ## itself (L-11), with the authority's methods granted
 
   var sessions = 0
 
@@ -217,9 +259,21 @@ when defined(posix):
     var o = dc.orchestration.get(LcnDcOrchestration())
     o.start = Opt.some(Providers)
     dc.orchestration = Opt.some(o)
-    var rules =
-      @[grant(meterRoot, Full), grant(shapesRoot, Full), grant(vaultRoot, Full)]
-    if shape.bulkDiscover:
+    var rules = @[
+      grant(shapesRoot, Full),
+      grant(vaultRoot, Full),
+      publishes(MeterInstance, meterRoot),
+      publishes(BulkInstance, bulkRoot),
+    ]
+    if shape.meterGrant:
+      rules.add(grant(meterRoot, Full))
+      rules.add(grant(caRoots().contract, Full))
+      rules.add(selfIssue(meterRoot, [LcnApActionKind.Subscribe_event]))
+    else:
+      rules.add(grant(meterRoot, Streaming))
+    if shape.bulkStream:
+      rules.add(grant(bulkRoot, Streaming))
+    elif shape.bulkDiscover:
       rules.add(grant(bulkRoot, [LcnApActionKind.Discover]))
     sortSet(rules)
     dc.policy.arm_Capability_authority.rules = rules
@@ -466,6 +520,43 @@ when defined(posix):
   func meterRead(channel: int): LcnCliCommand =
     callOf("meter_module", "read", [("channel", $channel)])
 
+  func subscribeOf(module, event: string, count = 0, forMs = 0): LcnCliCommand =
+    var c = LcnCliSubscribeCommand(provider: providerOf(module), event: event)
+    if count > 0:
+      c.count = Opt.some(uint32(count))
+    if forMs > 0:
+      c.for_ms = Opt.some(uint32(forMs))
+    LcnCliCommand(
+      kind: LcnCliCommandKind.lcn_Cli_subscribe_command,
+      arm_lcn_Cli_subscribe_command: c,
+    )
+
+  func eventsOf(names: openArray[string] = [], count = 0): LcnCliCommand =
+    var c = LcnCliEventsCommand()
+    if names.len > 0:
+      c.names = Opt.some(@names)
+    if count > 0:
+      c.count = Opt.some(uint32(count))
+    LcnCliCommand(
+      kind: LcnCliCommandKind.lcn_Cli_events_command, arm_lcn_Cli_events_command: c
+    )
+
+  proc restart(l: Live, module, instance: string) =
+    l.stop(module, instance)
+    discard l.reaches(instance, LogosNSRuntimeControlStateKind.Unloaded)
+    l.start(module, instance)
+    discard l.reaches(instance, LogosNSRuntimeControlStateKind.Ready)
+
+  proc sendBulk(l: Live, size: int) =
+    ## bulk's `send` publishes `bulk.carried_event` with `size` bytes.
+    discard l.run(callOf("bulk_module", "send", [("size", $size)]))
+
+  proc publish(l: Live) =
+    ## Channel 15: the meter publishes `meter.changed_event` (value 150).
+    let r = l.run(meterRead(15))
+    checkpoint r.said
+    check r.exit == 0
+
   # A call held at the meter, from a thread of its own -----------------------------------
 
   var
@@ -520,6 +611,159 @@ when defined(posix):
     let p = ?peerOf(fd)
     ok(Peer(uid: p.uid + 1, pid: p.pid))
 
+  # A stream, from a thread of its own -----------------------------------------------------
+
+  type Watch = object ## One stream the launcher runs.
+    thread: Thread[(ptr Live, ptr Watch)]
+    msg: LcnCliMessage
+    outPath, errPath: string ## `outPath` empty: stdout is `stalled`'s pipe
+    outFd, errFd: cint ## the launcher's stdout and stderr
+    stalled: cint ## the read end of a stdout pipe nothing reads; -1: none
+    cancelR, cancelW: cint ## the launcher's cancel
+    exit: Atomic[int] ## -1 while it runs
+
+  var
+    watch: Watch
+    watching: bool ## `watch.thread` runs and is not joined yet
+
+  proc streamed(arg: (ptr Live, ptr Watch)) {.thread.} =
+    let (lp, w) = arg
+    let r = launch(
+      Launch(
+        cliSocket: lp.cli,
+        ctlSocket: lp.d.socketPath,
+        message: w.msg,
+        stdoutFd: w.outFd,
+        stderrFd: w.errFd,
+        timeoutMs: Timeout,
+        cancelFd: w.cancelR,
+      )
+    )
+    w.exit.store(if r.isOk: r.get else: r.error.exit)
+    releasePerThread()
+
+  proc cloexecPipe(): (cint, cint) =
+    var p: array[2, cint]
+    doAssert posix.pipe(p) == 0, $strerror(errno)
+    for fd in p:
+      discard fcntl(fd, F_SETFD, FD_CLOEXEC)
+    (p[0], p[1])
+
+  proc stream(l: var Live, cmd: LcnCliCommand, text = false, stalled = false) =
+    ## Starts `cmd`; with `stalled` its stdout is a pipe nothing reads.
+    watch.msg = LcnCliMessage(
+      command: cmd,
+      output:
+        if text:
+          LcnCliOutput(kind: LcnCliOutputKind.Text)
+        else:
+          LcnCliOutput(kind: LcnCliOutputKind.Json),
+    )
+    if stalled:
+      (watch.stalled, watch.outFd) = cloexecPipe()
+      watch.outPath = ""
+    else:
+      watch.stalled = -1
+      (watch.outPath, watch.outFd) = outFile(l.outDir)
+    (watch.errPath, watch.errFd) = outFile(l.outDir)
+    (watch.cancelR, watch.cancelW) = cloexecPipe()
+    watch.exit.store(-1)
+    createThread(watch.thread, streamed, (addr l, addr watch))
+    watching = true
+
+  proc streamEnded(): bool =
+    watch.exit.load >= 0
+
+  proc interrupt() =
+    ## What logosctl does at SIGINT: its cancel descriptor becomes readable.
+    var b = [byte(1)]
+    discard posix.write(watch.cancelW, addr b[0], 1)
+
+  proc streamOutput(): string =
+    if watch.outPath.len > 0:
+      try:
+        return readFile(watch.outPath)
+      except IOError:
+        discard
+
+  proc streamErrors(): string =
+    try:
+      readFile(watch.errPath)
+    except IOError:
+      ""
+
+  proc streamLines(): seq[JsonNode] =
+    ## Every JSON line on stdout so far (a line still being written is left).
+    let o = streamOutput()
+    let whole = o.rfind('\n')
+    if whole < 0:
+      return
+    for line in o[0 ..< whole].splitLines:
+      if line.len > 0:
+        try:
+          result.add(parseJson(line))
+        except CatchableError as e:
+          checkpoint("not JSON: " & line & ": " & e.msg)
+
+  func eventsIn(lines: seq[JsonNode]): seq[JsonNode] =
+    lines.filterIt(it.hasKey("event"))
+
+  proc saidStream(): string =
+    "exit " & $watch.exit.load & "; stdout: " & streamOutput() & "; stderr: " &
+      streamErrors()
+
+  template within(cond: untyped, act: untyped): bool =
+    ## Does `act` until `cond`, at most `Patience` seconds.
+    let until = getMonoTime() + initDuration(seconds = Patience)
+    var met = cond
+    while not met and getMonoTime() < until:
+      act
+      sleep(20)
+      met = cond
+    met
+
+  proc endStream(): int =
+    ## Waits for the stream's end, at most `Patience`; its exit status. A
+    ## stream still running then fails the case and is cancelled as logosctl's
+    ## SIGINT would; one that outlives its cancel too ends the suite, since a
+    ## join that never returns would hold the run, and the validation queue
+    ## it waits in, until someone kills it.
+    if watching:
+      if not within(streamEnded(), sleep(10)):
+        checkpoint("the stream did not end: " & saidStream())
+        fail()
+        interrupt()
+        if not within(streamEnded(), sleep(10)):
+          try:
+            stderr.writeLine(
+              "test_lcn_call: a stream outlived its cancel; the suite stops: " &
+                saidStream()
+            )
+          except IOError:
+            discard
+          quit(QuitFailure)
+      joinThread(watch.thread)
+      watching = false
+      for fd in [watch.outFd, watch.errFd, watch.stalled, watch.cancelR, watch.cancelW]:
+        if fd >= 0:
+          discard posix.close(fd)
+    watch.exit.load
+
+  proc addressOf(l: Live, instance: string): JsonNode =
+    %*{
+      "module_instance_id": instance,
+      "runtime_instance_id": l.d.prepared.config.value.runtime.runtime_instance_id,
+    }
+
+  func commitmentOf(root: seq[byte]): JsonNode =
+    ## A `logos.schema_commitment`, as G89 writes it.
+    %*{
+      "commitment_model": "logos.commitment-model.2026-10",
+      "schema_root": hexOf(root),
+      "hash_profile": "logos.hash-profile.2026-08.choice-index",
+      "hash_suite": "logos.hash-suite.blake3-256",
+    }
+
   # Cases ---------------------------------------------------------------------------------
 
   suite "cli.lcn_call: the CLI module in logosd (DAEMON.md §7a) [IMPL-DECISION G343] [IMPL-DECISION G344] [IMPL-DECISION G348] [IMPL-DECISION G349]":
@@ -535,6 +779,9 @@ when defined(posix):
           except IOError:
             discard
         joinHeld()
+        if watching:
+          interrupt()
+          discard endStream()
         if live[].up:
           finish(live[])
       live = nil
@@ -837,6 +1084,197 @@ when defined(posix):
       let after = l.run(meterRead(7))
       checkpoint after.said
       check after.exit == 0
+
+    test "L-11: subscribe: --count and --for, the event's three name forms, text output, the launcher's EOF (130), a stalled reader (6), the provider stopping (6), lcn_call stopping (6) [IMPL-DECISION G349]":
+      l = boot(newSession(Shape(bulkStream: true)))
+      # [G349] `--count 3`: three lines, then 0. Until the subscription is
+      # active a publication reaches no one, so the meter publishes until
+      # the stream has its three.
+      l.stream(subscribeOf("meter_module", "changed", count = 3))
+      check within(streamEnded(), l.publish())
+      check endStream() == 0
+      let three = streamLines()
+      checkpoint saidStream()
+      check three.len == 3
+      for x in three:
+        check x{"event"}.getStr == "meter.changed_event"
+        check x{"data"} == %*{"value": 150}
+      # `--for`: no event in 300 ms; 0, and nothing written.
+      l.stream(subscribeOf("meter_module", "meter.changed_event", forMs = 300))
+      check endStream() == 0
+      check streamOutput() == ""
+      check streamErrors() == ""
+      # An event the provider does not declare is refused before any route (1).
+      let unknown = l.run(subscribeOf("meter_module", "flashed"))
+      checkpoint unknown.said
+      check unknown.exit == 1
+      check "changed" in unknown.env{"message"}.getStr
+      # Text; the launcher's EOF ends the stream (130), and lcn_call serves
+      # the next command.
+      l.stream(subscribeOf("meter_module", "changed_event"), text = true)
+      check within(
+        "meter.changed_event {\"value\": 150}" in streamOutput(), l.publish()
+      )
+      interrupt()
+      check endStream() == 130
+      check streamErrors() == ""
+      check l.run(meterRead(7)).exit == 0
+      # [plan §3.7] A stalled reader: stdout is a pipe nothing reads, so the
+      # queue fills (16 MiB) with 2 MiB events and the stream ends (6); the
+      # failure's envelope goes to stderr, since stdout waits for the same
+      # reader.
+      l.stream(subscribeOf("bulk_module", "carried"), stalled = true)
+      check within(streamEnded(), l.sendBulk(2 * 1024 * 1024))
+      check endStream() == 6
+      checkpoint saidStream()
+      try:
+        let e = parseJson(streamErrors().strip)
+        check e{"status"}.getStr == "error"
+        check e{"message"}.getStr == "the terminal did not keep up; the stream ended"
+      except CatchableError as e:
+        checkpoint("stderr is not one envelope: " & e.msg)
+        fail()
+      check l.run(meterRead(7)).exit == 0
+      # The provider stops: the route ends, and the stream with it (6), after
+      # the lines it had.
+      l.stream(subscribeOf("meter_module", "changed"))
+      check within(streamLines().eventsIn.len >= 1, l.publish())
+      l.stop("meter_module", MeterInstance)
+      check within(streamEnded(), sleep(10))
+      check endStream() == 6
+      let stopped = streamLines()
+      checkpoint saidStream()
+      check stopped.eventsIn.len >= 1
+      if stopped.len > 0:
+        check stopped[^1]{"status"}.getStr == "error"
+        check "the route ended" in stopped[^1]{"message"}.getStr
+      # The route ends as the stop begins; a start is refused until it is done.
+      check l.reaches(MeterInstance, LogosNSRuntimeControlStateKind.Unloaded)
+      l.start("meter_module", MeterInstance)
+      check l.reaches(MeterInstance, LogosNSRuntimeControlStateKind.Ready)
+      # lcn_call stopping ends its streams (6), never as a cancel (130). The
+      # Runtime may end lcn_call's routes as the stop begins, before
+      # `_MODULE_destroy`: a subscription's stream then ends with its route.
+      l.stream(subscribeOf("meter_module", "changed"), text = true)
+      check within(
+        "meter.changed_event {\"value\": 150}" in streamOutput(), l.publish()
+      )
+      l.stop("lcn_call", CliInstance)
+      check endStream() == 6
+      checkpoint saidStream()
+      check "lcn_call is stopping; the stream ended" in streamErrors() or
+        "the route ended" in streamErrors()
+      check l.reaches(CliInstance, LogosNSRuntimeControlStateKind.Unloaded)
+      # `events` has no route: lcn_call's own stop ends it.
+      l.stream(eventsOf(), text = true)
+      check within(streamOutput().len > 0, l.restart("shapes_module", ShapesInstance))
+      l.stop("lcn_call", CliInstance)
+      check endStream() == 6
+      checkpoint saidStream()
+      check "lcn_call is stopping; the stream ended" in streamErrors()
+      check l.reaches(CliInstance, LogosNSRuntimeControlStateKind.Unloaded)
+
+    test "[TRN-0392] [RUN-1095] L-11: a revoked grant ends a stream through the subscription-end observer (6) [IMPL-DECISION G349]":
+      l = boot(newSession(Shape(meterGrant: true)))
+      # Without `subscribe-event` the subscription is refused (4): nothing
+      # was subscribed, nothing is written but the failure.
+      let refused = l.run(subscribeOf("meter_module", "changed", count = 1))
+      checkpoint refused.said
+      check refused.exit == 4
+      check refused.env{"code"}.getStr == "NOT_AUTHORISED"
+      # lcn_call issues itself the grant through the authority's issue_grant
+      # (an issue rule, SPEC CA l.696-792), with `logosctl call`.
+      let me = l.addressOf(CliInstance)
+      let issued = l.run(
+        callOf(
+          AuthorityModule,
+          "issue_grant",
+          request = $(
+            %*{
+              "consumer": me,
+              "target": me,
+              "scopes": [
+                {
+                  "kind": "provider-access",
+                  "contract": commitmentOf(meterRoot),
+                  "actions": ["subscribe-event"],
+                }
+              ],
+            }
+          ),
+        )
+      )
+      checkpoint issued.said
+      check issued.exit == 0
+      let grantId = issued.env{"result", "grant", "grant_id"}.getStr
+      check grantId.len > 0
+      l.stream(subscribeOf("meter_module", "changed"))
+      check within(streamLines().eventsIn.len >= 1, l.publish())
+      # [SPEC CA l.906-914] The revocation drops the decisions it allowed: the
+      # next delivery is denied, the provider's side ends the subscription,
+      # and lcn_call's observer ends the stream with NOT_AUTHORISED. The
+      # route was established under the meter's rule and stays.
+      let revoked = l.run(
+        callOf(
+          AuthorityModule,
+          "revoke_grant",
+          request = $(%*{"consumer": me, "grant_id": grantId}),
+        )
+      )
+      checkpoint revoked.said
+      check revoked.exit == 0
+      check revoked.env{"result", "grant", "status"}.getStr == "revoked"
+      check within(streamEnded(), l.publish())
+      check endStream() == 6
+      let lines = streamLines()
+      checkpoint saidStream()
+      check lines.eventsIn.len >= 1
+      if lines.len > 0:
+        check lines[^1]{"code"}.getStr == "NOT_AUTHORISED"
+        check lines[^1]{"message"}.getStr ==
+          "the subscription ended: authority to receive the event ended"
+      check l.run(meterRead(7)).exit == 0
+
+    test "L-11: a stream lasts one route session: under a short decision_validity_ms it ends with its route's session (6) [IMPL-DECISION G349]":
+      # [P5; R l.3337-3338] A renewal does not extend a session; nothing
+      # renews the stream's route, so it ends at the decision's valid_until.
+      let validity = 8_000 * Slow
+      l = boot(newSession(Shape(validityMs: validity)))
+      l.stream(subscribeOf("meter_module", "changed"), text = true)
+      check within("meter.changed_event" in streamOutput(), l.publish())
+      check within(streamEnded(), sleep(10))
+      check endStream() == 6
+      checkpoint saidStream()
+      check "the route's session ended; run the command again" in streamErrors()
+      check l.run(meterRead(7)).exit == 0
+
+    test "L-12: events follows a module start; an event outside the events rule is NOT_AUTHORISED (4); an unknown one is refused (1) [IMPL-DECISION G346] [IMPL-DECISION G349]":
+      l = boot(newSession())
+      # The default set, the events rule's three. Until the subscriptions are
+      # active a start is not seen, so shapes is stopped and started until
+      # one is.
+      l.stream(eventsOf(count = 1))
+      check within(streamEnded(), l.restart("shapes_module", ShapesInstance))
+      check endStream() == 0
+      let seen = streamLines()
+      checkpoint saidStream()
+      check seen.len == 1
+      if seen.len == 1:
+        check seen[0]{"event"}.getStr in [
+          "logos.runtime_control.module_state_changed_event",
+          "logos.runtime_control.execution_state_changed_event",
+        ]
+        check seen[0]{"data", "instance"}.getStr == ShapesInstance
+      check l.reaches(ShapesInstance, LogosNSRuntimeControlStateKind.Ready)
+      # [G345 S7] route_state_changed is outside the events rule.
+      let denied = l.run(eventsOf(["route_state_changed"], count = 1))
+      checkpoint denied.said
+      check denied.exit == 4
+      check denied.env{"code"}.getStr == "NOT_AUTHORISED"
+      let unknown = l.run(eventsOf(["module_flashed"]))
+      checkpoint unknown.said
+      check unknown.exit == 1
+      check "module_state_changed" in unknown.env{"message"}.getStr
 
     test "L-13: a route ended while its call is in flight: exit 2, the outcome unknown, no retry; the provider saw one call":
       l = boot(newSession())

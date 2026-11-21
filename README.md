@@ -94,6 +94,11 @@ The specs are being revised, so the work is ordered by how settled each area is
   instance; it holds the routes and writes results straight to the terminal, and logosd sees only the
   route's control. Operator rules grant `lcn_call` the providers it may call.
   [docs/DAEMON.md](docs/DAEMON.md) §7a.
+- Tier 5, step N-2c: event streams from the shell. `logosctl subscribe MODULE EVENT` follows one
+  provider event and `logosctl events` this Runtime's module, execution and inventory events, one
+  line per event, until `--count`, `--for` or Ctrl-C (0, 130); a stream the route, its session or
+  the authority ends, or a terminal that does not keep up, exits 6. The events go from the
+  provider's host to `lcn_call`'s. [docs/DAEMON.md](docs/DAEMON.md) §7a, "Streams".
 - Tier 4b, step 4b-7: state transfer to a replacement instance. A `state_transfers` entry in the
   host configuration (or logosd's daemon-config) gives a new instance, under its own state
   assignment, the state directory of the instance it replaces: at the next start the old instance
