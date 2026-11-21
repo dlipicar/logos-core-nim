@@ -266,7 +266,8 @@ when defined(posix):
   proc initCli(c: Case): Ran =
     ## [DAEMON.md §7a] The default configuration with the hosted `meter-1`
     ## (not started), an operator rule granting `lcn_call` all of the meter's
-    ## provider actions, and `cli.artifact` naming the library
+    ## provider actions, its event included, the meter's own `publish-event`,
+    ## and `cli.artifact` naming the library
     ## `support/clibuild` builds.
     var dc = defaultDaemonConfig("assigned-by-init")
     dc.runtime.module_host = Opt.some(hostExe)
@@ -293,6 +294,7 @@ when defined(posix):
       LcnApAction(kind: LcnApActionKind.Establish_route),
       LcnApAction(kind: LcnApActionKind.Renew_route),
       LcnApAction(kind: LcnApActionKind.Call),
+      LcnApAction(kind: LcnApActionKind.Subscribe_event),
     ]
     sortSet(actions)
     dc.policy.arm_Capability_authority.rules = @[
@@ -313,8 +315,29 @@ when defined(posix):
             )
           ],
         ),
-      )
+      ),
+      # [SPEC CA l.244-247] The meter's own `publish-event`: a delivery
+      # needs it as well as the subscriber's `subscribe-event`.
+      LcnApRule(
+        kind: LcnApRuleKind.lcn_Ap_allow,
+        arm_lcn_Ap_allow: LcnApAllow(
+          subject: LcnApSubject(instances: Opt.some(@[MeterInstance])),
+          scopes: @[
+            LcnApScope(
+              kind: LcnApScopeKind.lcn_Ap_provider_access,
+              arm_lcn_Ap_provider_access: LcnApProviderAccess(
+                contract: LcnApProviderAccessContractChoice(
+                  kind: LcnApProviderAccessContractChoiceKind.logos_Schema_commitment,
+                  arm_logos_Schema_commitment: SchemaCommitment(schema_root: meterRoot),
+                ),
+                actions: @[LcnApAction(kind: LcnApActionKind.Publish_event)],
+              ),
+            )
+          ],
+        ),
+      ),
     ]
+    sortSet(dc.policy.arm_Capability_authority.rules)
     dc.cli = Opt.some(LcnDcCli(artifact: Opt.some(cliArt)))
     c.initWith(dc)
 
@@ -1126,6 +1149,57 @@ when defined(posix):
       checkpoint pe.stderr
       check pe.code == 5
       check d.stopped == 0
+      check hostsGone()
+
+    test "[IMPL-DECISION G349] subscribe as a process: SIGINT ends it (130) and lcn_call serves the next command; a stream open at logosd's stop ends (6), logosd exits 0 and lcn_call's socket is gone":
+      let c = newCase()
+      check c.initCli().code == 0
+      let d = c.start()
+      c.expectReady(d)
+      check c.startMeter().code == 0
+      check c.ctl("module", "wait", "meter_module", "--instance", MeterInstance).code ==
+        0
+      proc streaming(c: Case, name: string): Child =
+        ## `logosctl subscribe meter_module changed`, once its first event is
+        ## on stdout: channel 15 publishes one, and a publication before the
+        ## subscription is active reaches no one.
+        result = spawnChild(
+          ctlExe,
+          ["--session-dir", c.s.dir, "subscribe", "meter_module", "changed"],
+          c.dir,
+          name,
+        )
+        children.add(result)
+        let until = getMonoTime() + initDuration(milliseconds = ReadyMs)
+        while "meter.changed_event" notin result.outText and result.alive and
+            getMonoTime() < until:
+          discard c.lcn("call", "meter_module", "read", "channel=15")
+          sleep(20)
+        checkpoint(name & ": " & result.outText & result.errText)
+        check "{\"event\":\"meter.changed_event\",\"data\":{\"value\":150}}" in
+          result.outText
+
+      let first = c.streaming("sub1")
+      check posix.kill(first.pid, SIGINT) == 0
+      let firstExit = waitExit(first, StopMs)
+      checkpoint("sub1 exit " & $firstExit & ": " & first.outText & first.errText)
+      if firstExit != 130:
+        checkpoint("logosd: " & d.errText)
+      check firstExit == 130
+      check first.errText == ""
+      let after = c.lcn("call", "meter_module", "read", "channel=7")
+      checkpoint after.stdout & after.stderr
+      check after.code == 0
+      # [plan §3.7] lcn_call ends the stream as logosd stops (6, not 130):
+      # lcn_call stopping, or the meter's route ending first.
+      let second = c.streaming("sub2")
+      check d.stopped == 0
+      let secondExit = waitExit(second, StopMs)
+      checkpoint("sub2 exit " & $secondExit)
+      check secondExit == 6
+      checkpoint second.outText & second.errText
+      check "\"status\":\"error\"" in second.outText
+      check not entryExists(c.cliSocket)
       check hostsGone()
 
     test "[IMPL-DECISION G289] [IMPL-DECISION G350] kill -9 with lcn_call ready, then a restart: lcn_call comes back, resumed or recovered, and the next logosctl call succeeds":
