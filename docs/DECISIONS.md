@@ -6777,7 +6777,8 @@ their history.
   seen included, without the Nim heap. **Destroy:** `destroyModule` and the release run on the module
   thread, the publisher thread delivers what was queued and exits, the module thread answers what is
   left NOT_READY and tears down its dispatcher, both threads are joined; a failed initialization joins
-  them the same way, dropping queued events. **The host's SIGPIPE (P5, G340):** confined kit libraries
+  them the same way, dropping queued events. What still runs while `destroyModule` runs is G437 (N-1e).
+  **The host's SIGPIPE (P5, G340):** confined kit libraries
   are built with `--import:logos_sdk/base/hostsignals` and the generated export template restores the
   disposition last.
 - **Tests:** `sdk/tests/test_kit_confined.nim` (in process, all three builds): every entry kind handed
@@ -6875,6 +6876,8 @@ their history.
     - For a Runtime that destroys with submitted invocations outstanding, `_MODULE_destroy` now stops
       that residual work (l.2100) before the author's `destroyModule`. First every new job answers
       NOT_READY (the instance is detached; `disposed`, which drops posted tasks, is set only after).
+      **See G437 (N-1e):** `disposed` is now set only once `destroyModule`'s future has finished,
+      and events and end reports are dropped from the start of destroy.
       Then each waiting `async` handler's future is cancelled as `request_cancel` would, and the kit
       awaits up to 2 s (`UnwindMs`, fixed) for the outstanding invocations while the instance still
       lives. The wait is an `await`, never a nested poll, since destroy may run inside a handler's
@@ -7216,6 +7219,69 @@ their history.
 - **Decision:** (c). **Status:** OPEN.
 
 ---
+
+### G437 — What runs while a confined kit's `destroyModule` runs
+- **Kind:** IMPL · **Specs:** INTERFACE l.1949-1962 (destroy), l.2116-2117 (work that cannot
+  quiesce); RUNTIME l.3713-3716, l.3739; TIER5-PLAN N-1; plan `tier5-plans/stepN-1e-plan.md` §A
+  (Fable's P1 on N-3's plan, then Fable's check of the plan).
+- **Before.** `destroyTask` set `disposed` before it called the generated dispose, and three paths
+  read it: posted callbacks (`post`, `lcn_kit_post`) were dropped, consumer tasks ran with `drop`
+  (events, end reports, and the completions of prepared calls and `invokeAsync`), and publication
+  replies were never completed. A `destroyModule` that awaited any of them never resumed, and the
+  stop deadline ended the host. The guide promised that dropping starts when `destroyModule`
+  returns. The order came in with N-1.3 (fdbd7aa), with no reason recorded.
+- **Decision.**
+  - kitgen's confined template splits the dispose in two. `<prefix>KitDispose` returns
+    `destroyModule`'s own future, or nil when `destroyModule` is synchronous; `<prefix>KitRelease`
+    does the `GC_unref`. `confinedDestroy(module, dispose, release)` takes both, so every generated
+    confined kit is regenerated against it (N-3's and N-4's once their base has this).
+  - `destroyTask` awaits that future under `noCancel(join(f))`, so the release is reached even when
+    `destroyModule` fails, then sets `disposed` and calls the release in one step, with no await
+    between them. The order lives in `confinedrt`, not in each generated kit.
+  - While it waits, the context keeps `destroyModule`'s future (`GC_ref`'d). The instance counts as
+    released as soon as that future has finished, so what is served in the turns between
+    `destroyModule`'s return and the release is dropped as after the release.
+  - Two flags. `destroying`, set when `destroyTask` starts: events and end reports (`runEvent`,
+    `runEnd`, `runRouteEnd`) are dropped from then on. Released (above): posted callbacks,
+    completions (`runDone`, and the kit's own cancellation notice `runCancel`) and publication replies
+    run until then. `TaskNode.duringDestroy` marks the two kinds of completion; every other consumer
+    task is dropped from the start of destroy. The scoped-publication waits end on the released flag.
+  - **A change:** before, events and end reports were still delivered during the unwinding (up to
+    2 s, G338), since `disposed` was set after it. Now they are dropped from the start of destroy.
+    Nothing a `destroyModule` awaits needs them, and an event handler started during destroy could
+    itself be left suspended.
+- **What this means for handlers still running.** An `async` handler holds the instance through its
+  environment. A plain handler blocked in a nested poll holds only its route's `{.cursor.}`, which orc
+  does not count: residual work that existed before, not something every handler is protected from.
+  A handler whose unwinding waited for a completion arriving after the 2 s bound now finishes during
+  `destroyModule` instead of being abandoned; its invocation still completes once, NOT_READY, since
+  `unwindDeferred` leaves what is outstanding to teardown. A handler that ignored its cancellation can
+  be woken while `destroyModule` awaits. That is memory-safe for `async` handlers and outside the
+  contract (INTERFACE l.2116-2117); timers could already wake it before.
+- **For the guide** (MODULE-KIT §3): `destroyModule` may await a callback a foreign thread posts, a
+  prepared call's or `invokeAsync`'s completion, and `publishAsync`. Events and end reports are not
+  delivered once destroy has begun, and posts still queued when `destroyModule` returns are dropped.
+  Whether the Runtime still admits a call made during destroy is another matter: ordinary paths close
+  at stop and at shutdown (RUNTIME l.3713-3716), so cleanup that needs another module belongs in a
+  preparation method (l.3739).
+- **Not covered:** the inner job of an inline re-entry and synchronous entries still running at
+  destroy (both still run after `destroyModule`, as G338 records); `isCancelled` for plain handlers
+  once destroy has begun; the W-case for marked wipes on the cancellation path (G338).
+- **Tests:** `sdk/tests/test_kit_confined.nim` "what runs while destroyModule runs" (8 cases, orc,
+  refc and orc-release). The ledger fixture's `destroyModule` is `async` and awaits only when the test
+  sets `destroyMode`, so every other case keeps its synchronous behaviour; `foreign_lib.c` gains a
+  delayed single post and a stream that posts until stopped. Cases: (a) a callback a foreign C thread
+  posts 50 ms in, destroy under 1 s, the instance freed (orc); (b) `invokeAsync` completed by a binding
+  thread 100 ms in; (c) `publishAsync`, ok, seen by the publish callback; (d) posts queued by a
+  `destroyModule` that returns without yielding never run; (e) events delivered while `destroyModule`
+  awaits reach the kit and are dropped; (f) a `wait` 12 handler under `noCancel` whose completion
+  comes after the 2 s bound finishes during `destroyModule`, NOT_READY once, the instance freed (orc);
+  (g1) a foreign stream `destroyModule` stops and joins, no callback after it returned; (g2) the same
+  while `destroyModule` first awaits a delayed post, callbacks during it, none after. Each wait in the
+  fixture is bounded by 5 s with `race`, never `withTimeout`, which cancels the call it bounds and
+  waits for that. Run by hand once under the order before (`disposed` set at the start of destroy):
+  a, b, c, e, f and g2 fail, none hangs; d and g1 pass under both orders.
+- **Status:** built 2026-11-21 (Tier 5 step N-1e, part A).
 
 ### G317 — The reverse mapper's input set
 - **Kind:** IMPL (gaps Q1, Q4; reading Q6) · **Specs:** INTERFACE §3 · **Plan:** `tier5-plans/step5-1-reverse-mapper.md` §4.1. Section and Q numbers below are the plan's; `l.` cites are INTERFACE.
@@ -7582,6 +7648,7 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G396 | the package trust file v2 | FREE | 9 |
 | G397 | `logosctl trust` for the package trust file, and key separation | FREE | 9 |
 | G398 | catalog and provenance selections in the package trust file | FREE (C3, C9) | 9 |
+| G437 | what runs while a confined kit's `destroyModule` runs | IMPL | 12 |
 
 ---
 

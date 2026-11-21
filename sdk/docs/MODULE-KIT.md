@@ -163,8 +163,15 @@ as the example's `totals` table does. **A refc module whose handlers keep GC'd s
   has never seen included: a C or Rust library's own threads. C code linked into the library calls
   `lcn_kit_post(poster, fn, payload)` instead. Stop posting before `destroyModule` returns: a callback
   still queued then is dropped.
-- At destroy, `destroyModule` runs on the module thread, events already queued are delivered, and both
-  of the kit's threads are joined before `_MODULE_destroy` returns.
+- At destroy, `destroyModule` runs on the module thread, the events the module published are
+  delivered, and both of the kit's threads are joined before `_MODULE_destroy` returns.
+- `destroyModule` may be `async` and await what the module started: a callback a foreign thread posts
+  to it, the completion of a prepared call or of `invokeAsync`, and `publishAsync` (G437). Events and
+  end reports from routes are not delivered once destroy has begun, and posts still queued when
+  `destroyModule` returns are dropped.
+- Whether the Runtime still admits a call made during destroy is another matter: ordinary call paths
+  close at stop and at shutdown (RUNTIME l.3713-3716). Cleanup that needs another module belongs in a
+  preparation method the module declares and the deployment calls before stopping it (l.3739).
 
 ## 4. Async handlers
 

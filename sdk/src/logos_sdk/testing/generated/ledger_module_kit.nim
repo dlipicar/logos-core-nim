@@ -492,16 +492,20 @@ template exportLedgerModule*(T: typedesc) =
     GC_ref(instance)
     return Result[pointer, InvocationFailure].ok(cast[pointer](instance))
 
-  proc ledgerModuleKitDispose(p: pointer): Future[void] {.async: (raises: []).} =
+  proc ledgerModuleKitDispose(p: pointer): FutureBase {.nimcall, gcsafe, raises: [].} =
+    ## `destroyModule`'s own future, or nil once a synchronous one returned
+    ## (DECISIONS G437).
     let instance = cast[T](p)
     when compiles(destroyModule(instance)):
       when typeof(destroyModule(instance)) is void:
         destroyModule(instance)
       else:
-        let f = destroyModule(instance)
-        if not f.finished():
-          await noCancel(join(f))
-    GC_unref(instance)
+        return FutureBase(destroyModule(instance))
+
+  proc ledgerModuleKitRelease(p: pointer) {.nimcall, gcsafe, raises: [].} =
+    ## The instance's release, in the step that drops what is still queued
+    ## (DECISIONS G437).
+    GC_unref(cast[T](p))
 
   proc ledgerModuleKitName(): cstring {.exportc: "logos_ledger_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [].} =
     system.cstring(moduleName)
@@ -512,7 +516,7 @@ template exportLedgerModule*(T: typedesc) =
 
   proc ledgerModuleKitDestroy(module: ptr LogosModuleContext) {.exportc: "logos_ledger_module_MODULE_destroy", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
-    confinedDestroy(module, ledgerModuleKitDispose)
+    confinedDestroy(module, ledgerModuleKitDispose, ledgerModuleKitRelease)
 
   proc ledgerModuleKitRoute(p: pointer, bare: string, params: ptr UncheckedArray[uint8], len: int, inv: Invocation): RouteFuture {.nimcall, gcsafe, raises: [].} =
     let instance {.cursor.} = cast[T](p)

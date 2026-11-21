@@ -614,6 +614,7 @@ proc queueEnd(s: ptr SubObj, d: Dispatcher, reason: CErrorCode): bool =
   s.endReason = reason
   s.endTask.run = runEnd
   s.endTask.counted = false
+  s.endTask.duringDestroy = false # G437: an end report, dropped once destroy begins
   discard d.post(d.context, addr s.endTask)
   true
 
@@ -661,6 +662,7 @@ proc queueEvent(
   let e = cast[ptr EventTask](allocShared0(sizeof(EventTask) + n))
   e.task.run = runEvent
   e.task.counted = true
+  e.task.duringDestroy = false # G437: an event, dropped once destroy begins
   e.sub = s
   e.len = n
   if n > 0:
@@ -713,6 +715,7 @@ proc onRouteEndCb(reason: CErrorCode, userData: pointer) {.cdecl, gcsafe, raises
       if open:
         h.endTask.run = runRouteEnd
         h.endTask.counted = false
+        h.endTask.duringDestroy = false # G437: dropped once destroy begins
         discard h.dispatch.post(h.dispatch.context, addr h.endTask)
   elif h.onRouteEnd != nil:
     enterCallback(h)
@@ -1150,6 +1153,9 @@ proc onCompleteCb(
     c.queued.store(true)
     c.doneTask.run = runDone
     c.doneTask.counted = false
+    c.doneTask.duringDestroy = true
+      # G437: a completion of what the module started, which `destroyModule` may
+      # await (`invokeAsync` included)
     discard c.dispatch.post(c.dispatch.context, addr c.doneTask)
     return
   var st = checkCompletion(status, response, len, owner)

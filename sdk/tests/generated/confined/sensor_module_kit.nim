@@ -295,16 +295,20 @@ template exportSensorModule*(T: typedesc) =
     GC_ref(instance)
     return Result[pointer, InvocationFailure].ok(cast[pointer](instance))
 
-  proc sensorModuleKitDispose(p: pointer): Future[void] {.async: (raises: []).} =
+  proc sensorModuleKitDispose(p: pointer): FutureBase {.nimcall, gcsafe, raises: [].} =
+    ## `destroyModule`'s own future, or nil once a synchronous one returned
+    ## (DECISIONS G437).
     let instance = cast[T](p)
     when compiles(destroyModule(instance)):
       when typeof(destroyModule(instance)) is void:
         destroyModule(instance)
       else:
-        let f = destroyModule(instance)
-        if not f.finished():
-          await noCancel(join(f))
-    GC_unref(instance)
+        return FutureBase(destroyModule(instance))
+
+  proc sensorModuleKitRelease(p: pointer) {.nimcall, gcsafe, raises: [].} =
+    ## The instance's release, in the step that drops what is still queued
+    ## (DECISIONS G437).
+    GC_unref(cast[T](p))
 
   proc sensorModuleKitName(): cstring {.exportc: "logos_sensor_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [].} =
     system.cstring(moduleName)
@@ -315,7 +319,7 @@ template exportSensorModule*(T: typedesc) =
 
   proc sensorModuleKitDestroy(module: ptr LogosModuleContext) {.exportc: "logos_sensor_module_MODULE_destroy", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
-    confinedDestroy(module, sensorModuleKitDispose)
+    confinedDestroy(module, sensorModuleKitDispose, sensorModuleKitRelease)
 
   proc sensorModuleKitRoute(p: pointer, bare: string, params: ptr UncheckedArray[uint8], len: int, inv: Invocation): RouteFuture {.nimcall, gcsafe, raises: [].} =
     let instance {.cursor.} = cast[T](p)

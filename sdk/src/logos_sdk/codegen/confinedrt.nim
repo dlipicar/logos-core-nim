@@ -75,7 +75,11 @@
 ## left with NOT_READY, closes its signal and tears down its dispatcher; both
 ## threads are joined and the context freed before `_MODULE_destroy` returns.
 ## A failed initialization joins both threads the same way, dropping the
-## queued events.
+## queued events. While `destroyModule` runs (G437), posted callbacks,
+## completions and publication replies still run, so it may await them;
+## events and end reports are dropped from the start of destroy. Once
+## `destroyModule`'s future has finished, the instance is released in the same
+## step, and nothing queued runs after that.
 ##
 ## **Deferred provider** (DECISIONS G338). With `lcn-gen kit --confined
 ## --async-api` the kit exports `_MODULE_async_api` (INTERFACE §2.9.2). Its
@@ -261,7 +265,12 @@ type
     services: ModuleServices
     # Module thread only.
     instance: pointer
-    disposed: bool
+    destroying: bool
+      ## [DECISIONS G437] destroy has begun: events and end reports are dropped
+    disposing: pointer
+      ## [DECISIONS G437] while `destroyModule` runs: its future (`GC_ref`'d), so
+      ## what is served once it has finished is dropped as after the release
+    disposed: bool ## [DECISIONS G437] the instance is released
     ending: bool ## the module thread is tearing down
     # The publisher.
     pubLock: Lock
@@ -293,13 +302,14 @@ type
   CreateFuture* = Future[Result[pointer, InvocationFailure]].Raising([])
   RouteFuture* = Future[Result[seq[byte], InvocationFailure]].Raising([])
   ApplyFuture* = Future[Result[void, InvocationFailure]].Raising([])
-  DisposeFuture* = Future[void].Raising([])
 
   ConfinedCreate* = proc(init: ModuleInit): CreateFuture {.nimcall, gcsafe, raises: [].}
     ## Runs the author's `initModule` and returns its instance, `GC_ref`'d.
-  ConfinedDispose* =
-    proc(instance: pointer): DisposeFuture {.nimcall, gcsafe, raises: [].}
-    ## Runs the author's `destroyModule`, if any, and `GC_unref`s the instance.
+  ConfinedDispose* = proc(instance: pointer): FutureBase {.nimcall, gcsafe, raises: [].}
+    ## [DECISIONS G437] Runs the author's `destroyModule`, if any: nil once a
+    ## synchronous one has returned, else its own future.
+  ConfinedRelease* = proc(instance: pointer) {.nimcall, gcsafe, raises: [].}
+    ## [DECISIONS G437] `GC_unref`s the instance: its release.
   ConfinedRoute* = proc(
     instance: pointer,
     bare: string,
@@ -598,6 +608,23 @@ proc publishEncodedAsync*(
 
 # Statuses back on the module thread --------------------------------------------------
 
+proc released(ctx: ptr ConfinedObj): bool =
+  ## [DECISIONS G437] The module thread: the instance is released, or
+  ## `destroyModule` has returned and its release is a few turns away. Posted
+  ## callbacks, completions and publication replies are dropped from then on.
+  if ctx.disposed:
+    return true
+  if ctx.disposing == nil:
+    return false
+  let f {.cursor.} = cast[FutureBase](ctx.disposing)
+  f.finished()
+
+proc dropTask(ctx: ptr ConfinedObj, t: ptr TaskNode): bool =
+  ## [DECISIONS G437] Whether a queued task is dropped: every task once the
+  ## instance is released; from the start of destroy, all but the completions
+  ## of what the module started.
+  ctx.released or (ctx.destroying and not t.duringDestroy)
+
 proc settleReply(ctx: ptr ConfinedObj, item: ptr PubItem) =
   ## Completes an answered publication's future; after the instance's release
   ## the future is let go without resuming anyone.
@@ -609,7 +636,7 @@ proc settleReply(ctx: ptr ConfinedObj, item: ptr PubItem) =
       let d {.cursor.} = cast[DrainFuture](job.drained)
       if not d.finished():
         d.complete()
-  if not ctx.disposed and not ctx.ending and not reply.finished():
+  if not ctx.released and not ctx.ending and not reply.finished():
     case item.kind
     of pkInstance:
       reply.complete(publishCode(item.rc, $item.itemName))
@@ -714,6 +741,7 @@ type
 
   DestroyArgs = object
     dispose: ConfinedDispose
+    release: ConfinedRelease
 
   ApplyArgs = object
     apply: ConfinedApply
@@ -798,18 +826,28 @@ proc unwindDeferred(ctx: ptr ConfinedObj) {.async: (raises: []).} =
 proc destroyTask(job: ptr ConfinedJob) {.async: (raises: []).} =
   let a = cast[ptr DestroyArgs](job.args)
   let ctx = job.ctx
-  # [DECISIONS G338] No new job reaches the instance (each answers NOT_READY);
-  # running handlers keep their own reference to it until it is disposed.
-  # `disposed` waits for the unwinding: it drops posted tasks, and a cancelled
-  # handler may await a completion that arrives as one.
+  # [DECISIONS G337, G338, G437] No new job reaches the instance (each answers
+  # NOT_READY), and events and end reports are dropped from here. Posted
+  # callbacks, completions and publication replies still run through the
+  # unwinding and `destroyModule`, which may await them, until `destroyModule`
+  # has returned; then the instance is released in the same step as
+  # `disposed` is set, so nothing served after its release runs.
+  ctx.destroying = true
   let instance = ctx.instance
   ctx.instance = nil
   await unwindDeferred(ctx)
-  ctx.disposed = true
   if instance != nil:
     let f = a.dispose(instance)
-    if not f.finished():
+    if f != nil and not f.finished():
+      GC_ref(f)
+      ctx.disposing = cast[pointer](f)
+      # A failed or cancelled `destroyModule` still reaches the release.
       await noCancel(join(f))
+      ctx.disposing = nil
+      GC_unref(f)
+  ctx.disposed = true
+  if instance != nil:
+    a.release(instance)
   var outcome = Result[void, InvocationFailure].ok()
   finishJob(job, nil, outcome)
 
@@ -1092,11 +1130,11 @@ proc runNode(ctx: ptr ConfinedObj, n: ptr Node) =
     let p = cast[ptr PostNode](n)
     let (fn, payload) = (p.fn, p.payload)
     cFree(p)
-    if not ctx.disposed:
+    if not ctx.released:
       fn(payload)
   of nkTask:
     let t = cast[ptr TaskNode](n)
-    t.run(t, ctx.disposed)
+    t.run(t, ctx.dropTask(t))
 
 proc serve(ctx: ptr ConfinedObj) =
   ## Runs what is queued, one node at a time, answered publications first; a
@@ -1172,13 +1210,13 @@ proc deferredScopedPublish(
   inc job.inflight
   let saved = swapConfinedScope(nil)
   var queued = ctx.tryQueue(item, wantRoom = true)
-  while not queued and not ctx.disposed:
+  while not queued and not ctx.released:
     let room = ctx.waitRoom()
-    while not room.finished() and not ctx.disposed:
+    while not room.finished() and not ctx.released:
       poll()
     queued = ctx.tryQueue(item, wantRoom = true)
   if queued:
-    while not reply.finished() and not ctx.disposed:
+    while not reply.finished() and not ctx.released:
       poll()
   discard swapConfinedScope(saved)
   if not queued:
@@ -1440,7 +1478,9 @@ proc confinedInit*(
     return
   outContext[] = cast[ptr LogosModuleContext](ctx)
 
-proc confinedDestroy*(module: ptr LogosModuleContext, dispose: ConfinedDispose) =
+proc confinedDestroy*(
+    module: ptr LogosModuleContext, dispose: ConfinedDispose, release: ConfinedRelease
+) =
   ## [SPEC INTERFACE §2.6, l.1949-1962] `_MODULE_destroy` of a confined kit:
   ## the author's hook and the instance's release on the module thread, then
   ## the queued events delivered, then both threads joined and the context
@@ -1450,7 +1490,7 @@ proc confinedDestroy*(module: ptr LogosModuleContext, dispose: ConfinedDispose) 
   let ctx = module.confinedOf
   if ctx.onModuleThread:
     die("_MODULE_destroy was called on its own module thread")
-  var a = DestroyArgs(dispose: dispose)
+  var a = DestroyArgs(dispose: dispose, release: release)
   discard handOff(ctx, launchDestroy, addr a, nil)
   ctx.stopThreads(deliver = true)
   freeContext(ctx)
@@ -1551,6 +1591,7 @@ proc confinedSubmit*(
   dj.route = route
   dj.refs = 1
   dj.cancelTask.run = runCancel
+  dj.cancelTask.duringDestroy = true
   acquire(ctx.lock)
   if ctx.stopping:
     release(ctx.lock)
@@ -1696,9 +1737,10 @@ proc poster*(s: ModuleServices): Poster =
 proc post*(p: Poster, fn: PostFn, payload: pointer) =
   ## [IMPL] Runs `fn(payload)` on the module thread. Any thread, one the Nim
   ## runtime never saw included: only the C allocator, and a failure aborts. A
-  ## callback still queued at destroy is dropped without running, so `fn`
-  ## owns `payload` only once it runs; stop posting before `destroyModule`
-  ## returns.
+  ## callback still runs while `destroyModule` runs, which may await it; one
+  ## still queued when `destroyModule` has returned is dropped without running
+  ## (DECISIONS G437), so `fn` owns `payload` only once it runs; stop posting
+  ## before `destroyModule` returns.
   let ctx = cast[ptr ConfinedObj](p)
   if ctx == nil or fn == nil:
     die("post: a null poster or callback")

@@ -469,6 +469,8 @@ var
   fakeCancels: Atomic[int]
   fakeCancelCompletes: Atomic[bool] ## `cancel` completes the call CANCELLED
   fakeTimeout: Atomic[int] ## the latest prepared call's deadline, 0 for none
+  fakePrepares: Atomic[int] ## calls prepared
+  deliveries: Atomic[int] ## events `deliver` handed to a subscription
   ownerReleases: Atomic[int]
   ownerReleaseThread: Atomic[uint64]
   delivering {.threadvar.}: bool
@@ -582,6 +584,7 @@ proc fakePrepareOp(
   {.cast(gcsafe).}:
     fakeCallbacks = callbacks[]
     outCall[] = LogosAsyncCall(vtable: addr fakeCallVtable, state: addr fakeState)
+  fakePrepares += 1
   fakeTimeout.store(
     if options.hasTimeout:
       int(options.timeoutMs)
@@ -633,6 +636,8 @@ proc resetFake() =
   fakeCancels.store(0)
   fakeCancelCompletes.store(false)
   fakeTimeout.store(0)
+  fakePrepares.store(0)
+  deliveries.store(0)
   ownerReleases.store(0)
   routeToWrap = LogosRouteHandle(vtable: addr fakeVtable, state: addr fakeState)
 
@@ -646,6 +651,7 @@ proc deliver(value: uint64) {.gcsafe.} =
         if f.active:
           targets.add((f.handler, f.user))
   for (handler, user) in targets:
+    deliveries += 1
     delivering = true
     handler(
       "meter.changed_event",
@@ -698,6 +704,49 @@ proc deliverInsideHook(
 
 proc report(ctx: ptr LogosModuleContext): string =
   probe(ctx, 14)[1].note
+
+proc resetDestroy() =
+  ## The fixture's destroy modes and counters (DECISIONS G437).
+  destroyMode.store(0)
+  destroyStarted.store(false)
+  destroyReturned.store(false)
+  streamed.store(0)
+  streamedDuring.store(0)
+  lateCalls.store(0)
+  residualDone.store(0)
+  posts.store(0)
+  postThreads.store(0)
+
+proc completeInDestroy(a: (int, int)) {.thread.} =
+  ## Completes the latest prepared call `a[0]` ms after `destroyModule` began,
+  ## once `a[1]` calls were prepared, as a binding's thread does.
+  let (delayMs, prepared) = a
+  for _ in 0 ..< 20_000:
+    if destroyStarted.load and fakePrepares.load >= prepared:
+      break
+    sleep(1)
+  sleep(delayMs)
+  completeFake("destroy")
+
+var deliveredInDestroy: Atomic[int]
+
+proc deliverInDestroy(i: int) {.thread.} =
+  ## Two `meter.changed_event`s once `destroyModule` began.
+  for _ in 0 ..< 20_000:
+    if destroyStarted.load:
+      break
+    sleep(1)
+  let before = deliveries.load
+  deliver(5)
+  deliver(6)
+  deliveredInDestroy.store(deliveries.load - before)
+
+proc streamedAtLeast(n: int): bool =
+  for _ in 0 ..< 5000:
+    if streamed.load >= n:
+      return true
+    sleep(1)
+  false
 
 # Provider invocations the test builds (DECISIONS G338) -------------------------------
 #
@@ -1493,3 +1542,117 @@ suite "confined kit: the deferred provider (DECISIONS G338)":
     check f.value.error.code == ecNotReady
     check fakeTimeout.load == 0
     discard h.release()
+
+suite "confined kit: what runs while destroyModule runs (DECISIONS G437)":
+  setup:
+    resetRuntime()
+    resetFake()
+    resetDestroy()
+
+  test "[IMPL-DECISION G437] destroyModule awaits a callback a foreign C thread posts 50 ms in":
+    let ctx = openLedger()
+    let freedBefore = freed.load
+    destroyMode.store(1)
+    let started = epochTime()
+    ledgerDestroy(ctx)
+    # Under the order before G437 the callback was dropped, and only the
+    # fixture's 5 s bound ended the wait: the 1 s bound catches that.
+    check epochTime() - started < 1.0
+    check destroyNote() == "woke=true"
+    check posts.load == 1
+    when defined(gcOrc):
+      check freed.load == freedBefore + 1
+
+  test "[IMPL-DECISION G437] destroyModule awaits invokeAsync; the completion arrives 100 ms into destroyModule":
+    let ctx = openLedger()
+    check probe(ctx, 10)[1].note == "subscribed"
+    destroyMode.store(2)
+    var t: Thread[(int, int)]
+    createThread(t, completeInDestroy, (100, 1))
+    let started = epochTime()
+    ledgerDestroy(ctx)
+    joinThread(t)
+    check epochTime() - started < 1.0
+    check destroyNote() == "ok:destroy"
+    check ownerReleases.load == 1
+    check fakeCallReleases.load == 1
+    check fakeReleased.load
+
+  test "[IMPL-DECISION G437] destroyModule awaits publishAsync: ok, and the publish callback saw the event":
+    let ctx = openLedger()
+    destroyMode.store(3)
+    ledgerDestroy(ctx)
+    check destroyNote() == "ok"
+    check seenCount("destroy") == 1
+
+  test "[IMPL-DECISION G437] posts queued by a destroyModule that returns without yielding never run":
+    let ctx = openLedger()
+    let freedBefore = freed.load
+    destroyMode.store(4)
+    ledgerDestroy(ctx)
+    check destroyNote() == "posted"
+    check posts.load == 0
+    check postThreads.load == 0
+    when defined(gcOrc):
+      check freed.load == freedBefore + 1
+
+  test "[IMPL-DECISION G437] events are dropped from the start of destroy, while destroyModule awaits":
+    let ctx = openLedger()
+    check probe(ctx, 10)[1].note == "subscribed"
+    deliver(1)
+    check ctx.report.startsWith("seen=1 ")
+    destroyMode.store(5)
+    deliveredInDestroy.store(0)
+    var t: Thread[int]
+    createThread(t, deliverInDestroy, 0)
+    ledgerDestroy(ctx)
+    joinThread(t)
+    check deliveredInDestroy.load == 2 # both reached the kit's subscription
+    check destroyNote() == "woke=true seen=1"
+
+  test "[IMPL-DECISION G437] [IFC-0769] a handler that ignored its cancellation past the unwinding's bound finishes during destroyModule: NOT_READY once":
+    let ctx = openLedger()
+    check probe(ctx, 10)[1].note == "subscribed"
+    let fi = prepareFake(0, "wait", request(LedgerWaitRequest(channel: 12, value: 3)))
+    submit(ctx, fi)
+    discard probe(ctx, 1) # its handler awaits its call, prepared and submitted
+    check fakePrepares.load == 1
+    let freedBefore = freed.load
+    destroyMode.store(6)
+    var t: Thread[(int, int)]
+    createThread(t, completeInDestroy, (500, 1))
+    let started = epochTime()
+    ledgerDestroy(ctx)
+    joinThread(t)
+    let took = epochTime() - started
+    check took >= 1.5 and took < 10.0 # the unwinding's 2 s bound passed first
+    check destroyNote() == "residual=1"
+    check fakeCancels.load == 0 # `noCancel`: its call was never cancelled
+    check fi.exactlyOnce
+    check fi.status.error.code == ecNotReady
+    when defined(gcOrc):
+      check freed.load == freedBefore + 1 # its frames ended: nothing abandoned
+    clearFake(fi)
+
+  test "[IMPL-DECISION G437] a foreign stream that destroyModule stops and joins: no callback after it returned":
+    let ctx = openLedger()
+    let freedBefore = freed.load
+    check probe(ctx, 24)[1].note == "streaming"
+    check streamedAtLeast(20)
+    ledgerDestroy(ctx)
+    check lateCalls.load == 0
+    when defined(gcOrc):
+      check freed.load == freedBefore + 1
+
+  test "[IMPL-DECISION G437] a foreign stream while destroyModule awaits a delayed post: callbacks run during it, none after it returned":
+    let ctx = openLedger()
+    let freedBefore = freed.load
+    check probe(ctx, 24)[1].note == "streaming"
+    check streamedAtLeast(20)
+    destroyMode.store(7)
+    ledgerDestroy(ctx)
+    check destroyNote() == "woke=true"
+    check streamedDuring.load > 0
+    check lateCalls.load == 0
+    when defined(gcOrc):
+      check freed.load == freedBefore + 1
