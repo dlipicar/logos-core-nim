@@ -95,6 +95,23 @@ proc loadSchema*(
   doAssert s.isOk, "generated module: its schema set is not accepted: " & s.error
   loadSchemaSet(s.get)
 
+proc loadBindingSchema*(
+    module: string, interfaces, supporting: openArray[string], system = false
+): GeneratedSchema =
+  ## [DECISIONS G339] The declarations of an interface-only module binding
+  ## (INTERFACE §2, l.2833-2835): no primary document, `interfaces` as its
+  ## implemented set. A failure means the module no longer matches this
+  ## library's acceptance rules: regenerate it.
+  let b = acceptBinding(
+    module, Opt.none(string), interfaces, supporting, AcceptOptions(system: system)
+  )
+  doAssert b.isOk, "generated module: its binding is not accepted: " & b.error
+  let ctx = b.get.context
+  var g = GeneratedSchema()
+  for c in b.get.documents:
+    g.add(schemaSetFor(c.model, ctx))
+  g
+
 proc loadCommonSchema*(): GeneratedSchema =
   ## The pinned common schema (INTERFACE §5.1).
   var g = GeneratedSchema()

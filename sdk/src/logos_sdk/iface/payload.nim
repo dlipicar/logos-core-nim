@@ -32,17 +32,25 @@ type
     msg*: string
 
   ContractValidator* = object
-    ## Validates payloads for every callable of one accepted contract set.
-    contracts*: ContractSet
+    ## Validates payloads for every callable of one accepted contract set or
+    ## module binding.
+    documents*: seq[Contract]
+      ## the set's or the binding's documents (`documents`), which `surface`'s
+      ## `doc` indexes
     surface*: CallSurface
     maxDepth*: int ## [SPEC INTERFACE §4.5.1] the payload depth limit, >= 128
-    sets: seq[SchemaSet] ## one per `contracts.documents` entry
+    sets: seq[SchemaSet] ## one per `documents` entry
+
+func newValidator(
+    docs: seq[Contract], surface: CallSurface, ctx: SchemaContext, maxDepth: int
+): ContractValidator =
+  var v = ContractValidator(documents: docs, surface: surface, maxDepth: maxDepth)
+  for c in docs:
+    v.sets.add(schemaSetFor(c.model, ctx))
+  v
 
 func newValidator(s: ContractSet, maxDepth: int): ContractValidator =
-  var v = ContractValidator(contracts: s, surface: s.callSurface, maxDepth: maxDepth)
-  for c in s.documents:
-    v.sets.add(schemaSetFor(c.model, s.context))
-  v
+  newValidator(s.documents, s.callSurface, s.context, maxDepth)
 
 func validator*(s: ContractSet): ContractValidator =
   ## A validator with the default payload depth limit, `DefaultMaxDepth`.
@@ -54,6 +62,12 @@ func validator*(s: ContractSet, maxDepth: int): Result[ContractValidator, string
   if maxDepth < MinMaxDepth:
     return err("the payload depth limit is below " & $MinMaxDepth)
   ok(newValidator(s, maxDepth))
+
+proc validator*(b: ModuleBinding): ContractValidator =
+  ## [SPEC INTERFACE §2.6] A validator for what a module binding exposes, with
+  ## the default payload depth limit: an interface-only provider's kit checks
+  ## its calls with it (DECISIONS G339).
+  newValidator(b.documents, b.callSurface, b.context, DefaultMaxDepth)
 
 func marked*(v: ContractValidator, methodName: string): tuple[request, response: bool] =
   ## [SPEC INTERFACE §1.2.1] Which payloads of the bare method `methodName`

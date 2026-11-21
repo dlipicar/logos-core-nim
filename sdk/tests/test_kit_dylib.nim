@@ -37,6 +37,10 @@ type
   ApplyFn = proc(
     module: ptr LogosModuleContext, cbor: ptr UncheckedArray[uint8], len: csize_t
   ): LogosResult {.cdecl, gcsafe, raises: [].}
+  SnapshotFn = proc(
+    module: ptr LogosModuleContext, owner: ptr LogosResponseOwner, outCount: ptr uint64
+  ): LogosResult {.cdecl, gcsafe, raises: [].}
+    ## `metrics_provider.snapshot`'s typed provider function (INTERFACE §2.4)
 
   Library = object ## One kit module's exported symbols, as `dlsym` finds them.
     handle: LibHandle
@@ -123,6 +127,18 @@ let ledgerOther = load(
   buildKitLibrary("ledger_lib.nim", "kitledgerx", otherMm, exports = "ledger_module"),
   "ledger_module",
 )
+
+let metricsOnly =
+  build("metrics_only_impl.nim", "kitmetricsonly", "metrics_only_module")
+  ## [DECISIONS G339] The interface-only kit (`sdk/tests/kit/`): the §3.9.2
+  ## `metrics_provider` with no primary document.
+
+let idleLib = block:
+  ## [DECISIONS G339] A kit with lifecycle symbols and no contract, linked with
+  ## its export list.
+  let h = loadLib(buildKitLibrary("idle_impl.nim", "kitidle", exports = "idle_module"))
+  doAssert h != nil, "dlopen failed: kitidle"
+  h
 
 var otherPublished: Atomic[int]
 
@@ -297,6 +313,7 @@ suite "ifc.kit: kit modules as shared libraries (INTERFACE §2.6, §2.8) [IMPL]"
       (tuner, "kittuner", "tuner_module", generatedDir),
       (sensorConfined, "kitsensorc", "sensor_module", sdkGeneratedDir / "confined"),
       (ledger, "kitledger", "ledger_module", generatedDir),
+      (metricsOnly, "kitmetricsonly", "metrics_only_module", sdkGeneratedDir),
     ]:
       checkpoint name
       var listed = 0
@@ -312,6 +329,51 @@ suite "ifc.kit: kit modules as shared libraries (INTERFACE §2.6, §2.8) [IMPL]"
         for hidden in ["lib" & name & "NimMain", "blake3_hasher_init", "blake3_version"]:
           checkpoint hidden
           check lib.handle.symAddr(cstring(hidden)) == nil
+
+  test "[IMPL-DECISION G339] [IFC-0880] an interface-only kit library: its descriptor, and its interface's method by dispatch and by typed function":
+    check $metricsOnly.name() == "metrics_only_module"
+    var n: csize_t
+    let p = metricsOnly.callSurface(addr n)
+    let bytes = @(cast[ptr UncheckedArray[uint8]](p).toOpenArray(0, int(n) - 1))
+    let b = acceptBinding(
+      "metrics_only_module", Opt.none(string), [mirror("IFC/3.9.2.interface.cddl")]
+    ).get
+    check bytes == callSurfaceDescriptor(b).get
+    check acceptCallSurfaceDescriptor(bytes, "metrics_only_module").get.primary.isNone
+    let ctx = metricsOnly.start(publish = false)
+    let c = call(metricsOnly.dispatch, metricsOnly.free, ctx, "snapshot", diag("{}"))
+    check c.status.isOk and c.response == diag("{\"count\": 1}")
+    let snap = cast[SnapshotFn](metricsOnly.handle.symAddr(
+      "logos_metrics_only_module_CALL_metrics_provider_Snapshot"
+    ))
+    check snap != nil
+    var owner: LogosResponseOwner
+    var count: uint64
+    check readStatus(snap(ctx, addr owner, addr count)).isOk and count == 2
+    if not owner.release.isNil:
+      owner.release(owner.state)
+    check call(metricsOnly.dispatch, metricsOnly.free, ctx, "configure", diag("{}")).code ==
+      ecMethodNotFound
+    metricsOnly.destroy(ctx)
+
+  test "[IMPL-DECISION G339] [IFC-0880] [IFC-0881] a kit library with lifecycle symbols and no contract exports no provider symbol":
+    for suffix in ["name", "init", "destroy"]:
+      check idleLib.symAddr(cstring("logos_idle_module_MODULE_" & suffix)) != nil
+    for suffix in ["call_surface", "free", "dispatch", "async_api"]:
+      check idleLib.symAddr(cstring("logos_idle_module_MODULE_" & suffix)) == nil
+    let name = cast[NameFn](idleLib.symAddr("logos_idle_module_MODULE_name"))
+    check $name() == "idle_module"
+    let init = cast[InitFn](idleLib.symAddr("logos_idle_module_MODULE_init"))
+    let destroy = cast[DestroyFn](idleLib.symAddr("logos_idle_module_MODULE_destroy"))
+    var i = input(publish = false)
+    var ctx: ptr LogosModuleContext
+    check checkOutcome(init(addr i, addr ctx), contextShape(ctx)).isOk
+    destroy(ctx)
+    var listed = 0
+    for line in lines(repoDir / sdkGeneratedDir / "idle_module_kit.exports"):
+      if line.len > 0 and line[0] == '_':
+        inc listed
+    check listed == 3
 
   test "calls from the loading thread: a response, a failure's message, an event":
     withLock publishedLock:

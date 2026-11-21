@@ -597,6 +597,19 @@ proc loadValidator*(
   doAssert s.isOk, "module kit: its schema set is not accepted: " & s.error
   validator(s.get)
 
+proc loadBindingValidator*(
+    module: string, interfaces, supporting: openArray[string], system: bool
+): ContractValidator =
+  ## [DECISIONS G339] The validator of an interface-only binding a kit was
+  ## generated from (INTERFACE l.2833-2835): no primary document, `interfaces`
+  ## as the implemented set. A failure means this library no longer accepts
+  ## them: regenerate the kit.
+  let b = acceptBinding(
+    module, Opt.none(string), interfaces, supporting, AcceptOptions(system: system)
+  )
+  doAssert b.isOk, "module kit: its binding is not accepted: " & b.error
+  validator(b.get)
+
 proc checkedRequest*(
     v: ContractValidator, bare: string, params: openArray[byte]
 ): Result[CborValue, InvocationFailure] =
