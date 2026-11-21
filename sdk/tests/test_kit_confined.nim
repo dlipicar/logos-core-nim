@@ -1106,6 +1106,19 @@ suite "confined kit: publication (DECISIONS G337)":
     sleep(20)
     check seenCount("flood") == 30
 
+suite "confined kit: the module thread's dispatcher (DECISIONS G438)":
+  setup:
+    resetRuntime()
+
+  test "[IMPL-DECISION G438] the dispatcher is made before the kit registers anything: it held only chronos's own descriptor":
+    # What teardown leaves out of its count is what the dispatcher held when it
+    # was made: none on 4.4.1, the wake-up descriptor alone on chronos's main
+    # line. The kit's signal, registered by `arm`, is never among them.
+    let ctx = openLedger()
+    let line = probe(ctx, 27)[1].note
+    check probe(ctx, 29)[1].note == (if line == "main line": "1" else: "0")
+    ledgerDestroy(ctx)
+
 suite "confined kit: lifecycle and foreign threads (DECISIONS G335)":
   setup:
     resetRuntime()

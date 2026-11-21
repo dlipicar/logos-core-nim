@@ -287,6 +287,26 @@ let helpers = block:
 proc threadCount(): clong {.importc: "lcn_thread_count", cdecl.}
 proc residentBytes(): clong {.importc: "lcn_resident_bytes", cdecl.}
 
+proc steadyThreads(): int =
+  ## The thread count once two reads 20 ms apart agree: on macOS a thread just
+  ## joined can stay listed for a moment.
+  result = int(threadCount())
+  for _ in 0 ..< 100:
+    sleep(20)
+    let n = int(threadCount())
+    if n == result:
+      return
+    result = n
+
+proc threadsBackTo(target: int): int =
+  ## The thread count once it is back to `target`, or after 5 s.
+  result = int(threadCount())
+  for _ in 0 ..< 250:
+    if result == target:
+      return
+    sleep(20)
+    result = int(threadCount())
+
 proc openDescriptors(): int =
   when defined(linux):
     for _ in walkDir("/proc/self/fd"):
@@ -890,14 +910,18 @@ suite "ifc.kit: what a confined kit's destroy leaves registered (DECISIONS G438)
       for _ in 0 ..< 10:
         cycle()
       let fds = openDescriptors()
-      let threads = threadCount()
+      let threads = steadyThreads()
       let resident = residentBytes()
       for _ in 0 ..< 200:
         cycle()
       let grown = residentBytes() - resident
       echo "    200 cycles: resident memory grew by ", grown div 1024, " KiB"
       check openDescriptors() == fds
-      check threads > 0 and threadCount() == threads
+      let after = threadsBackTo(threads)
+      if after != threads:
+        echo "    threads: ",
+          threads, " after the warm-up, ", after, " after 200 cycles"
+      check threads > 0 and after == threads
       # DECISIONS G438: under 1 MiB (Mac 2026-11-21: 16 KiB orc, 0 refc, 16 KiB
       # orc-release); resident memory rarely returns to the byte.
       check resident > 0 and grown < 1024 * 1024

@@ -57,7 +57,9 @@
 ## built with (`main line` once it has `closeThreadDispatcher`, else `4.4.1`).
 ## For G440's post gate, `probe` 28 answers this instance's poster value in
 ## decimal, and an `initModule` given the state directory `/refuse-poster`
-## keeps its poster in `refusedPoster`, then fails.
+## keeps its poster in `refusedPoster`, then fails. `probe` 29 answers how
+## many registrations the module thread's dispatcher held when it was made (a
+## test hook; `no hooks` in a library built without them).
 ##
 ## `destroyModule` is `async` [DECISIONS G437], and awaits only when the test
 ## set `destroyMode` before the destroy; every other destroy returns without
@@ -635,6 +637,9 @@ proc `probe`(
     note = (when declared(closeThreadDispatcher): "main line" else: "4.4.1")
   of 28:
     note = $cast[uint](cast[pointer](m.services.poster))
+  of 29:
+    note = (when declared(notedRegistrations): $notedRegistrations()
+    else: "no hooks")
   else:
     discard
   ok(LedgerProbeResponse(value: request.value, thread: threadNumber(), note: note))

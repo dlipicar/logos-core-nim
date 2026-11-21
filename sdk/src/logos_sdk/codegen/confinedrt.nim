@@ -1271,6 +1271,15 @@ var ownRegistered {.threadvar.}: seq[cint]
   ## when it was made, before the kit registered its signal: chronos's own
   ## wake-up descriptor on its main line after v4.4.0, none on 4.4.1.
 
+when defined(lcnTestHooks):
+  testHooksMarker("confinedrt")
+
+  proc notedRegistrations*(): int =
+    ## [DECISIONS G438] Test hook, on a module thread: how many registrations
+    ## its dispatcher held when it was made, before the kit registered
+    ## anything (`ownRegistered`).
+    ownRegistered.len
+
 when defined(posix):
   proc cDirfd(d: ptr DIR): cint {.importc: "dirfd", header: "<dirent.h>".}
 
