@@ -330,15 +330,19 @@ var
 # What a case costs [IMPL]: one line per case, so a CI log shows where the
 # suite's time goes.
 
-type Cost = object
+type Cost = object ## The main thread's; commands run from other threads too.
   began: MonoTime
-  boots, shutdowns, commands: int
-  bootMs, shutdownMs, commandMs: int64
+  boots, shutdowns: int
+  bootMs, shutdownMs: int64
 
-var cost: Cost
+var
+  cost: Cost
+  costCommands, costCommandMs: Atomic[int64] ## `run`'s, from any thread
 
 proc costBegin() =
   cost = Cost(began: getMonoTime())
+  costCommands.store(0)
+  costCommandMs.store(0)
 
 proc msSince(t: MonoTime): int64 =
   inMilliseconds(getMonoTime() - t)
@@ -352,7 +356,7 @@ proc costLine(name: string): string =
       name
   "lcn_call cost " & tag & ": " & $msSince(cost.began) & " ms; " & $cost.boots & " boot " &
     $cost.bootMs & " ms, " & $cost.shutdowns & " shutdown " & $cost.shutdownMs & " ms, " &
-    $cost.commands & " commands " & $cost.commandMs & " ms"
+    $costCommands.load & " commands " & $costCommandMs.load & " ms"
 
 proc rc[Req](l: Live, m: LcnCtlMethodKind, req: Req): LcnCtlReply =
   let fd = connectCtl(l.d.socketPath, Timeout).expect("a connection")
@@ -572,8 +576,8 @@ proc run(
       files: files,
     )
   )
-  inc cost.commands
-  cost.commandMs += msSince(began)
+  discard costCommands.fetchAdd(1)
+  discard costCommandMs.fetchAdd(msSince(began))
   discard posix.close(ofd)
   discard posix.close(efd)
   for f in files:
