@@ -62,8 +62,8 @@ proc foreignPost(
 
 type
   FreedMark = object
-    ## Counts its instance in `freed` when the instance's memory goes; a moved-from
-    ## mark is not live.
+    ## Counts its instance in `freed` when the instance's memory goes (orc and
+    ## arc builds); a moved-from mark is not live.
     live: bool
 
   Ledger* = ref object
@@ -95,11 +95,15 @@ var
     ## what `probe` 8 calls; the test sets it
   routeToWrap*: LogosRouteHandle ## what `probe` 10 wraps; the test sets it
 
-proc `=destroy`(m: FreedMark) =
-  if m.live:
-    freed += 1
+when defined(gcOrc) or defined(gcArc) or defined(gcAtomicArc):
+  # Only where the count is checked: Nim 2.2 refuses this `=destroy` form under
+  # refc (it asks for `var T`), so refc builds, test_kit_mixed's and
+  # test_kit_dylib's refc libraries among them, count nothing.
+  proc `=destroy`(m: FreedMark) =
+    if m.live:
+      freed += 1
 
-proc `=copy`(a: var FreedMark, b: FreedMark) {.error.}
+  proc `=copy`(a: var FreedMark, b: FreedMark) {.error.}
 
 proc threadNumber(): uint64 =
   uint64(getThreadId())
