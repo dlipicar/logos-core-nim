@@ -512,7 +512,7 @@ template exportLedgerModule*(T: typedesc) =
 
   proc ledgerModuleKitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: "logos_ledger_module_MODULE_init", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
-    confinedInit(input, outContext, declaresEvents, ledgerModuleKitCreate)
+    confinedInit(input, outContext, declaresEvents, ledgerModuleKitCreate, name = system.cstring(moduleName))
 
   proc ledgerModuleKitDestroy(module: ptr LogosModuleContext) {.exportc: "logos_ledger_module_MODULE_destroy", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()

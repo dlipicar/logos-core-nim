@@ -110,7 +110,7 @@ import chronos/[asyncloop, config, threadsync]
 import ../cbor
 import ../abi/[checks, types]
 import ../iface/[outcome, payload]
-import ../base/[perthread, wipe]
+import ../base/[perthread, testhooks, wipe]
 import ./[handover, kitrt]
 
 when defined(posix):
@@ -263,6 +263,7 @@ type
     signal: ThreadSignalPtr
     module: Thread[ptr ConfinedObj]
     services: ModuleServices
+    name: cstring ## the module's name, static in the library; nil for none
     # Module thread only.
     instance: pointer
     destroying: bool
@@ -1253,6 +1254,121 @@ proc scopedPublish(
   ctx.pollUntil(addr mail.done)
   readCopy(mail.status)
 
+# The module thread's dispatcher at teardown (DECISIONS G438) ------------------------
+
+strictDestroyMarker()
+
+var ownRegistered {.threadvar.}: seq[cint]
+  ## [DECISIONS G438] The open descriptors the module thread's dispatcher held
+  ## when it was made, before the kit registered its signal: chronos's own
+  ## wake-up descriptor on its main line after v4.4.0, none on 4.4.1.
+
+when defined(posix):
+  proc cDirfd(d: ptr DIR): cint {.importc: "dirfd", header: "<dirent.h>".}
+
+  iterator openDescriptors(): cint =
+    ## The process's open descriptors: `/proc/self/fd` or `/dev/fd`, else each
+    ## one below `min(RLIMIT_NOFILE, 65536)` that `fcntl` accepts. The listing's
+    ## own descriptor is left out.
+    var listed = false
+    for path in ["/proc/self/fd", "/dev/fd"]:
+      let d = opendir(cstring(path))
+      if d != nil:
+        let own = cDirfd(d)
+        while true:
+          let e = readdir(d)
+          if e == nil:
+            break
+          let name = cast[cstring](addr e.d_name[0])
+          var fd = 0
+          var digits = 0
+          for c in name:
+            if c notin {'0' .. '9'} or digits == 9:
+              digits = -1
+              break
+            fd = fd * 10 + (ord(c) - ord('0'))
+            inc digits
+          if digits > 0 and cint(fd) != own:
+            yield cint(fd)
+        discard closedir(d)
+        listed = true
+        break
+    if not listed:
+      var limit: RLimit
+      var top = 1024
+      if getrlimit(RLIMIT_NOFILE, limit) == 0:
+        top = int(min(int64(limit.rlim_cur), 65536'i64))
+      for fd in 0 ..< top:
+        if fcntl(cint(fd), F_GETFD) != -1:
+          yield cint(fd)
+
+proc registeredBy(disp: PDispatcher): seq[cint] =
+  ## The open descriptors `disp` holds; none off POSIX.
+  when defined(posix):
+    for fd in openDescriptors():
+      if disp.contains(AsyncFD(fd)):
+        result.add(fd)
+
+proc writeLine(ctx: ptr ConfinedObj, text: string) =
+  let line =
+    "logos module kit (confined): " & (if ctx.name == nil: "a module"
+    else: $ctx.name) & ": " & text & "\n"
+  discard cWrite(2, cstring(line), csize_t(line.len))
+
+proc reportLeft(ctx: ptr ConfinedObj, what: string) =
+  ## [DECISIONS G438] What the module left registered with its thread's
+  ## dispatcher: one line on stderr, the descriptors left open. A strict build
+  ## (`lcnKitStrictDestroy`, test builds only) then aborts, so the module's own
+  ## suite fails at the destroy that missed a close.
+  ctx.writeLine(
+    "destroy left " & what &
+      " registered with the module thread's dispatcher; the kit leaves them open"
+  )
+  when defined(lcnKitStrictDestroy):
+    when defined(posix):
+      # A host's own SIGABRT handler (a Nim program's allocates) would not let
+      # the abort through.
+      discard signal(SIGABRT, SIG_DFL)
+    cAbort()
+
+proc closeDispatcher(ctx: ptr ConfinedObj, disp: PDispatcher) =
+  ## [DECISIONS G438] Closes the module thread's dispatcher once the kit's own
+  ## signal is closed and its callbacks cleared. On chronos's main line, which
+  ## gives each dispatcher a wake-up descriptor only `closeThreadDispatcher`
+  ## closes, that is called when nothing else is registered: every step checked
+  ## through the public API first, since its close raises a Defect on anything
+  ## left. Otherwise, and on 4.4.1 and Windows, the selector is closed and the
+  ## dispatcher dropped, as before. The kit never closes what the module left.
+  when defined(posix):
+    var left = 0
+    for fd in openDescriptors():
+      if disp.contains(AsyncFD(fd)) and fd notin ownRegistered:
+        inc left
+  when declared(closeThreadDispatcher) and defined(posix):
+    if left == 0 and ownRegistered.len == 1:
+      let own = ownRegistered[0]
+      let selector = disp.getIoHandler()
+      if own in selector and selector.unregister2(own).isOk:
+        let empty = selector.isEmpty()
+        if selector.registerHandle2(own, {Event.Read}, SelectorData()).isOk and
+            own in selector:
+          if empty:
+            ownRegistered = @[]
+            let diagnostic = closeThreadDispatcher()
+            if diagnostic.isSome:
+              ctx.writeLine("closing the module thread's dispatcher: " & diagnostic.get)
+            return
+          ctx.reportLeft("other registrations")
+  when defined(posix):
+    if left > 0:
+      ctx.reportLeft(
+        "at least " & $left & (if left == 1: " descriptor" else: " descriptors")
+      )
+  ownRegistered = @[]
+  when not defined(windows):
+    discard disp.getIoHandler().close2()
+  setThreadDispatcher(nil)
+
 proc teardown(ctx: ptr ConfinedObj) =
   ## [DECISIONS G335] The module thread's last act: answers what is still
   ## queued (NOT_READY), lets go of every pending future, closes its signal
@@ -1312,15 +1428,16 @@ proc teardown(ctx: ptr ConfinedObj) =
   roomWaiters = @[]
   discard ctx.signal.close()
   let disp = getThreadDispatcher()
-  when not defined(windows):
-    discard disp.getIoHandler().close2()
   disp.callbacks.clear()
-  setThreadDispatcher(nil)
+  ctx.closeDispatcher(disp)
 
 proc moduleMain(ctx: ptr ConfinedObj) {.thread.} =
   ownCtx = ctx
   enterThread()
   enterConfinedThread()
+  # [DECISIONS G438] The dispatcher before anything registers with it: what it
+  # registered when it was made is chronos's own, closed with it.
+  ownRegistered = registeredBy(getThreadDispatcher())
   ctx.arm()
   ctx.serve()
   while true:
@@ -1426,6 +1543,7 @@ proc confinedInit*(
     create: ConfinedCreate,
     maxEvents = DefaultMaxEvents,
     maxBytes = DefaultMaxBytes,
+    name: cstring = nil,
 ): LogosResult =
   ## [SPEC INTERFACE §2.6; DECISIONS G335] `_MODULE_init` of a confined kit:
   ## the input is checked here; the context's threads start and the author's
@@ -1450,6 +1568,7 @@ proc confinedInit*(
   ctx.maxEvents = max(maxEvents, 1)
   ctx.maxBytes = max(maxBytes, 1)
   ctx.maxDeliveries = DefaultMaxDeliveries
+  ctx.name = name
   ctx.services = moduleServices(input).withConfined(ctx, queuePublish, postTask)
   try:
     createThread(ctx.publisher, publisherMain, ctx)

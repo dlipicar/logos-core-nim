@@ -51,6 +51,10 @@
 ## full); 23 reads how many `wait` 9 handlers of the library saw cancelled and
 ## how many sleep now (`<cancelled> <sleeping>`); 24 starts a foreign C thread
 ## that posts a callback touching the instance until `destroyModule` stops it.
+## For G438's leftover cases, `probe` 25 registers a pipe's read end with the
+## module thread's dispatcher and never unregisters it; 26 does the same and
+## closes it without unregistering it; 27 names the chronos the library was
+## built with (`main line` once it has `closeThreadDispatcher`, else `4.4.1`).
 ##
 ## `destroyModule` is `async` [DECISIONS G437], and awaits only when the test
 ## set `destroyMode` before the destroy; every other destroy returns without
@@ -82,6 +86,27 @@ proc foreignStreamStart(
 proc foreignStreamStop(
   stream: pointer
 ): clong {.importc: "lcn_foreign_stream_stop", cdecl, gcsafe, raises: [].}
+
+when defined(posix):
+  proc cPipe(fds: var array[2, cint]): cint {.importc: "pipe", header: "<unistd.h>".}
+  proc cClose(fd: cint): cint {.importc: "close", header: "<unistd.h>".}
+
+proc leaveRegistered(closeIt: bool): string =
+  ## [DECISIONS G438] A pipe's read end registered with this thread's
+  ## dispatcher and never unregistered; closed too when `closeIt`.
+  when defined(posix):
+    var fds: array[2, cint]
+    if cPipe(fds) != 0:
+      return "no pipe"
+    discard cClose(fds[1])
+    if register2(AsyncFD(fds[0])).isErr:
+      discard cClose(fds[0])
+      return "not registered"
+    if closeIt:
+      discard cClose(fds[0])
+    "registered"
+  else:
+    "posix only"
 
 type
   FreedMark = object
@@ -551,6 +576,12 @@ proc `probe`(
         cast[pointer](m.services.poster), onStreamed, cast[pointer](m)
       )
     note = (if m.stream.isNil: "no stream" else: "streaming")
+  of 25:
+    note = leaveRegistered(closeIt = false)
+  of 26:
+    note = leaveRegistered(closeIt = true)
+  of 27:
+    note = (when declared(closeThreadDispatcher): "main line" else: "4.4.1")
   else:
     discard
   ok(LedgerProbeResponse(value: request.value, thread: threadNumber(), note: note))

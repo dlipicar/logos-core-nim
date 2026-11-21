@@ -315,7 +315,7 @@ template exportSensorModule*(T: typedesc) =
 
   proc sensorModuleKitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: "logos_sensor_module_MODULE_init", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
-    confinedInit(input, outContext, declaresEvents, sensorModuleKitCreate)
+    confinedInit(input, outContext, declaresEvents, sensorModuleKitCreate, name = system.cstring(moduleName))
 
   proc sensorModuleKitDestroy(module: ptr LogosModuleContext) {.exportc: "logos_sensor_module_MODULE_destroy", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()

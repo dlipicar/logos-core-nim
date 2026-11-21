@@ -14,7 +14,7 @@
 ## libraries (`support/testroute`): caller, helpers and provider then each run
 ## on a Nim runtime of their own.
 
-import std/[dynlib, os, strutils, typedthreads]
+import std/[dynlib, os, osproc, strutils, typedthreads]
 import unittest2
 import logos_sdk/base/perthread
 import logos_sdk/iface/[accept, provider]
@@ -73,6 +73,44 @@ proc build(source, name, module: string): Library =
   ## The kit library, linked with its kit's export list (DECISIONS G341).
   load(buildKitLibrary(source, name, exports = module), module)
 
+const leftoverChildVar = "LCN_KIT_LEFTOVER_CHILD"
+
+proc leftoverChild(spec: string) =
+  ## [DECISIONS G438] The leftover cases' child, this program run again with
+  ## `<library>|<channel>` in `LCN_KIT_LEFTOVER_CHILD`: it loads the confined
+  ## ledger library, says which chronos it was built with, runs `probe` with
+  ## the channel unless it is 0, destroys the instance and says so. A strict
+  ## library aborts in that destroy instead.
+  let at = spec.rfind('|')
+  let lib = load(spec[0 ..< at], "ledger_module")
+  var inp = input()
+  var ctx: ptr LogosModuleContext
+  doAssert lib.init(addr inp, addr ctx).code == CErrorCode(0)
+  proc probe(channel: uint32): string =
+    let c = call(
+      lib.dispatch,
+      lib.free,
+      ctx,
+      "probe",
+      encode(LedgerProbeRequest(channel: channel)).get,
+    )
+    doAssert c.code == ecOk
+    LedgerProbeResponse.decode(c.response).get.note
+
+  stdout.writeLine("chronos: " & probe(27))
+  let channel = uint32(parseInt(spec[at + 1 .. ^1]))
+  if channel != 0:
+    stdout.writeLine("probe: " & probe(channel))
+  stdout.flushFile()
+  lib.destroy(ctx)
+  stdout.writeLine("destroyed")
+  stdout.flushFile()
+  quit(0)
+
+if existsEnv(leftoverChildVar):
+  # Before any library is built: the child only loads the one it is given.
+  leftoverChild(getEnv(leftoverChildVar))
+
 let
   meter = build("meter_impl.nim", "kitmeter", "meter_module")
   sensor = build("sensor_impl.nim", "kitsensor", "sensor_module")
@@ -91,12 +129,22 @@ when defined(posix):
   proc sentinel(sig: cint) {.noconv.} =
     discard
 
+let
+  ledgerPath = buildKitLibrary("ledger_lib.nim", "kitledger", exports = "ledger_module")
+  ledgerLenientPath = buildKitLibrary(
+    "ledger_lib.nim",
+    "kitledgerp",
+    exports = "ledger_module",
+    strictDestroy = false,
+    reason = "the production line of G438's leftover cases",
+  ) ## [DECISIONS G438] the same kit as a library that is not strict about destroy
+
 let (ledger, pipeAfterLoad) = block:
   ## [DECISIONS G340, P5] The confined ledger kit, whose main module imports
   ## chronos before the kit (`ledger_lib.nim`), loaded with a sentinel
   ## `SIGPIPE` handler; what is set after the load is kept for the test below,
   ## then this program's own handler goes back.
-  let path = buildKitLibrary("ledger_lib.nim", "kitledger", exports = "ledger_module")
+  let path = ledgerPath
   when defined(posix):
     var mark, own, now: Sigaction
     mark.sa_handler = sentinel
@@ -234,6 +282,29 @@ let helpers = block:
       shapesPingClear: helper("lcn_clear_shapes_Ping"),
     )
   )
+
+{.compile: "support/procstats.c".}
+proc threadCount(): clong {.importc: "lcn_thread_count", cdecl.}
+proc residentBytes(): clong {.importc: "lcn_resident_bytes", cdecl.}
+
+proc openDescriptors(): int =
+  when defined(linux):
+    for _ in walkDir("/proc/self/fd"):
+      inc result
+  else:
+    for _ in walkDir("/dev/fd"):
+      inc result
+
+proc leftoverRun(path: string, channel: int): tuple[output: string, code: int] =
+  ## [DECISIONS G438] The leftover cases' child on the library at `path`.
+  putEnv(leftoverChildVar, path & "|" & $channel)
+  try:
+    let (output, code) = execCmdEx(quoteShell(getAppFilename()))
+    result = (output, code)
+  finally:
+    delEnv(leftoverChildVar)
+
+const leftLine = "logos module kit (confined): ledger_module: destroy left "
 
 proc routeTo(lib: Library, ctx: ptr LogosModuleContext): ptr TestRoute =
   ## A route bound directly to a module library's instance.
@@ -743,3 +814,90 @@ suite "ifc.kit: a thread-confined kit as a shared library (DECISIONS G335, G338,
     let refused = parseInt(note[4 .. ^1])
     ledgerOther.destroy(ctx) # delivers what is queued
     check otherPublished.load + refused == posters.len * 20
+
+suite "ifc.kit: what a confined kit's destroy leaves registered (DECISIONS G438) [IMPL]":
+  test "[IMPL-DECISION G438] a pipe end the module left registered: the lenient library writes one line naming it and returns; the strict one aborts with that line":
+    when not defined(posix):
+      skip()
+    else:
+      let (lenient, lenientCode) = leftoverRun(ledgerLenientPath, 25)
+      checkpoint lenient
+      check lenientCode == 0
+      check "probe: registered" in lenient
+      check (leftLine & "at least 1 descriptor registered") in lenient
+      check lenient.count(leftLine) == 1
+      check "destroyed" in lenient
+      let (strict, strictCode) = leftoverRun(ledgerPath, 25)
+      checkpoint strict
+      check strictCode != 0
+      check (leftLine & "at least 1 descriptor registered") in strict
+      check "destroyed" notin strict
+
+  test "[IMPL-DECISION G438] a pipe end closed while still registered: only the main line's selector sees it; 4.4.1 writes nothing":
+    when not defined(posix):
+      skip()
+    else:
+      let (lenient, lenientCode) = leftoverRun(ledgerLenientPath, 26)
+      checkpoint lenient
+      let (strict, strictCode) = leftoverRun(ledgerPath, 26)
+      checkpoint strict
+      check lenientCode == 0
+      check "probe: registered" in lenient
+      check "destroyed" in lenient
+      if "chronos: main line" in lenient:
+        check (leftLine & "other registrations") in lenient
+        check strictCode != 0
+        check (leftLine & "other registrations") in strict
+        check "destroyed" notin strict
+      else:
+        check "chronos: 4.4.1" in lenient
+        check leftLine notin lenient # what 4.4.1 cannot see (G438)
+        check strictCode == 0
+        check leftLine notin strict
+        check "destroyed" in strict
+
+  test "[IMPL-DECISION G438] a clean destroy writes no line, lenient or strict":
+    when not defined(posix):
+      skip()
+    else:
+      for path in [ledgerLenientPath, ledgerPath]:
+        let (output, code) = leftoverRun(path, 0)
+        checkpoint output
+        check code == 0
+        check "destroyed" in output
+        check "logos module kit" notin output
+
+  test "[IMPL-DECISION G438] [IMPL-DECISION G439] 200 init and destroy cycles of the confined library: descriptors, threads and resident memory back to the baseline":
+    when not defined(posix):
+      skip()
+    else:
+      proc cycle() =
+        var inp = input()
+        inp.publish = countPublish # on the library's publisher thread: it only counts
+        inp.publishUserData = nil
+        var ctx: ptr LogosModuleContext
+        doAssert ledger.init(addr inp, addr ctx).code == CErrorCode(0)
+        let c = call(
+          ledger.dispatch,
+          ledger.free,
+          ctx,
+          "post",
+          encode(LedgerPostRequest(key: "cycle", amount: 1)).get,
+        )
+        doAssert c.code == ecOk
+        ledger.destroy(ctx)
+
+      for _ in 0 ..< 10:
+        cycle()
+      let fds = openDescriptors()
+      let threads = threadCount()
+      let resident = residentBytes()
+      for _ in 0 ..< 200:
+        cycle()
+      let grown = residentBytes() - resident
+      echo "    200 cycles: resident memory grew by ", grown div 1024, " KiB"
+      check openDescriptors() == fds
+      check threads > 0 and threadCount() == threads
+      # DECISIONS G438: under 1 MiB (Mac 2026-11-21: 16 KiB orc, 0 refc, 16 KiB
+      # orc-release); resident memory rarely returns to the byte.
+      check resident > 0 and grown < 1024 * 1024

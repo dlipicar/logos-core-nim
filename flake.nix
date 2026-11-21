@@ -653,6 +653,19 @@
                   echo "the probe built with the define holds no marker"
                   exit 1
                 fi
+                # [DECISIONS G438] The same for a strict confined kit's marker.
+                strict=LCN_KIT_STRICT_DESTROY_BUILD
+                for p in ${lib.escapeShellArgs (map toString deployed)}; do
+                  if grep -rlaF "$strict" "$p"; then
+                    echo "a deployment output is a strict-destroy kit build: $p"
+                    exit 1
+                  fi
+                done
+                nim c --hints:off -d:lcnKitStrictDestroy --outdir:build tests/support/strictprobe.nim
+                if ! grep -qaF "$strict" build/strictprobe; then
+                  echo "the probe built with lcnKitStrictDestroy holds no marker"
+                  exit 1
+                fi
                 runHook postBuild
               '';
             };

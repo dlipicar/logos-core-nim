@@ -532,7 +532,7 @@ proc kitParts(
         "KitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: \"" &
         sym("init") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
         "    kitEnter()\n    confinedInit(input, outContext, declaresEvents, " & prefix &
-        "KitCreate)\n\n" & "  proc " & prefix &
+        "KitCreate, name = system.cstring(moduleName))\n\n" & "  proc " & prefix &
         "KitDestroy(module: ptr LogosModuleContext) {.exportc: \"" & sym("destroy") &
         "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
         "    kitEnter()\n    confinedDestroy(module, " & prefix & "KitDispose, " & prefix &

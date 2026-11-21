@@ -7283,6 +7283,88 @@ their history.
   a, b, c, e, f and g2 fail, none hangs; d and g1 pass under both orders.
 - **Status:** built 2026-11-21 (Tier 5 step N-1e, part A).
 
+### G438 — Closing a confined kit's module-thread dispatcher, and what destroy left
+- **Kind:** IMPL · **Specs:** INTERFACE l.1949-1962, l.2100 (residual work); chronos's main line after
+  v4.4.0, which logos-storage-nim (2d81a762) and logos-delivery (0de7b335) pin; TIER5-PLAN N-1; plan
+  `tier5-plans/stepN-1e-plan.md` §B (W2-P's P7 check; Fable's checks,
+  `tier5-plans/fable-checks/stepN-1e-plan.md`).
+- **Found** (W2-P, Mac, 1c0530b). On that line each POSIX dispatcher owns a wake-up descriptor (an
+  eventfd on Linux, a socket pair on macOS), and only `closeThreadDispatcher()` closes it. The kit's
+  teardown closed the selector and dropped the dispatcher, so every module thread leaked it:
+  test_kit_mixed MX-1 counted 41 descriptors against 21 under either library's chronos. On the lock's
+  chronos 4.4.1 it passes.
+- **Decision.** At teardown, after the kit's own signal is closed (so its registration never counts)
+  and the dispatcher's callbacks are cleared, `confinedrt.closeDispatcher`:
+  - counts the descriptors left: the open ones (`/proc/self/fd`, `/dev/fd`, else each below
+    `min(RLIMIT_NOFILE, 65536)` that `fcntl` accepts) the selector `contains`, less those it held when
+    it was made. `moduleMain` now makes the dispatcher before `arm` registers the kit's signal (it was
+    made inside `arm`) and notes those: chronos's wake-up descriptor on the main line, none on 4.4.1.
+  - On the main line (`when declared(closeThreadDispatcher) and defined(posix)`), when nothing is
+    left, checks through chronos's public API only, since its POSIX close raises a Defect on anything
+    left and on a failed unregistration (kqueue `getKey`/`addKey`, epoll likewise at 2d81a762): exactly
+    one descriptor was noted; the selector `contains` it; `unregister2` of it succeeds; the selector's
+    `isEmpty` is read; `registerHandle2` puts it back and `contains` holds again. When all pass and
+    the selector was empty, it calls `closeThreadDispatcher()` and writes its diagnostic, if any. Past
+    these checks nothing in that close raises.
+  - Otherwise, and always on 4.4.1 and on Windows (whose close asserts what cannot be checked first;
+    until M12), it takes the old path: the selector's `close2` and `setThreadDispatcher(nil)`. Never
+    both.
+  - **What is left is never closed.** The kit doesn't own it: the module's stream or a library thread
+    may still close it, by when its number may be reused, in logosd perhaps for one of the Runtime's
+    own. With no thread left it is a leaked descriptor, not residual work, so INTERFACE l.2100 holds;
+    closing it is the module's duty. Unregistering what is left so that the wake-up descriptor could
+    still be closed is not done: the scan sees descriptors but not signal or process registrations,
+    and chronos offers no full public listing across G341's range.
+  - **Reported** in one stderr line, as the kit's fatal path writes, naming the module: "destroy left
+    at least N descriptor(s)", a lower bound since a closed descriptor still registered is invisible
+    to the scan, or "other registrations" when only `isEmpty` saw something. 4.4.1 exports no
+    `isEmpty`, so there a signal, process or closed-but-registered leftover goes unseen.
+  - **Strict mode.** Built with `lcnKitStrictDestroy`, the kit aborts after that line, so a module's
+    own suite fails at the destroy that missed a close. The define is set only in the test
+    configuration files (`sdk/tests/config.nims`, `tests/config.nims`, for in-process kits) and on
+    `kitbuild`'s command line, never in the root `config.nims`, which every build reads. `kitbuild`
+    builds strict by default (`strictDestroy`); turning it off takes a reason, written beside the
+    library (`<name>.lenient`) and to its log, and the variant directory's name says which (`-strict`),
+    so a lenient test never loads a strict library of the same name. A strict build holds the marker
+    `LCN_KIT_STRICT_DESTROY_BUILD` (`base/testhooks.strictDestroyMarker`); `no-test-hooks` fails when a
+    deployment output holds it and requires it in `tests/support/strictprobe.nim` built with the
+    define. MODULE-KIT §8: kitbuild never builds a release library. N-4's hosted cases build their
+    module with kitbuild, so a registration storage or libp2p leaves at stop aborts them until the leak
+    is fixed or the reason recorded.
+  - The stderr line carries the module's name: `confinedInit` takes it (`name`), and the generated
+    kit passes its `moduleName`, so every confined kit is regenerated.
+- **A late cross-thread wake-up** (Fable §6.1). A thread that still holds this dispatcher's handle
+  after destroy and calls chronos's cross-thread `callSoon` writes to the wake-up descriptor. Before,
+  that descriptor was leaked but open; once closed, its number may be reused, in logosd perhaps for one
+  of the Runtime's descriptors. Such a thread is residual work the module must stop or join (l.2100);
+  chronos calls closing in that state undefined, and the kit cannot see it, since the cross-thread
+  queue is private. This is the risk closing adds. MODULE-KIT §3: before `destroyModule` returns, the
+  module stops or joins every thread it gave that handle to.
+- **The kit's own posts** never touch the wake-up descriptor: `post`, `lcn_kit_post` and the consumer
+  dispatcher's `postTask` check `closed` under the context's lock and only then fire the kit's own
+  signal, and teardown sets `closed` before it closes that signal, so a post after the last drain is
+  refused and its node freed. A post after `_MODULE_destroy` returned is G440's gate. The window
+  between the last drain and the return is too short to hit from a test without a hook in the
+  runtime, so G440's foreign-stream case, which posts through the whole destroy, covers both refusals.
+- **For the guide** (MODULE-KIT §3, §8): `destroyModule` closes every stream and transport the module
+  opened; a descriptor registered with chronos is unregistered before it is closed; what is left is
+  reported and stays open; test builds abort there; threads holding the dispatcher handle are stopped
+  or joined first; kitbuild never builds a release library.
+- **Tests:** `sdk/tests/test_kit_dylib.nim` "what a confined kit's destroy leaves registered", each
+  case in a child process (this program run again) over the strict ledger library and a lenient one
+  (`kitledgerp`): `probe` 25 leaves a pipe end registered (the lenient library writes the line, "at
+  least 1 descriptor", and returns; the strict one aborts with it); `probe` 26 closes it while still
+  registered (on the main line "other registrations", lenient returns, strict aborts; on 4.4.1 no
+  line in either mode, as above); a clean destroy writes no line in either mode. `probe` 27 says
+  which chronos the library has, since under `kit-toolchains`' variant (G439) the library and the
+  host differ. **The 200-cycle case** (moved from N-4; G439 runs it under the variant too): the strict
+  confined ledger library initialized, called once and destroyed 200 times in one process (G111),
+  after 10 warm-up cycles; the same open descriptors and threads as after the warm-up, and resident
+  memory grown by under 1 MiB (it rarely returns to the byte; Mac 2026-11-21: 16 KiB orc, 0 refc,
+  16 KiB orc-release). It is the regression check for the wake-up descriptor: without this decision
+  each cycle leaks one (Linux) or two (macOS).
+- **Status:** built 2026-11-21 (Tier 5 step N-1e, part B).
+
 ### G317 — The reverse mapper's input set
 - **Kind:** IMPL (gaps Q1, Q4; reading Q6) · **Specs:** INTERFACE §3 · **Plan:** `tier5-plans/step5-1-reverse-mapper.md` §4.1. Section and Q numbers below are the plan's; `l.` cites are INTERFACE.
 - **Decision.** Plan §3.2 and §3.3. `<stdbool.h>`, `<stddef.h>` and `<stdint.h>` are the only angle includes, the ones `logos_types.h` includes (IF l.3432-3434). `"logos_types.h"` is the only fixed include and is optional (Q6: l.2335, l.2217-2219, l.2640); redeclaring a fixed common type is rejected. An include cycle is rejected, which is stricter than l.2297. A file-level include guard may enclose declarations and the fixed and standard includes, never a contract-header include, a check or a document guard (l.2325). Comments-document remarks 1 (`65d614be`)
@@ -7649,6 +7731,7 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G397 | `logosctl trust` for the package trust file, and key separation | FREE | 9 |
 | G398 | catalog and provenance selections in the package trust file | FREE (C3, C9) | 9 |
 | G437 | what runs while a confined kit's `destroyModule` runs | IMPL | 12 |
+| G438 | closing a confined kit's module-thread dispatcher, and what destroy left | IMPL | 12 |
 
 ---
 

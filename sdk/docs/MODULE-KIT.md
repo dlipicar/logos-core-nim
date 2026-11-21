@@ -172,6 +172,13 @@ as the example's `totals` table does. **A refc module whose handlers keep GC'd s
 - Whether the Runtime still admits a call made during destroy is another matter: ordinary call paths
   close at stop and at shutdown (RUNTIME l.3713-3716). Cleanup that needs another module belongs in a
   preparation method the module declares and the deployment calls before stopping it (l.3739).
+- `destroyModule` closes every stream and transport the module opened on its module thread. A
+  descriptor you registered with chronos yourself is unregistered before it is closed: one closed while
+  still registered counts as left. The kit reports what is left in one stderr line naming the module,
+  and leaves it open, since it never closes what it did not open (G438). In the SDK's test builds a
+  confined kit aborts there instead, so your own suite fails at the destroy that missed a close.
+- Before `destroyModule` returns, stop or join every thread you gave the module thread's chronos
+  dispatcher handle to (for chronos's cross-thread `callSoon`): no thread may call into it afterwards.
 
 ## 4. Async handlers
 
@@ -276,6 +283,9 @@ nim c --app:lib --mm:refc -d:noSignalHandler --import:logos_sdk/base/hostsignals
 - The export list makes the library export its ABI and nothing else (G341): not its `NimMain`, and not
   the C functions it carries, so two modules in one process never bind each other's copies.
 - `--mm:refc` or `--mm:orc`, as you like (§7). Add your own switches after these.
+- Never build a release library with `logos_sdk/testing/kitbuild`. It is the test suites' helper, and
+  it builds confined kits strict about destroy (`-d:lcnKitStrictDestroy`, G438): they abort when a
+  destroy left something registered.
 
 **Toolchain** (G341). Nim 2.2.14 for refc libraries, 2.2.12 or later for orc ones; `results` 0.5.x;
 for confined mode, chronos 4.4.x (this repository locks 4.4.1; confined mode uses no API newer than
