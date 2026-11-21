@@ -791,8 +791,11 @@ TRANSPORT §8.2 and §9.1 as built in `src/logos_core/transport/io/` (DECISIONS 
   effective uid can write to, or a root-owned sticky directory such as `/tmp` `[IMPL]`. The
   per-instance directory is new (a random name, never reused), owned by the effective uid and set
   to 0700 with `fchmod` whatever the umask. `bind` never follows, removes or replaces an existing
-  object; the socket is set to 0600 and listens before any handoff. A path that does not fit
-  `sun_path` fails the placement; nothing is shortened.
+  object; the socket is set to 0600 and listens before any handoff. When the path would not fit
+  `sun_path`, the socket's name is `logos_<p>.sock`, `p` the longest prefix of the module name that
+  fits (RUNTIME l.296-297 leaves the concrete pathname to the implementation; G58 amended
+  2026-11-21 `[IMPL]`); the directory holds that one socket, and tickets carry the path. Only a base
+  that leaves no room for `<8 hex>/logos_.sock` fails, and the Runtime refuses it at open.
 - **macOS `bind`.** Darwin's `bind` follows a dangling symbolic link at the socket name and creates
   the socket at its target. `bindEndpoint` therefore looks at the name with
   `fstatat(AT_SYMLINK_NOFOLLOW)` first and refuses anything there (TRN-0182). The name is inside

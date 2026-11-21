@@ -130,6 +130,12 @@ type
     pool: Pool
 
 var sv: ptr Served
+  ## Set on the lifecycle thread; the threads `serveEndpoint` starts read it.
+var serving: Atomic[ptr Served]
+  ## [IMPL] `sv` once its loop runs, for the main thread (`order`), which was
+  ## running before it was set. That thread learns of it only through the
+  ## Runtime (a lane-2 order comes after `initialized`), and nothing in this
+  ## process orders that, so the store releases and `order`'s load acquires.
 
 # Requests ------------------------------------------------------------------------------
 
@@ -861,7 +867,7 @@ proc submitMain() {.thread.} =
 
 proc order*(f: seq[byte]) =
   ## Main thread: one lane-2 order or verdict.
-  if sv == nil or sv.loop == nil:
+  if serving.load(moAcquire) == nil:
     carrierLost("a lane-2 order for a host that serves nothing")
   try:
     sv.orders.send(f)
@@ -964,6 +970,7 @@ proc serveEndpoint*(
   sv.access = access
   sv.serve = ssWaiting
   sv.loop = ?startTransport(config, loopEvent, nil)
+  serving.store(sv, moRelease)
   var cmd = IoCommand(
     kind: IoCommandKind.cmdServe,
     endpoint: HostEndpoint,
@@ -982,6 +989,7 @@ proc serveEndpoint*(
       for i in 0 ..< sv.serveErrorLen:
         failed[i] = sv.serveError[i]
   if failed.len > 0 or sv.serve != ssListening:
+    serving.store(nil, moRelease)
     sv.loop.stopTransport()
     sv.loop = nil
     return err("the listener cannot be served: " & failed)

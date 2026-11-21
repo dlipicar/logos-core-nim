@@ -70,7 +70,16 @@ marked field, as the library does (G277).
   Runtime's store under the store's own lock, takes it, and is refused while logosd runs: "another logosd
   or an offline logosctl command holds this session" (exit 1). Other offline reads take no lock.
 - `run/` is emptied and recreated at each start while logosd holds the lock, so a socket left by a killed
-  daemon never blocks a new one. The Runtime's transport endpoints are under `run/ep/`.
+  daemon never blocks a new one. The Runtime's transport endpoints are under `run/ep/`. Each is
+  `run/ep/<8 hex>/logos_<module>.sock`, the module's name cut when the path would not fit `sun_path`
+  (DECISIONS G58, amended 2026-11-21). A session directory that leaves no room even for
+  `run/ep/<8 hex>/logos_.sock` (the session path plus 28 bytes) fails the start (exit 2) when the
+  Runtime serves endpoints, as it does with a Module Host: "start: the endpoint directory: … does not
+  fit sun_path …: the base leaves no room for an endpoint". So the session directory's path may be at
+  most 75 bytes on macOS and 79 on Linux (`sun_path` is 104 and 108 bytes, its NUL included); the next
+  tightest bound is the control socket, `run/logosctl.sock`, at plus 18 (85 and 89) unless `ctl.socket_dir`
+  moves it. logosd always
+  sets the endpoint directory itself; there is no setting for it.
 - `work/` is the Runtime's `work_dir`. It keeps the Module Hosts' restart locks (`work/hosts/`), so it is
   never emptied.
 - `state/` holds the Runtime's persistent state (`state/store`, `state/modules`), the trust mark and the
@@ -288,6 +297,13 @@ logosd hands one `logos-core-nim.app-config.v1` value to `logos_runtime_create`.
 inputs through it: `work_dir`, `state_root`, `store_dir` and `endpoint_dir` from the session layout, the
 Runtime id, the instances of §4, the merged policy of §5, and the permission settings of §5. `routing`,
 `transport`, `state_transfers` and `call_audit.call_records`/`evidence` pass through unchanged.
+
+`endpoint_dir` is always `<session>/run/ep`; the daemon configuration has no field for it. Since an endpoint
+needs `<endpoint_dir>/<8 hex>/logos_.sock` to fit `sun_path` (DECISIONS G58, amended 2026-11-21), the session
+directory's path may be at most **75 bytes on macOS and 79 on Linux**; a longer one fails the start (exit 2)
+with "the endpoint directory: … does not fit sun_path …: the base leaves no room for an endpoint" (§2). Before
+the amendment the tightest limit was the control socket's, 85 and 89 bytes. The check is the Runtime's at
+open, not logosd's at assembly.
 
 ## 4. Composition and bootstrap
 
