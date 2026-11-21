@@ -9,7 +9,7 @@
 ## one they observe it. A provider may serve objects it holds while not `ready` and may accept
 ## every locator, so neither is checked.
 
-import std/[locks, monotimes, os, strutils, times, typedthreads]
+import std/[locks, monotimes, os, times, typedthreads]
 import results
 import logos_sdk/abi/types
 import logos_sdk/crypto/blake3
@@ -130,6 +130,8 @@ type ReadJob = object
   target: FetchObject
   done: bool
   digest: Blake3Digest
+  why: array[160, char] ## the first problem, cut: plain bytes cross threads under refc
+  whyLen: int
 
 proc readJob(job: ptr ReadJob) {.thread.} =
   var problems: seq[string]
@@ -137,6 +139,10 @@ proc readJob(job: ptr ReadJob) {.thread.} =
   if d.isSome:
     job.digest = d.get
     job.done = true
+  elif problems.len > 0:
+    job.whyLen = min(problems[0].len, job.why.len)
+    for i in 0 ..< job.whyLen:
+      job.why[i] = problems[0][i]
 
 proc callChecks*(t: FetchTarget, f: FetchFixture): seq[string] =
   ## Sizes, whole reads, the end, the length rule (checked before anything else), an object
@@ -184,8 +190,13 @@ proc callChecks*(t: FetchTarget, f: FetchFixture): seq[string] =
     createThread(threads[i], readJob, addr jobs[i])
   joinThreads(threads)
   for i in 0 .. 3:
-    if not jobs[i].done or jobs[i].digest != first.digest:
-      result.add("concurrent read " & $i & " did not read the object")
+    if not jobs[i].done:
+      var why = newString(jobs[i].whyLen)
+      for k in 0 ..< jobs[i].whyLen:
+        why[k] = jobs[i].why[k]
+      result.add("concurrent read " & $i & " did not read the object: " & why)
+    elif jobs[i].digest != first.digest:
+      result.add("concurrent read " & $i & " read other bytes")
 
 # FetchReadiness --------------------------------------------------------------------------------
 

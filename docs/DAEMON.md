@@ -65,10 +65,10 @@ marked field, as the library does (G277).
 - Every directory is owner-only. A session directory that group or other can access is refused, as is a
   path component that is a link where a directory is expected.
 - `lock` is an advisory lock (`flock`). logosd holds it for its whole life. Every offline `logosctl`
-  command that writes (`init`, `daemon config set`, `trust development`, `trust reestablish`,
-  `trust evidence-keys rotate`, `state purge`), and `state list`, which reads the Runtime's store
-  under the store's own lock, takes it, and is refused while logosd runs: "another logosd or an
-  offline logosctl command holds this session" (exit 1). Other offline reads take no lock.
+  command that writes (`init`, `daemon config set`, `trust anchor …`, `trust development`,
+  `trust reestablish`, `trust evidence-keys rotate`, `state purge`), and `state list`, which reads the
+  Runtime's store under the store's own lock, takes it, and is refused while logosd runs: "another logosd
+  or an offline logosctl command holds this session" (exit 1). Other offline reads take no lock.
 - `run/` is emptied and recreated at each start while logosd holds the lock, so a socket left by a killed
   daemon never blocks a new one. The Runtime's transport endpoints are under `run/ep/`.
 - `work/` is the Runtime's `work_dir`. It keeps the Module Hosts' restart locks (`work/hosts/`), so it is
@@ -527,23 +527,68 @@ holds revision 1 with the v1 floor's digest, the refusal names the fix, `logosct
 A refusal is exit 1. logosd never creates a mark. `logosctl init` writes the file and its mark together;
 `logosctl trust reestablish --revision N` writes a mark from the current file when the owner names its
 revision (after the mark alone was lost, or `state/` was restored from a backup; a lost `state/` also
-lost the Runtime's store and needs a new session, §2). The trust file is read twice during start, and a change
-between the reads is refused.
+lost the Runtime's store and needs a new session, §2). It first applies everything a start applies before
+continuity (the schema and bound, the rules, key separation, the conversion), so the mark never names a
+revision logosd refuses; a file that fails is refused and no mark is written. The trust file is read twice
+during start, and a change between the reads is refused.
 
 **The development switch** (D27). `logosctl trust development on|off` writes the next revision with the
-switch set or cleared; `init --development` starts at revision 2 with it on, so revision 1 keeps the
-floor's content. With the switch on:
+switch set or cleared, and nothing when it is already so; `init --development` starts at revision 2 with it
+on, so revision 1 keeps the floor's content. With the switch on:
 
 - `policy: allow-all` is accepted;
 - `test_hooks` is accepted by a logosd built with test hooks (a test build). A packaged logosd has none
   and refuses the field whatever the switch says: "test_hooks: this logosd has no test hooks". The flake
   check `no-test-hooks` verifies no packaged output holds hook code;
+- development anchors (`development: true`) are in force, so packages they sign verify;
 - the deployment is **non-production**, and says so: a `NON-PRODUCTION` warning in the start log; every
   `logosctl` output, online and offline (`deployment: "non-production"` in JSON, a
   `NON-PRODUCTION deployment` line in text); every socket reply's `deployment`.
 
-The switch weakens nothing else. Continuity still applies (a rollback is refused with the switch on), and
-under capability-authority the system rules still deny, for example, `module stop logos_module_loader`.
+The switch weakens nothing else. Continuity still applies (a rollback is refused with the switch on), the
+other anchors and every rule of the file are unchanged, and under capability-authority the system rules still
+deny, for example, `module stop logos_module_loader`.
+
+### The trust commands
+
+`logosctl trust` administers the file offline, under the session lock (DECISIONS G397). Every change
+applies at the next start, when logosd reads the file again (BCP l.364): a removed anchor or name, or the
+switch turned off, is withdrawn from that start on, and nothing running is affected before it.
+
+| Command | What it does |
+|---|---|
+| `trust show` | the revision, the switch, the profile, the selections, the mark and what continuity would decide; each anchor with its kid (in hex, and as text when printable ASCII), its names, its key, its development marker and whether it is in force. The file is decoded without the rules, so a file logosd refuses is shown, with the reason |
+| `trust anchor add --kid KID --key HEX [--development] NAME…` | a new anchor authorizing the names. A kid already present is refused (`add-names` adds names to it) |
+| `trust anchor remove --kid KID` | removes the anchor: a withdrawal (PACKAGE MANAGER l.436-437) |
+| `trust anchor add-names --kid KID NAME…` | adds names; one added name is a new revision (PACKAGE MANAGER l.420) |
+| `trust anchor remove-names --kid KID NAME…` | removes names; leaving the anchor none is refused (remove the anchor instead) |
+| `trust development on\|off` | the switch, and how many development anchors enter or leave force with it |
+| `trust reestablish --revision N` | the mark, as above |
+| `trust evidence-keys ls\|rotate` | the call-evidence keys (§9) |
+
+- `KID` is text, or `hex:` and hex digits, as `lcn-pkg sign --kid` takes it, so the operator passes the
+  value the producer signed with. `HEX` is the public key's 96 hex digits, or `@FILE` holding them alone
+  or as the `public key: <hex>` line `lcn-pkg keygen` prints; surrounding whitespace is ignored. A name is
+  taken as given, 1 to 128 bytes; the file keeps names and anchors in canonical order whatever order they
+  are given in.
+- **Every writer** reads the current file, makes its one change, and checks the result as a start would
+  (schema and bound, the rules, key separation against every evidence key of the session, the conversion),
+  so it never writes a file logosd refuses. The result is written as the next revision, in format v2, and
+  the command says "it applies at the next start". A Tier 4b v1 file becomes v2 with its first change,
+  without re-establishment.
+- **A change that changes nothing writes nothing**: names already present, an absent name or anchor
+  removed, the same anchor added again, the switch set as it is. The command exits 0 and says "unchanged"
+  (`"changed": false` in JSON), so scripts can repeat it and no revision is spent on nothing.
+- **A file logosd refuses** is refused by every writer, a change that changes nothing included, and the
+  refusal ends "correct trust.cbor by hand, then run a trust change or logosctl trust reestablish
+  --revision N". A selection written by hand is one such file: no command selects a catalog or provenance
+  profile, since none can be selected. A change that removes what is refused (for example, removing an
+  anchor whose key is an evidence key) is written.
+- JSON follows §7's envelope with `deployment` (DECISIONS G89). `trust show`'s result carries the file's
+  fields (`revision`, `development`, `signing` with `profile` and `anchors`, `catalog`, `provenance`; keys
+  and kids in hex, `kid_text`, `in_force`), `file`, `mark`, `continuity` and, for a file logosd refuses,
+  `refused`. A writer's carries `revision` and `changed`, an anchor command's `kid`, and
+  `trust development`'s `development` and `development_anchors`.
 
 ## 7. The logosctl instance and its socket
 
@@ -1118,7 +1163,7 @@ set`, `logosctl trust …`, or the owner's own edits, each applying at the next 
 - **Authentication** of that path is the operating system's: the files are the session owner's, mode
   0600 in 0700 directories, and logosd refuses a session others can access.
 - **What it authorizes**: everything logosd does. Whoever can write the session can change the policy,
-  the trust file and its switch, and the evidence key.
+  the trust file with its anchors and switch, and the evidence key.
 - An `issue` rule in the policy is protected input too. Under it a module may issue grants while the
   daemon runs (CA l.744), within what the rule allows; that is the only change of authority at run time.
 - **State transfers** are the same kind of input (decision 9): an entry in `state_transfers`, set with

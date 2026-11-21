@@ -3972,3 +3972,12 @@ test = "tests/test_deployment.nim"
 id = "TXT-0350"
 step = "P9"
 test = "tests/test_deployment.nim"
+
+# Tier 5 step 5-3a-2: a deferred entry that leaves with its unit (PACKAGE MANAGER §4.1; G396, G397, I114) ----------
+# PKG-0418 is claimed by 5-3a-2, and TXT-0463 leaves [deferred] with it. Its [[deferred]] record above stays; step
+# is the entry's step in the frozen list.
+
+[[text]]
+id = "TXT-0463"
+step = "P7"
+test = "tests/test_daemon_config.nim"

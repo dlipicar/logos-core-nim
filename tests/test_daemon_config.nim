@@ -5,10 +5,11 @@
 ## configuration for three daemon-configs through the library's own checks;
 ## the system rules S1-S5 decided by the Capability Authority's own evaluator;
 ## the trust file's continuity table and logosd's start order over it; the
-## evidence key's binding and rotation; and `logosctl init`'s session. Tier 5
-## step N-2b adds the `cli` field, the `lcn_call` instance and its rules S6-S8
-## (G343-G346). No logosd process and no Runtime: those are `test_logosd` (6b)
-## and `test_lcn_call`.
+## `logosctl trust` writers' edits and checks (G397); the evidence key's
+## binding and rotation; and `logosctl init`'s session. Tier 5 step N-2b
+## adds the `cli` field, the `lcn_call` instance and its rules S6-S8
+## (G343-G346). No logosd process and no Runtime: those are `test_logosd`
+## (6b) and `test_lcn_call`.
 
 import std/[os, sequtils, strutils]
 import unittest2
@@ -1056,6 +1057,31 @@ proc anchored(revision: uint64, development = false): LcnPackageTrust =
 proc markRevision(s: Session): uint64 =
   readMark(s).get.get.revision
 
+proc setDevelopment(s: Session, on: bool): Result[TrustFileState, string] =
+  ## `logosctl trust development on|off` without its lock and output.
+  let cur = ?readTrust(s)
+  ok((?commitTrust(s, cur, cur.file.withDevelopment(on), @[])).state)
+
+proc current(s: Session): LcnPackageTrust =
+  readTrust(s).get.file
+
+proc commit(s: Session, next: LcnPackageTrust): Result[TrustChange, string] =
+  ## A `logosctl trust` writer's last step, `next` an edit of the current
+  ## file: the session's evidence keys when either file names an anchor.
+  let cur = ?readTrust(s)
+  var keys: seq[seq[byte]]
+  if cur.file.signing.anchors.len > 0 or next.signing.anchors.len > 0:
+    keys = ?sessionEvidenceKeys(s)
+  commitTrust(s, cur, next, keys)
+
+proc commit(
+    s: Session, next: Result[LcnPackageTrust, string]
+): Result[TrustChange, string] =
+  s.commit(?next)
+
+proc fileBytes(s: Session): string =
+  readFile(s.trustPath)
+
 suite "dc.trust: the trust file's continuity [IMPL-DECISION G137] [IMPL-DECISION G299] [D27]":
   test "[PKG-0418] [PKG-0419] [PKG-0420] [PKG-0421] the decision table":
     let r2 = input(2, true)
@@ -1144,8 +1170,8 @@ suite "dc.trust: the trust file's continuity [IMPL-DECISION G137] [IMPL-DECISION
     check "other contents" in establishTrust(s).error
     check writeTrustFile(s, LcnPackageTrust(revision: 1, development: false)).isOk
     check "rollback is refused" in establishTrust(s).error
-    check reestablish(s, 2).error == "the trust file is at revision 1, not 2"
-    check reestablish(s, 1).isOk
+    check reestablish(s, 2, @[]).error == "the trust file is at revision 1, not 2"
+    check reestablish(s, 1, @[]).isOk
     check establishTrust(s).isOk
     check readMark(s).get.get.revision == 1
 
@@ -1260,7 +1286,7 @@ suite "dc.trust: the trust file's continuity [IMPL-DECISION G137] [IMPL-DECISION
     check r.isErr
     check "other contents than the revision recorded" in r.error
     check "run logosctl trust reestablish --revision 1" in r.error
-    check reestablish(s, 1).isOk
+    check reestablish(s, 1, @[]).isOk
     check establishTrust(s).isOk
     # An absent file below a higher mark is a rollback.
     check writeMark(s, input(2, false)).isOk
@@ -1313,6 +1339,185 @@ suite "dc.trust: the trust file's continuity [IMPL-DECISION G137] [IMPL-DECISION
     setFilePermissions(elsewhere / "trust.cbor", {fpUserRead, fpUserWrite})
     createSymlink(elsewhere / "trust.cbor", s.trustPath)
     check "is not a regular file" in readTrust(s).error
+
+# dc.trustctl ------------------------------------------------------------------------
+
+proc kid(t: string): seq[byte] =
+  @(t.toOpenArrayByte(0, t.high))
+
+func okDoc(f: LcnPackageTrust): Result[LcnPackageTrust, string] =
+  ok(f)
+
+suite "dc.trustctl: the logosctl trust writers over the package trust file [IMPL-DECISION G397]":
+  test "[PKG-0418] [TXT-0463] each change is the next revision, one added name included; the file keeps its canonical form and logosd accepts it":
+    let s = freshSession()
+    discard initTrust(s, development = false).get
+    let a = s.commit(
+      s.current.withAnchor(
+        anchorOf("org", ["logos.storage", "logos.chat", "logos.chat"])
+      )
+    ).get
+    check a.changed and a.state.file.revision == 2
+    check a.state.file.signing.anchors[0].packages == @["logos.chat", "logos.storage"]
+    var other = newSeq[byte](48)
+    other[0] = 1
+    let b = s.commit(
+      s.current.withAnchor(
+        anchorOf("dev", ["logos.example"], development = true, key = other)
+      )
+    ).get
+    check b.state.file.revision == 3
+    check b.state.file.signing.anchors.mapIt(it.kid) == @[kid "dev", kid "org"]
+    let c = s.commit(s.current.withNames(kid "org", ["logos.wallet"])).get
+    check c.changed and c.state.file.revision == 4
+    check readTrust(s).get == c.state
+    let accepted = establishTrust(s).get
+    check s.markRevision == 4
+    check accepted.signing.authorize(kid "org", "logos.wallet").isOk
+    check accepted.signing.anchor(kid "dev").isNone # the switch is off
+    let d = s.commit(s.current.withoutNames(kid "org", ["logos.chat"])).get
+    check d.state.file.revision == 5
+    check d.state.file.signing.anchors[1].packages == @["logos.storage", "logos.wallet"]
+    let e = s.commit(s.current.withoutAnchor(kid "dev")).get
+    check e.state.file.revision == 6 and e.state.file.signing.anchors.len == 1
+    check establishTrust(s).isOk
+    check s.markRevision == 6
+
+  test "[IMPL-DECISION G397] a change that changes nothing writes nothing: names already present, an absent name or anchor removed, the same anchor again, the switch as it is":
+    let s = freshSession()
+    discard initTrust(s, development = false).get
+    let org = anchorOf("org", ["logos.storage"])
+    discard s.commit(s.current.withAnchor(org)).get
+    let before = s.fileBytes
+    for (what, next) in [
+      ("names already present", s.current.withNames(kid "org", ["logos.storage"])),
+      ("an absent name removed", s.current.withoutNames(kid "org", ["logos.chat"])),
+      ("an absent anchor removed", okDoc(s.current.withoutAnchor(kid "dev"))),
+      ("the same anchor again", s.current.withAnchor(org)),
+      ("the switch as it is", okDoc(s.current.withDevelopment(false))),
+    ]:
+      checkpoint what
+      let r = s.commit(next).get
+      check not r.changed and r.state.file.revision == 2
+      check s.fileBytes == before
+    # Without a file, the floor: nothing is written either.
+    let f = freshSession()
+    check not f.commit(f.current.withDevelopment(false)).get.changed
+    check not fileExists(f.trustPath)
+
+  test "[PKG-0107] [PKG-0072] [PKG-0434] [PKG-0435] the writers' refusals write nothing: a kid already an anchor, an unknown kid, the last name removed, a name or kid out of bounds, a key not of 48 bytes, an evidence key":
+    let s = freshSession()
+    discard initTrust(s, development = false).get
+    let k = createEvidenceKey(s.keysDir, "rt-1").get
+    discard s.commit(s.current.withAnchor(anchorOf("org", ["logos.storage"]))).get
+    let before = s.fileBytes
+    let long = repeat('n', 129)
+    var otherKey = newSeq[byte](48)
+    otherKey[0] = 1
+    for (what, next, refusal) in [
+      (
+        "a kid already an anchor",
+        s.current.withAnchor(anchorOf("org", ["logos.chat"])),
+        "is already an anchor",
+      ),
+      (
+        "another key for a kid",
+        s.current.withAnchor(anchorOf("org", ["logos.storage"], key = otherKey)),
+        "is already an anchor",
+      ),
+      (
+        "names added to an unknown kid",
+        s.current.withNames(kid "dev", ["logos.chat"]),
+        "no anchor has kid 646576",
+      ),
+      (
+        "names removed from an unknown kid",
+        s.current.withoutNames(kid "dev", ["logos.chat"]),
+        "no anchor has kid 646576",
+      ),
+      (
+        "the last name removed",
+        s.current.withoutNames(kid "org", ["logos.storage"]),
+        "would authorize no package name",
+      ),
+      ("an empty name", s.current.withNames(kid "org", [""]), "1 to 128 bytes"),
+      ("a name of 129 bytes", s.current.withNames(kid "org", [long]), "1 to 128 bytes"),
+      (
+        "a kid of 129 bytes",
+        s.current.withAnchor(anchorOf(long, ["x"])),
+        "a kid is 1 to 128 bytes",
+      ),
+      (
+        "no name",
+        s.current.withAnchor(anchorOf("new", newSeq[string]())),
+        "at least one package",
+      ),
+      (
+        "a key of 47 bytes",
+        s.current.withAnchor(anchorOf("new", ["x"], key = newSeq[byte](47))),
+        "lcn.package_trust",
+      ),
+      (
+        "an evidence key",
+        s.current.withAnchor(anchorOf("new", ["x"], key = k.binding.public_key)),
+        "is a call-evidence key of this session",
+      ),
+    ]:
+      checkpoint what
+      let r = s.commit(next)
+      check r.isErr and refusal in r.error
+      check s.fileBytes == before
+
+  test "[IMPL-DECISION G398] [PKG-0169] [PKG-0435] a file logosd refuses: every writer refuses it and says to correct the file; reestablish writes no mark; a change that removes what is refused is written":
+    let s = freshSession()
+    discard initTrust(s, development = false).get
+    var prov = anchored(2)
+    prov.provenance.selected = Opt.some("logos.package-provenance.slsa-v1.2")
+    check writeTrustFile(s, prov).isOk
+    let before = s.fileBytes
+    for (what, next) in [
+      ("a change", okDoc(s.current.withDevelopment(true))),
+      ("a change that changes nothing", okDoc(s.current.withDevelopment(false))),
+      ("an added name", s.current.withNames(kid "org", ["logos.chat"])),
+    ]:
+      checkpoint what
+      let r = s.commit(next)
+      check r.isErr
+      check "supports no provenance profile; the file selects \"logos.package-provenance.slsa-v1.2\"" in
+        r.error
+      check r.error.endsWith(CorrectByHand)
+      check s.fileBytes == before
+    let re = reestablish(s, 2, @[])
+    check re.isErr
+    check "supports no provenance profile" in re.error
+    check re.error.endsWith("; no mark was written")
+    check s.markRevision == 1
+    # Key separation as well: an anchor written by hand with an evidence key.
+    let k = createEvidenceKey(s.keysDir, "rt-1").get
+    check writeTrustFile(
+      s,
+      docOf(
+        2,
+        [
+          anchorOf("bad", ["x"], key = k.binding.public_key),
+          anchorOf("org", ["logos.storage"]),
+        ],
+      ),
+    ).isOk
+    let keys = sessionEvidenceKeys(s).get
+    check "is a call-evidence key" in reestablish(s, 2, keys).error
+    check s.markRevision == 1
+    # Removing that anchor fixes the file: written, then accepted.
+    let fixed = s.commit(s.current.withoutAnchor(kid "bad")).get
+    check fixed.changed and fixed.state.file.revision == 3
+    check establishTrust(s, keys).isOk
+    check s.markRevision == 3
+
+  test "the revision cannot grow past the largest uint64":
+    let s = freshSession()
+    check writeTrustFile(s, LcnPackageTrust(revision: high(uint64))).isOk
+    check s.commit(s.current.withDevelopment(true)).error ==
+      "the trust file's revision cannot grow"
 
 # dc.keys ----------------------------------------------------------------------------
 

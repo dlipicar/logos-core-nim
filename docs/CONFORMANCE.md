@@ -685,6 +685,35 @@ the launcher erase every copy they make of a marked request or response, which `
 launcher's process, on success, refusal, provider failure, cancel and a closed stdout. A marked value
 reaches `lcn_call` only from a passed file, so none is in a process's arguments.
 
+### What Tier 5 step 5-3a-2 changes
+
+The package trust file and its administration (DECISIONS I114; G396, G397, G398; G137, G299, G303 amended).
+`<session>/trust.cbor` is the package trust file, `logos-core-nim.trust.v2`: one revision covers the
+development switch, the baseline signing profile, every anchor (kid, key, exact package names, development
+marker) and the catalog and provenance selections. Its schema and rules are core's
+(`src/logos_core/package/trustdoc.cddl`, `trustdoc.nim`), so the Package Manager reads the same document in
+5-3b; logosd applies them at both reads of a start, before continuity (`docs/DAEMON.md` §6), and
+`logosctl trust` writes it offline, each change as the next revision.
+
+- **Claimed:** PKG-0418 to PKG-0421 (continuity over every field; the mark survives restart; rollback and
+  other contents at one revision refused; no mark, no start, and `trust reestablish` restores it),
+  PKG-0083 (a development anchor through the same file, in force only with the switch on), PKG-0166 (only
+  the trust file selects a provenance profile) and PKG-0169 (a selected profile is refused before package
+  material is accepted). TXT-0463 (one added name is a later revision) leaves the pending list with
+  PKG-0418. PKG 253/253, with 333 units left for Tier 5.
+- **Limits of the claim.** PKG-0421 rests on the Package Manager getting its trust input only from
+  logosd's accepted start (5-3b builds it so; plan Q10). PKG-0166 covers "select" until a profile can be
+  selected: of the seven sources PM l.733-734 lists, the Storage object arrives with 5-3b and the caller
+  with 5-6a, and Nix metadata and the provenance object only if 5-10 and 5-11 are built, each adding its
+  case under the same tag. Rollback resistance is not
+  claimed beyond the session's own files (PM l.406): whoever can write the session can replace the file and
+  its mark together.
+- **Bounds.** The file is at most 1 MiB (`MaxTrustBytes`), the same wherever it is read; a kid and a
+  package name are 1 to 128 bytes and a key 48 bytes. The number of anchors and names is bounded only by
+  the file's size.
+- **Key separation** (PM l.533): no anchor may use a call-evidence key of the session, retired ones
+  included. It supplies evidence to PKG-0435, which stays with step 5-7a until the TLS key exists.
+
 ## Properties not claimed
 
 - A complete Logos module system (BCP §5.1; owner decision 10 (a), K18; DECISIONS G310, I97): there

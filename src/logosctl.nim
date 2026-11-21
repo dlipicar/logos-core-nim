@@ -107,6 +107,9 @@ offline (the session's files; writers hold its lock):
   daemon config set @FILE
   daemon config module-config INSTANCE (@FILE | --remove)
   trust show
+  trust anchor add --kid KID --key HEX|@FILE [--development] NAME...
+  trust anchor remove --kid KID
+  trust anchor add-names|remove-names --kid KID NAME...
   trust development on|off
   trust reestablish --revision N
   trust evidence-keys ls|rotate
@@ -115,7 +118,10 @@ offline (the session's files; writers hold its lock):
   state list
   state purge INSTANCE [--yes]
   state purge --assignment A [--yes]
-  version"""
+  version
+
+KID is text, or hex: and hex digits, as lcn-pkg sign --kid takes it; HEX is the
+public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too)."""
     DefaultTimeoutMs = 65_000
     ExitOk = 0
     ExitUsage = 1
@@ -1362,6 +1368,97 @@ offline (the session's files; writers hold its lock):
         return toHex(xs[i].binding.kid).toLowerAscii
     ""
 
+  proc trustEvidenceKeys(
+      s: Session, files: openArray[LcnPackageTrust]
+  ): Result[seq[seq[byte]], string] =
+    ## [G397] What logosd's start compares for key separation: the session's
+    ## evidence keys, the configured one included, read only when one of
+    ## `files` names an anchor.
+    var anchors = false
+    for f in files:
+      if f.signing.anchors.len > 0:
+        anchors = true
+    if not anchors:
+      return ok(newSeq[seq[byte]]())
+    let (dc, _) = ?readDaemonConfig(s)
+    if dc.call_audit.isSome and dc.call_audit.get.evidence.isSome:
+      let e = dc.call_audit.get.evidence.get
+      return sessionEvidenceKeys(s, e.secret_key_file, e.kid)
+    sessionEvidenceKeys(s)
+
+  proc kidOpt(c: Cli): Result[seq[byte], Fail] =
+    ## [G397; I41] `--kid KID`: text, or `hex:` and hex digits, as
+    ## `lcn-pkg sign --kid` takes it, so the operator passes the value the
+    ## producer signed with.
+    let v = c.opt("kid")
+    if v.isNone:
+      return err(usage("--kid KID is required"))
+    if v.get.startsWith("hex:"):
+      return hex.fromHex(v.get[4 .. ^1]).mapErr(
+          proc(e: string): Fail =
+            usage("--kid hex: takes hex digits: " & e)
+        )
+    ok(@(v.get.toOpenArrayByte(0, v.get.high)))
+
+  proc keyOpt(c: Cli): Result[seq[byte], Fail] =
+    ## [G397; IMPL] `--key HEX`: the public key's 96 hex digits, or `@FILE`
+    ## holding them alone or as the `public key: <hex>` line `lcn-pkg keygen`
+    ## prints; surrounding whitespace is ignored and nothing else is taken.
+    const Line = "public key:"
+    let v = c.opt("key")
+    if v.isNone:
+      return err(usage("--key HEX is required"))
+    var text = v.get
+    if text.startsWith("@"):
+      try:
+        text = readFile(text[1 .. ^1])
+      except IOError as e:
+        return err(fail(ExitUsage, text[1 .. ^1] & ": " & e.msg))
+    text = text.strip
+    if text.startsWith(Line):
+      text = text[Line.len .. ^1].strip
+    let key = hex.fromHex(text)
+    if key.isErr or key.get.len != 48:
+      return err(
+        fail(
+          ExitUsage,
+          "--key: a public key is 96 hex digits (48 bytes), alone or as lcn-pkg keygen's \"public key:\" line",
+        )
+      )
+    ok(key.get)
+
+  proc trustCommit(
+      s: Session, cur: TrustFileState, next: LcnPackageTrust
+  ): Result[TrustChange, Fail] =
+    ## [G397] Every writer's last step: logosd's checks, the unchanged rule.
+    let keys = trustEvidenceKeys(s, [cur.file, next]).valueOr:
+      return err(fail(ExitUsage, "the evidence keys: " & error))
+    commitTrust(s, cur, next, keys).mapErr(
+      proc(e: string): Fail =
+        fail(ExitUsage, e)
+    )
+
+  proc trustWritten(
+      s: Session,
+      command: string,
+      ch: TrustChange,
+      what: string,
+      extra: JsonNode,
+      why = "",
+  ): Done =
+    ## [G397; Q16] A writer's answer: the revision written, or unchanged.
+    let rev = $ch.state.file.revision
+    var j = %*{"revision": ch.state.file.revision, "changed": ch.changed}
+    for k, v in extra.pairs:
+      j[k] = v
+    let text =
+      if ch.changed:
+        "trust revision " & rev & ": " & what & "; it applies at the next start"
+      else:
+        "unchanged at trust revision " & rev & ": " &
+          (if why.len > 0: why & "; " else: "") & "nothing was written"
+    s.offline(command, j, text)
+
   proc cmdTrust(c: Cli, s: Session): Result[Done, Fail] =
     let sub = ?c.arg(1, "a trust command")
     case sub
@@ -1378,29 +1475,106 @@ offline (the session's files; writers hold its lock):
           "accepted (the revision in use)"
         else:
           "accepted at the next start (a higher revision)"
-      var j = %*{
-        "revision": t.file.revision,
-        "development": t.file.development,
-        "file": t.present,
-        "continuity": continuity,
-      }
+      # [G397] The file is decoded without the rules, so a refused one shows,
+      # with the reason logosd's start would give.
+      let refused = block:
+        let keys = trustEvidenceKeys(s, [t.file])
+        if keys.isErr:
+          Opt.some("the evidence keys: " & keys.error)
+        else:
+          let v = validateTrust(t.file, keys.get)
+          if v.isErr:
+            Opt.some(v.error)
+          else:
+            Opt.none(string)
+      var j = trustJson(t.file)
+      j["file"] = %t.present
+      j["continuity"] = %continuity
+      if refused.isSome:
+        j["refused"] = %refused.get
       if mark.isSome:
         j["mark"] = %*{
           "revision": mark.get.revision, "digest": toHex(mark.get.digest).toLowerAscii
         }
-      let text = table(
-        ["FIELD", "VALUE"],
-        [
-          @[
-            "revision",
-            $t.file.revision & (if t.present: "" else: " (the floor; no file)"),
-          ],
-          @["development", (if t.file.development: "on" else: "off")],
-          @["mark", (if mark.isSome: $mark.get.revision else: "none")],
-          @["continuity", continuity],
-        ],
-      )
+      var rows = @[
+        @[
+          "revision",
+          $t.file.revision & (if t.present: "" else: " (the floor; no file)"),
+        ]
+      ]
+      rows.add(trustRows(t.file))
+      rows.add(@["mark", (if mark.isSome: $mark.get.revision else: "none")])
+      rows.add(@["continuity", continuity])
+      if refused.isSome:
+        rows.add(@["refused", refused.get])
+      var text = table(["FIELD", "VALUE"], rows)
+      if t.file.signing.anchors.len > 0:
+        text.add("\n\n" & anchorsTable(t.file))
       ok(s.offline("trust show", j, text))
+    of "anchor":
+      let op = ?c.arg(2, "add, remove, add-names or remove-names")
+      if op notin ["add", "remove", "add-names", "remove-names"]:
+        return err(usage("unknown trust anchor command " & op))
+      let kid = ?c.kidOpt
+      let names =
+        if c.args.len > 3:
+          c.args[3 .. ^1]
+        else:
+          newSeq[string]()
+      var key: seq[byte]
+      if op == "add":
+        key = ?c.keyOpt
+      if op == "remove" and names.len > 0:
+        return
+          err(usage("trust anchor remove takes no NAME; remove-names removes names"))
+      if op != "remove" and names.len == 0:
+        return err(usage("trust anchor " & op & " needs at least one NAME"))
+      var lock = ?locked(s)
+      defer:
+        lock.release()
+      let cur = readTrust(s).valueOr:
+        return err(fail(ExitUsage, error))
+      let next =
+        case op
+        of "add":
+          cur.file.withAnchor(
+            LcnTrustAnchor(
+              kid: kid,
+              public_key: key,
+              packages: names,
+              development: "development" in c.flags,
+            )
+          )
+        of "remove":
+          Result[LcnPackageTrust, string].ok(cur.file.withoutAnchor(kid))
+        of "add-names":
+          cur.file.withNames(kid, names)
+        else:
+          cur.file.withoutNames(kid, names)
+      let f = next.valueOr:
+        return err(fail(ExitUsage, error))
+      let ch = ?trustCommit(s, cur, f)
+      # [G397; Q16] Withdrawing a kid that is not there changes nothing; the
+      # answer names it, so a mistyped kid is not taken for a withdrawal.
+      var absent = op == "remove"
+      for a in cur.file.signing.anchors:
+        if a.kid == kid:
+          absent = false
+      let what =
+        case op
+        of "add": "anchor added"
+        of "remove": "anchor removed"
+        of "add-names": "names added"
+        else: "names removed"
+      ok(
+        s.trustWritten(
+          "trust anchor " & op,
+          ch,
+          what & " (kid " & toHex(kid) & ")",
+          %*{"kid": toHex(kid)},
+          why = (if absent: "no anchor has kid " & toHex(kid) else: ""),
+        )
+      )
     of "development":
       let v = ?c.arg(2, "on or off")
       if v notin ["on", "off"]:
@@ -1408,14 +1582,24 @@ offline (the session's files; writers hold its lock):
       var lock = ?locked(s)
       defer:
         lock.release()
-      let t = setDevelopment(s, v == "on").valueOr:
+      let cur = readTrust(s).valueOr:
         return err(fail(ExitUsage, error))
+      let ch = ?trustCommit(s, cur, cur.file.withDevelopment(v == "on"))
+      # [G137] How many development anchors enter or leave force with it.
+      var moved = 0
+      if ch.changed:
+        for a in ch.state.file.signing.anchors:
+          if a.development:
+            inc moved
+      let anchors =
+        $moved & " development anchor" & (if moved == 1: " " else: "s ") &
+        (if v == "on": "enter" else: "leave") & (if moved == 1: "s" else: "") & " force"
       ok(
-        s.offline(
+        s.trustWritten(
           "trust development",
-          %*{"revision": t.file.revision, "development": t.file.development},
-          "trust revision " & $t.file.revision & ": development switch " & v &
-            "; it applies at the next start",
+          ch,
+          "development switch " & v & ", " & anchors,
+          %*{"development": ch.state.file.development, "development_anchors": moved},
         )
       )
     of "reestablish":
@@ -1425,7 +1609,11 @@ offline (the session's files; writers hold its lock):
       var lock = ?locked(s)
       defer:
         lock.release()
-      let t = reestablish(s, rev.get).valueOr:
+      let cur = readTrust(s).valueOr:
+        return err(fail(ExitUsage, error))
+      let keys = trustEvidenceKeys(s, [cur.file]).valueOr:
+        return err(fail(ExitUsage, "the evidence keys: " & error))
+      let t = reestablish(s, rev.get, keys).valueOr:
         return err(fail(ExitUsage, error))
       ok(
         s.offline(
