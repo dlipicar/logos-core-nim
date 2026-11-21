@@ -184,6 +184,11 @@ as the example's `totals` table does. **A refc module whose handlers keep GC'd s
   confined kit aborts there instead, so your own suite fails at the destroy that missed a close.
 - Before `destroyModule` returns, stop or join every thread you gave the module thread's chronos
   dispatcher handle to (for chronos's cross-thread `callSoon`): no thread may call into it afterwards.
+- Never close or replace the module thread's dispatcher: the kit's own wake-up is registered with it,
+  so nothing queued for the module is served once it is gone. A library may close dispatchers on
+  threads it starts itself, as logos-storage-nim's `ffi` package does on its own threads. A destroy
+  that finds another dispatcher says so in its line and counts nothing (G438); a test build aborts
+  there.
 
 ## 4. Async handlers
 

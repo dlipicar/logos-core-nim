@@ -59,7 +59,10 @@
 ## decimal, and an `initModule` given the state directory `/refuse-poster`
 ## keeps its poster in `refusedPoster`, then fails. `probe` 29 answers how
 ## many registrations the module thread's dispatcher held when it was made (a
-## test hook; `no hooks` in a library built without them).
+## test hook; `no hooks` in a library built without them). `probe` 30 has the
+## next `destroyModule` replace the module thread's dispatcher (destroy mode
+## 10), and 31 posts a null callback, so the kit's `die` aborts on the module
+## thread.
 ##
 ## `destroyModule` is `async` [DECISIONS G437], and awaits only when the test
 ## set `destroyMode` before the destroy; every other destroy returns without
@@ -113,6 +116,22 @@ proc leaveRegistered(closeIt: bool): string =
   else:
     "posix only"
 
+proc tick(arg: pointer) {.gcsafe, raises: [].} =
+  discard setTimer(Moment.fromNow(2.milliseconds), tick)
+
+proc replaceDispatcher(): string =
+  ## [DECISIONS G438] What MODULE-KIT §3 forbids: this thread's dispatcher
+  ## replaced by a new one, which a timer wakes every 2 ms so the kit still sees
+  ## its stop. chronos's `setThreadDispatcher` requires an empty callback queue,
+  ## which the queue's sentinel never leaves, so it is emptied around the call.
+  let old = getThreadDispatcher()
+  let queued = old.callbacks
+  old.callbacks.clear()
+  setThreadDispatcher(newDispatcher())
+  old.callbacks = queued
+  tick(nil)
+  "replaced"
+
 type
   FreedMark = object
     ## Counts its instance in `freed` when the instance's memory goes (orc and
@@ -161,7 +180,8 @@ var
     ## modes break the module's duty on purpose: 8 leaves its wrapped route
     ## handle, subscription and prepared call unreleased (in `leftRoute` and
     ## `leftCall`), and 9 leaves `probe` 24's stream running (in `leftStream`,
-    ## for `stopLeftStream`).
+    ## for `stopLeftStream`). [DECISIONS G438] 10 replaces the module thread's
+    ## dispatcher (`replaceDispatcher`).
   destroyStarted*: Atomic[bool] ## a `destroyModule` began
   destroyReturned*: Atomic[bool] ## a `destroyModule` returned
   streamed*: Atomic[int] ## stream callbacks that ran
@@ -350,6 +370,8 @@ proc destroyModule(m: Ledger) {.async: (raises: []).} =
     leftStream.store(m.stream)
     m.stream = nil
     note = "streaming"
+  of 10:
+    note = replaceDispatcher()
   else:
     discard
   if not m.stream.isNil:
@@ -640,6 +662,11 @@ proc `probe`(
   of 29:
     note = (when declared(notedRegistrations): $notedRegistrations()
     else: "no hooks")
+  of 30:
+    destroyMode.store(10)
+    note = "armed"
+  of 31:
+    m.services.poster.post(nil, nil)
   else:
     discard
   ok(LedgerProbeResponse(value: request.value, thread: threadNumber(), note: note))

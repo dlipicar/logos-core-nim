@@ -147,6 +147,11 @@ proc die(message: static string) {.noreturn.} =
   ## stderr, then abort. Never allocates.
   const line = "logos module kit (confined): " & message & "\n"
   discard cWrite(2, cstring(line), csize_t(line.len))
+  when defined(posix):
+    # [DECISIONS G438] As `reportLeft`: the host's own SIGABRT handler would run
+    # on this thread, and a debug Nim program's allocates, which hangs on a
+    # thread its runtime never started (upstream draft 190).
+    discard signal(SIGABRT, SIG_DFL)
   cAbort()
 
 const
@@ -369,6 +374,22 @@ else:
 static:
   doAssert sizeof(SignalMirror) == sizeof(ThreadSignal),
     "chronos's ThreadSignal changed its layout: update confinedrt's mirror"
+
+proc closeUnregistered(signal: ThreadSignalPtr) =
+  ## [DECISIONS G438] Closes and frees a signal no dispatcher this thread
+  ## reaches holds: chronos's `close` looks its descriptors up in the calling
+  ## thread's dispatcher, and makes one on a thread that has none. Windows'
+  ## close never touches the dispatcher.
+  when defined(windows):
+    discard signal.close()
+  else:
+    let m = cast[ptr SignalMirror](signal)
+    when defined(linux) and not defined(emscripten):
+      discard posix.close(m.efd)
+    else:
+      discard posix.close(m.rfd)
+      discard posix.close(m.wfd)
+    deallocShared(signal)
 
 proc fire(signal: ThreadSignalPtr) =
   ## Wakes the thread that waits on `signal`. Any thread, one the Nim runtime
@@ -1266,10 +1287,15 @@ proc scopedPublish(
 
 strictDestroyMarker()
 
-var ownRegistered {.threadvar.}: seq[cint]
-  ## [DECISIONS G438] The open descriptors the module thread's dispatcher held
-  ## when it was made, before the kit registered its signal: chronos's own
-  ## wake-up descriptor on its main line after v4.4.0, none on 4.4.1.
+var
+  ownDispatcher {.threadvar.}: PDispatcher
+    ## [DECISIONS G438] The dispatcher the module thread was given, which
+    ## `ownRegistered` is about: a module that closed or replaced it
+    ## (MODULE-KIT §3) leaves another at teardown.
+  ownRegistered {.threadvar.}: seq[cint]
+    ## [DECISIONS G438] The open descriptors the module thread's dispatcher held
+    ## when it was made, before the kit registered its signal: chronos's own
+    ## wake-up descriptor on its main line after v4.4.0, none on 4.4.1.
 
 when defined(lcnTestHooks):
   testHooksMarker("confinedrt")
@@ -1279,6 +1305,23 @@ when defined(lcnTestHooks):
     ## its dispatcher held when it was made, before the kit registered
     ## anything (`ownRegistered`).
     ownRegistered.len
+
+  var
+    failSignalClose*: bool
+      ## [DECISIONS G438] Test hook, set before a destroy: that destroy's close
+      ## of the kit's signal fails as chronos's does when it cannot unregister
+      ## the first descriptor, which stays open and registered (on POSIX).
+    failedSignalFd*: cint = -1
+      ## the descriptor `failSignalClose` left, for the test to close
+    failInitAt*: int
+      ## [DECISIONS G438] Test hook: the next `confinedInit` fails as when the
+      ## post gate has no free slot (1), the publisher thread (2) or the module
+      ## thread (3) cannot start.
+
+  proc failingAt(step: int): bool =
+    result = failInitAt == step
+    if result:
+      failInitAt = 0
 
 when defined(posix):
   proc cDirfd(d: ptr DIR): cint {.importc: "dirfd", header: "<dirent.h>".}
@@ -1332,15 +1375,10 @@ proc writeLine(ctx: ptr ConfinedObj, text: string) =
     else: $ctx.name) & ": " & text & "\n"
   discard cWrite(2, cstring(line), csize_t(line.len))
 
-proc reportLeft(ctx: ptr ConfinedObj, what: string) =
-  ## [DECISIONS G438] What the module left registered with its thread's
-  ## dispatcher: one line on stderr, the descriptors left open. A strict build
-  ## (`lcnKitStrictDestroy`, test builds only) then aborts, so the module's own
-  ## suite fails at the destroy that missed a close.
-  ctx.writeLine(
-    "destroy left " & what &
-      " registered with the module thread's dispatcher; the kit leaves them open"
-  )
+proc strictAbort() =
+  ## [DECISIONS G438] A strict build (`lcnKitStrictDestroy`, test builds only)
+  ## aborts after a destroy's report, so the module's own suite fails at the
+  ## destroy that broke the rule.
   when defined(lcnKitStrictDestroy):
     when defined(posix):
       # A host's own SIGABRT handler (a Nim program's allocates) would not let
@@ -1348,7 +1386,43 @@ proc reportLeft(ctx: ptr ConfinedObj, what: string) =
       discard signal(SIGABRT, SIG_DFL)
     cAbort()
 
-proc closeDispatcher(ctx: ptr ConfinedObj, disp: PDispatcher) =
+proc reportLeft(ctx: ptr ConfinedObj, what: string) =
+  ## [DECISIONS G438] What the module left registered with its thread's
+  ## dispatcher: one line on stderr, the descriptors left open; a strict build
+  ## then aborts.
+  ctx.writeLine(
+    "destroy left " & what &
+      " registered with the module thread's dispatcher; the kit leaves them open"
+  )
+  strictAbort()
+
+proc signalDescriptors(signal: ThreadSignalPtr): seq[cint] =
+  ## The kit's signal's descriptors; none on Windows.
+  when not defined(windows):
+    let m = cast[ptr SignalMirror](signal)
+    when defined(linux) and not defined(emscripten):
+      result = @[m.efd]
+    else:
+      result = @[m.rfd, m.wfd]
+
+proc closeSignal(signal: ThreadSignalPtr): Result[void, string] =
+  ## chronos's close of the kit's signal, on the dispatcher that holds it.
+  when defined(lcnTestHooks) and defined(posix):
+    if failSignalClose:
+      # What chronos leaves when the first `unregister2` fails: that descriptor
+      # open and registered, the rest closed, the signal freed.
+      failSignalClose = false
+      let m = cast[ptr SignalMirror](signal)
+      when defined(linux) and not defined(emscripten):
+        failedSignalFd = m.efd
+      else:
+        failedSignalFd = m.rfd
+        discard posix.close(m.wfd)
+      deallocShared(signal)
+      return err("a test's failed unregister")
+  signal.close()
+
+proc closeDispatcher(ctx: ptr ConfinedObj, disp: PDispatcher, kept: openArray[cint]) =
   ## [DECISIONS G438] Closes the module thread's dispatcher once the kit's own
   ## signal is closed and its callbacks cleared. On chronos's main line, which
   ## gives each dispatcher a wake-up descriptor only `closeThreadDispatcher`
@@ -1356,13 +1430,16 @@ proc closeDispatcher(ctx: ptr ConfinedObj, disp: PDispatcher) =
   ## through the public API first, since its close raises a Defect on anything
   ## left. Otherwise, and on 4.4.1 and Windows, the selector is closed and the
   ## dispatcher dropped, as before. The kit never closes what the module left.
+  ## `kept` are the kit's own descriptors a failed close of its signal left:
+  ## not counted, and the main line's close is not tried, since one may still
+  ## be registered.
   when defined(posix):
     var left = 0
     for fd in openDescriptors():
-      if disp.contains(AsyncFD(fd)) and fd notin ownRegistered:
+      if disp.contains(AsyncFD(fd)) and fd notin ownRegistered and fd notin kept:
         inc left
   when declared(closeThreadDispatcher) and defined(posix):
-    if left == 0 and ownRegistered.len == 1:
+    if left == 0 and ownRegistered.len == 1 and kept.len == 0:
       let own = ownRegistered[0]
       let selector = disp.getIoHandler()
       if own in selector and selector.unregister2(own).isOk:
@@ -1443,10 +1520,38 @@ proc teardown(ctx: ptr ConfinedObj) =
     )
     completeDeferred(dj, outcome)
   roomWaiters = @[]
-  discard ctx.signal.close()
+  # [DECISIONS G438] `getThreadDispatcher` makes one if the module dropped its
+  # own.
   let disp = getThreadDispatcher()
+  let own = move ownDispatcher
+  if disp != own:
+    # The module closed or replaced its thread's dispatcher (MODULE-KIT §3): the
+    # kit's signal is registered with the one it was given, whatever state that
+    # is in, and what was noted is about that one. Nothing is counted, and
+    # neither dispatcher is closed: the kit cannot tell what the module closed.
+    ownRegistered = @[]
+    ctx.signal.closeUnregistered()
+    ctx.writeLine(
+      "destroy found the module thread's dispatcher closed or replaced; the kit " &
+        "counts nothing left on it and closes neither dispatcher"
+    )
+    strictAbort()
+    disp.callbacks.clear()
+    setThreadDispatcher(nil)
+    return
+  let mine = signalDescriptors(ctx.signal)
+  var kept: seq[cint]
+  let closed = closeSignal(ctx.signal)
+  if closed.isErr:
+    # [DECISIONS G438] chronos returns before closing when it cannot unregister:
+    # the kit's own descriptors are not the module's leftovers.
+    ctx.writeLine(
+      "the kit's own signal could not be closed (" & closed.error &
+        "); its descriptors stay open and out of destroy's count"
+    )
+    kept = mine
   disp.callbacks.clear()
-  ctx.closeDispatcher(disp)
+  ctx.closeDispatcher(disp, kept)
 
 proc moduleMain(ctx: ptr ConfinedObj) {.thread.} =
   ownCtx = ctx
@@ -1454,7 +1559,9 @@ proc moduleMain(ctx: ptr ConfinedObj) {.thread.} =
   enterConfinedThread()
   # [DECISIONS G438] The dispatcher before anything registers with it: what it
   # registered when it was made is chronos's own, closed with it.
-  ownRegistered = registeredBy(getThreadDispatcher())
+  let disp = getThreadDispatcher()
+  ownDispatcher = disp
+  ownRegistered = registeredBy(disp)
   ctx.arm()
   ctx.serve()
   while true:
@@ -1741,20 +1848,32 @@ proc confinedInit*(
   ctx.name = name
   # [DECISIONS G440] Before any thread starts: a failed `initModule` may give
   # its poster away, and every failure path below retires the slot.
-  ctx.gate = gateOpen(ctx)
+  when defined(lcnTestHooks):
+    ctx.gate = (if failingAt(1): nil else: gateOpen(ctx))
+  else:
+    ctx.gate = gateOpen(ctx)
+  # [DECISIONS G438] The signal is armed only on the module thread: on the
+  # paths below it is registered nowhere, and is closed without chronos's
+  # close, which would make a dispatcher on this thread.
   if ctx.gate == nil:
-    discard ctx.signal.close()
+    ctx.signal.closeUnregistered()
     freeContext(ctx)
     return failureResult(moduleError("the post gate has no free slot"))
   ctx.services =
     moduleServices(input).withConfined(ctx, ctx.gate, queuePublish, postTask)
   try:
+    when defined(lcnTestHooks):
+      if failingAt(2):
+        raise newException(ResourceExhaustedError, "a test's failed thread")
     createThread(ctx.publisher, publisherMain, ctx)
   except ResourceExhaustedError:
-    discard ctx.signal.close()
+    ctx.signal.closeUnregistered()
     freeContext(ctx)
     return failureResult(moduleError("the module's publisher thread did not start"))
   try:
+    when defined(lcnTestHooks):
+      if failingAt(3):
+        raise newException(ResourceExhaustedError, "a test's failed thread")
     createThread(ctx.module, moduleMain, ctx)
   except ResourceExhaustedError:
     acquire(ctx.pubLock)
@@ -1762,7 +1881,7 @@ proc confinedInit*(
     signal(ctx.pubCond)
     release(ctx.pubLock)
     joinThread(ctx.publisher)
-    discard ctx.signal.close()
+    ctx.signal.closeUnregistered()
     freeContext(ctx)
     return failureResult(moduleError("the module thread did not start"))
   var a = InitArgs(input: input, create: create)

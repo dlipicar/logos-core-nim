@@ -7358,10 +7358,63 @@ their history.
   refused and its node freed. A post after `_MODULE_destroy` returned is G440's gate. The window
   between the last drain and the return is too short to hit from a test without a hook in the
   runtime, so G440's foreign-stream case, which posts through the whole destroy, covers both refusals.
+- **Amended after the merge** (Fable's review, `tier5-plans/fable-checks/stepN-1e-plan.md` §9; branch
+  `stepN-1e-fix`):
+  - **The kit's own signal (K1).** chronos's `close` returns before closing when `unregister2` fails,
+    and frees the signal either way. Teardown discarded that result, so the kit's own descriptor was
+    counted as the module's leftover: the line named the module, and a strict build aborted. Teardown
+    now reads the signal's descriptors before the close, through the layout mirror `fire` uses. On an
+    error it writes "the kit's own signal could not be closed (<error>); its descriptors stay open and
+    out of destroy's count" and leaves those numbers out of the count. It also skips the main line's
+    `closeThreadDispatcher`, since one of them may still be registered and that close would raise its
+    Defect, and takes the old path instead. It does not abort: the failure is the kit's, not the
+    module's.
+  - **The dispatcher's identity (K2).** The noted descriptors belong to the dispatcher `moduleMain`
+    made, and the kit's signal stays registered with that one. `moduleMain` now keeps it as well
+    (`ownDispatcher`, a reference, so a later dispatcher cannot share its address), and teardown
+    compares it with the thread's dispatcher. On a mismatch the kit:
+    - closes its signal's descriptors directly;
+    - writes "destroy found the module thread's dispatcher closed or replaced; the kit counts nothing
+      left on it and closes neither dispatcher";
+    - drops the thread's dispatcher without closing either one, since it cannot tell what the module
+      closed;
+    - in a strict build, aborts after the line, as for a leftover.
+
+    chronos itself stops most such modules. `setThreadDispatcher` asserts an empty callback queue,
+    which a dispatcher without strict reentrancy never has, because of its sentinel. The main line's
+    `closeThreadDispatcher` asserts an empty selector, which the kit's registered signal never leaves.
+    Only a module that works around both gets this far. Even then its destroy is reached only if the
+    new dispatcher wakes by itself: the kit's signal wakes the old one, so nothing queued is served
+    after the swap. If the module dropped its dispatcher altogether, `getThreadDispatcher` makes a
+    new one at teardown, and that one is dropped too, with its descriptors still open. MODULE-KIT §3
+    now says that a module never closes or replaces its module thread's dispatcher.
+    logos-storage-nim's closes are in its `ffi` package (0.3.0, `ffi_context.nim`), registered only
+    on the threads that package starts.
+  - **A failed init.** On the post-gate, publisher-thread and module-thread failures, `confinedInit`
+    closed the signal with chronos's `close`. That close looks the descriptors up in the calling
+    thread's dispatcher, and makes a dispatcher if the thread has none. The signal is armed only on
+    the module thread, so on these paths it is registered nowhere. `closeUnregistered` now closes its
+    descriptors directly and frees it. Windows keeps chronos's close, which never touches the
+    dispatcher.
+
+    Checked by reading:
+    - logosd's Runtime calls `_MODULE_init` on its lifecycle workers (`runtime/engine.nim`,
+      `workerMain`), and the Module Host on its lifecycle thread (`host/main.nim`). Neither file
+      imports chronos; core's only dispatcher is the transport's I/O thread.
+    - A kit library's chronos is its own copy, so the only dispatcher it ever had on those threads is
+      the one that close made.
+    - So before this change, the first such failure on each thread left a dispatcher there that was
+      never closed. Its epoll or kqueue descriptor stayed open, and on the main line its wake-up
+      descriptor too.
+  - **`die` on a module thread.** `die` now resets SIGABRT to its default before `abort`, as
+    `reportLeft` already did. Without the reset, the host's own handler runs on that thread. A debug
+    Nim host's handler allocates, and on a thread its runtime never started it hangs (upstream draft
+    190, not filed).
 - **For the guide** (MODULE-KIT §3, §8): `destroyModule` closes every stream and transport the module
   opened; a descriptor registered with chronos is unregistered before it is closed; what is left is
   reported and stays open; test builds abort there; threads holding the dispatcher handle are stopped
-  or joined first; kitbuild never builds a release library.
+  or joined first; the module thread's dispatcher is never closed or replaced; kitbuild never builds
+  a release library.
 - **Tests:** `sdk/tests/test_kit_dylib.nim` "what a confined kit's destroy leaves registered", each
   case in a child process (this program run again) over the strict ledger library and a lenient one
   (`kitledgerp`): `probe` 25 leaves a pipe end registered (the lenient library writes the line, "at
@@ -7375,7 +7428,21 @@ their history.
   memory grown by under 1 MiB (it rarely returns to the byte; Mac 2026-11-21: 16 KiB orc, 0 refc,
   16 KiB orc-release). It is the regression check for the wake-up descriptor: without this decision
   each cycle leaks one (Linux) or two (macOS).
-- **Status:** built 2026-11-21 (Tier 5 step N-1e, part B).
+  - **The amendment's cases.** Every child now runs under a bound (`leftoverRun`, 120 s by default);
+    one that outlives it is killed and fails its case.
+    - In `test_kit_dylib`, `probe` 30 has the next destroy replace the dispatcher (destroy mode 10,
+      `replaceDispatcher`, with a 2 ms timer that keeps the new one waking). The lenient library
+      writes the mismatch line alone and returns; the strict one aborts with it.
+    - In `test_kit_dylib`, `probe` 31 posts a null callback on the module thread. The child ends by
+      SIGABRT (134) with `die`'s line, within 60 s, in every build mode.
+    - In `test_kit_confined`, through the test hooks: `failSignalClose` leaves what chronos leaves
+      (the first descriptor open and registered). The destroy writes the K1 line and no "destroy
+      left", the strict in-process build goes on, and the descriptor is still open.
+    - In `test_kit_confined`, `failInitAt` 1 to 3 on a thread that never had a dispatcher: each init
+      fails with its message and no context, and the process has as many open descriptors after it
+      as before.
+- **Status:** built 2026-11-21 (Tier 5 step N-1e, part B); amended 2026-11-21 (`stepN-1e-fix`: K1,
+  K2, the failed init, `die`).
 
 ### G439 — A chronos variant in `kit-toolchains`: the kits under the libraries' own chronos
 - **Kind:** IMPL · **Specs:** none (a test of G341's range); TIER5-PLAN N-1; plan
