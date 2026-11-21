@@ -7804,8 +7804,11 @@ their history.
     `srcDir` (which Nimble lists too) and the listed develop links: a local source is a finding.
   - **Where it runs.** First in every `nimble test*` task (`runSuites` in `logos_core.nimble`), and as a
     step of its own right after `nimble setup` in CI's `nimble` job and in `windows.ps1 setup`, so a
-    suite the job compiles directly is covered too. Not covered: a suite a developer compiles by hand,
-    `nimble build`, `build_runtime_lib` and `regen`. Deployed outputs come from Nix.
+    suite the job compiles directly is covered too. Before a task runs, Nimble solves again and
+    rewrites an existing `nimble.paths` (Nimble 0.26.2 `nimble.nim:2690-2702`), so inside a task the
+    check sees the installs that solve picked, not an edited file. Not covered: a suite a developer
+    compiles by hand, `nimble build`, `build_runtime_lib` and `regen`. Deployed outputs come from Nix.
+    The Nix checks run `test_lockcheck` too, with the real lock in their sources.
   - **Setup not run.** No `nimble.paths`, or install directories that are gone, is one finding that says
     to run `nimble setup`: never a crash or an empty pass. A mismatch says it too, for a `nimble.paths`
     left from before the lock moved.

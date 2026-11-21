@@ -79,6 +79,8 @@
             root = ./.;
             fileset = lib.fileset.unions [
               ./logos_core.nimble
+              # test_lockcheck checks the helper against the real lock (DECISIONS G436).
+              ./nimble.lock
               ./config.nims
               ./.nph.toml
               ./src
