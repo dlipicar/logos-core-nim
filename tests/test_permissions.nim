@@ -1003,13 +1003,22 @@ when declared(caParity):
       e.finish()
 
     test "[IMPL-DECISION G170] an execution renewal whose allow narrows an installed permission ends the execution as authority-denied, as a narrowed route renewal is (CA l.940; re-pin P4c M9); intent and origin kept":
-      let e = fixtureEngine(quotaTen())
+      # [IMPL] On a test clock, as test_runtime_authority's renewals are: the
+      # renewal falls due at the end − min(30 s, a third of the lifetime), 40 s
+      # into 60 s, and the validity end cannot pass while its answer is on the
+      # way. On the real clock a 300 ms margin let a loaded CI runner end it as
+      # authority-expired first.
+      var clk = newTestClock()
+      useClock(clk)
+      defer:
+        useClock(systemClock())
+      var cfg = quotaTen()
+      cfg.clock = clk
+      let e = fixtureEngine(cfg)
       let (_, rc) = e.startClient("c")
       discard e.create(client(), "t").tryGet
-      # [IMPL] The renewal comes at the end − min(30 s, a third of the
-      # lifetime): 600 ms in, on the real clock.
       setScript(
-        allow("execute", validMs = 900),
+        allow("execute", validMs = 60_000),
         Rule(
           what: "renew-execution",
           verdict: vAllow,
@@ -1021,12 +1030,15 @@ when declared(caParity):
       check rc.startBy("t") == ecOk
       check latestBinding().installed ==
         Opt.some(@[setting(Quota, quota(10)), ambient()])
+      check e.stateIs("t", msReady)
+      clk.advance(41_000)
       check e.stateIs("t", msUnloaded)
       let v = e.view("t").tryGet
       check v.failure.isSome and v.failure.get.kind == fkAuthorityDenied
       check v.execution.intent == inRequested
       check v.intentOrigin.instance == "c"
       e.finish()
+      freeClock(clk) # after the engine that reads it is closed
 
     test "[CAP-0084] [CAP-0068] [BCP-0049] [BCP-0081] [IMPL-DECISION G282] an allow broadening a permission, leaving one out, or allowing another is an evaluation failure":
       let e = fixtureEngine(quotaTen())

@@ -277,6 +277,10 @@ type
       ## [I85] the execution authorization of the attempt or realization in
       ## progress (`execauth.nim`)
     execSerial: int ## advanced whenever `exec` is replaced or ended
+    renewalHold: bool
+      ## [SPEC RUNTIME l.3731 (RUN-1199)] its stop began while it ran under an
+      ## ending execution authorization: while that stop is `stopping` its
+      ## realization is not yet released, so the authority stays held for it
     enforced: Opt[Failure]
       ## [G168 extended] the classification an authority stop in progress
       ## leaves on `unloaded`
@@ -4623,6 +4627,10 @@ proc stopInstance(
   ## it get the view after the stop, or NOT_READY at shutdown. An
   ## `enforcement` stop (`stopForAuthority`) keeps intent, as a shutdown stop
   ## does, and has the stop deadline of an explicit one.
+  if x.state != msStopping:
+    # Read before the authorization ends; a later stop of a `stopping` one
+    # keeps what its first stop recorded.
+    x.renewalHold = x.executing
   x.exec = Opt.none(ExecAuth)
   inc x.execSerial
   if not keepIntent:
@@ -5007,9 +5015,12 @@ proc create(st: State, q: Request) =
 proc authorityHeld(st: State): bool =
   ## [SPEC RUNTIME l.3731 (RUN-1199, TXT-0314); P5 §0.4 item 1; I85 amended]
   ## The bound authority stays usable for execution renewal while an
-  ## execution it authorized still runs, other than one of the authority's
-  ## own ordering prerequisites, direct or not: the ordering releases those
-  ## after it, so holding it for them would never end.
+  ## execution it authorized still runs, and until a realization whose stop
+  ## began while it ran is released or its cleanup failure recorded (no
+  ## longer `stopping`; at expiry `releasable` passes this by, l.3732), other
+  ## than one of the authority's own ordering prerequisites, direct or not:
+  ## the ordering releases those after it, so holding it for them would never
+  ## end.
   if not st.authorityMode or st.caInst.isNil:
     return false
   let ca = st.cfg.authority.get.instance
@@ -5022,7 +5033,8 @@ proc authorityHeld(st: State): bool =
         before.add(pre)
         todo.add(pre)
   for x in st.instances.values:
-    if x.id != ca and x.id notin before and x.executing:
+    if x.id != ca and x.id notin before and
+        (x.executing or (x.renewalHold and x.state == msStopping)):
       return true
   false
 

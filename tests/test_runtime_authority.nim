@@ -1236,12 +1236,14 @@ suite "run.authority: execution over time (CA §5.1, §8 l.828-866; RUNTIME §10
     check e.awaitShutdown().isOk
     let m1 = e.view("m1").tryGet
     check m1.state == msUnloaded and m1.failure.isNone
+    # [SPEC RUNTIME l.3731] Held until m1 is released, not only until its
+    # release begins: the authority's own stop begins after m1 is `unloaded`.
     var order: seq[string]
     for c in e.changes():
-      if c.serial > before and c.view.state == msUnloaded and
+      if c.serial > before and c.view.state in {msStopping, msUnloaded} and
           c.view.instance in ["m1", Ca]:
-        order.add(c.view.instance)
-    check order == @["m1", Ca]
+        order.add(c.view.instance & " " & $c.view.state)
+    check order == @["m1 stopping", "m1 unloaded", "ca stopping", "ca unloaded"]
     check e.close(initDuration(seconds = 10 * Slow))
     live = nil
 
