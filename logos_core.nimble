@@ -16,11 +16,18 @@ namedBin["logos_module_host"] = "logos-module-host"
 when not defined(windows):
   bin.add ["logosd", "logosctl"]
 
+# [DECISIONS G436] Nimble 0.26.2 or later: 0.20.1 empties or crashes on a lock made over an existing
+# one, and on macOS crashes without --useSystemNim. Every Nimble command passes --useSystemNim, so
+# Nimble neither installs nor locks a Nim: the one on the path must be the pin below.
+when (NimbleMajor, NimbleMinor) < (0, 26):
+  {.error: "logos_core needs Nimble >= 0.26".}
+
 # Dependencies
 #
 # This file and nimble.lock are the only place dependency versions are decided.
 # Nix builds from nimble.lock through nix/nimble-deps.json. After regenerating
-# nimble.lock (`rm nimble.lock && nimble -y lock`), run `nix run .#update-nimble-deps`.
+# nimble.lock (`rm nimble.lock && nimble --useSystemNim -y lock`), run
+# `nix run .#update-nimble-deps`. The lock has no `nim` entry.
 
 requires "nim == 2.2.14"
 requires "results == 0.5.1"
@@ -33,9 +40,10 @@ requires "zlib == 0.3.0"
 # The transport I/O thread's event loop (G77(a); DECISIONS I83), and the tls-tcp carrier's
 # streams (I99), which also import chronos's TCP transports; stew is compiled with them, and
 # httputils and bearssl (chronos's HTTP and TLS layers) are locked but never compiled.
-# Every transitive package is pinned exactly, and before chronos: nimble 0.20.1 caches a
-# download under the version its first requirement names, so chronos's `>=` ranges coming
-# first would leave the pinned versions' entries checked out at the newest tag.
+# Every transitive package is pinned exactly, and before chronos: Nimble caches each download
+# under the version range of the first requirement that names it, and its discovery follows
+# chronos's `>=` ranges first when chronos comes first, so the pinned versions' entries would
+# be checked out at the newest tag.
 requires "stew == 0.5.2"
 requires "httputils == 0.5.1"
 requires "bearssl == 0.2.13"

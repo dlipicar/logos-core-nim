@@ -65,8 +65,8 @@ CANONICAL_FLAKE = re.compile(r"^github:" + OWNER + r"/[a-z0-9][a-z0-9-]*$")
 SDK_NIMBLE = os.path.join("sdk", "logos_sdk.nimble")
 CORE_NIMBLE = "logos_core.nimble"
 LOCK = "nimble.lock"
-# [W2-P.1] core's nimble file gains the guard with Nimble 0.26.2; this set is then empty.
-UNGUARDED = {CORE_NIMBLE}
+# Nimble files allowed without the guard: none since W2-P.1 (G436). A file listed here must not have it.
+UNGUARDED = set()
 GUARD = re.compile(
     r"^when\s*\(\s*NimbleMajor\s*,\s*NimbleMinor\s*\)\s*<\s*\(\s*0\s*,\s*26\s*\)\s*:\s*\n"
     r"\s+\{\.\s*error\s*:",
@@ -85,9 +85,9 @@ NIMBLE_COMMAND_FILES = [
     "README.md",
     os.path.join("sdk", "docs", "MODULE-KIT.md"),
 ]
-# [W2-P.1] Each command gains `--useSystemNim` with Nimble 0.26.2, and this becomes False. While it
-# is True, a tree whose every command already has the flag fails, so it cannot go stale.
-SYSTEM_NIM_PENDING = True
+# Every Nimble command carries `--useSystemNim` since W2-P.1 (G436). The switch stays for the
+# self-test, which checks both states.
+SYSTEM_NIM_PENDING = False
 NIMBLE_COMMAND = re.compile(r"(?<![\w./'-])nimble\s+(?!-v\b|--version\b)[-\w\"$]")
 
 
@@ -362,7 +362,8 @@ def read_text(root, rel):
         return f.read()
 
 
-def check(root, system_nim_pending=SYSTEM_NIM_PENDING):
+def check(root, system_nim_pending=SYSTEM_NIM_PENDING, unguarded=None):
+    unguarded = UNGUARDED if unguarded is None else unguarded
     findings = []
     nimbles = nimble_files(root)
     texts = {}
@@ -385,10 +386,10 @@ def check(root, system_nim_pending=SYSTEM_NIM_PENDING):
             if is_ours(name):
                 findings.append((nimble, n, "own-requirement", f"requires one of our packages: {req!r}"))
         guarded = bool(GUARD.search(text))
-        if nimble in UNGUARDED and guarded:
+        if nimble in unguarded and guarded:
             message = "has the guard but is still listed in UNGUARDED"
             findings.append((nimble, 1, "nimble-guard", message))
-        elif nimble not in UNGUARDED and not guarded:
+        elif nimble not in unguarded and not guarded:
             message = "no `when (NimbleMajor, NimbleMinor) < (0, 26): {.error.}` guard"
             findings.append((nimble, 1, "nimble-guard", message))
 
@@ -533,12 +534,15 @@ installFiles = @[
 requires "results >= 0.5.0 & < 0.6.0"
 requires "chronos >= 4.4.0 & < 4.5.0"
 """
-GOOD_CORE = """version = "0.1.0"
+GOOD_CORE = (
+    """version = "0.1.0"
 srcDir = "src"
 installExt = @["nim"]
 requires "nim == 2.2.14"
 requires "chronos == 4.4.1"
 """
+    + GUARD_TEXT
+)
 
 
 def lock_entry(version, url):
@@ -607,7 +611,7 @@ PLANTS = [
     ("lock-complete", "nimble.lock", GOOD_LOCK.replace('"40f8087c"', '""')),
     ("lock-complete", "nimble.lock", GOOD_LOCK.replace("https://github.com/status-im/nim-chronos", "")),
     ("nimble-guard", "sdk/logos_sdk.nimble", GOOD_SDK.replace("when (NimbleMajor", "when (NimbleMinor")),
-    ("nimble-guard", "logos_core.nimble", GOOD_CORE + GUARD_TEXT),
+    ("nimble-guard", "logos_core.nimble", GOOD_CORE.replace(GUARD_TEXT, "")),
     ("address", "README.md", "See " + URL + ".\n"),
     ("address", "docs/x.md", "git@github.com:" + OWNER + "/logos-core-nim.git\n"),
     ("address", "flake.nix", '{ description = "' + URL + '"; }\n'),
@@ -650,10 +654,10 @@ def self_test():
         if satisfies(version, constraint) != want:
             failures.append(f"satisfies({version!r}, {constraint!r}) is not {want}")
 
-    def run(tree, pending=False):
+    def run(tree, pending=False, unguarded=None):
         with tempfile.TemporaryDirectory() as root:
             plant_tree(root, tree)
-            return check(root, system_nim_pending=pending)[0]
+            return check(root, system_nim_pending=pending, unguarded=unguarded)[0]
 
     clean = run(CLEAN_TREE)
     if clean:
@@ -664,6 +668,9 @@ def self_test():
     waiting = run(dict(CLEAN_TREE, **{"README.md": "```\nnimble test\n```\n"}), pending=True)
     if waiting:
         failures.append(f"a pending system-nim rule reports: {waiting}")
+    listed = run(CLEAN_TREE, unguarded={CORE_NIMBLE})
+    if [f[2] for f in listed] != ["nimble-guard"]:
+        failures.append(f"a guarded file still listed in UNGUARDED is not reported: {listed}")
     for rule, path, text in PLANTS:
         found = {f[2] for f in run(dict(CLEAN_TREE, **{path: text}))}
         if rule not in found:
@@ -674,7 +681,7 @@ def self_test():
         return 1
     print(
         f"packaging self-test: {len(SATISFIES)} ranges, {len(PLANTS)} planted violations caught,"
-        " and the pending switch's two states"
+        " the pending switch's two states and a stale UNGUARDED"
     )
     return 0
 
