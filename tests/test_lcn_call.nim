@@ -329,19 +329,24 @@ when defined(posix):
       l = share(last = true)
       # The default set, the events rule's three. Until the subscriptions are
       # active a start is not seen, so shapes is stopped and started until
-      # one is.
-      l.stream(eventsOf(count = 1))
+      # three events came, one of them about shapes: in the shared session an
+      # earlier case's change (L-9's recovered host) can be seen first.
+      l.stream(eventsOf(count = 3))
       check within(streamEnded(), l.restart("shapes_module", ShapesInstance))
       check endStream() == 0
       let seen = streamLines()
       checkpoint saidStream()
-      check seen.len == 1
-      if seen.len == 1:
-        check seen[0]{"event"}.getStr in [
-          "logos.runtime_control.module_state_changed_event",
-          "logos.runtime_control.execution_state_changed_event",
-        ]
-        check seen[0]{"data", "instance"}.getStr == ShapesInstance
+      check seen.len == 3
+      let states = [
+        "logos.runtime_control.module_state_changed_event",
+        "logos.runtime_control.execution_state_changed_event",
+      ]
+      for e in seen:
+        check e{"event"}.getStr in
+          @states & @["logos.runtime_control.inventory_changed_event"]
+      check seen.anyIt(
+        it{"event"}.getStr in states and it{"data", "instance"}.getStr == ShapesInstance
+      )
       check l.reaches(ShapesInstance, LogosNSRuntimeControlStateKind.Ready)
       # [G345 S7] route_state_changed is outside the events rule.
       let denied = l.run(eventsOf(["route_state_changed"], count = 1))
