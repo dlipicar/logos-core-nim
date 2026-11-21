@@ -369,7 +369,9 @@ When logosd composes the CLI module `lcn_call` (§7a), it adds four more:
 - **What an operator rule can add.** The system rules give `lcn_call` no provider access: operator rules
   grant it, provider by provider (§7a, "Grants"). An operator rule may also grant it more Runtime Control
   methods, but no rule can let it start or stop an instance, itself included: a start or stop also needs
-  an execution decision for the requester, which S7 denies (so `lcn_call` never stops itself, G350). A
+  an execution decision for the requester, which S7 denies (so `lcn_call` never stops itself, G350). Nor
+  can a rule give it another Runtime Control event: S7 denies `configuration_state_changed`,
+  `permission_settings_changed` and `route_state_changed`, and a deny wins over any allow (G346). A
   granted `recover_module` would take effect, since a recovery is decided on the authority of the
   instance's original starter (its execution decision is for the retained origin); `lcn_call` never
   calls it. A deny over every other method cannot be written: in this policy language a deny that
@@ -738,8 +740,7 @@ so the wait for it ends with that outcome or the command's deadline (I97).
 
 ## 7a. The `lcn_call` instance and its socket
 
-`logosctl call` and `logosctl describe` (and, from Tier 5 step N-2c, `subscribe` and `events`) are not
-logosctl instance commands. They go to `lcn_call`, the CLI module: a consumer-only system instance,
+`logosctl call`, `describe`, `subscribe` and `events` are not logosctl instance commands. They go to `lcn_call`, the CLI module: a consumer-only system instance,
 `hosted_dynamic` in a Module Host of its own, that makes the calls through its own binding and routes
 and writes the result to the user's terminal itself (DECISIONS G343–G350; Tier 5 plan A3, design (f)).
 The shell is its launcher: it hands over its stdout, stderr and each `@FILE`, names the command, and waits
@@ -753,6 +754,8 @@ logosctl describe shapes_module
 logosctl call shapes_module reflect n=3 label=@label.txt
 logosctl call shapes_module reflect --request '{"n": 3, "label": "x"}' --text
 logosctl module wait shapes_module --state ready
+logosctl subscribe meter_module changed --count 3
+logosctl events --for 30s
 ```
 
 ### Composition and lifetime
@@ -950,9 +953,10 @@ lcn.cli_refused = {
 - The launcher sends one `lcn.cli_message`: `protocol`, an optional `target` node (absent: `local`, this
   Runtime), `output` (`json` or `text`), `fds` naming each descriptor's role (`stdout`, `stderr`, then one
   `file` per `@FILE`), an optional `deadline_ms`, and the `command`: `call` (provider, method, `args` or
-  `json`), `describe` (provider), `subscribe` and `events` (N-2c), or `rc` (reserved for remote nodes,
-  refused). A provider is a module, an optional instance, and an optional `contract` root that selects
-  any of its exact contract views (primary, implemented interface or extended view; absent: primary).
+  `json`), `describe` (provider), `subscribe` and `events` (Streams, below), or `rc` (reserved for
+  remote nodes, refused). A provider is a module, an optional instance, and an optional `contract` root
+  that selects any of its exact contract views (primary, implemented interface or extended view;
+  absent: primary).
 - The descriptors travel as `SCM_RIGHTS` on the frame's first byte, at most 16. `lcn_call` makes them
   close-on-exec at once, closes every one it received when it refuses a frame, and closes them all when
   the command ends, before it answers, so a reader of a pipe sees its end.
@@ -997,7 +1001,7 @@ lcn.cli_refused = {
 | 2 | no daemon, `lcn_call` not reachable or not started before `--timeout`, busy or closing past it, or **the outcome unknown**: a `TRANSPORT_ERROR`, `TIMEOUT` or a `CANCELLED` nobody asked for after the call was sent, or a lost `done`. The provider may have run the call. |
 | 4 | a Runtime Control failure: `NOT_AUTHORISED`, `NOT_READY`, an error arm, a continuation fault, with code and message |
 | 5 | the provider's error channel answered the call (`METHOD_NOT_FOUND`, `INVALID_PARAMS`, `MODULE_ERROR`): the code and the provider's declared text |
-| 6 | a stream `lcn_call` or its provider ended (N-2c) |
+| 6 | a stream `lcn_call` or the Runtime ended: the route, its session or the subscription ended, the terminal did not keep up, or `lcn_call` is stopping (Streams, below) |
 | 130 | interrupted |
 
 **One retry.** A call whose `prepare_call` failed (nothing was submitted), or that completed `NOT_READY`
@@ -1037,18 +1041,52 @@ prints the roots. Where the Runtime answers `NOT_AUTHORISED`, the launcher print
 Runtime's message; it guesses no reason. Every process of logosd's user can use `lcn_call` with all of
 these grants, as with the logosctl instance (§7): grant it what the session's user may call.
 
-### Streams (N-2c)
+### Streams (G349)
 
-A subscription stays on the route it was made on and ends with that route's session: the decision's
-validity, one hour by default ([AUTHORITY-POLICY.md](AUTHORITY-POLICY.md)). The stream then exits 6, "the
-route's session ended; run the command again". A renewal does not extend a session (R l.3337-3338).
+- **`subscribe MODULE EVENT [--count N] [--for DURATION] [--instance I] [--contract ROOT]`**: one event
+  the provider declares, named by its identifier (`meter.changed_event`), without its namespace
+  (`changed_event`), or without the `_event` suffix too (`changed`); an unknown or ambiguous name is
+  refused (1) with the provider's events. `lcn_call` establishes a route whose access names that event
+  only (`subscribe_events: [root]`), so the grant needs `establish-route` and `subscribe-event` on the
+  contract (Grants), then subscribes on it. A refused subscription writes nothing but the failure (4).
+  Each delivery also needs the provider's own `publish-event` on that contract (CA l.244-247), an
+  operator rule naming the provider's instance, as S1 does for the Capability Authority. Without it
+  every publication is skipped: the stream stays open and sees nothing.
+- **`events [NAME]... [--count N] [--for DURATION]`**: this Runtime's Runtime Control events, on
+  `lcn_call`'s own binding. NAME as above (`module_state_changed`,
+  `logos.runtime_control.module_state_changed_event`), at most 16; none names the events rule's three
+  (§5). Another Runtime Control event is `NOT_AUTHORISED` (4): S7 denies it, and a deny wins over any
+  operator rule.
+- **Output.** One line per event, written as it arrives: JSON `{"event": ID, "data": VALUE}`, VALUE as
+  G89 renders a response, or with `--text` `ID VALUE` in diagnostic notation. A stream that fails after
+  its events adds the failure: one envelope line on stdout in JSON, `logosctl: CODE: message` on stderr
+  in text.
+- **Its end.** `--count` events written, or `--for` elapsed (milliseconds, or a number with `ms`, `s`, `m`
+  or `h`; 1 ms to 49 days): 0. The launcher's EOF, at SIGINT or SIGTERM: 130. Exit 6, after the events it
+  had, when `lcn_call` or the Runtime ends it:
+  - "the route ended: the provider is not ready" (`NOT_READY`): the provider stopped, or `lcn_call`
+    is stopping and the Runtime ended its routes before `lcn_call` ended the stream itself;
+  - "the route's session ended; run the command again" (`NOT_AUTHORISED`): below;
+  - "the subscription ended: authority to receive the event ended" (`NOT_AUTHORISED`): the authority
+    no longer allows a delivery, such as after a revoked grant (T l.753; IF l.1472-1485);
+  - "the terminal did not keep up; the stream ended": below;
+  - "lcn_call is stopping; the stream ended": `module stop lcn_call`, or logosd's stop, for an `events`
+    stream, or a `subscribe` stream whose route had not ended yet.
+- **One route session.** A subscription stays on the route it was made on and ends with that route's
+  session: the decision's validity, one hour by default ([AUTHORITY-POLICY.md](AUTHORITY-POLICY.md)). A
+  renewal does not extend a session (R l.3337-3338).
+- **A terminal that does not keep up.** `lcn_call` copies each event into a queue of 1024 events or 16
+  MiB; when it is full, the stream ends (6) rather than lose events silently. The message goes to stderr
+  whatever the output (in JSON, its envelope), since stdout waits for the same reader; `lcn_call` waits
+  at most a second for room there.
 
 ### Limits
 
 | | |
 |---|---|
 | Workers | `cli.workers` (1–32, default 8): one-shot commands in service at once; one more is refused `busy` and retried until `--timeout` |
-| Streams | `cli.streams` (1–64, default 8): subscriptions and event streams |
+| Streams | `cli.streams` (1–64, default 8): subscriptions and event streams at once |
+| Stream queue | 1024 events or 16 MiB per stream; `events` names at most 16 |
 | Idle timeout | `cli.idle_timeout_ms` (100–600000, default 30 s): a connection without a complete request |
 | Route idle | `cli.route_idle_ms` (1000–86400000, default 10 min) |
 | Request frame | 1 MiB of argument text and 128 KiB for the rest; larger values as `@FILE` |

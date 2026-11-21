@@ -25,10 +25,12 @@
 ##   runs with no lock a callback takes (IF l.1484-1485). Lock order: a
 ##   handle's lock, then the table's.
 ## - **End registrations (IF l.1477).** At materialization, once per handle:
-##   `observe_end` marks it ended, and `observe_subscription_end` reports a
-##   binding-ended subscription to the table's hook (the streams of N-2c;
-##   none in N-2b). One registration each: commands share handles, so no
-##   command registers its own.
+##   `observe_end` marks it ended, and `observe_subscription_end` takes a
+##   binding-ended subscription. Both go on to the table's hook with the
+##   handle they came from, since a subscription identifier is scoped to
+##   one handle (IF l.3367): the streams of N-2c (`streams.nim`). One
+##   registration each: commands share handles, so no command registers
+##   its own.
 ## - **Renewal.** When less than a tenth of the validity or 5 s remain, or
 ##   less than the command's deadline, `renew_route` and a new handle: a
 ##   renewal does not extend an existing session (R l.3337-3338), so new
@@ -76,6 +78,12 @@ type
     retired, ended: bool
     subEnds: bool ## `observe_subscription_end` is registered
     tag: ptr EndTag
+    kept: ptr Kept ## freed once the handle is released
+
+  Kept = object ## State a binding may still use until the handle's release.
+    data: pointer
+    free: FreeProc
+    next: ptr Kept
 
   EndTag = object ## `observe_end`'s user data.
     table: ptr TableObj
@@ -97,13 +105,25 @@ type
     lock: Lock
     renewed: Cond ## signalled, under `lock`, when a slot's renewal ends
     establishing: Lock ## one establishment at a time
-    subHook: LogosSubscriptionEndHandler ## N-2c's streams; nil in N-2b
-    subHookData: pointer
+    endHook: EndHook ## the streams' (`streams.nim`); nil: none
+    endHookData: pointer
     rc: ptr LogosRuntimeControlBinding
     idleMs: int
     slots: array[MaxRoutes, Slot]
 
   RouteTable* = ptr TableObj
+
+  FreeProc* = proc(data: pointer) {.nimcall, gcsafe, raises: [].}
+
+  EndHook* = proc(
+    handle: pointer,
+    subscription: Opt[LogosSubscriptionId],
+    reason: CErrorCode,
+    data: pointer,
+  ) {.nimcall, gcsafe, raises: [].}
+    ## A handle's route ended (`subscription` none) or the binding ended one of
+    ## its subscriptions. `handle` is the lease's `handle`. It runs on the
+    ## binding's thread and may not operate on the handle (IF l.1480).
 
   RouteSpec* = object ## What a command needs a route for.
     key*: Digest
@@ -119,6 +139,7 @@ type
     lock*: ptr Lock ## the handle's lock
     routeId*: string
     subEnds*: bool ## binding-ended subscriptions are reported
+    handle*: pointer ## the handle's identity, as the end hook names it
 
   Detached = object ## A slot taken out of the table, to finish outside its lock.
     slot: int
@@ -172,23 +193,28 @@ proc newRouteTable*(rc: ptr LogosRuntimeControlBinding, idleMs: int): RouteTable
   result.rc = rc
   result.idleMs = idleMs
 
-proc setSubscriptionEndHook*(
-    t: RouteTable, hook: LogosSubscriptionEndHandler, data: pointer
-) =
-  ## [N-2c] Where a handle's binding-ended subscriptions go; set before the
-  ## first route.
+proc setEndHook*(t: RouteTable, hook: EndHook, data: pointer) =
+  ## [N-2c] Where handles' ends and binding-ended subscriptions go; set before
+  ## the first route.
   withLock t.lock:
-    t.subHook = hook
-    t.subHookData = data
+    t.endHook = hook
+    t.endHookData = data
 
 proc onEnd(reason: CErrorCode, userData: pointer) {.cdecl, gcsafe, raises: [].} =
-  ## [SPEC INTERFACE §2.8] The route ended: the handle takes no new command.
-  ## It takes the table's lock only, never a handle's. Like every callback, it
-  ## registers the calling thread first (`rpc.onComplete`).
+  ## [SPEC INTERFACE §2.8] The route ended: the handle takes no new command,
+  ## and its subscriptions are inactive (IF l.1430-1433). It takes the table's
+  ## lock only, never a handle's. Like every callback, it registers the
+  ## calling thread first (`rpc.onComplete`).
   callbackEnter()
   let tag = cast[ptr EndTag](userData)
+  var hook: EndHook = nil
+  var data: pointer = nil
   withLock tag.table.lock:
     tag.box.ended = true
+    hook = tag.table.endHook
+    data = tag.table.endHookData
+  if hook != nil:
+    hook(tag.box, Opt.none(LogosSubscriptionId), reason, data)
 
 proc onSubscriptionEnd(
     sub: LogosSubscriptionId, reason: CErrorCode, userData: pointer
@@ -197,15 +223,21 @@ proc onSubscriptionEnd(
   ## for the table's hook; it operates on no handle (l.1480).
   callbackEnter()
   let tag = cast[ptr EndTag](userData)
-  var hook: LogosSubscriptionEndHandler = nil
+  var hook: EndHook = nil
   var data: pointer = nil
   withLock tag.table.lock:
-    hook = tag.table.subHook
-    data = tag.table.subHookData
+    hook = tag.table.endHook
+    data = tag.table.endHookData
   if hook != nil:
-    hook(sub, reason, data)
+    hook(tag.box, Opt.some(sub), reason, data)
 
 proc freeBox(b: ptr Box) =
+  var k = b.kept
+  while k != nil:
+    let next = k.next
+    k.free(k.data)
+    deallocShared(k)
+    k = next
   if b.tag != nil:
     deallocShared(b.tag)
   deinitLock(b.lock)
@@ -395,6 +427,7 @@ proc lease(t: RouteTable, i: int): Lease =
     lock: addr s.current.lock,
     routeId: textOf(s.routeId),
     subEnds: s.current.subEnds,
+    handle: s.current,
   )
 
 func needsRenewal(s: Slot, now: int64, deadlineMs: Opt[int]): bool =
@@ -552,6 +585,17 @@ proc done*(t: RouteTable, l: Lease) =
           r = nil
   if release != nil:
     releaseBox(release)
+
+proc keepUntilRelease*(t: RouteTable, l: Lease, data: pointer, free: FreeProc) =
+  ## [SPEC INTERFACE l.1436-1438] A subscription's handler state, freed once
+  ## the leased handle is released: when `unsubscribe` did not return
+  ## LOGOS_OK, the caller keeps it valid until then. Call it before `done`.
+  let k = cast[ptr Kept](allocShared0(sizeof(Kept)))
+  k.data = data
+  k.free = free
+  withLock l.box.lock:
+    k.next = l.box.kept
+    l.box.kept = k
 
 proc drop*(t: RouteTable, l: Lease) =
   ## [G348; plan §3.5 step 8, rule 2] The leased handle takes no new command,

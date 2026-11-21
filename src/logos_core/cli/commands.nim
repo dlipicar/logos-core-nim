@@ -36,7 +36,7 @@
 
 {.push raises: [], gcsafe.}
 
-import std/[json, monotimes, strutils, times]
+import std/[algorithm, atomics, json, locks, monotimes, strutils, tables, times]
 import results
 import logos_sdk/cbor
 import logos_sdk/commitment
@@ -44,7 +44,11 @@ import logos_sdk/base/hex
 import logos_sdk/hash/hashinput
 import logos_sdk/iface/[accept, provider, surface]
 import logos_sdk/kit/rc_types
-import ./[args, cli_types, present, routes, rpc, wire]
+import logos_sdk/abi/[checks, types]
+import logos_sdk/iface/outcome
+from ../authority/scopes import rcContractInfo
+import ../daemon/render
+import ./[args, cli_types, present, routes, rpc, streams, wire]
 
 when defined(posix):
   import std/posix
@@ -60,6 +64,8 @@ type
   Env* = object ## What every command shares; plain values, copied per worker.
     rc*: ptr LogosRuntimeControlBinding
     routes*: RouteTable
+    hub*: Hub ## the streams' (`streams.nim`)
+    stopping*: ptr Atomic[bool] ## the server's: lcn_call is stopping; nil: never
     production*: bool
 
   Job* = object ## One admitted request.
@@ -352,8 +358,10 @@ func outputStop(e: SinkError): Stop =
     cancelled()
   of seClosed:
     Stop(exit: ExitOk, silent: true)
-  of seIo:
+  of seIo, seStalled: # seStalled: only a sink with `waitMs`, the overflow's notice
     Stop(exit: ExitUnreachable, silent: true)
+  of seAborted:
+    Stop(exit: ExitStreamEnded, silent: true) # a stream's queue overflowed
 
 # describe ------------------------------------------------------------------------------
 
@@ -634,6 +642,305 @@ proc runCall(c: Ctx, cmd: LcnCliCallCommand): Result[void, Stop] =
     return err(outputStop(error))
   ok()
 
+# subscribe and events ------------------------------------------------------------------
+
+const
+  OverflowNoticeMs = 1_000 ## [IMPL] the wait for room for the overflow's message
+  RcEventPrefix = "logos.runtime_control."
+  DefaultEvents* =
+    ["module_state_changed", "execution_state_changed", "inventory_changed"]
+    ## [G346] the events rule's three, `events`' default set (as compose's
+    ## `CliEvents`)
+
+func shortEvent(id, namespace: string): string =
+  ## [G349] An event's identifier without its namespace and `_event` suffix.
+  result = id
+  if result.startsWith(namespace & "."):
+    result = result[namespace.len + 1 .. ^1]
+  if result.endsWith("_event"):
+    result = result[0 ..< result.len - "_event".len]
+
+func eventsNamed(s: CallSurface, name: string): seq[SurfaceEvent] =
+  ## [G349] By identifier, or without the namespace, or without the `_event`
+  ## suffix too.
+  for e in s.events:
+    let noNs =
+      if e.id.startsWith(e.namespace & "."):
+        e.id[e.namespace.len + 1 .. ^1]
+      else:
+        e.id
+    if name == e.id or name == noNs or name == shortEvent(e.id, e.namespace):
+      result.add(e)
+
+func eventNames(s: CallSurface): string =
+  var names: seq[string] = @[]
+  for e in s.events:
+    names.add(shortEvent(e.id, e.namespace))
+  if names.len == 0:
+    "(none)"
+  else:
+    names.join(", ")
+
+proc limits(count, forMs: Opt[uint32]): Result[(Opt[int], Opt[int]), Stop] =
+  if count.isSome and count.get == 0:
+    return err(refused("--count is at least 1"))
+  if forMs.isSome and forMs.get == 0:
+    return err(refused("--for is at least 1 ms"))
+  ok(
+    (
+      count.map(
+        proc(x: uint32): int =
+          int(x)
+      ),
+      forMs.map(
+        proc(x: uint32): int =
+          int(x)
+      ),
+    )
+  )
+
+func codeName(c: CErrorCode): string =
+  let e = errorCode(int64(c))
+  if e.isSome:
+    $e.get
+  else:
+    $c
+
+func endStop(e: Ending): Stop =
+  ## [G349; plan §3.7] Why lcn_call ended the stream (exit 6).
+  let code = codeName(e.reason)
+  case e.kind
+  of ekOverflow:
+    Stop(
+      exit: ExitStreamEnded, message: "the terminal did not keep up; the stream ended"
+    )
+  of ekSubscription:
+    Stop(
+      exit: ExitStreamEnded,
+      code: code,
+      message:
+        if e.reason == CErrorCode(ord(ecNotAuthorised)):
+          "the subscription ended: authority to receive the event ended"
+        else:
+          "the subscription ended",
+    )
+  of ekRoute, ekNone:
+    Stop(
+      exit: ExitStreamEnded,
+      code: code,
+      message:
+        if e.reason == CErrorCode(ord(ecNotAuthorised)):
+          # [P5; R l.3337-3338] A stream lasts one route session.
+          "the route's session ended; run the command again"
+        elif e.reason == CErrorCode(ord(ecNotReady)):
+          "the route ended: the provider is not ready"
+        else:
+          "the route ended",
+    )
+
+proc interrupted(c: Ctx): Stop =
+  ## [G349; plan §3.7] A cancel: the launcher's EOF (130), or lcn_call
+  ## stopping, which ends the stream itself (6).
+  if c.env.stopping != nil and c.env.stopping[].load:
+    Stop(exit: ExitStreamEnded, message: "lcn_call is stopping; the stream ended")
+  else:
+    cancelled()
+
+proc pump(
+    c: Ctx, s: Stream, names: openArray[string], count, forMs: Opt[int]
+): Result[void, Stop] =
+  ## [G349; plan §3.7] Writes the stream's events, one line each, until
+  ## `count` events, `forMs`, the launcher's cancel, or the stream's end;
+  ## what was queued before an end is written first. An overflow stops a
+  ## write the terminal holds up (`abortFd`).
+  var p = c.pres
+  p.output.abortFd = s.abortFd
+  proc overflowed(p: Presenter): Result[void, Stop] =
+    # [IMPL] Said on stderr in either format, since stdout waits for the same
+    # reader; given up after a second if stderr is that reader too (`2>&1`).
+    let st = endStop(Ending(kind: ekOverflow))
+    var q = p
+    q.errors.waitMs = OverflowNoticeMs
+    q.output = q.errors
+    discard q.failed(st.code, st.message)
+    var quiet = st
+    quiet.silent = true
+    err(quiet)
+
+  p.streamStart().isOkOr:
+    return err(outputStop(error))
+  let started = getMonoTime()
+  var written = 0
+  while true:
+    for ev in s.take():
+      let v = decodeCbor(ev.data).valueOr:
+        return err(
+          Stop(
+            exit: ExitStreamEnded,
+            code: $ecModule,
+            message: "an event's data is not Logos deterministic CBOR",
+          )
+        )
+      let line = %*{"event": names[ev.name], "data": jsonOf(v)}
+      p.streamLine(line, names[ev.name] & " " & toDiag(v)).isOkOr:
+        if error == seAborted:
+          return p.overflowed()
+        if error == seCancelled:
+          return err(c.interrupted)
+        return err(outputStop(error))
+      inc written
+      if count.isSome and written >= count.get:
+        return ok()
+    let e = s.ending
+    if e.kind == ekOverflow:
+      return p.overflowed()
+    if e.kind != ekNone:
+      # Nothing is queued after an end; one more pass writes what came in
+      # between `take` and `ending`.
+      for ev in s.take():
+        let v = decodeCbor(ev.data).valueOr:
+          break
+        p.streamLine(
+          %*{"event": names[ev.name], "data": jsonOf(v)},
+          names[ev.name] & " " & toDiag(v),
+        ).isOkOr:
+          break
+        inc written
+        if count.isSome and written >= count.get:
+          return ok()
+      return err(endStop(e))
+    var timeout = -1
+    if forMs.isSome:
+      let left = forMs.get - int(inMilliseconds(getMonoTime() - started))
+      if left <= 0:
+        return ok()
+      timeout = left
+    if not s.wait(c.cancelFd, timeout):
+      return err(c.interrupted)
+
+proc subscribeFailure(r: LogosResult): Stop =
+  ## A `subscribe` that did not succeed.
+  let st = readStatus(r)
+  let f =
+    if st.isErr:
+      failureOf(st.error)
+    else:
+      failure(ecModule, "subscribe returned LOGOS_OK without a subscription")
+  rcStop(f)
+
+proc runSubscribe(c: Ctx, cmd: LcnCliSubscribeCommand): Result[void, Stop] =
+  ## [G348, G349; plan §3.7] One provider event as a stream, through a leased
+  ## route whose access names that event only; the stream lasts at most the
+  ## route's session (P5).
+  let (count, forMs) = ?limits(cmd.count, cmd.for_ms)
+  let p = ?c.provider(cmd.provider)
+  let found = p.surface.eventsNamed(cmd.event)
+  if found.len == 0:
+    return err(
+      refused(
+        p.module & " has no event " & cmd.event & "; its events: " & p.surface.eventNames
+      )
+    )
+  if found.len > 1:
+    var ids: seq[string] = @[]
+    for e in found:
+      ids.add(e.id)
+    return err(refused(cmd.event & " names more than one event: " & ids.join(", ")))
+  let e = found[0]
+  let root = ?p.memberRoot(e.doc, e.id)
+  let spec = RouteSpec(
+    key: routeKey(c.target, p.address, p.selected, "subscribe_events", root),
+    contract: p.selected,
+    provider: p.address,
+    access: LogosNSRuntimeControlRouteAccess(subscribe_events: Opt.some(@[@root])),
+    schema: p.schema,
+  )
+  let lease = c.env.routes.acquire(spec, Opt.none(int), c.cancelFd).valueOr:
+    return err(rcStop(error))
+  let s = c.env.hub.open(lease.handle, 1).valueOr:
+    c.env.routes.done(lease)
+    return err(Stop(exit: ExitUnreachable, message: error))
+  var r: LogosResult
+  withLock lease.lock[]:
+    r = lease.route.vtable.subscribe(
+      lease.route, cstring(e.id), handler(), s.userData(0), s.idSlot(0)
+    )
+  if int64(r.code) != 0:
+    s.settle(0, false)
+    c.env.hub.detach(s)
+    freeStream(s) # [IF l.1400] no handler was or will be invoked
+    if r.code in [CErrorCode(ord(ecNotReady)), CErrorCode(ord(ecTransport))]:
+      c.env.routes.drop(lease) # the next command establishes a new route
+    c.env.routes.done(lease)
+    return err(subscribeFailure(r))
+  if c.env.routes.ended(lease):
+    s.markEnded(ekRoute, CErrorCode(ord(ecNotReady)))
+  let res = c.pump(s, [e.id], count, forMs)
+  var u: LogosResult
+  withLock lease.lock[]:
+    u = lease.route.vtable.unsubscribe(lease.route, s.id(0))
+  c.env.hub.detach(s)
+  if int64(u.code) == 0:
+    freeStream(s)
+  else:
+    # [IF l.1436-1438] e.g. the route ended: valid until the handle's release.
+    c.env.routes.keepUntilRelease(lease, s, freeStream)
+  c.env.routes.done(lease)
+  res
+
+proc runEvents(c: Ctx, cmd: LcnCliEventsCommand): Result[void, Stop] =
+  ## [G346, G349; plan §3.7] The target's Runtime Control events as one
+  ## stream, subscribed on its binding; by default the events rule's three.
+  let (count, forMs) = ?limits(cmd.count, cmd.for_ms)
+  var wanted: seq[string] = @[]
+  for n in cmd.names.get(@DefaultEvents):
+    var bare = n
+    if bare.startsWith(RcEventPrefix):
+      bare = bare[RcEventPrefix.len .. ^1]
+    if bare.endsWith("_event"):
+      bare = bare[0 ..< bare.len - "_event".len]
+    if bare notin rcContractInfo().events:
+      var known: seq[string] = @[]
+      for k in rcContractInfo().events.keys:
+        known.add(k)
+      return err(
+        refused(
+          "no Runtime Control event " & n & "; its events: " & known.sorted.join(", ")
+        )
+      )
+    if bare notin wanted:
+      wanted.add(bare)
+  if wanted.len == 0 or wanted.len > MaxNames:
+    return err(refused("events takes 1 to " & $MaxNames & " names"))
+  var ids: seq[string] = @[]
+  for b in wanted:
+    ids.add(RcEventPrefix & b & "_event")
+  let s = c.env.hub.open(c.rc, ids.len).valueOr:
+    return err(Stop(exit: ExitUnreachable, message: error))
+  var made = 0
+  var res = Result[void, Stop].ok()
+  for i, id in ids:
+    let r =
+      c.rc.vtable.subscribe(c.rc, cstring(id), handler(), s.userData(i), s.idSlot(i))
+    if int64(r.code) != 0:
+      s.settle(i, false)
+      res = Result[void, Stop].err(subscribeFailure(r))
+      break
+    inc made
+  if res.isOk:
+    res = c.pump(s, ids, count, forMs)
+  var quiet = true
+  for i in 0 ..< made:
+    let u = c.rc.vtable.unsubscribe(c.rc, s.id(i))
+    if int64(u.code) != 0:
+      quiet = false
+  c.env.hub.detach(s)
+  if quiet:
+    freeStream(s)
+  # [IMPL; IF l.1436-1438] Otherwise a handler may still run until the
+  # binding's release, after `_MODULE_destroy`: the stream is never freed.
+  res
+
 # A request ---------------------------------------------------------------------------------
 
 func what(cmd: LcnCliCommand): string =
@@ -689,9 +996,10 @@ proc run*(env: Env, job: Job): Done =
       r = runCall(c, job.msg.command.arm_lcn_Cli_call_command)
     of LcnCliCommandKind.lcn_Cli_describe_command:
       r = runDescribe(c, job.msg.command.arm_lcn_Cli_describe_command.provider)
-    of LcnCliCommandKind.lcn_Cli_subscribe_command,
-        LcnCliCommandKind.lcn_Cli_events_command:
-      r = R.err(refused("streams come with Tier 5 step N-2c"))
+    of LcnCliCommandKind.lcn_Cli_subscribe_command:
+      r = runSubscribe(c, job.msg.command.arm_lcn_Cli_subscribe_command)
+    of LcnCliCommandKind.lcn_Cli_events_command:
+      r = runEvents(c, job.msg.command.arm_lcn_Cli_events_command)
     of LcnCliCommandKind.lcn_Cli_rc_command:
       r = R.err(refused("the rc op comes with remote Runtimes (Tier 5 step 5-7a)"))
   if r.isOk:

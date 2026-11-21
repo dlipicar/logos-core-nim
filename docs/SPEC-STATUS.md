@@ -431,6 +431,12 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   C-2b). No unit changes status: BCP-0085 (inspection) and BCP-0086 to BCP-0090 gain the CLI socket as
   evidence beside the logosctl socket's, and IFC-0942 the projected `describe`.
 
+- 2026-11-20, Tier 5 step N-2c (I102), streams (G346, G349): `logosctl subscribe` and `events`, a bounded
+  queue per stream, ends reported by route handle and subscription identifier, exit 6 for a stream the
+  route, its session, the authority or `lcn_call` ends, or a terminal that does not keep up. Events go
+  from the provider's host to `lcn_call`'s. No unit changes status: RUN-1095 and TRN-0392 gain
+  end-to-end evidence in logosd (a revoked grant).
+
 ## Tiers at f4f83471 (the original plan)
 
 | Tier | Area | Verdict |
