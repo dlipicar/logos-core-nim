@@ -101,9 +101,24 @@ proc kitCompiler(): (string, string) =
   doAssert at >= 0 and at < words.high, "LCN_KIT_NIM: " & version
   (other, "-nim" & words[at + 1])
 
+proc kitSwitches(): (seq[string], string) =
+  ## [DECISIONS G341] A module library's own switch set and its variant
+  ## suffix: `LCN_KIT_SWITCHES` when it is set (the `kit-toolchains` check
+  ## builds the libraries with logos-storage-nim's and logos-delivery's
+  ## switches), split on white space and passed after the kit's own, so a
+  ## switch it repeats wins; else none.
+  let set = getEnv("LCN_KIT_SWITCHES").strip
+  if set.len == 0:
+    return (@[], "")
+  var h = 0'u32 # FNV-1a: a stable name for the set's build directory
+  for c in set:
+    h = (h xor uint32(ord(c))) * 16777619'u32
+  (set.splitWhitespace, "-sw" & toHex(h).toLowerAscii)
+
 proc kitVariantOf*(mm: string): string =
-  ## `kitVariant` for a library built with `mm` (and `LCN_KIT_NIM`).
-  mm & kitVariant[kitMm.len .. ^1] & kitCompiler()[1]
+  ## `kitVariant` for a library built with `mm` (and `LCN_KIT_NIM`,
+  ## `LCN_KIT_SWITCHES`).
+  mm & kitVariant[kitMm.len .. ^1] & kitCompiler()[1] & kitSwitches()[1]
 
 proc exportListFlags*(tree: KitTree, kit: string): seq[string] =
   ## [DECISIONS G341] The link switch for the export list lcn-gen wrote for
@@ -161,6 +176,7 @@ proc buildKitLibraryIn*(
     if mm != "refc":
       args.add("-d:" & kitSanitizer)
   args.add(kitAuditFlags(false))
+  args.add(kitSwitches()[0])
   if exports.len > 0:
     args.add(tree.exportListFlags(exports))
   args.add(
