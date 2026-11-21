@@ -426,3 +426,68 @@ suite "ifc.nim-types: lcn-gen kit with a configuration (DECISIONS I87) [IMPL]":
     ]:
       check run(bad) == 1
     check not dirExists(dir / "x")
+
+  test "[IMPL-DECISION G339] [IFC-0880] the command line writes the interface-only, events-only, types-only and lifecycle-only kits as committed, an interface-only one only with --module":
+    let exe = "build/tools/lcn_gen_cli"
+    let (built, code) = execCmdEx(
+      quoteShellCommand(
+        [
+          getCurrentCompilerExe(),
+          "c",
+          "--hints:off",
+          "--nimcache:build/nimcache/lcn_gen_cli",
+          "-o:" & exe,
+          "src/lcn_gen.nim",
+        ]
+      )
+    )
+    checkpoint built
+    check code == 0
+    let dir = "build/lcn_gen_cli_g339"
+    removeDir(dir)
+    proc run(args: openArray[string]): int =
+      let (output, code) =
+        execCmdEx(quoteShellCommand(@[exe] & @args), options = {poStdErrToStdOut})
+      checkpoint output
+      code
+
+    let metrics = "--interface:spec/mirrors/IFC/3.9.2.interface.cddl"
+    for (module, args) in [
+      ("metrics_only_module", @["--module:metrics_only_module", metrics]),
+      (
+        "gauge_module",
+        @[
+          "--module:gauge_module",
+          "--interface:" & gaugeInterface,
+          "--extends:" & gaugeEarlier,
+        ],
+      ),
+      ("tally_module", @[tallyDocument, metrics]),
+      ("idle_module", @["--module:idle_module"]),
+    ]:
+      checkpoint module
+      check run(@["kit", "--out:" & dir, "--import-prefix:" & fixturePrefix] & args) == 0
+      for suffix in ["_types.nim", "_kit.nim", "_kit.exports", "_kit.map"]:
+        checkpoint module & suffix
+        check readFile(dir / module & suffix) ==
+          readFile(sdkGeneratedDir / module & suffix)
+    for bad in [
+      @["kit", "--out:" & dir / "x", metrics], # no primary document and no --module
+      @["nim", "--out:" & dir / "x", "--module:metrics_only_module", metrics],
+      @[
+        "types",
+        "--out:" & dir / "x",
+        "--module:gauge_module",
+        "--interface:" & gaugeInterface,
+        "--extends:" & gaugeEarlier,
+      ],
+      @[
+        "kit",
+        "--out:" & dir / "x",
+        "--module:gauge_module",
+        "--interface:" & gaugeInterface,
+        "--extends:" & metrics[12 .. ^1],
+      ], # an earlier contract no described contract extends
+    ]:
+      check run(bad) == 1
+    check not dirExists(dir / "x")

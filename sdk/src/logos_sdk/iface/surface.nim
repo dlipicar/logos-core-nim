@@ -43,16 +43,13 @@ type
 
 # Call surface ----------------------------------------------------------------------
 
-func callSurface*(s: ContractSet): CallSurface =
-  ## [SPEC INTERFACE §1.2, §1.4] The primary contract's methods and events and
-  ## those of every implemented interface, each keeping its defining contract.
-  ## A supporting schema exposes nothing.
+func surfaceOf(docs: seq[Contract], exposed: int): CallSurface =
+  ## The methods and events of `docs`' first `exposed` documents.
   var c = CallSurface()
-  let docs = s.documents
   for i, d in docs:
     if d.model.role notin {srModule, srInterface}:
       continue
-    if i > s.interfaces.len:
+    if i >= exposed:
       break # supporting schemas follow the interfaces
     for m in d.model.methods:
       c.methods.add(
@@ -81,6 +78,20 @@ func callSurface*(s: ContractSet): CallSurface =
       cmp(a.id, b.id)
   )
   c
+
+func callSurface*(s: ContractSet): CallSurface =
+  ## [SPEC INTERFACE §1.2, §1.4] The primary contract's methods and events and
+  ## those of every implemented interface, each keeping its defining contract.
+  ## A supporting schema exposes nothing.
+  surfaceOf(s.documents, 1 + s.interfaces.len)
+
+func callSurface*(b: ModuleBinding): CallSurface =
+  ## [SPEC INTERFACE §1.2, §1.4, §2.6] What a module binding exposes: its
+  ## primary contract's methods and events, when it has one, and those of every
+  ## implemented interface (an interface-only provider's are its interfaces'
+  ## alone, l.2833-2835). `doc` indexes `documents(b)`. The binding's earlier
+  ## contracts add nothing (§2.6 l.1695).
+  surfaceOf(b.documents, b.exposedCount)
 
 func findMethod*(c: CallSurface, bare: string): Opt[SurfaceMethod] =
   for m in c.methods:

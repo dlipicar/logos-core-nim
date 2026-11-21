@@ -1,0 +1,13 @@
+; -- metadata --
+_module = "tally_module"
+_implements = [
+  h'6abd62efd7835d78114f988733977d9d766c9cce56aef7e8b117c45b2955fc22',
+]
+
+; Input for tests/generated/tally_module_*: a types-only primary document with
+; an implemented callable interface (INTERFACE l.2839; DECISIONS G339), the
+; §3.9.2 `metrics_provider` (spec/mirrors/IFC/3.9.2.interface.cddl).
+; `_implements` is the §3.9.2 module's literal (spec/mirrors/IFC/3.9.2.module.cddl),
+; and acceptance fails when that interface's root changes and this literal does not.
+
+tally.step = uint64
