@@ -10,15 +10,17 @@ name: CI
 # over two hours for every check on Linux x86_64, and 86 of its 90 minutes on macOS (5bd731f,
 # 2026-11-13). Each check is in exactly one group, and the first orc-spec shard also evaluates every
 # flake output. Linux has six groups; macOS has no sanitizer checks, so only orc-spec, refc and
-# orc-release. On Linux each group runs as two shards, tsan as three, asan as four and msan as five
-# (flake.nix `ciShards`, which balances them by the heaviest suites' measured times): on 36f355c
-# (2026-11-14) the x86_64 asan and msan jobs passed the 90-minute limit and tsan took 81 minutes,
-# on eed9d58 (2026-11-15) the second x86_64 msan shard of two did, on 5ddd886 (the same day) the
-# second x86_64 asan shard of two did, on b3af640 (2026-11-16) the second x86_64 msan shard of three
-# did (the other two took 72 and 71 minutes), and on 5887c5a (the same day) the second x86_64 tsan
-# shard of two took 81 minutes, asan's second of three 74 and msan's four 55 to 68.
-# macOS builds refc and orc-release whole and orc-spec as two shards: the whole orc-spec group took
-# 49 minutes on 19a6274 (2026-11-15) and 73 on dc2e7ef (2026-11-16); refc took 52 to 60 in between.
+# orc-release. On Linux orc-spec runs as four shards, refc as three, orc-release as two, asan and
+# tsan as four and msan as five (flake.nix `ciShards`, balanced by each check's minutes in a saved
+# run, nix/ci-weights.json). A shard's heaviest check, when it takes 25 minutes or more, is its head:
+# it builds on one build slot from the start and the rest beside it on three, since Nix starts a
+# build's checks in no order of weight. On 0a459c9 (2026-11-21, run 44888184613) the x86_64 shards
+# holding test_lcn_call under asan and msan, and orc-spec's holding kit-toolchains, passed the
+# 90-minute limit when those checks started late; under asan and msan test_lcn_call alone still
+# takes 80 and 73 minutes there.
+# macOS builds refc and orc-release whole and orc-spec as two shards, without heads: the whole
+# orc-spec group took 49 minutes on 19a6274 (2026-11-15) and 73 on dc2e7ef (2026-11-16); refc took
+# 52 to 66 since.
 
 on:
   pull_request:
@@ -39,7 +41,7 @@ concurrency:
 jobs:
   nix:
     if: ${{ !inputs.windows_only }}
-    name: nix (${{ matrix.os }}, ${{ matrix.group }}${{ (matrix.os != 'macos-latest' && format(' {0}/{1}', matrix.shard, (matrix.group == 'msan' && 5) || (matrix.group == 'asan' && 4) || (matrix.group == 'tsan' && 3) || 2)) || (matrix.group == 'orc-spec' && format(' {0}/2', matrix.shard)) || '' }})
+    name: nix (${{ matrix.os }}, ${{ matrix.group }}${{ (matrix.os != 'macos-latest' && format(' {0}/{1}', matrix.shard, (matrix.group == 'msan' && 5) || ((matrix.group == 'orc-spec' || matrix.group == 'asan' || matrix.group == 'tsan') && 4) || (matrix.group == 'refc' && 3) || 2)) || (matrix.group == 'orc-spec' && format(' {0}/2', matrix.shard)) || '' }})
     # ATTIC_TOKEN_PUBLIC only exists in the public-cache environment.
     environment: ${{ github.ref == 'refs/heads/master' && 'public-cache' || '' }}
     strategy:
@@ -47,8 +49,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
         group: [orc-spec, refc, orc-release, asan, tsan, msan]
-        # `ciShardCount` in flake.nix: 2, 3 for tsan, 4 for asan and 5 for msan (the shards past 2
-        # in `include`).
+        # `ciShardCount` in flake.nix. On Linux: 4 for orc-spec, 3 for refc, 2 for orc-release, 4
+        # for asan and tsan and 5 for msan (the shards past 2 in `include`). On macOS: 2 for
+        # orc-spec, and refc and orc-release as one.
         shard: [1, 2]
         # flake.nix defines the sanitizer variants on Linux only, and macOS builds refc and
         # orc-release whole.
@@ -67,6 +70,24 @@ jobs:
             group: msan
         include:
           - os: ubuntu-latest
+            group: orc-spec
+            shard: 3
+          - os: ubuntu-24.04-arm
+            group: orc-spec
+            shard: 3
+          - os: ubuntu-latest
+            group: orc-spec
+            shard: 4
+          - os: ubuntu-24.04-arm
+            group: orc-spec
+            shard: 4
+          - os: ubuntu-latest
+            group: refc
+            shard: 3
+          - os: ubuntu-24.04-arm
+            group: refc
+            shard: 3
+          - os: ubuntu-latest
             group: asan
             shard: 3
           - os: ubuntu-24.04-arm
@@ -84,6 +105,12 @@ jobs:
           - os: ubuntu-24.04-arm
             group: tsan
             shard: 3
+          - os: ubuntu-latest
+            group: tsan
+            shard: 4
+          - os: ubuntu-24.04-arm
+            group: tsan
+            shard: 4
           - os: ubuntu-latest
             group: msan
             shard: 3
@@ -138,14 +165,27 @@ jobs:
         if: matrix.group == 'orc-spec' && matrix.shard == 1
         run: nix flake check --no-build
 
+      # A shard with a head (flake.nix `ciLayout.<label>.head`, "" for none) builds it with one
+      # build slot while its tail builds with the runner's other three, so the shard's longest
+      # check starts with the job; a shard without one builds whole. Both builds run to the end,
+      # and the step fails if either does.
       - name: Checks in group ${{ matrix.group }}
         run: |
-          if [ "$RUNNER_OS" = macOS ] && [ "$GROUP" != orc-spec ]; then
-            attr="ciGroups.$GROUP"
-          else
-            attr="ciShards.$GROUP-$SHARD"
+          label="$GROUP-$SHARD"
+          head=$(nix eval --raw ".#ciLayout.$label.head")
+          if [ -z "$head" ]; then
+            nix build -L --keep-going --no-link ".#ciShards.$label"
+            exit
           fi
-          nix build -L --keep-going --no-link ".#$attr"
+          echo "head of $label: $head"
+          nix build -L --keep-going --no-link --max-jobs 1 ".#ciShardHeads.$label" &
+          headPid=$!
+          tailRc=0
+          nix build -L --keep-going --no-link --max-jobs 3 ".#ciShardTails.$label" || tailRc=$?
+          headRc=0
+          wait "$headPid" || headRc=$?
+          echo "head of $label: exit $headRc; tail: exit $tailRc"
+          [ "$headRc" = 0 ] && [ "$tailRc" = 0 ]
 
   # One job per OS, Nimble test task and shard of the suites (`LCN_SHARD`, logos_core.nimble). Both
   # tasks in one Linux job passed 60 minutes on 2026-11-13 (orc 27 min, then refc); one job per task

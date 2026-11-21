@@ -7102,15 +7102,16 @@ their history.
   too. The ledger's lists (`sdk/src/logos_sdk/testing/generated/`) and the confined sensor's
   (`sdk/tests/generated/confined/`) are drift-checked by `test_nimgen`, and `test_kit_dylib` checks
   both libraries' through `dlsym`.
-- **Amended (N-1 sub-part 6):** **`kit-toolchains`**, a Linux flake check, builds the test kit
-  libraries with the switches the node's libraries build with, on this toolchain (no new compiler
+- **Amended (N-1 sub-part 6):** **`kit-toolchains-storage`** and **`kit-toolchains-delivery`**,
+  Linux flake checks (one check, `kit-toolchains`, until 2026-11-21, when it was split per set so CI
+  builds the two in parallel), build the test kit libraries with the switches the node's libraries build with, on this toolchain (no new compiler
   input): logos-storage-nim `4fe02344`'s (`config.nims`: `--threads:on`, `--tlsEmulation:off`,
   `--opt:speed`, `--excessiveStackTrace:on`, `-d:metrics`, `-d:nimTypeNames`, `--styleCheck:usages`,
   `--styleCheck:error`, `--fieldChecks:on`, `ProveField` as an error,
   `--legacy:procParamTypeBackendAliases`, `-d:withoutPCRE`, `-d:nimOldCaseObjects`,
   `-d:chronosHandleException`, which changes how `async` procs compile, and `-d:release`) and
   logos-delivery `d20ee361`'s library set (`config.nims`, `library/config.nims`: `--threads:on`,
-  `--deepcopy:on`, `-d:nimOldCaseObjects`, `-d:nimTypeNames`, `-d:metrics`). Under each it runs
+  `--deepcopy:on`, `-d:nimOldCaseObjects`, `-d:nimTypeNames`, `-d:metrics`). Under its set each runs
   `test_kit_dylib` under refc (refc libraries, the confined sensor among them), and `run.mixed` and
   `test_kit_mixed` under orc (refc libraries, the confined ledger among them, in orc Runtimes and
   Module Hosts). `kitbuild` takes the set from `LCN_KIT_SWITCHES`, after its own switches, and builds
@@ -7126,7 +7127,7 @@ their history.
   delivery `0de7b335`, both declaring 4.4.0) are for the packaging step or N-4 to check (plan P7).
   The guide states the build line and the floor (`sdk/docs/MODULE-KIT.md` §8).
 - **Status:** export lists and the Mac toolchain probe built 2026-11-16 (I101, N-1 sub-part 1);
-  `kit-toolchains` and the chronos range 2026-11-20 (sub-part 6). The packaging is the split's.
+  `kit-toolchains` and the chronos range 2026-11-20 (sub-part 6), the check split per set 2026-11-21. The packaging is the split's.
 
 ### G342 — Modules built with the other memory manager
 - **Kind:** Choice [IMPL] · **Specs:** INTERFACE §2.6-§2.8; TIER5-PLAN §7 A7.

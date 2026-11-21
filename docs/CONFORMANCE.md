@@ -652,8 +652,8 @@ The ledger, a confined kit module built with refc, runs in orc logosd's own proc
 (`direct_dynamic`) and in a Module Host it starts (`hosted_dynamic`), called through `logosctl call`
 by `lcn_call`: its GC'd state stays on its module thread under concurrent calls, an async handler
 answers with its caller, and it stops and starts again (`tests/test_logosd.nim`; G342). The
-`kit-toolchains` flake check (Linux) builds the test kit libraries with logos-storage-nim's and
-logos-delivery's switch sets and runs `test_kit_dylib`, `run.mixed` and `test_kit_mixed` against them
+`kit-toolchains-storage` and `kit-toolchains-delivery` flake checks (Linux) build the test kit
+libraries with logos-storage-nim's and logos-delivery's switch sets, one set each, and run `test_kit_dylib`, `run.mixed` and `test_kit_mixed` against them
 (G341). `sdk/docs/MODULE-KIT.md` is the author's guide, its example built and called by
 `sdk/tests/test_module_kit_guide.nim`. I71's limit, that a refc module's handlers on threads other
 than the loading one must not store GC'd values, now holds for kits without `--confined` only.

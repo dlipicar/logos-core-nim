@@ -439,8 +439,8 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   6: modules built with the other memory manager, export lists and the kit's signal rule (1); typed
   consumer helpers (2); the thread-confined mode, so a refc module may keep GC'd state (3); the deferred
   provider `_MODULE_async_api` and `invokeAsync` (4); interface-only provider kits and `--extends` (5);
-  the confined kit in logosd's two placements, the `kit-toolchains` check with storage's and delivery's
-  switch sets, and the author's guide `sdk/docs/MODULE-KIT.md` (6). IFC-0281 and IFC-0282 claimed for
+  the confined kit in logosd's two placements, the `kit-toolchains-storage` and `-delivery` checks with
+  storage's and delivery's switch sets, and the author's guide `sdk/docs/MODULE-KIT.md` (6). IFC-0281 and IFC-0282 claimed for
   confined modules (3), and twelve provider units for `_MODULE_async_api` (4): IFC-0743, 0746, 0748, 0750
   to 0752, 0754, 0762, 0763, 0766, 0769 and 0779. IFC-0671 taken for Nim; IFC-0758 and IFC-0767 stay out
   of scope. I71's refc limit now holds for kits without `--confined` only. The sanitizer pass over
