@@ -1416,12 +1416,40 @@ suite "confined kit: the deferred provider (DECISIONS G338)":
       prepareFake(0, "wait", request(LedgerWaitRequest(channel: 1, millis: 20_000)))
     submit(ctx, fi)
     discard probe(ctx, 1) # its handler is asleep
+    let freedBefore = freed.load
     let started = epochTime()
     ledgerDestroy(ctx)
     check epochTime() - started < 10.0
     check fi.exactlyOnce
     check fi.status.error.code == ecNotReady
+    when defined(gcOrc):
+      # Destroy cancelled the handler and it unwound: the instance and the
+      # handler's task are freed once the module thread ends.
+      check freed.load == freedBefore + 1
     clearFake(fi)
+
+  test "[IFC-0769] [IMPL-DECISION G338] destroy abandons a handler that ignores its cancellation once the bound passes: NOT_READY once, its frames kept":
+    when defined(asan):
+      # The abandoned task is the residue G338 keeps on purpose (INTERFACE
+      # l.2116-2117); LeakSanitizer would report it. Every other build runs it.
+      skip()
+    else:
+      let ctx = openLedger()
+      let fi =
+        prepareFake(0, "wait", request(LedgerWaitRequest(channel: 11, millis: 20_000)))
+      submit(ctx, fi)
+      discard probe(ctx, 1) # its handler is asleep
+      let freedBefore = freed.load
+      let started = epochTime()
+      ledgerDestroy(ctx)
+      let took = epochTime() - started
+      check took >= 1.5 and took < 10.0
+      check fi.exactlyOnce
+      check fi.status.error.code == ecNotReady
+      when defined(gcOrc):
+        # The abandoned frames still hold the instance.
+        check freed.load == freedBefore
+      clearFake(fi)
 
   test "[IMPL-DECISION G338] invokeAsync through a wrapped handle: completion, deadline, and the awaiting handler's cancellation":
     let ctx = openLedger()
