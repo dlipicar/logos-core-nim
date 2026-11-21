@@ -44,37 +44,37 @@ CONFORMANCE and `conformance/`.
 | 0 | l.360-361 | this document, its two tables, every applicable choice indexed | Supported | — | this page; the second table sweeps the other specifications | [§0](#0-this-document) | BCP-0038, BCP-0039 |
 | 1 | l.363 | Package Manager source kinds; provenance profiles | None | Tier 5 | no Package Manager is deployed; no source kind, no provenance profile | [§1](#1-package-manager) | BCP-0040 |
 | 2 | l.364 | protected inputs: representations, provisioning, validation, replacement, revocation | Supported | — | owner-only session files, checked at start, replaced offline for the next start | [§2](#2-protected-inputs) | BCP-0074 |
-| 3 | l.365 | authority-policy format, administration, permissions of bootstrap and system instances | Supported | — | `authority-policy.v1` in daemon-config; system rules S1–S5; host-ambient for system instances | [§3](#3-authority-policy) | BCP-0075 |
+| 3 | l.365 | authority-policy format, administration, permissions of bootstrap and system instances | Supported | — | `authority-policy.v1` in daemon-config; system rules S1–S5, and S6–S8 with the CLI module; host-ambient for system instances | [§3](#3-authority-policy) | BCP-0075 |
 | 4a | l.366 | local transport profile | Supported | — | `logos.local.unix-stream` | [§4](#4-transport) | BCP-0041 |
 | 4b | l.366 | remote transport profiles | None | Tier 5 | none enabled; no listener, no export, no enrollment | [§4](#4-transport) | BCP-0041 |
 | 5a | l.367 | call-evidence signing trust | Supported | — | one evidence key per session, bound to the Runtime, rotated offline | [§5](#5-trust-inputs) | BCP-0042 |
 | 5b | l.367 | package-signing trust | Supported | — | the package trust file: anchors with exact names under one revision, administered offline by `logosctl trust` | [§5](#5-trust-inputs) | BCP-0042 |
 | 5c | l.367 | package-provenance and source-evidence requirements | None | Tier 5 | none selected; a selection is refused until step 5-11 | [§5](#5-trust-inputs) | BCP-0042 |
 | 5d | l.367 | remote Runtime enrollment | None | Tier 5 | no enrollment trust | [§5](#5-trust-inputs) | BCP-0042 |
-| 6a | l.368 | Module Loader mappings; the `process` mechanism | Supported | — | `direct_static`, `direct_dynamic`, `hosted_dynamic` with placement `process` | [§6](#6-module-loader-mappings) | BCP-0043 |
+| 6a | l.368 | Module Loader mappings; the `process` mechanism | Supported | — | `direct_static`, `direct_dynamic`, `hosted_dynamic` with placement `process`; the CLI module `lcn_call` hosted | [§6](#6-module-loader-mappings) | BCP-0043 |
 | 6b | l.368 | `sandbox` and `container` mechanisms | Not supported | — | not advertised; a request for one is `unsupported-strategy`; outside Tier 5 (D16) | [§6](#6-module-loader-mappings) | BCP-0043 |
 | 7 | l.369 | permission definitions, constraint mappings, enforcers | Supported | — | one definition, host-ambient, empty constraints, enforced by Runtime admission | [§7](#7-permission-definitions) | BCP-0044 |
-| 8a | l.370 | isolation and process behaviour | Supported | — | separate address spaces for hosted modules, one OS user, a process group per host | [§8](#8-isolation-and-the-data-path) | BCP-0045 |
+| 8a | l.370 | isolation and process behaviour | Supported | — | separate address spaces for hosted modules, the CLI module included; one OS user, a process group per host | [§8](#8-isolation-and-the-data-path) | BCP-0045 |
 | 8b | l.370 | filesystem, network, device, credential and resource controls | Not supported | — | none: a module has its OS user's access; outside Tier 5 (D16) | [§8](#8-isolation-and-the-data-path) | BCP-0045 |
-| 9 | l.371 | directories, state, retention, cleanup, recovery, migration | Supported | — | the session tree; state kept after retirement; restart lock; `state_transfers` | [§9](#9-directories-and-state) | BCP-0046 |
+| 9 | l.371 | directories, state, retention, cleanup, recovery, migration | Supported | — | the session tree (`run/lcn_call.sock` included); state kept after retirement; restart lock; `state_transfers` | [§9](#9-directories-and-state) | BCP-0046 |
 | 10a | l.372 | accepted-declaration selection | Supported | — | daemon-config `modules` and `declarations`, one declaration per module name | [§10](#10-declaration-selection) | BCP-0076 |
 | 10b | l.372 | exact package/version pinning | None | Tier 5 | no package-backed creation | [§10](#10-declaration-selection) | BCP-0076 |
 | 11 | l.373 | attribute-source integration | Supported | — | the Runtime's registry, in process: instance id and module name | [§11](#11-the-attribute-source) | BCP-0077 |
 | 24 | l.374 | Credential Store: credential, format and sealing profiles; backend durability and recovery; operation-record retention; protected delivery and activation | None | — | no Credential Store is deployed or claimed | [§25](#25-credential-store) | BCP-0101 |
-| 12a | l.375 | bounds of the Runtime, Transport, Module Loader and schema processing | Supported | — | finite, listed with their scope and exhaustion behaviour | [§12](#12-resource-bounds) | BCP-0047 |
+| 12a | l.375 | bounds of the Runtime, Transport, Module Loader and schema processing | Supported | — | finite, listed with their scope and exhaustion behaviour; the CLI module's in DAEMON.md §7a | [§12](#12-resource-bounds) | BCP-0047 |
 | 12b | l.375 | Package Manager bounds, dependency resolution | None | Tier 5 | no Package Manager | [§12](#12-resource-bounds) | BCP-0047 |
 | 13 | l.376 | deadlines: start points, phases, effects, escalation, shared-process limits | Supported | — | five deadlines; a Module Host may be ended by force; a direct realization never | [§13](#13-deadlines) | BCP-0078 |
 | 14 | l.377 | configuration-preserving upgrade; verified defaults | Supported | — | the operator carries configuration; defaults come from accepted declarations | [§14](#14-upgrade-and-verified-defaults) | BCP-0079 |
-| 15 | l.378 | presentation profile | None | — | none selected (BCP l.346) | [§15](#15-presentation) | BCP-0048 |
+| 15 | l.378 | presentation profile | None | — | none selected (BCP l.346); the CLI writes to the launcher's terminal, which is not a presentation profile | [§15](#15-presentation) | BCP-0048 |
 | 16a | l.380 | Package Manager installation, inventory, shared state | None | Tier 5 | no Package Manager | [§1](#1-package-manager) | BCP-0080 |
 | 16b | l.380 | operating-system integration material | Supported | — | a systemd user unit and a launchd agent, owner-installed | [§16](#16-facilities-that-cannot-be-supplied) | BCP-0080 |
 | 17 | l.380-382 | a facility or constraint that cannot be supplied fails | Supported | — | the dependent realization fails; nothing falls back | [§16](#16-facilities-that-cannot-be-supplied) | BCP-0081 |
 | 25 | l.383 | each finite admission pool shared by consumers or providers: whether a per-consumer or per-provider limit applies | Supported | — | each pool with its total and its per-consumer or per-provider limit, or none | [§12](#admission-pools) | BCP-0102 |
 | 18a | l.385 | the administrative path and its authentication | Supported | — | offline edits of owner-only files; the OS authenticates | [§17](#17-approval-and-activation) | BCP-0082 |
 | 18b | l.385-386 | approval presentation | None | — | no user-facing approval | [§17](#17-approval-and-activation) | BCP-0083 |
-| 18c | l.387 | requester provenance kept apart | Supported | — | peer uid and pid logged, never the consumer | [§17](#17-approval-and-activation) | BCP-0084 |
-| 19 | l.389-395 | activation: mechanism, admission, selection, presentation handoff, failure | Supported | — | the `logosctl` socket and its instance | [§17](#17-approval-and-activation) | BCP-0085, BCP-0086, BCP-0087, BCP-0088, BCP-0089 |
-| 20 | l.397 | deployment representations keep Core meaning | Supported | — | the ctl wire and CLI carry Core values unchanged | [§18](#18-deployment-representations) | BCP-0090 |
+| 18c | l.387 | requester provenance kept apart | Supported | — | peer uid and pid logged, never the consumer, on both sockets | [§17](#17-approval-and-activation) | BCP-0084 |
+| 19 | l.389-395 | activation: mechanism, admission, selection, presentation handoff, failure | Supported | — | the `logosctl` socket and its instance; the `lcn_call` socket and its instance, started through the first | [§17](#17-approval-and-activation) | BCP-0085, BCP-0086, BCP-0087, BCP-0088, BCP-0089 |
+| 20 | l.397 | deployment representations keep Core meaning | Supported | — | the ctl wire, the CLI wire and the CLI carry Core values unchanged | [§18](#18-deployment-representations) | BCP-0090 |
 | 21 | l.399-401 | state at rest, principals, secrets, backup, restore and rollback, retention and deletion | Supported | — | file modes only; no secret store; `state purge` is the deletion | [§19](#19-state-at-rest) | BCP-0091, BCP-0092 |
 | 22 | l.403-406 | non-production mechanisms: development trust anchors, relaxed debugging entitlements, Transport test hooks, unknown-artifact analysis | Supported | — | development anchors are in force only with the trust file's development switch on, and the other three are not in a deployed logosd; what the switch gates is announced everywhere | [§20](#20-non-production) | BCP-0103, BCP-0094, BCP-0095, BCP-0096 |
 | 23 | l.408-410 | fail closed, no weaker mechanism | Supported | — | every refusal below; no fallback anywhere | [§21](#21-failing-closed) | BCP-0049, BCP-0050 |
@@ -162,10 +162,10 @@ input is read once.
 ## 3. Authority policy
 
 Item 3. The format is `logos-core-nim.authority-policy.v1` ([AUTHORITY-POLICY.md](AUTHORITY-POLICY.md)).
-logosd merges the operator's rules with its system rules S1–S5, which are derived and not configurable
-([DAEMON.md](DAEMON.md) §5). Administration is the offline path of §17. The explicit permissions of the
-bootstrap and system instances: host-ambient for `orchestrator`, `logosctl` and `authority`, written by
-logosd; the Module Loader holds it by construction ([PERMISSIONS.md](PERMISSIONS.md), "What BCP asks to
+logosd merges the operator's rules with its system rules S1–S5, and S6–S8 when it composes the CLI
+module `lcn_call`, which are derived and not configurable ([DAEMON.md](DAEMON.md) §5). Administration is
+the offline path of §17. The explicit permissions of the bootstrap and system instances: host-ambient for
+`orchestrator`, `logosctl`, `authority` and `lcn_call`, written by logosd; the Module Loader holds it by construction ([PERMISSIONS.md](PERMISSIONS.md), "What BCP asks to
 be documented"). `allow-all` is accepted only with the development switch on (§20).
 
 ## 4. Transport
@@ -207,7 +207,7 @@ Items 6a and 6b. The Loader is built in, `direct_static`, bound first, never con
 |---|---|---|
 | `direct_static` | in logosd | logosd's own two bindings, `lcn_orchestrator` and `logosctl`, and the library's `logos_capability_authority`; an operator `direct_static` module is refused |
 | `direct_dynamic` | in logosd: a verified copy of the artifact under `work/`, mapped | a `modules` or `declarations` entry |
-| `hosted_dynamic`, placement `process` | in a `logos-module-host` process of its own, under logosd's user | the same, with `runtime.module_host` set (logosd's default sets it) |
+| `hosted_dynamic`, placement `process` | in a `logos-module-host` process of its own, under logosd's user | the same, with `runtime.module_host` set (logosd's default sets it); the CLI module `lcn_call`, from the library installed with logosd or `cli.artifact` ([DAEMON.md](DAEMON.md) §7a) |
 
 - `sandbox` and `container` are not advertised. A descriptor naming one is refused with
   `unsupported-strategy` before any artifact is read (L l.377); this Runtime never selects another
@@ -236,7 +236,8 @@ Items 8a and 8b.
 **Isolation (8a).** A `direct_*` module shares logosd's address space. A `hosted_dynamic` module runs in
 a separate process: its own address space, a process group of its own that is killed after every end
 of the host, an environment of only `module_host_env`, and the descriptors listed in
-[HOST-CONFIG.md](HOST-CONFIG.md), "Module Hosts". Every process runs as logosd's user.
+[HOST-CONFIG.md](HOST-CONFIG.md), "Module Hosts". Every process runs as logosd's user. The CLI module
+`lcn_call` is such a module; the terminal descriptors a launcher hands it are its own for the command.
 
 **Not supported (8b).** Placement `process` is a separate address space, **not a sandbox** (DECISIONS
 G265): a hosted module has the filesystem, network, device, process and credential access of logosd's
@@ -254,6 +255,10 @@ placements and their controls out, and so does the Tier 5 plan (its area K).
 - Otherwise no method payload and no event data goes through logosd or `logosctl`: hosted consumers
   and providers exchange payloads over the route's socket; the Runtime decides the Hello, each call
   and delivery from names, roots and connection numbers.
+- **Calls from the command line** (`logosctl call`, `describe`) take the same path: provider host ⇄
+  `lcn_call`'s host ⇄ the terminal. `lcn_call` is the consumer and writes the result to the descriptors
+  the launcher passed it; the launcher sees only an exit status, and logosd only the route's control
+  ([DAEMON.md](DAEMON.md) §7a). Argument values pass through the launcher because the user typed them.
 - A state transfer by `copy` passes the module's state through logosd's Runtime thread in one 64 KiB
   buffer, zeroed after use; `move` reads nothing.
 - What does cross logosd (control path, not payloads): Runtime Control requests, responses and events,
@@ -414,7 +419,8 @@ Item 14 (CFG l.134, l.266).
 ## 15. Presentation
 
 Item 15. No presentation profile is selected and none is assigned (BCP l.346). logosctl is a terminal
-command, not a presentation profile.
+command, not a presentation profile; neither is the CLI module, which writes a command's result to the
+terminal descriptors its launcher handed it ([DAEMON.md](DAEMON.md) §7a).
 
 ## 16. Facilities that cannot be supplied
 
@@ -439,19 +445,29 @@ Items 18a–18c and 19.
   everything logosd does. Under an `issue` rule a module may issue grants while logosd runs, within
   what the rule allows: the only change of authority at run time.
 - **Approval presentation** (18b): none; nothing asks a user to approve anything.
-- **Requester provenance** (18c): the peer uid and pid of each socket command are logged with it and
-  never reach a Runtime Control request or stand for the consumer.
+- **Requester provenance** (18c): the peer uid and pid of each socket command, on the logosctl socket
+  and on `lcn_call`'s, are logged with it and never reach a Runtime Control request or stand for the
+  consumer.
 - **Activation** (19): the `logosctl` socket and instance, with BCP l.389's five items, are documented
   in [DAEMON.md](DAEMON.md) §7, "Activation": mechanism, admission (peer uid), selection (one instance,
   seventeen methods), presentation handoff (socket path, worker count, idle timeout, deployment, trust
-  revision, version, start time; nothing that authenticates), failure behaviour.
+  revision, version, start time; nothing that authenticates), failure behaviour. The CLI module's socket
+  is a second activation surface, documented with the same five items in [DAEMON.md](DAEMON.md) §7a:
+  `lcn_call`'s socket, which the launcher activates through the logosctl instance (`start_module` or
+  `recover_module` under that instance's authority, never the launcher's), admission by peer uid,
+  selection of one instance fixed by composition, a handoff of settings at initialization and terminal
+  descriptors per command, and its exit codes.
 
 ## 18. Deployment representations
 
 Item 20. The ctl wire `logos-core-nim.ctl.v1`, the CLI's arguments and its `--json` output carry Core
 values unchanged: each command is one Runtime Control call whose request and answer are the
 contract's values, validated by the Runtime as any module's are; the text and JSON forms only display
-them ([DAEMON.md](DAEMON.md) §7, §12; DECISIONS G89, D26).
+them ([DAEMON.md](DAEMON.md) §7, §12; DECISIONS G89, D26). The CLI wire `logos-core-nim.cli.v1` carries
+a provider call's arguments as the user typed them; `lcn_call` types them from the method's request rule,
+refuses an ambiguous value rather than choose a reading (BCP l.397), and checks the assembled value
+against the rule before the call, which the provider's host checks again ([DAEMON.md](DAEMON.md) §7a,
+DECISIONS G349).
 
 ## 19. State at rest
 
@@ -515,10 +531,13 @@ The erasure claim and its five non-claims are in CONFORMANCE, "Properties not cl
 methods include a marked one is refused (RUNTIME l.1808; DECISIONS G277, G327).
 
 A module library logosd maps (`direct_dynamic`) or a Module Host loads may be built with either memory
-manager (DECISIONS G342; measured with the Runtime and the Module Host on macOS, Linux pending). Build
+manager (DECISIONS G342; measured with the Runtime and the Module Host on macOS and x86_64 Linux). Build
 it with `-d:noSignalHandler`, so that loading it leaves the process's signal handlers alone (G340; the
-kit warns without it), and link it with its kit's export list (G341). In a refc module written with
-today's kit, handlers on threads other than the loading one must not store GC'd values (DECISIONS I71).
+kit warns without it), and link it with its kit's export list (G341). A refc module whose handlers keep
+GC'd values in the instance must be generated with `lcn-gen kit --confined`, which runs each instance
+on a thread of its own (G335; measured in logosd too, both placements, `tests/test_logosd.nim`); in a
+refc module without it, handlers on threads other than the loading one must not store GC'd values
+(DECISIONS I71). The author's guide is [sdk/docs/MODULE-KIT.md](../sdk/docs/MODULE-KIT.md).
 
 ## 23. Diagnostics and logs
 
@@ -641,6 +660,18 @@ The values `tests/test_deployment.nim` checks against the code. Times are millis
   },
   "authority_audit": {"acknowledged": "append", "unwritten_bound": 4096, "retained_records": 65536},
   "credential_store": "none",
-  "runtime_claim": {"orchestration_module": "lcn_orchestrator", "orchestration_instance": "orchestrator"}
+  "runtime_claim": {"orchestration_module": "lcn_orchestrator", "orchestration_instance": "orchestrator"},
+  "cli": {
+    "instance": "lcn_call",
+    "placement": "process",
+    "started_at_boot": false,
+    "socket": "run/lcn_call.sock",
+    "workers": 8,
+    "streams": 8,
+    "idle_timeout": 30000,
+    "route_idle": 600000,
+    "events": ["execution_state_changed", "inventory_changed", "module_state_changed"],
+    "max_hops": 4
+  }
 }
 ```

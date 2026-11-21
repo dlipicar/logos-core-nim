@@ -6,7 +6,8 @@
 strict = true
 
 # What generated kits and calls files import, and what none of it may reach (G339): the kit
-# facade, and the runtimes a generated `_calls.nim` imports.
+# facade, and the runtimes a generated `_calls.nim` imports. Their closure reaches neither the
+# Runtime Control types nor chronos (G335: a plain kit stays chronos-free).
 kit_facade = [
   "sdk/src/logos_sdk/kit.nim",
   "sdk/src/logos_sdk/codegen/invokert.nim",
@@ -16,6 +17,8 @@ kit_forbidden = [
   "sdk/src/logos_sdk/kit/rcclient.nim",
   "sdk/src/logos_sdk/kit/rc_types.nim",
 ]
+# What generated thread-confined kits import (G335): chronos, but not the Runtime Control types.
+confined_facade = ["sdk/src/logos_sdk/confined.nim"]
 
 # The TLS engine, which stays out of logosd and logosctl. `transport/tls/signing` may be reached:
 # the signing service belongs to the daemon.
@@ -56,6 +59,7 @@ sdk_base = ["sdk/src/logos_sdk/"]
 sdk_binding = [
   "sdk/src/logos_sdk.nim",
   "sdk/src/logos_sdk/kit.nim",
+  "sdk/src/logos_sdk/confined.nim",
   "sdk/src/logos_sdk/codegen/",
   "sdk/src/logos_sdk/contracts/",
   "sdk/src/logos_sdk/kit/",
@@ -67,4 +71,5 @@ daemon_cli = [
   "src/logos_core/cli/",
   "src/logosd.nim",
   "src/logosctl.nim",
+  "src/lcn_call.nim",
 ]

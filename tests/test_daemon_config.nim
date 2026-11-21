@@ -6,8 +6,10 @@
 ## the system rules S1-S5 decided by the Capability Authority's own evaluator;
 ## the trust file's continuity table and logosd's start order over it; the
 ## `logosctl trust` writers' edits and checks (G397); the evidence key's
-## binding and rotation; and `logosctl init`'s session. No logosd process and
-## no Runtime: those are `test_logosd` (6b).
+## binding and rotation; and `logosctl init`'s session. Tier 5 step N-2b
+## adds the `cli` field, the `lcn_call` instance and its rules S6-S8
+## (G343-G346). No logosd process and no Runtime: those are `test_logosd`
+## (6b) and `test_lcn_call`.
 
 import std/[os, sequtils, strutils]
 import unittest2
@@ -25,6 +27,8 @@ from ../src/logos_core/loader/contract import LoaderInstanceId, LoaderModuleName
 from ../src/logos_core/orchestration/settings import OrchestratorModule
 import logos_sdk/base/clock
 from ../src/logos_core/durable import release, writeAtomic
+from ../src/logos_core/cli/lcn_call_configuration_types import
+  LcnCallSettings, LcnCallSettingsDeploymentChoiceKind, decode
 import ./support/authfixture, logos_sdk/testing/[kitbuild, schemasuite]
 
 let work =
@@ -110,7 +114,8 @@ const
   DcRules = [
     "lcn.daemon_config", "lcn.dc_runtime", "lcn.dc_policy", "lcn.dc_orchestration",
     "lcn.dc_restart", "lcn.dc_override", "lcn.dc_call_audit", "lcn.dc_evidence_store",
-    "lcn.dc_permissions", "lcn.dc_ctl", "lcn.dc_test_hooks", "lcn.dc_test_diagnostics",
+    "lcn.dc_permissions", "lcn.dc_ctl", "lcn.dc_cli", "lcn.dc_test_hooks",
+    "lcn.dc_test_diagnostics",
   ]
   TrustRules = ["lcn.trust_mark", "lcn.ev_key_binding"]
   TrustdocRules = [
@@ -204,11 +209,16 @@ suite "dc.checks: DAEMON.md §3, checks 1 to 4 [IMPL-DECISION G293] [IMPL-DECISI
 
   test "check 2: reserved instance ids and module names, and no direct_static operator module":
     check checked(dcText(extra = "\"modules\": [" & hostedModule("svc") & "]")).isOk
-    for id in [OrchestratorInstance, AuthorityInstance, CtlInstance, LoaderInstanceId]:
+    for id in [
+      OrchestratorInstance, AuthorityInstance, CtlInstance, CliInstance,
+      LoaderInstanceId,
+    ]:
       checkpoint id
       check refusal(dcText(extra = "\"modules\": [" & hostedModule(id) & "]")) ==
         "modules: instance " & id & " uses a reserved instance id"
-    for m in [LoaderModuleName, AuthorityModule, CtlModule, OrchestratorModule]:
+    for m in [
+      LoaderModuleName, AuthorityModule, CtlModule, CliModule, OrchestratorModule
+    ]:
       checkpoint m
       check refusal(dcText(extra = "\"modules\": [" & hostedModule("x", m) & "]")) ==
         "modules: instance x uses the reserved module name " & m
@@ -359,6 +369,43 @@ suite "dc.checks: DAEMON.md §3, checks 1 to 4 [IMPL-DECISION G293] [IMPL-DECISI
     check refusal(dcText(extra = "\"ctl\": {\"idle_timeout_ms\": 600001}")) ==
       "ctl.idle_timeout_ms must be 100 to 600000"
 
+  test "[IMPL-DECISION G344] cli: absolute paths; workers 1 to 32, streams 1 to 64; the timeouts' bounds":
+    let d = checked(dcText()).get
+    check d.cli.artifact.isNone and d.cli.socketDir == ""
+    check d.cli.workers == DefaultCliWorkers and d.cli.streams == DefaultCliStreams
+    check d.cli.idleTimeoutMs == DefaultIdleTimeoutMs and
+      d.cli.routeIdleMs == DefaultRouteIdleMs
+    let art =
+      "\"artifact\": {\"id\": \"lcn_call\", \"local_path\": \"/opt/lib/liblcn_call.so\", " &
+      "\"hash\": " & Zero32 & ", \"hash_suite\": \"logos.hash-suite.blake3-256\"}"
+    let c = checked(
+      dcText(
+        extra =
+          "\"cli\": {" & art & ", \"socket_dir\": \"/run/cli\", \"workers\": 32, " &
+          "\"streams\": 64, \"idle_timeout_ms\": 600000, \"route_idle_ms\": 1000}"
+      )
+    ).get
+    check c.cli.artifact.get.local_path == "/opt/lib/liblcn_call.so"
+    check c.cli.socketDir == "/run/cli" and c.cli.workers == 32 and c.cli.streams == 64
+    check c.cli.idleTimeoutMs == 600000 and c.cli.routeIdleMs == 1000
+    check refusal(dcText(extra = "\"cli\": {" & art.replace("/opt/lib/", "") & "}")) ==
+      "cli.artifact.local_path must be an absolute path"
+    check refusal(dcText(extra = "\"cli\": {\"socket_dir\": \"run\"}")) ==
+      "cli.socket_dir must be an absolute path"
+    for (field, value, message) in [
+      ("workers", "0", "cli.workers must be 1 to 32"),
+      ("workers", "33", "cli.workers must be 1 to 32"),
+      ("streams", "0", "cli.streams must be 1 to 64"),
+      ("streams", "65", "cli.streams must be 1 to 64"),
+      ("idle_timeout_ms", "99", "cli.idle_timeout_ms must be 100 to 600000"),
+      ("idle_timeout_ms", "600001", "cli.idle_timeout_ms must be 100 to 600000"),
+      ("route_idle_ms", "999", "cli.route_idle_ms must be 1000 to 86400000"),
+      ("route_idle_ms", "86400001", "cli.route_idle_ms must be 1000 to 86400000"),
+    ]:
+      checkpoint field & " " & value
+      check refusal(dcText(extra = "\"cli\": {\"" & field & "\": " & value & "}")) ==
+        message
+
   test "[IMPL-DECISION G293] [batch E 19] check 4: the store needs the evidence key, whose kid and Runtime match its binding; the store's bounds":
     let s = freshSession()
     let k = createEvidenceKey(s.keysDir, "rt-1").get
@@ -497,6 +544,48 @@ suite "dc.compose: the derived host configuration [IMPL-DECISION G294] [IMPL-DEC
     check p.composition.orchestrator.authority.isNone
     check p.composition.entryFor(AuthorityModule, AuthorityInstance).len == 0
 
+  posixTest "[IMPL-DECISION G343] lcn_call: composed from cli.artifact, hosted, stateless, host-ambient, its settings provisioned, not started":
+    # A test logosd is built without the compiled hash: no artifact, no lcn_call.
+    check lcnCallArtifactHash.len == 0
+    let s = Session(dir: freshDir())
+    let none = prepareDaemon(s, dcBytes(dcText()), prod).get
+    check CliInstance notin none.composition.appConfig.modules.mapIt(it.instance)
+    let host = getAppFilename()
+    let text = dcText(
+        extra =
+          "\"cli\": {\"artifact\": {\"id\": \"lcn_call\", \"local_path\": \"/opt/lib/liblcn_call.so\", " &
+          "\"hash\": " & Zero32 &
+          ", \"hash_suite\": \"logos.hash-suite.blake3-256\"}, \"workers\": 3, \"route_idle_ms\": 5000}"
+      )
+      .replace(
+        "{\"runtime_instance_id\": \"rt-1\"}",
+        "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & host & "\"}",
+      )
+    for (trust, deployment) in [
+      (prod, LcnCallSettingsDeploymentChoiceKind.Production),
+      (dev, LcnCallSettingsDeploymentChoiceKind.Non_production),
+    ]:
+      checkpoint $deployment
+      let p = prepareDaemon(s, dcBytes(text), trust).get
+      let app = p.composition.appConfig
+      check app.modules.mapIt(it.instance) ==
+        @[OrchestratorInstance, CtlInstance, CliInstance, AuthorityInstance]
+      let m = app.modules[2]
+      check m.module == CliModule and m.state_assignment.isNone
+      check m.implementation.kind == LcnAppImplementationKind.Process_hosted_dynamic
+      check m.implementation.arm_Process_hosted_dynamic.artifact.local_path ==
+        "/opt/lib/liblcn_call.so"
+      let v = LcnCallSettings.decode(m.provisioned_configuration.get).get
+      check v.socket == s.runDir / "lcn_call.sock"
+      check v.workers == 3 and v.streams == uint8(DefaultCliStreams)
+      check v.route_idle_ms == 5000 and v.idle_timeout_ms == uint32(
+        DefaultIdleTimeoutMs
+      )
+      check v.deployment.kind == deployment
+      check p.composition.entryFor(CliModule, CliInstance) == @[HostAmbient & "=a0"]
+      # [G343] Not in the start list: the first launcher starts it.
+      check CliInstance notin p.composition.orchestrator.defaults.get.mapIt(it.instance)
+
   posixTest "an operator deployment: hosted modules, their module-level host-ambient, ordering, the start list, restart and audit":
     let s = freshSession()
     let k = createEvidenceKey(s.keysDir, "rt-1").get
@@ -602,13 +691,14 @@ proc moduleOf(instance: string): string =
   of CtlInstance: CtlModule
   of AuthorityInstance: AuthorityModule
   of LoaderInstanceId: LoaderModuleName
+  of CliInstance: CliModule
   else: "svc"
 
 proc daemonFacts(): SharedFacts =
   result = newSharedFacts(Rt)
   for id in [
-    OrchestratorInstance, CtlInstance, AuthorityInstance, LoaderInstanceId, "a", "b",
-    "c",
+    OrchestratorInstance, CtlInstance, AuthorityInstance, LoaderInstanceId, CliInstance,
+    "a", "b", "c",
   ]:
     doAssert result.putInstance(id, InstanceFacts(module: moduleOf(id))).isOk
 
@@ -677,10 +767,11 @@ type PolicyEnv = object
   sink: ChannelSink
   a: Authority
 
-proc openPolicy(diag: string): PolicyEnv =
+proc openPolicy(diag: string, cli = false): PolicyEnv =
   let dc = dcOf(diag)
   let orch = orchestratorValue(dc).expect("an orchestration value")
-  let policy = mergedPolicy(dc.policy.arm_Capability_authority, orch).expect("a policy")
+  let policy =
+    mergedPolicy(dc.policy.arm_Capability_authority, orch, cli).expect("a policy")
   let dir = freshDir("ca")
   privateDir(dir)
   result.facts = daemonFacts()
@@ -838,6 +929,88 @@ suite "dc.policy: the system rules S1 to S5, decided by the Capability Authority
     check p.source == DefaultPolicySource
     var e = openPolicy(dcText())
     check e.allows(rcReq(CtlInstance, "list_modules"))
+    e.close()
+
+const CliOperatorRules =
+  """[{"kind": "allow", "subject": {"instances": ["lcn_call"]}, "scopes": [{"kind": "runtime-control", "methods": ["get_configuration", "recover_module", "start_module", "stop_module"]}, {"kind": "module-execution", "targets": {}, "actions": ["start", "stop"]}]}]"""
+
+proc cliPolicyText(rules = "[]"): string =
+  dcText(
+    policy =
+      "{\"kind\": \"capability-authority\", \"source\": \"test\", \"rules\": " & rules &
+      "}",
+    extra =
+      "\"modules\": [" & hostedModule("a") & "], \"orchestration\": {\"start\": [\"a\"]}",
+  )
+
+suite "dc.policy.cli: lcn_call's system rules S6 to S8 and the events rule [IMPL-DECISION G345] [IMPL-DECISION G346] [IMPL-DECISION G350]":
+  test "S6: lcn_call's Runtime Control methods and nothing else the system grants":
+    var e = openPolicy(cliPolicyText(), cli = true)
+    check e.allows(rcReq(CliInstance, "list_modules"))
+    for m in [
+      "get_configuration", "start_module", "stop_module", "recover_module",
+      "retire_module", "update_configuration", "apply_configuration",
+    ]:
+      checkpoint m
+      check not e.allows(rcReq(CliInstance, m, "a"))
+    check not e.allows(rcReq(CliInstance, "shutdown_runtime"))
+    e.close()
+
+  test "S7 and the events rule: three events, no other; no execution, with consumer-denied":
+    var e = openPolicy(cliPolicyText(), cli = true)
+    for ev in ["module_state_changed", "execution_state_changed", "inventory_changed"]:
+      checkpoint ev
+      check e.allows(eventReq(CliInstance, ev))
+    for ev in [
+      "route_state_changed", "configuration_state_changed",
+      "permission_settings_changed",
+    ]:
+      checkpoint ev
+      check e.denial(eventReq(CliInstance, ev)) == DenialKind.Consumer_denied
+    check e.denial(execReq(CliInstance, "a")) == DenialKind.Consumer_denied
+    check e.denial(execReq(CliInstance, "a", stop = true)) == DenialKind.Consumer_denied
+    e.close()
+
+  test "[plan R7] an operator may grant lcn_call more methods; S7 still refuses every start and stop":
+    var e = openPolicy(cliPolicyText(CliOperatorRules), cli = true)
+    # The methods are granted; the events rule still holds (a method grant
+    # with no event list covers every subscription, and S7 denies the others).
+    check e.allows(rcReq(CliInstance, "get_configuration", "a"))
+    check e.allows(rcReq(CliInstance, "stop_module", "a"))
+    check e.allows(eventReq(CliInstance, "module_state_changed"))
+    check e.denial(eventReq(CliInstance, "route_state_changed")) ==
+      DenialKind.Consumer_denied
+    # A stop or start also needs the execution decision for the requester,
+    # which S7 refuses whatever the operator allows: no self-exit (G350).
+    for target in ["a", CliInstance]:
+      checkpoint target
+      check not e.allows(execReq(CliInstance, target, stop = true))
+      check not e.allows(execReq(CliInstance, target))
+    # [Fable, R7] Recovery is decided on the instance's original starter's
+    # execution authority, so a granted recover_module would take effect;
+    # lcn_call never calls it.
+    check e.allows(rcReq(CliInstance, "recover_module", "a"))
+    e.close()
+
+  test "S8: logosctl starts, stops and recovers lcn_call, and may not retire or reconfigure it (target-denied)":
+    var e = openPolicy(cliPolicyText(), cli = true)
+    for m in ["start_module", "stop_module", "recover_module", "get_configuration"]:
+      checkpoint m
+      check e.allows(rcReq(CtlInstance, m, CliInstance))
+    check e.allows(execReq(CtlInstance, CliInstance, hosted = true))
+    check e.allows(execReq(CtlInstance, CliInstance, stop = true))
+    for m in ["retire_module", "update_configuration", "apply_configuration"]:
+      checkpoint m
+      check e.denial(rcReq(CtlInstance, m, CliInstance)) == DenialKind.Target_denied
+      check e.allows(rcReq(CtlInstance, m, "a"))
+    e.close()
+
+  test "without lcn_call, none of S6 to S8":
+    let orch = orchestratorValue(dcOf(cliPolicyText())).get
+    check systemRules(orch, cli = true).get.len > systemRules(orch).get.len
+    var e = openPolicy(cliPolicyText())
+    check not e.allows(rcReq(CliInstance, "list_modules"))
+    check e.allows(rcReq(CtlInstance, "retire_module", CliInstance))
     e.close()
 
 # dc.trust ---------------------------------------------------------------------------
@@ -1562,12 +1735,12 @@ suite "dc.init: logosctl init's session [IMPL-DECISION G192] [batch E 19] [U8]":
     check getFilePermissions(s.runDir) == {fpUserRead, fpUserWrite, fpUserExec}
 
 suite "dc.docs: docs/DAEMON.md carries the schemas and the system rules verbatim":
-  test "every daemon CDDL file and the package trust file's, and S1-S5 for init's default configuration, word for word":
+  test "every daemon CDDL file, the package trust file's and the launcher's, and S1-S8 for init's default configuration, word for word":
     let root = currentSourcePath().parentDir.parentDir
     let doc = readFile(root / "docs" / "DAEMON.md")
     for name in [
       "daemon/daemon_config.cddl", "daemon/trust.cddl", "package/trustdoc.cddl",
-      "daemon/ctl.cddl", "daemon/logosctl.cddl", "daemon/evstore.cddl",
+      "daemon/ctl.cddl", "daemon/logosctl.cddl", "daemon/evstore.cddl", "cli/cli.cddl",
     ]:
       checkpoint name
       let schema = readFile(root / "src/logos_core" / name)
@@ -1575,6 +1748,12 @@ suite "dc.docs: docs/DAEMON.md carries the schemas and the system rules verbatim
     check ("## 3. `" & DaemonConfigFormat & "`") in doc
     let orch = orchestratorValue(defaultDaemonConfig("x")).get
     var listing = "```text\n"
-    for r in systemRules(orch).get:
+    let base = systemRules(orch).get
+    for r in base:
       listing.add(toDiag(r) & "\n")
     check (listing & "```") in doc
+    # [G345, G346] S6 to S8, which logosd adds when it composes lcn_call.
+    var cli = "```text\n"
+    for r in systemRules(orch, cli = true).get[base.len .. ^1]:
+      cli.add(toDiag(r) & "\n")
+    check (cli & "```") in doc

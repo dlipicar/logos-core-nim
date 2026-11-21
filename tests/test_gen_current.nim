@@ -4,6 +4,7 @@
 import std/strutils
 import unittest2
 import logos_sdk/[cbor, hash, pins]
+from logos_sdk/codegen/kitgen import ExportListKind
 import ../src/logos_core/authority/[policy_types, logos_capability_authority_types]
 import ./support/genfixtures_core
 
@@ -27,6 +28,9 @@ suite "core.nim-types: core's generated modules (D29)":
     check generatedLcnCallTypes().get == readFile(lcnCallTypesPath)
     check generatedLcnCallConfigTypes().get == readFile(lcnCallConfigTypesPath)
     check generatedLcnCallKit().get == readFile(lcnCallKitPath)
+    for kind in ExportListKind:
+      checkpoint lcnCallExportsPath(kind)
+      check generatedLcnCallExports(kind).get == readFile(lcnCallExportsPath(kind))
     check generatedStoreTypes().get == readFile(storeTypesPath)
     check generatedCarrierTypes().get == readFile(carrierTypesPath)
     check generatedCaTypes().get == readFile(caTypesPath)

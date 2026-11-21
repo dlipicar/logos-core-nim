@@ -234,10 +234,16 @@ type
     hcCompleting
     hcDone
 
+  Retains = enum ## a method whose answer this host reads before the module (RUN-0174)
+    rtNone = ""
+    rtEstablish = "establish_route"
+    rtRenew = "renew_route"
+
   HostCall = object
     local: uint64
     complete: LogosAsyncCompleteFn
     userData: pointer
+    retains: Retains
     phase: CallPhase
     received: bool ## its completion came
     completer: int
@@ -297,6 +303,11 @@ proc runCompletion(f: seq[byte]) =
   var len: csize_t = 0
   if d.failure.isNone:
     let v = d.value.get(@[])
+    # [RUN-0174; plan §2.8] As the synchronous call's: a prepared
+    # `establish_route` or `renew_route` keeps the route's material here (Tier
+    # 5 step N-2b: lcn_call establishes its routes this way).
+    if c.retains != rtNone:
+      retainFrom($c.retains, v)
     o.response = copyOut(v)
     response = o.response
     len = csize_t(v.len)
@@ -553,6 +564,13 @@ proc rcPrepareCallOp(
   c.local = nextCall.fetchAdd(1) + 1
   c.complete = callbacks.complete
   c.userData = callbacks.userData
+  case $`method`
+  of "establish_route":
+    c.retains = rtEstablish
+  of "renew_route":
+    c.retains = rtRenew
+  else:
+    discard
   withLock callLock:
     c.next = calls
     calls = c

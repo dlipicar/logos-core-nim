@@ -217,6 +217,28 @@ proc assembleDaemon*(
   let c = prepared.config
   let path = prepareRunDir(s, c.ctl.socketDir).valueOr:
     return err(startError(ExitRefused, error))
+  let cliArt = cliArtifact(c, opts.exe)
+  if cliArt.isSome:
+    # [G344] lcn_call's socket: its directory owner-only, its path within
+    # `sun_path`; lcn_call binds it when the first launcher starts it.
+    if c.cli.socketDir.len > 0:
+      ensurePrivateDir(c.cli.socketDir).isOkOr:
+        return err(startError(ExitRefused, "cli.socket_dir: " & error))
+    let cliPath = cliSocketPath(s, c)
+    if not fitsSunPath(cliPath):
+      return err(
+        startError(
+          ExitRefused,
+          "the CLI socket path " & cliPath & " is longer than sun_path (" &
+            $(sunPathMax() - 1) & " bytes): choose a shorter cli.socket_dir",
+        )
+      )
+    logInfo(
+      "lcn_call: the CLI module is " & cliArt.get.local_path &
+        (if c.cli.artifact.isSome: " (cli.artifact)" else: " (installed with logosd)")
+    )
+  else:
+    logInfo("lcn_call: no CLI module (no cli.artifact and no compiled library hash)")
   # Step 9.
   let comp = prepared.composition
   var cfg = LogosRuntimeConfig(

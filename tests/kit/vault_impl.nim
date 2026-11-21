@@ -10,6 +10,11 @@
 ##
 ## - `store` with the note `echo` fails with a message that holds the secret
 ##   (a provider failure forwarded to the caller only, l.3366);
+## - `store` with the note `outside` fails NOT_AUTHORISED, a status outside the
+##   provider set (l.3306-3311), with that message: the caller gets
+##   MODULE_ERROR without it;
+## - `store` with the note `detail` fails INVALID_PARAMS with a detail whose
+##   path holds the secret as text (forwarded to the caller only);
 ## - `store` with the note `leak` copies the secret to the Nim heap and drops
 ##   the copy unwiped, stores nothing and answers `stored: false`: the free
 ##   scan's self-test in an audit host (W-3);
@@ -108,6 +113,32 @@ proc `store`(
       text[i] = char(b)
     result = err(failure(ecModule, "refused " & text))
     wipe(text)
+    return
+  if r.note == Opt.some("outside"):
+    # A status outside the provider set (l.3306-3311) whose message holds the
+    # secret: the caller gets MODULE_ERROR without it.
+    var text = newString(r.secret.len)
+    for i, b in r.secret:
+      text[i] = char(b)
+    result = err(failure(ecNotAuthorised, "refused " & text))
+    wipe(text)
+    return
+  if r.note == Opt.some("detail"):
+    # INVALID_PARAMS whose detail path holds the secret as text: a valid
+    # status, forwarded to the caller only.
+    var text = newString(r.secret.len)
+    for i, b in r.secret:
+      text[i] = char(b)
+    let tree = detailValue(iprSchemaMismatch, Opt.some(@[cbor(text)]))
+    wipe(text)
+    var detail = encodeCbor(tree)
+    wipe(tree)
+    result = err(
+      InvocationFailure(
+        code: ecInvalidParams, message: Opt.some("refused"), detail: Opt.some(detail)
+      )
+    )
+    wipe(detail)
     return
   if r.note == Opt.some("leak"):
     var leak = newSeq[byte](r.secret.len)

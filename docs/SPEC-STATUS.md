@@ -143,7 +143,7 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-4, 5-9 | the Windows readings: logosd's own user; the build key | one user is not a security boundary (G58's non-claim); keyed on the OS and `afunix.sys` builds (5-4's G332, G333) | decided 2026-11-17 (owner) |
 | 5-11 | NP-13 | provenance attests the assembled archive | open (E3) |
 | 5-13 | TF-43 (G310); the units still deferred | the member set of E1; E2's relabels | open (E1, E2, E3) |
-| N-2 | marked methods through the CLI | refused, naming the method (INTERFACE l.368-369); local-only support later (N-2d), non-local targets refused | decided 2026-11-17 (owner) |
+| N-2 | marked methods through the CLI | local targets only (INTERFACE l.368-369, l.373): a marked request from files or stdin, a marked response to stdout, every copy erased; non-local targets refused | decided 2026-11-17 (owner); built in N-2d (G349, I102) |
 
 Unanswered upstream and bearing on Tier 5: NP-12 to NP-14 (NP-11 is settled by text: PM l.964, l.1172, and
 NP-15 by PM l.1096-1101 at 6cac8335),
@@ -425,6 +425,32 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   `fetch_fake_module` and the conformance harness in the SDK's testing package; `sdk/docs/STORAGE-FETCH.md`.
   A hosted consumer reads 4 MiB from a hosted provider and no carrier frame holds the bytes (RUN-0815
   re-tested). No unit changes status: the contract is half of PKG-0474's evidence, which 5-3b claims.
+
+- 2026-11-20, Tier 5 step N-2b (I102), the CLI module `lcn_call` (G343-G350; planning's rulings P1-P6, plan R7):
+  `logosctl call`, `describe` and `module wait`; `lcn_call` hosted and started on demand through the logosctl
+  instance, its socket `logos-core-nim.cli.v1` (DAEMON.md §7a), system rules S6-S8 and the events rule.
+  Payloads go between `lcn_call`'s host and the provider's; logosd sees only the route's control. The
+  first run fixed a Module Host defect: a prepared `establish_route` or `renew_route` kept no route
+  material (RUN-0174), so an asynchronous hosted consumer could not materialize (`test_hosted_routes`
+  C-2b). No unit changes status: BCP-0085 (inspection) and BCP-0086 to BCP-0090 gain the CLI socket as
+  evidence beside the logosctl socket's, and IFC-0942 the projected `describe`.
+
+- 2026-11-20, Tier 5 step N-1 (I101), the module kit's gaps on the node track (G335-G342), sub-parts 1 to
+  6: modules built with the other memory manager, export lists and the kit's signal rule (1); typed
+  consumer helpers (2); the thread-confined mode, so a refc module may keep GC'd state (3); the deferred
+  provider `_MODULE_async_api` and `invokeAsync` (4); interface-only provider kits and `--extends` (5);
+  the confined kit in logosd's two placements, the `kit-toolchains` check with storage's and delivery's
+  switch sets, and the author's guide `sdk/docs/MODULE-KIT.md` (6). IFC-0281 and IFC-0282 claimed for
+  confined modules (3), and twelve provider units for `_MODULE_async_api` (4): IFC-0743, 0746, 0748, 0750
+  to 0752, 0754, 0762, 0763, 0766, 0769 and 0779. IFC-0671 taken for Nim; IFC-0758 and IFC-0767 stay out
+  of scope. I71's refc limit now holds for kits without `--confined` only. The sanitizer pass over
+  N-1's suites is planning's to schedule.
+
+- 2026-11-20, Tier 5 step N-2c (I102), streams (G346, G349): `logosctl subscribe` and `events`, a bounded
+  queue per stream, ends reported by route handle and subscription identifier, exit 6 for a stream the
+  route, its session, the authority or `lcn_call` ends, or a terminal that does not keep up. Events go
+  from the provider's host to `lcn_call`'s. No unit changes status: RUN-1095 and TRN-0392 gain
+  end-to-end evidence in logosd (a revoked grant).
 
 - 2026-11-20, Tier 5 step 5-3a-2 (I114; G396, G397, G398), the package trust file:
   - `<session>/trust.cbor` is `logos-core-nim.trust.v2`, closed: one revision covers the switch, the signing profile,

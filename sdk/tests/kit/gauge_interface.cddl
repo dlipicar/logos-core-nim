@@ -1,0 +1,16 @@
+; -- metadata --
+_interface = "gauge"
+
+; Input for tests/generated/gauge_module_*: an interface that declares only
+; events (INTERFACE l.2839), implemented by `gauge_module` with no primary
+; document (DECISIONS G339). It extends sdk/tests/kit/gauge_interface_v1.cddl
+; with `gauge.alarm_event`.
+
+gauge.level_event = {
+  level: uint64,
+}
+
+gauge.alarm_event = {
+  level: uint64,
+  bound: uint64,
+}

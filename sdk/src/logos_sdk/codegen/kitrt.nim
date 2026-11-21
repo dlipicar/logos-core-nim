@@ -39,6 +39,14 @@
 ## context should be destroyed on the thread that created it (the tests do so
 ## under refc; under orc they also create and destroy contexts on other
 ## threads).
+##
+## A thread-confined kit (`lcn-gen kit --confined`, `codegen/confinedrt`;
+## DECISIONS G335-G337) runs its instance on one module thread instead. This
+## module carries what both kinds share: `ModuleServices` routes `publish` to
+## the confined runtime's queue when the services belong to a confined
+## context, and on a module thread the invocation-scoped operations read the
+## *confined scope* the runtime sets around a plain handler (G336) instead of
+## the Runtime's per-thread `current`.
 
 {.push raises: [], gcsafe.}
 
@@ -48,9 +56,9 @@ import ../pins
 import ../iface/[accept, outcome, payload]
 import ../abi/[types, checks]
 import ../base/[libvisibility, perthread, wipe]
-import ./nimrt
+import ./[handover, nimrt]
 
-export results, outcome, types, payload, nimrt
+export results, outcome, types, payload, nimrt, handover
 
 proc cMalloc(size: csize_t): pointer {.importc: "malloc", header: "<stdlib.h>".}
 proc cFree(p: pointer) {.importc: "free", header: "<stdlib.h>".}
@@ -65,6 +73,9 @@ type
     publishFn: LogosPublishFn
     publishUserData: pointer
     invocationAccess: LogosInvocationAccess
+    confined: pointer ## a confined kit's context (`confinedrt`), else nil
+    confinedPublish: ConfinedPublishFn
+    dispatch: Dispatcher ## where its route handles' callbacks run (G339)
 
   ModuleInit* = object
     ## What `initModule` receives. The state directory and configuration are
@@ -94,6 +105,22 @@ type
     kind*: CallerKind
     runtimeInstance*: string
     moduleInstance*: Opt[string] ## none for a system-service caller
+
+  ConfinedPublishFn* = proc(
+    confined: pointer, eventId: string, data: openArray[byte]
+  ): Result[void, InvocationFailure] {.nimcall, gcsafe, raises: [].}
+    ## [DECISIONS G337] A confined context's instance-wide publication: queued
+    ## for its publisher thread.
+
+  ConfinedScope* = object
+    ## [DECISIONS G336] What a plain handler of a confined kit acts for while
+    ## it runs on the module thread: its job's captured invocation context and
+    ## how that job publishes in the invocation's scope.
+    invocation*: ptr LogosInvocationContext
+    job*: pointer
+    publish*: proc(
+      job: pointer, eventId: string, data: openArray[byte]
+    ): Result[void, InvocationFailure] {.nimcall, gcsafe, raises: [].}
 
   KitContext = object ## What `logos_module_context_t*` points to for a kit module.
     services: ModuleServices
@@ -186,8 +213,39 @@ proc clearLastFailure*() =
     secureZero(addr resultDetail[0], detailUsed)
     detailUsed = 0
 
+var failureHooked {.threadvar.}: bool
+  ## `releaseLastFailure` is registered for this thread's release
+
+proc releaseLastFailure() {.nimcall, gcsafe, raises: [].} =
+  ## [DECISIONS G276] At the thread's end: a failure no later call cleared is
+  ## zeroed before the system releases the thread's storage, which it does
+  ## without zeroing it.
+  clearLastFailure()
+  failureHooked = false
+
 proc okResult*(): LogosResult =
   LogosResult(code: CErrorCode(0))
+
+proc normalizedFailure*(f: InvocationFailure): InvocationFailure =
+  ## [SPEC INTERFACE §2.7, §5.1] `f` as a status carries it: the message
+  ## clipped to `MaxMessageBytes`; a failure that is not a valid status (code
+  ## OK, a NUL or invalid UTF-8 in the message, detail its code does not
+  ## allow) becomes MODULE_ERROR without diagnostics. The caller's `f` is the
+  ## caller's; the copy returned is the receiver's to zero (DECISIONS G276).
+  result = f
+  if result.message.isSome and result.message.get.len > MaxMessageBytes:
+    # Through a local: under refc, `f.message = Opt.some(clip(f.message.get))`
+    # resets the destination before the argument reads it (nim-lang/Nim#25993,
+    # fixed in 2.4.0, not in 2.2.14).
+    var clipped = clip(result.message.get)
+    wipe(result.message)
+    result.message = Opt.some(clipped)
+    wipe(clipped)
+  if checkFailure(result).isErr or (
+    result.message.isSome and '\0' in result.message.get
+  ):
+    wipe(result)
+    result = InvocationFailure(code: ecModule)
 
 proc failureResult*(f: InvocationFailure): LogosResult =
   ## [SPEC INTERFACE §2.7, §5.1, §5.2] The status of a failed call. Its message
@@ -197,19 +255,11 @@ proc failureResult*(f: InvocationFailure): LogosResult =
   ## without diagnostics, as an ABI caller would treat it. [DECISIONS G276] A
   ## marked method's failure text may hold its payload: every copy made here
   ## is zeroed once written; the caller's `f` is the caller's.
-  var f = f
-  if f.message.isSome and f.message.get.len > MaxMessageBytes:
-    # Through a local: under refc, `f.message = Opt.some(clip(f.message.get))`
-    # resets the destination before the argument reads it (nim-lang/Nim#25993,
-    # fixed in 2.4.0, not in 2.2.14).
-    var clipped = clip(f.message.get)
-    wipe(f.message)
-    f.message = Opt.some(clipped)
-    wipe(clipped)
-  if checkFailure(f).isErr or (f.message.isSome and '\0' in f.message.get):
-    wipe(f)
-    f = InvocationFailure(code: ecModule)
+  var f = normalizedFailure(f)
   clearLastFailure()
+  if not failureHooked:
+    failureHooked = true
+    onThreadRelease(releaseLastFailure)
   var r = LogosResult(code: CErrorCode(ord(f.code)))
   if f.message.isSome:
     for i, c in f.message.get:
@@ -225,6 +275,76 @@ proc failureResult*(f: InvocationFailure): LogosResult =
     r.detailLen = csize_t(f.detail.get.len)
   wipe(f)
   r
+
+# Services and the confined scope ---------------------------------------------------
+
+var
+  confinedThread {.threadvar.}: bool ## this thread is a confined kit's module thread
+  confinedScope {.threadvar.}: ptr ConfinedScope
+    ## the plain handler running on this module thread, if any (G336)
+
+proc enterConfinedThread*() =
+  ## [DECISIONS G336] Marks the calling thread as a confined kit's module
+  ## thread: from now on the invocation-scoped operations read its confined
+  ## scope, which is nil outside a plain handler (NOT_READY).
+  confinedThread = true
+
+proc onConfinedThread*(): bool =
+  confinedThread
+
+proc swapConfinedScope*(scope: ptr ConfinedScope): ptr ConfinedScope =
+  ## [DECISIONS G336] Sets this module thread's confined scope and returns the
+  ## one it replaces, which the caller puts back.
+  result = confinedScope
+  confinedScope = scope
+
+proc moduleServices*(input: ptr LogosModuleInitInput): ModuleServices =
+  ## The bindings of a checked initialization input (`checkInitInput`).
+  ModuleServices(
+    runtimeControl: input.runtimeControl,
+    publishFn: input.publish,
+    publishUserData: input.publishUserData,
+    invocationAccess: input.invocationAccess,
+  )
+
+proc withConfined*(
+    s: ModuleServices, confined: pointer, publish: ConfinedPublishFn, post: PostTaskFn
+): ModuleServices =
+  ## [DECISIONS G337, G339] `s` for an instance of the confined context
+  ## `confined`: its events are queued by `publish`, and its route handles'
+  ## callbacks are posted to its module thread by `post`.
+  result = s
+  result.confined = confined
+  result.confinedPublish = publish
+  result.dispatch = Dispatcher(context: confined, post: post)
+
+proc dispatcher*(s: ModuleServices): Dispatcher =
+  ## [DECISIONS G339, P2] What the consumer helpers wrap this instance's route
+  ## handles with (`routes.newRouteSet`, `consumert.wrapRoute`): a confined
+  ## kit's module thread, or none (callbacks run in the delivery).
+  s.dispatch
+
+proc confinedOf*(s: ModuleServices): pointer =
+  ## The confined context these services belong to; nil for a plain kit.
+  s.confined
+
+proc hasPublish*(s: ModuleServices): bool =
+  not s.publishFn.isNil
+
+proc callPublish*(
+    s: ModuleServices, eventId: cstring, data: ptr UncheckedArray[uint8], len: int
+): int64 =
+  ## The instance's publish callback, called as it is (its raw result).
+  int64(s.publishFn(s.publishUserData, eventId, data, csize_t(len)))
+
+proc publishCode*(rc: int64, eventId: string): Result[void, InvocationFailure] =
+  ## [SPEC INTERFACE §5.1, App A.4] A publish callback's result: a result
+  ## outside the shared registry is MODULE_ERROR.
+  let code = errorCode(rc).valueOr:
+    return err(moduleError("the publish callback returned code " & $rc))
+  if code == ecOk:
+    return ok()
+  err(failure(code, "the publish callback refused " & eventId))
 
 # Contexts --------------------------------------------------------------------------
 
@@ -244,6 +364,19 @@ proc copyBytes(p: ptr UncheckedArray[uint8], len: csize_t): seq[byte] =
   for i in 0 ..< int(len):
     result[i] = p[i]
 
+proc moduleInit*(
+    input: ptr LogosModuleInitInput, services: ModuleServices
+): ModuleInit =
+  ## [SPEC INTERFACE §2.6] What `initModule` receives for a checked input
+  ## (`checkInitInput`): the state directory and configuration copied, since
+  ## the input is borrowed only for `_MODULE_init`.
+  result = ModuleInit(services: services)
+  if input.stateDir != nil:
+    result.stateDir = Opt.some($input.stateDir)
+  if input.configurationCbor != nil:
+    result.configuration =
+      Opt.some(copyBytes(input.configurationCbor, input.configurationCborLen))
+
 proc kitInit*(
     input: ptr LogosModuleInitInput,
     outContext: ptr ptr LogosModuleContext,
@@ -258,19 +391,7 @@ proc kitInit*(
   outContext[] = nil
   checkInitInput(input, declaresEvents).isOkOr:
     return failureResult(failure(error.code, error.reason))
-  var init = ModuleInit(
-    services: ModuleServices(
-      runtimeControl: input.runtimeControl,
-      publishFn: input.publish,
-      publishUserData: input.publishUserData,
-      invocationAccess: input.invocationAccess,
-    )
-  )
-  if input.stateDir != nil:
-    init.stateDir = Opt.some($input.stateDir)
-  if input.configurationCbor != nil:
-    init.configuration =
-      Opt.some(copyBytes(input.configurationCbor, input.configurationCborLen))
+  let init = moduleInit(input, moduleServices(input))
   # The C allocator, not Nim's: `_MODULE_destroy` may free the context on
   # another thread after this one has exited.
   let c = cast[ptr KitContext](cMalloc(csize_t(sizeof(KitContext))))
@@ -307,6 +428,25 @@ proc kitFree*(module: ptr LogosModuleContext, p: pointer) =
   secureZero(base, ResponseHeader + n)
   cFree(base)
 
+proc storeResponse*(
+    response: openArray[byte],
+    outResponse: ptr ptr UncheckedArray[uint8],
+    outResponseLen: ptr csize_t,
+): Result[void, InvocationFailure] =
+  ## [SPEC INTERFACE §2.7] Copies a dispatch response into a buffer from the C
+  ## allocator that `_MODULE_free` releases, and sets the outputs.
+  let n = response.len
+  let base = cMalloc(csize_t(ResponseHeader + n))
+  if base == nil:
+    return err(moduleError("out of memory for the response"))
+  cast[ptr uint64](base)[] = uint64(n)
+  let buffer = cast[ptr UncheckedArray[uint8]](cast[uint](base) + ResponseHeader)
+  for i, b in response:
+    buffer[i] = b
+  outResponse[] = buffer
+  outResponseLen[] = csize_t(n)
+  ok()
+
 proc kitDispatch*(
     module: ptr LogosModuleContext,
     methodName: cstring,
@@ -339,18 +479,10 @@ proc kitDispatch*(
     result = failureResult(response.error)
     wipe(response)
     return
-  let n = response.get.len
-  let base = cMalloc(csize_t(ResponseHeader + n))
-  if base == nil:
-    wipe(response)
-    return failureResult(moduleError("out of memory for the response"))
-  cast[ptr uint64](base)[] = uint64(n)
-  let buffer = cast[ptr UncheckedArray[uint8]](cast[uint](base) + ResponseHeader)
-  for i, b in response.get:
-    buffer[i] = b
+  let stored = storeResponse(response.get, outResponse, outResponseLen)
   wipe(response)
-  outResponse[] = buffer
-  outResponseLen[] = csize_t(n)
+  if stored.isErr:
+    return failureResult(stored.error)
   okResult()
 
 proc kitApply*(
@@ -465,6 +597,19 @@ proc loadValidator*(
   doAssert s.isOk, "module kit: its schema set is not accepted: " & s.error
   validator(s.get)
 
+proc loadBindingValidator*(
+    module: string, interfaces, supporting: openArray[string], system: bool
+): ContractValidator =
+  ## [DECISIONS G339] The validator of an interface-only binding a kit was
+  ## generated from (INTERFACE l.2833-2835): no primary document, `interfaces`
+  ## as the implemented set. A failure means this library no longer accepts
+  ## them: regenerate the kit.
+  let b = acceptBinding(
+    module, Opt.none(string), interfaces, supporting, AcceptOptions(system: system)
+  )
+  doAssert b.isOk, "module kit: its binding is not accepted: " & b.error
+  validator(b.get)
+
 proc checkedRequest*(
     v: ContractValidator, bare: string, params: openArray[byte]
 ): Result[CborValue, InvocationFailure] =
@@ -500,43 +645,55 @@ proc publishEncoded*(
   ## the publisher-side check and never a delivery report. NOT_READY when the
   ## instance has none (a null callback must not be called); a result outside
   ## the shared registry is MODULE_ERROR (§5.1).
+  ## In a confined kit (DECISIONS G337) the event is queued for the context's
+  ## publisher thread instead, and the result is the kit's check.
   if s.publishFn.isNil:
     return err(failure(ecNotReady, "this instance has no publish callback"))
   if data.len == 0:
     return err(moduleError("an event payload is one CBOR map"))
-  let rc = s.publishFn(
-    s.publishUserData,
-    system.cstring(eventId),
-    cast[ptr UncheckedArray[uint8]](addr data[0]),
-    csize_t(data.len),
+  if s.confined != nil:
+    return s.confinedPublish(s.confined, eventId, data)
+  publishCode(
+    s.callPublish(
+      system.cstring(eventId), cast[ptr UncheckedArray[uint8]](addr data[0]), data.len
+    ),
+    eventId,
   )
-  let code = errorCode(int64(rc)).valueOr:
-    return err(moduleError("the publish callback returned code " & $int64(rc)))
-  if code == ecOk:
-    return ok()
-  err(failure(code, "the publish callback refused " & eventId))
+
+proc currentContext*(s: ModuleServices): ptr LogosInvocationContext =
+  ## [SPEC INTERFACE §2.9.3] The Runtime's invocation context for the provider
+  ## entry active on this thread, as its invocation access answers.
+  s.invocationAccess.current(s.invocationAccess.state)
 
 proc currentInvocation(s: ModuleServices): ptr LogosInvocationContext =
-  s.invocationAccess.current(s.invocationAccess.state)
+  if confinedThread:
+    # [DECISIONS G336] A module thread acts only for the job whose plain
+    # handler it runs.
+    return (if confinedScope == nil: nil else: confinedScope.invocation)
+  s.currentContext()
 
 proc activeInvocation(
     s: ModuleServices
 ): Result[ptr LogosInvocationContext, InvocationFailure] =
   let c = s.currentInvocation()
   if c == nil:
+    if confinedThread:
+      return err(
+        failure(
+          ecNotReady,
+          "no plain handler runs on this module thread (an async handler uses its Invocation)",
+        )
+      )
     return err(failure(ecNotReady, "no active provider entry on this thread"))
   checkInvocationContext(c).isOkOr:
     return err(moduleError(error.reason))
   ok(c)
 
-proc publishScopedEncoded*(
-    s: ModuleServices, eventId: string, data: openArray[byte]
+proc publishVia*(
+    c: ptr LogosInvocationContext, eventId: string, data: openArray[byte]
 ): Result[void, InvocationFailure] =
-  ## [SPEC INTERFACE §2.9.3] Invocation-scoped publication through the active
-  ## provider entry's context; its status is returned as the context gave it.
-  let c = ?s.activeInvocation()
-  if data.len == 0:
-    return err(moduleError("an event payload is one CBOR map"))
+  ## [SPEC INTERFACE §2.9.3] One publication through the invocation context
+  ## `c`, called on this thread; its status as the context gave it.
   let r = c.vtable.publish(
     c,
     system.cstring(eventId),
@@ -545,23 +702,39 @@ proc publishScopedEncoded*(
   )
   readStatus(r).mapErr(toFailure)
 
-proc isCancelled*(s: ModuleServices): bool =
-  ## [SPEC INTERFACE §2.9.3] Whether the active provider entry's invocation was
-  ## cancelled; false outside a provider entry.
-  let c = s.currentInvocation()
+proc publishScopedEncoded*(
+    s: ModuleServices, eventId: string, data: openArray[byte]
+): Result[void, InvocationFailure] =
+  ## [SPEC INTERFACE §2.9.3] Invocation-scoped publication through the active
+  ## provider entry's context; its status is returned as the context gave it.
+  ## A confined kit's plain handler publishes through its job (G337).
+  let c = ?s.activeInvocation()
+  if data.len == 0:
+    return err(moduleError("an event payload is one CBOR map"))
+  if confinedThread and confinedScope.publish != nil:
+    return confinedScope.publish(confinedScope.job, eventId, data)
+  publishVia(c, eventId, data)
+
+proc isCancelledAt*(c: ptr LogosInvocationContext): bool =
+  ## [SPEC INTERFACE §2.9.3] Whether the invocation of the context `c` was
+  ## cancelled; false for a null or invalid context.
   if c == nil or checkInvocationContext(c).isErr:
     return false
   c.vtable.isCancelled(c)
+
+proc isCancelled*(s: ModuleServices): bool =
+  ## [SPEC INTERFACE §2.9.3] Whether the active provider entry's invocation was
+  ## cancelled; false outside a provider entry.
+  isCancelledAt(s.currentInvocation())
 
 func text(v: LogosUtf8View): string =
   result = newString(int(v.len))
   for i in 0 ..< int(v.len):
     result[i] = char(v.data[i])
 
-proc caller*(s: ModuleServices): Result[Caller, InvocationFailure] =
-  ## [SPEC INTERFACE §2.9.3] The authenticated origin of the active provider
-  ## entry, copied.
-  let c = ?s.activeInvocation()
+proc callerAt*(c: ptr LogosInvocationContext): Result[Caller, InvocationFailure] =
+  ## [SPEC INTERFACE §2.9.3] The authenticated origin of the invocation of the
+  ## checked context `c`, copied.
   var view: LogosCallerView
   ?readStatus(c.vtable.caller(c, addr view)).mapErr(toFailure)
   checkCallerView(view).isOkOr:
@@ -576,3 +749,8 @@ proc caller*(s: ModuleServices): Result[Caller, InvocationFailure] =
     )
   else:
     ok(Caller(kind: ckSystemService, runtimeInstance: text(view.runtimeInstanceId)))
+
+proc caller*(s: ModuleServices): Result[Caller, InvocationFailure] =
+  ## [SPEC INTERFACE §2.9.3] The authenticated origin of the active provider
+  ## entry, copied.
+  callerAt(?s.activeInvocation())

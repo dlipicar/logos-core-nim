@@ -39,8 +39,33 @@
 ## beside the kit as `<header>_kit.exports` (macOS) and `<header>_kit.map`
 ## (GNU version script).
 ##
-## Not generated yet: `_MODULE_async_api` (optional), and kits for an
-## interface-only provider (no primary document). A consumer's typed call
+## With `KitOptions.confined` (`lcn-gen kit --confined`; DECISIONS G335-G337)
+## the kit imports `logos_sdk/confined` and its entries run on one module
+## thread per context (`confinedrt`). A handler may then be `async`, taking the
+## job's `Invocation` as a third argument:
+## `<bare>(T, <Request>, Invocation): Future[Result[<Response>, InvocationFailure]]`
+## (`{.async: (raises: []).}`); `initModule`, `destroyModule` and
+## `applyConfiguration` may return a future of their result. Each event also
+## gets `publishAsync(ModuleServices, <Event>)` and `publishScoped(Invocation,
+## <Event>)`, and the template restores the host's signal dispositions at the
+## end of the library's initialization (G340).
+##
+## With `KitOptions.asyncApi` as well (`--async-api`; DECISIONS G338) a
+## provider's kit also exports `_MODULE_async_api`, a static descriptor whose
+## `submit` and `request_cancel` hand the invocation to the module thread
+## (`confinedSubmit`, `confinedRequestCancel`): the same route, handlers and
+## typed results as `_MODULE_dispatch` (INTERFACE §2.9.2).
+##
+## A kit is generated for a module binding (`ModuleBinding`; INTERFACE §2). One
+## with a primary document is the binding a concrete module document's set
+## establishes (`kitModule` of a `ContractSet`), or that set with the earlier
+## contracts its descriptor carries (`extends`, §2.6 l.1693-1696). An
+## interface-only binding (`lcn-gen kit --module:NAME` without a primary
+## document, l.2833-2840; DECISIONS G339) embeds its interfaces and supporting
+## schemas and checks its calls against them (`loadBindingValidator`); its
+## call surface is its interfaces' methods and events, and a binding with
+## neither a primary document nor an interface is no provider: its kit exports
+## the identity and lifecycle symbols alone (l.2573). A consumer's typed call
 ## helpers (App A.5) come from `callsgen`.
 
 {.push raises: [].}
@@ -62,6 +87,9 @@ type
   KitOptions* = object
     importPrefix*: string ## how the kit imports this library (`NimOptions`)
     configuration*: Opt[KitConfiguration]
+    confined*: bool ## [DECISIONS G335] a module thread per context
+    asyncApi*: bool
+      ## [DECISIONS G338] export `_MODULE_async_api` (a confined provider's)
 
 proc configurationSet*(document: string): Result[ContractSet, string] =
   ## [SPEC CONFIG §2 l.62-66] A configuration document accepted as the Runtime
@@ -73,21 +101,41 @@ proc configurationSet*(document: string): Result[ContractSet, string] =
     return err("the configuration schema is not a supporting schema")
   ok(set)
 
+func configurationTypesName(header: string): string =
+  header & "_configuration_types"
+
 func configurationTypesName*(s: ContractSet): string =
   ## The configuration types module of the kit for the module set `s`.
-  s.cSchemaSet.headerName & "_configuration_types"
+  configurationTypesName(s.cSchemaSet.headerName)
+
+func configurationTypesName*(b: ModuleBinding): string =
+  ## The configuration types module of the kit for the module binding `b`.
+  configurationTypesName(b.cSchemaSet.headerName)
+
+proc configurationTypesFor(
+    header: string, c: KitConfiguration, opts: KitOptions
+): Result[string, string] =
+  let text = ?nimModule(c.set, NimOptions(importPrefix: opts.importPrefix))
+  let generic = c.set.cSchemaSet.headerName & "_types.nim:"
+  let first = "## " & generic
+  if not text.startsWith(first):
+    return err("unexpected nimModule output")
+  ok("## " & configurationTypesName(header) & ".nim:" & text[first.len .. ^1])
 
 proc configurationTypesModule*(
     s: ContractSet, c: KitConfiguration, opts = KitOptions(importPrefix: SdkImportRoot)
 ): Result[string, string] =
   ## `<module>_configuration_types.nim`: the configuration set's Nim types
   ## (`nimModule`), for the kit of the module set `s`.
-  let text = ?nimModule(c.set, NimOptions(importPrefix: opts.importPrefix))
-  let generic = c.set.cSchemaSet.headerName & "_types.nim:"
-  let first = "## " & generic
-  if not text.startsWith(first):
-    return err("unexpected nimModule output")
-  ok("## " & configurationTypesName(s) & ".nim:" & text[first.len .. ^1])
+  configurationTypesFor(s.cSchemaSet.headerName, c, opts)
+
+proc configurationTypesModule*(
+    b: ModuleBinding,
+    c: KitConfiguration,
+    opts = KitOptions(importPrefix: SdkImportRoot),
+): Result[string, string] =
+  ## `configurationTypesModule` for the kit of the module binding `b`.
+  configurationTypesFor(b.cSchemaSet.headerName, c, opts)
 
 func pascalModule(name: string): string =
   for part in name.split('_'):
@@ -111,13 +159,15 @@ func templateName*(module: string): string =
   "export" & pascalModule(module)
 
 proc kitParts(
-    s: ContractSet, opts: KitOptions, system: bool
+    b: ModuleBinding, opts: KitOptions, system: bool
 ): Result[(string, seq[string]), string] =
   ## The kit's text and the C symbols its template exports.
-  let b = ?s.binding
-  let header = s.cSchemaSet.headerName
-  let names = nimTypeNames(s)
-  let surface = callSurface(s)
+  let header = b.cSchemaSet.headerName
+  let names = nimTypeNames(b)
+  let surface = callSurface(b)
+  # [DECISIONS G339] An interface-only binding has no primary document: the kit
+  # reloads the binding itself, under its module name.
+  let primary = b.primary.isSome
   let provider = b.isProvider
   let moduleC = projectModule(b.module)
   let tmpl = templateName(b.module)
@@ -190,6 +240,25 @@ proc kitParts(
         names.getOrDefault(m.request) & "): Result[" & names.getOrDefault(m.response) &
         ", InvocationFailure]\n"
     )
+  let confined = opts.confined
+  if opts.asyncApi and not (confined and provider):
+    return err("_MODULE_async_api is generated for a confined provider's kit only")
+  if confined:
+    o.add(
+      "##\n## Confined (DECISIONS G335-G337): every entry that uses the instance runs on\n" &
+        "## the context's module thread, which runs chronos. A handler may instead be\n" &
+        "## `async`, taking the job's invocation:\n##\n" &
+        "##   proc <method>(m: T, request: <Request>, inv: Invocation):\n" &
+        "##       Future[Result[<Response>, InvocationFailure]] {.async: (raises: []).}\n##\n" &
+        "## and `initModule`, `destroyModule` and `applyConfiguration` may return a\n" &
+        "## future of their result.\n"
+    )
+  if opts.asyncApi:
+    o.add(
+      "##\n## Deferred (DECISIONS G338): the kit exports `_MODULE_async_api`; a submitted\n" &
+        "## invocation runs the same handler on the module thread, and its cancellation\n" &
+        "## cancels an `async` handler's future.\n"
+    )
   var mirrors = KitMirrors()
   if provider:
     var methods: seq[KitMethod]
@@ -203,7 +272,7 @@ proc kitParts(
           requestType: names.getOrDefault(m.request),
         )
       )
-    mirrors = ?kitMirrors(s, prefix, methods)
+    mirrors = ?kitMirrors(b, prefix, methods, confined)
   if mirrors.exports.len > 0:
     o.add(
       "##\n## The template also exports the typed provider functions (INTERFACE §2.4),\n" &
@@ -211,13 +280,15 @@ proc kitParts(
     )
   let typeModules =
     if configured:
-      header & "_types, " & configurationTypesName(s)
+      header & "_types, " & configurationTypesName(header)
     else:
       header & "_types"
+  let facade = if confined: "confined" else: "kit"
   o.add(
     "\n#!fmt: off\n{.push raises: [], gcsafe.}\n\n" & "import " & opts.importPrefix &
-      "kit\nimport ./" & (if configured: "[" & typeModules & "]"
-    else: typeModules) & "\n\nexport kit, " & typeModules & "\n\n"
+      facade & "\nimport ./" & (
+      if configured: "[" & typeModules & "]" else: typeModules
+    ) & "\n\nexport " & facade & ", " & typeModules & "\n\n"
   )
   let descriptor =
     if provider:
@@ -225,13 +296,27 @@ proc kitParts(
     else:
       @[]
   o.add(
-    "const\n  moduleName* = " & escape(b.module) & "\n  primaryDocument = " &
-      escape(s.primary.source) & "\n  interfaceDocuments: array[" & $s.interfaces.len &
-      ", string] = [" & s.interfaces.mapIt(escape(it.source)).join(", ") &
-      "]\n  supportingDocuments: array[" & $s.supporting.len & ", string] = [" &
-      s.supporting.mapIt(escape(it.source)).join(", ") & "]\n  declaresEvents = " &
+    "const\n  moduleName* = " & escape(b.module) & (
+      if primary:
+        "\n  primaryDocument = " & escape(b.primary.get.source)
+      else:
+        ""
+    ) & "\n  interfaceDocuments: array[" & $b.interfaces.len & ", string] = [" &
+      b.interfaces.mapIt(escape(it.source)).join(", ") &
+      "]\n  supportingDocuments: array[" & $b.supporting.len & ", string] = [" &
+      b.supporting.mapIt(escape(it.source)).join(", ") & "]\n  declaresEvents = " &
       $(surface.events.len > 0) & "\n"
   )
+  let documentsArgs =
+    if primary:
+      "primaryDocument, interfaceDocuments, supportingDocuments, " & $system
+    else:
+      "moduleName, interfaceDocuments, supportingDocuments, " & $system
+  let (loadValidatorCall, loadSchemaCall) =
+    if primary:
+      ("loadValidator", "loadSchema")
+    else:
+      ("loadBindingValidator", "loadBindingSchema")
   if provider:
     o.add(
       "  callSurfaceBytes: array[" & $descriptor.len & ", uint8] = " &
@@ -252,15 +337,13 @@ proc kitParts(
         "  loadSchema(configurationDocument, noDocuments, noDocuments),\n)\n"
     )
   o.add(
-    "\nperThread(\n  kitValidator,\n  ContractValidator,\n" &
-      "  loadValidator(primaryDocument, interfaceDocuments, supportingDocuments, " &
-      $system & "),\n)\n"
+    "\nperThread(\n  kitValidator,\n  ContractValidator,\n  " & loadValidatorCall & "(" &
+      documentsArgs & "),\n)\n"
   )
   if "kitSchema()" in mirrors.procs:
     o.add(
-      "\nperThread(\n  kitSchema,\n  GeneratedSchema,\n" &
-        "  loadSchema(primaryDocument, interfaceDocuments, supportingDocuments, " &
-        $system & "),\n)\n"
+      "\nperThread(\n  kitSchema,\n  GeneratedSchema,\n  " & loadSchemaCall & "(" &
+        documentsArgs & "),\n)\n"
     )
   # Events (App A.4).
   for e in surface.events:
@@ -281,8 +364,77 @@ proc kitParts(
         "    return err(moduleError(\"the event does not match its schema: \" & error))\n" &
         "  s.publishScopedEncoded(" & escape(e.id) & ", data)\n"
     )
+    if confined:
+      # [DECISIONS G337] The module thread's asynchronous publications.
+      o.add(
+        "\nproc publishAsync*(s: ModuleServices, event: " & t &
+          "): Future[Result[void, InvocationFailure]] {.async: (raises: []).} =\n" &
+          "  ## Publishes `" & e.id &
+          "` through the instance's publish callback; completes with its result.\n" &
+          "  let data = encode(event)\n" & "  if data.isErr:\n" &
+          "    return Result[void, InvocationFailure].err(moduleError(\"the event does not match its schema: \" & data.unsafeError))\n" &
+          "  await s.publishEncodedAsync(" & escape(e.id) & ", data.unsafeGet)\n"
+      )
+      o.add(
+        "\nproc publishScoped*(inv: Invocation, event: " & t &
+          "): Future[Result[void, InvocationFailure]] {.async: (raises: []).} =\n" &
+          "  ## Publishes `" & e.id &
+          "` in `inv`'s scope (INTERFACE §2.9.3); completes with the context's status.\n" &
+          "  let data = encode(event)\n" & "  if data.isErr:\n" &
+          "    return Result[void, InvocationFailure].err(moduleError(\"the event does not match its schema: \" & data.unsafeError))\n" &
+          "  await inv.publishScopedEncodedAsync(" & escape(e.id) & ", data.unsafeGet)\n"
+      )
   # The dispatch table (App A.3).
-  if provider:
+  if provider and confined:
+    # [DECISIONS G335, G336] On the module thread: a plain handler runs with
+    # its job's confined scope set; an `async` one is awaited.
+    o.add(
+      "\nproc routeConfined" & pascalModule(b.module) &
+        "[T](instance: T, bare: string, params: ptr UncheckedArray[uint8], len: int, inv: Invocation): Future[Result[seq[byte], InvocationFailure]] {.async: (raises: []).} =\n"
+    )
+    if surface.methods.len > 0:
+      o.add("  mixin " & surface.methods.mapIt(handlerName(it.bare)).join(", ") & "\n")
+    o.add(
+      "  var request = kitValidator().checkedRequestAt(bare, params, len)\n" &
+        "  if request.isErr:\n" &
+        "    return Result[seq[byte], InvocationFailure].err(request.unsafeError)\n"
+    )
+    for m in surface.methods:
+      let requestType = names.getOrDefault(m.request)
+      let responseType = names.getOrDefault(m.response)
+      let h = handlerName(m.bare)
+      let marked = m.sensitiveRequest or m.sensitiveResponse
+      o.add(
+        "  if bare == " & escape(m.bare) & ":\n" & "    var typed = fromChecked(" &
+          requestType & ", request.unsafeGet)\n"
+      )
+      if m.sensitiveRequest:
+        o.add("    wipe(request.unsafeGet)\n")
+      o.add(
+        "    var response: Result[" & responseType & ", InvocationFailure]\n" &
+          "    when compiles(" & h & "(instance, typed, inv)):\n" &
+          "      settleHandler(response, " & h & "(instance, typed, inv), inv)\n" &
+          "    else:\n" & "      let saved = enterPlain(inv)\n" & "      response = " & h &
+          "(instance, typed)\n" & "      leavePlain(saved)\n"
+      )
+      if m.sensitiveRequest:
+        o.add("    wipeTyped(typed)\n")
+      o.add(
+        "    if response.isErr:\n" &
+          "      result = Result[seq[byte], InvocationFailure].err(response.unsafeError)\n"
+      )
+      if marked:
+        o.add("      wipeError(response)\n")
+      o.add(
+        "      return\n" & "    result = encodedResponse(encode(response.unsafeGet))\n"
+      )
+      if m.sensitiveResponse:
+        o.add("    wipeTyped(response.get)\n")
+      o.add("    return\n")
+    o.add(
+      "  return Result[seq[byte], InvocationFailure].err(failure(ecMethodNotFound, \"unknown method \" & bare))\n"
+    )
+  elif provider:
     o.add(
       "\nproc route" & pascalModule(b.module) &
         "[T](instance: T, bare: string, params: openArray[byte]): Result[seq[byte], InvocationFailure] =\n"
@@ -334,68 +486,172 @@ proc kitParts(
   if provider:
     o.add("\n" & mirrors.layout & "\n")
   # The export template.
-  o.add(
-    "\ntemplate " & tmpl & "*(T: typedesc) =\n" & "  ## Defines `" & b.module &
-      "`'s exported symbols over the handlers of `T`.\n" & "  proc " & prefix &
-      "KitCreate(init: ModuleInit): Result[pointer, InvocationFailure] {.nimcall, gcsafe, raises: [].} =\n" &
-    (
+  if confined:
+    # [DECISIONS G335] The entries hand their work to the module thread.
+    let createBody =
       if configured:
-        "    var init = init\n" &
-          "    let config = ?kitConfiguration(init, configurationRoots, kitConfigurationSchema(), configurationRoot)\n" &
-          "    let r = initModule(T, init, " & convert & ")\n"
+        "    var setup = init\n" &
+          "    let checked = kitConfiguration(setup, configurationRoots, kitConfigurationSchema(), configurationRoot)\n" &
+          "    if checked.isErr:\n      return Result[pointer, InvocationFailure].err(checked.unsafeError)\n" &
+          "    let config = checked.unsafeGet\n" &
+          "    var r: Result[T, InvocationFailure]\n" &
+          "    when compiles(initModule(T, setup, " & convert & ").isOk):\n" &
+          "      r = initModule(T, setup, " & convert & ")\n" & "    else:\n" &
+          "      settleHandler(r, initModule(T, setup, " & convert & "))\n"
       else:
-        "    ?kitNoConfiguration(init)\n    let r = initModule(T, init)\n"
-    ) & "    if r.isErr:\n      return err(r.error)\n" & "    let instance = r.get\n" &
-      "    if instance.isNil:\n      return err(moduleError(\"initModule returned nil\"))\n" &
-      "    GC_ref(instance)\n    ok(cast[pointer](instance))\n\n" & "  proc " & prefix &
-      "KitDispose(p: pointer) {.nimcall, gcsafe, raises: [].} =\n" &
-      "    let instance {.cursor.} = cast[T](p)\n" &
-      "    when compiles(destroyModule(instance)):\n      destroyModule(instance)\n" &
-      "    GC_unref(instance)\n\n" & "  proc " & prefix &
-      "KitName(): cstring {.exportc: \"" & sym("name") &
-      "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
-      "    system.cstring(moduleName)\n\n" & "  proc " & prefix &
-      "KitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: \"" &
-      sym("init") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
-      "    kitEnter()\n    kitInit(input, outContext, declaresEvents, " & prefix &
-      "KitCreate)\n\n" & "  proc " & prefix &
-      "KitDestroy(module: ptr LogosModuleContext) {.exportc: \"" & sym("destroy") &
-      "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
-      "    kitEnter()\n    kitDestroy(module, " & prefix & "KitDispose)\n"
-  )
-  if live:
+        "    let none = kitNoConfiguration(init)\n" &
+          "    if none.isErr:\n      return Result[pointer, InvocationFailure].err(none.unsafeError)\n" &
+          "    var r: Result[T, InvocationFailure]\n" &
+          "    when compiles(initModule(T, init).isOk):\n      r = initModule(T, init)\n" &
+          "    else:\n      settleHandler(r, initModule(T, init))\n"
     o.add(
-      "\n  proc " & prefix &
-        "KitApply(p: pointer, input: openArray[byte]): Result[void, InvocationFailure] {.nimcall, gcsafe, raises: [].} =\n" &
+      "\ntemplate " & tmpl & "*(T: typedesc) =\n" & "  ## Defines `" & b.module &
+        "`'s exported symbols over the handlers of `T`, each context's on its own\n" &
+        "  ## module thread (DECISIONS G335).\n" & "  proc " & prefix &
+        "KitCreate(init: ModuleInit): Future[Result[pointer, InvocationFailure]] {.async: (raises: []).} =\n" &
+        createBody & "    if r.isErr:\n" &
+        "      return Result[pointer, InvocationFailure].err(r.unsafeError)\n" &
+        "    let instance = r.unsafeGet\n" & "    if instance.isNil:\n" &
+        "      return Result[pointer, InvocationFailure].err(moduleError(\"initModule returned nil\"))\n" &
+        "    GC_ref(instance)\n" &
+        "    return Result[pointer, InvocationFailure].ok(cast[pointer](instance))\n\n" &
+        "  proc " & prefix &
+        "KitDispose(p: pointer): Future[void] {.async: (raises: []).} =\n" &
+        "    let instance = cast[T](p)\n" &
+        "    when compiles(destroyModule(instance)):\n" &
+        "      when typeof(destroyModule(instance)) is void:\n" &
+        "        destroyModule(instance)\n" & "      else:\n" &
+        "        let f = destroyModule(instance)\n" &
+        "        if not f.finished():\n          await noCancel(join(f))\n" &
+        "    GC_unref(instance)\n\n" & "  proc " & prefix &
+        "KitName(): cstring {.exportc: \"" & sym("name") &
+        "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
+        "    system.cstring(moduleName)\n\n" & "  proc " & prefix &
+        "KitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: \"" &
+        sym("init") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
+        "    kitEnter()\n    confinedInit(input, outContext, declaresEvents, " & prefix &
+        "KitCreate)\n\n" & "  proc " & prefix &
+        "KitDestroy(module: ptr LogosModuleContext) {.exportc: \"" & sym("destroy") &
+        "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
+        "    kitEnter()\n    confinedDestroy(module, " & prefix & "KitDispose)\n"
+    )
+    if live:
+      o.add(
+        "\n  proc " & prefix &
+          "KitApply(p: pointer, input: ptr UncheckedArray[uint8], len: int): Future[Result[void, InvocationFailure]] {.async: (raises: []).} =\n" &
+          "    let instance = cast[T](p)\n" &
+          "    let checked = checkConfigurationInput(input.toOpenArray(0, len - 1), configurationRoots, kitConfigurationSchema(), configurationRoot)\n" &
+          "    if checked.isErr:\n      return Result[void, InvocationFailure].err(checked.unsafeError)\n" &
+          "    let config = checked.unsafeGet[0]\n" &
+          "    when compiles(applyConfiguration(instance, " & convert & ").isOk):\n" &
+          "      return applyConfiguration(instance, " & convert & ")\n" & "    else:\n" &
+          "      var r: Result[void, InvocationFailure]\n" &
+          "      settleHandler(r, applyConfiguration(instance, " & convert & "))\n" &
+          "      return r\n\n" & "  proc " & prefix &
+          "KitApplyConfiguration(module: ptr LogosModuleContext, configurationCbor: ptr UncheckedArray[uint8], configurationCborLen: csize_t): LogosResult {.exportc: \"" &
+          sym("apply_configuration") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
+          "    kitEnter()\n    confinedApply(module, configurationCbor, configurationCborLen, " &
+          prefix & "KitApply)\n"
+      )
+    if provider:
+      o.add(
+        "\n  proc " & prefix &
+          "KitRoute(p: pointer, bare: string, params: ptr UncheckedArray[uint8], len: int, inv: Invocation): RouteFuture {.nimcall, gcsafe, raises: [].} =\n" &
+          "    let instance {.cursor.} = cast[T](p)\n" & "    routeConfined" &
+          pascalModule(b.module) & "(instance, bare, params, len, inv)\n\n" & "  proc " &
+          prefix & "KitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: \"" &
+          sym("call_surface") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
+          "    if outLen != nil:\n      outLen[] = csize_t(callSurfaceData.len)\n" &
+          "    addr callSurfaceData[0]\n\n" & "  proc " & prefix &
+          "KitFree(module: ptr LogosModuleContext, p: pointer) {.exportc: \"" &
+          sym("free") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
+          "    kitEnter()\n    kitFree(module, p)\n\n" & "  proc " & prefix &
+          "KitDispatch(module: ptr LogosModuleContext, methodName: cstring, paramsCbor: ptr UncheckedArray[uint8], paramsLen: csize_t, outResponseCbor: ptr ptr UncheckedArray[uint8], outResponseLen: ptr csize_t): LogosResult {.exportc: \"" &
+          sym("dispatch") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
+          "    kitEnter()\n    confinedDispatch(module, methodName, paramsCbor, paramsLen, outResponseCbor, outResponseLen, " &
+          prefix & "KitRoute)\n"
+      )
+      if opts.asyncApi:
+        # [SPEC INTERFACE §2.9.2, App A.3; DECISIONS G338] The deferred surface:
+        # a descriptor that never changes, from a context-free getter.
+        o.add(
+          "\n  proc " & prefix &
+            "KitSubmit(module: ptr LogosModuleContext, invocation: ptr LogosProviderInvocation) {.cdecl, gcsafe, raises: [].} =\n" &
+            "    kitEnter()\n    confinedSubmit(module, invocation, " & prefix &
+            "KitRoute)\n\n" & "  proc " & prefix &
+            "KitRequestCancel(module: ptr LogosModuleContext, invocation: ptr LogosProviderInvocation) {.cdecl, gcsafe, raises: [].} =\n" &
+            "    kitEnter()\n    confinedRequestCancel(module, invocation)\n\n" &
+            "  let " & prefix &
+            "KitAsyncApiData = LogosAsyncProviderApi(abiVersion: AsyncProviderAbiVersion, structSize: csize_t(sizeof(LogosAsyncProviderApi)), submit: " &
+            prefix & "KitSubmit, requestCancel: " & prefix & "KitRequestCancel)\n\n" &
+            "  proc " & prefix & "KitAsyncApi(): ptr LogosAsyncProviderApi {.exportc: \"" &
+            sym("async_api") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
+            "    unsafeAddr " & prefix & "KitAsyncApiData\n"
+        )
+      for e in mirrors.exports:
+        o.add("\n" & e & "\n")
+  else:
+    o.add(
+      "\ntemplate " & tmpl & "*(T: typedesc) =\n" & "  ## Defines `" & b.module &
+        "`'s exported symbols over the handlers of `T`.\n" & "  proc " & prefix &
+        "KitCreate(init: ModuleInit): Result[pointer, InvocationFailure] {.nimcall, gcsafe, raises: [].} =\n" &
+      (
+        if configured:
+          "    var init = init\n" &
+            "    let config = ?kitConfiguration(init, configurationRoots, kitConfigurationSchema(), configurationRoot)\n" &
+            "    let r = initModule(T, init, " & convert & ")\n"
+        else:
+          "    ?kitNoConfiguration(init)\n    let r = initModule(T, init)\n"
+      ) & "    if r.isErr:\n      return err(r.error)\n" & "    let instance = r.get\n" &
+        "    if instance.isNil:\n      return err(moduleError(\"initModule returned nil\"))\n" &
+        "    GC_ref(instance)\n    ok(cast[pointer](instance))\n\n" & "  proc " & prefix &
+        "KitDispose(p: pointer) {.nimcall, gcsafe, raises: [].} =\n" &
         "    let instance {.cursor.} = cast[T](p)\n" &
-        "    let (config, _) = ?checkConfigurationInput(input, configurationRoots, kitConfigurationSchema(), configurationRoot)\n" &
-        "    applyConfiguration(instance, " & convert & ")\n\n" & "  proc " & prefix &
-        "KitApplyConfiguration(module: ptr LogosModuleContext, configurationCbor: ptr UncheckedArray[uint8], configurationCborLen: csize_t): LogosResult {.exportc: \"" &
-        sym("apply_configuration") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
-        "    kitEnter()\n    kitApply(module, configurationCbor, configurationCborLen, " &
-        prefix & "KitApply)\n"
+        "    when compiles(destroyModule(instance)):\n      destroyModule(instance)\n" &
+        "    GC_unref(instance)\n\n" & "  proc " & prefix &
+        "KitName(): cstring {.exportc: \"" & sym("name") &
+        "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
+        "    system.cstring(moduleName)\n\n" & "  proc " & prefix &
+        "KitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: \"" &
+        sym("init") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
+        "    kitEnter()\n    kitInit(input, outContext, declaresEvents, " & prefix &
+        "KitCreate)\n\n" & "  proc " & prefix &
+        "KitDestroy(module: ptr LogosModuleContext) {.exportc: \"" & sym("destroy") &
+        "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
+        "    kitEnter()\n    kitDestroy(module, " & prefix & "KitDispose)\n"
     )
-  if provider:
-    o.add(
-      "\n  proc " & prefix &
-        "KitRoute(p: pointer, bare: string, params: openArray[byte]): Result[seq[byte], InvocationFailure] {.nimcall, gcsafe, raises: [].} =\n" &
-        "    let instance {.cursor.} = cast[T](p)\n" & "    route" &
-        pascalModule(b.module) & "(instance, bare, params)\n\n" & "  proc " & prefix &
-        "KitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: \"" &
-        sym("call_surface") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
-        "    if outLen != nil:\n      outLen[] = csize_t(callSurfaceData.len)\n" &
-        "    addr callSurfaceData[0]\n\n" & "  proc " & prefix &
-        "KitFree(module: ptr LogosModuleContext, p: pointer) {.exportc: \"" & sym(
-        "free"
-      ) & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
-        "    kitEnter()\n    kitFree(module, p)\n\n" & "  proc " & prefix &
-        "KitDispatch(module: ptr LogosModuleContext, methodName: cstring, paramsCbor: ptr UncheckedArray[uint8], paramsLen: csize_t, outResponseCbor: ptr ptr UncheckedArray[uint8], outResponseLen: ptr csize_t): LogosResult {.exportc: \"" &
-        sym("dispatch") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
-        "    kitEnter()\n    kitDispatch(module, methodName, paramsCbor, paramsLen, outResponseCbor, outResponseLen, " &
-        prefix & "KitRoute)\n"
-    )
-    for e in mirrors.exports:
-      o.add("\n" & e & "\n")
+    if live:
+      o.add(
+        "\n  proc " & prefix &
+          "KitApply(p: pointer, input: openArray[byte]): Result[void, InvocationFailure] {.nimcall, gcsafe, raises: [].} =\n" &
+          "    let instance {.cursor.} = cast[T](p)\n" &
+          "    let (config, _) = ?checkConfigurationInput(input, configurationRoots, kitConfigurationSchema(), configurationRoot)\n" &
+          "    applyConfiguration(instance, " & convert & ")\n\n" & "  proc " & prefix &
+          "KitApplyConfiguration(module: ptr LogosModuleContext, configurationCbor: ptr UncheckedArray[uint8], configurationCborLen: csize_t): LogosResult {.exportc: \"" &
+          sym("apply_configuration") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
+          "    kitEnter()\n    kitApply(module, configurationCbor, configurationCborLen, " &
+          prefix & "KitApply)\n"
+      )
+    if provider:
+      o.add(
+        "\n  proc " & prefix &
+          "KitRoute(p: pointer, bare: string, params: openArray[byte]): Result[seq[byte], InvocationFailure] {.nimcall, gcsafe, raises: [].} =\n" &
+          "    let instance {.cursor.} = cast[T](p)\n" & "    route" &
+          pascalModule(b.module) & "(instance, bare, params)\n\n" & "  proc " & prefix &
+          "KitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: \"" &
+          sym("call_surface") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
+          "    if outLen != nil:\n      outLen[] = csize_t(callSurfaceData.len)\n" &
+          "    addr callSurfaceData[0]\n\n" & "  proc " & prefix &
+          "KitFree(module: ptr LogosModuleContext, p: pointer) {.exportc: \"" &
+          sym("free") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
+          "    kitEnter()\n    kitFree(module, p)\n\n" & "  proc " & prefix &
+          "KitDispatch(module: ptr LogosModuleContext, methodName: cstring, paramsCbor: ptr UncheckedArray[uint8], paramsLen: csize_t, outResponseCbor: ptr ptr UncheckedArray[uint8], outResponseLen: ptr csize_t): LogosResult {.exportc: \"" &
+          sym("dispatch") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
+          "    kitEnter()\n    kitDispatch(module, methodName, paramsCbor, paramsLen, outResponseCbor, outResponseLen, " &
+          prefix & "KitRoute)\n"
+      )
+      for e in mirrors.exports:
+        o.add("\n" & e & "\n")
   # [SPEC RUNTIME §2.3, §13.3] A generated registration table: every symbol the
   # template exports, for a host that binds the module statically.
   var table = @[
@@ -413,6 +669,8 @@ proc kitParts(
         (sym("dispatch"), prefix & "KitDispatch"),
       ]
     )
+    if opts.asyncApi:
+      table.add((sym("async_api"), prefix & "KitAsyncApi"))
     table.add(mirrors.symbols)
   o.add(
     "\n  proc " & prefix & "StaticSymbols*(): seq[(string, pointer)] =\n" &
@@ -421,21 +679,39 @@ proc kitParts(
       table.mapIt("      (\"" & it[0] & "\", cast[pointer](" & it[1] & ")),\n").join &
       "    ]\n"
   )
+  if confined:
+    # [DECISIONS G340] chronos ignores SIGPIPE in its initializer; the
+    # library's build imports `hostsignals` first, and this puts it back last.
+    o.add("\n  restoreHostSignals()\n")
   ok((o, table.mapIt(it[0])))
+
+proc kitModule*(
+    b: ModuleBinding, opts = KitOptions(importPrefix: SdkImportRoot), system = false
+): Result[string, string] =
+  ## The kit of the module binding `b`, beside the `<header>_types.nim` that
+  ## `nimModule` writes for its set (a binding with a primary document) or for
+  ## the binding itself (an interface-only one, DECISIONS G339).
+  ok((?kitParts(b, opts, system))[0])
 
 proc kitModule*(
     s: ContractSet, opts = KitOptions(importPrefix: SdkImportRoot), system = false
 ): Result[string, string] =
   ## The kit of the module binding `s` establishes, beside the
   ## `<header>_types.nim` that `nimModule` writes for the same set.
-  ok((?kitParts(s, opts, system))[0])
+  kitModule(?s.binding, opts, system)
+
+proc kitSymbols*(
+    b: ModuleBinding, opts = KitOptions(importPrefix: SdkImportRoot), system = false
+): Result[seq[string], string] =
+  ## [DECISIONS G341] The C symbols the kit's template exports: the module's
+  ## ABI (INTERFACE §2.4, §2.6) and nothing else, for `exportList`.
+  ok((?kitParts(b, opts, system))[1])
 
 proc kitSymbols*(
     s: ContractSet, opts = KitOptions(importPrefix: SdkImportRoot), system = false
 ): Result[seq[string], string] =
-  ## [DECISIONS G341] The C symbols the kit's template exports: the module's
-  ## ABI (INTERFACE §2.4, §2.6) and nothing else, for `exportList`.
-  ok((?kitParts(s, opts, system))[1])
+  ## `kitSymbols` of the binding `s` establishes.
+  kitSymbols(?s.binding, opts, system)
 
 type ExportListKind* = enum
   ## [DECISIONS G341] A linker's list of the symbols a shared library exports.
@@ -460,10 +736,17 @@ func exportList*(
     "/* " & stamp & " */\n{\n  global:\n" & symbols.mapIt("    " & it & ";\n").join &
       "  local: *;\n};\n"
 
-func exportListName*(s: ContractSet, kind: ExportListKind): string =
-  ## The file `lcn-gen kit` writes the export list of `kind` to.
-  s.cSchemaSet.headerName & "_kit" & (
+func exportListName(header: string, kind: ExportListKind): string =
+  header & "_kit" & (
     case kind
     of elDarwin: ".exports"
     of elGnu: ".map"
   )
+
+func exportListName*(s: ContractSet, kind: ExportListKind): string =
+  ## The file `lcn-gen kit` writes the export list of `kind` to.
+  exportListName(s.cSchemaSet.headerName, kind)
+
+func exportListName*(b: ModuleBinding, kind: ExportListKind): string =
+  ## The file `lcn-gen kit` writes the export list of `kind` to.
+  exportListName(b.cSchemaSet.headerName, kind)

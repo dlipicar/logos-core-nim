@@ -1,6 +1,7 @@
 ## Rewrites the committed lcn-gen outputs: `nimble regen`.
 
 import results
+import logos_sdk/codegen/kitgen
 import ../sdk/tests/support/genfixtures, ../tests/support/genfixtures_core
 
 proc main() =
@@ -34,6 +35,9 @@ proc main() =
   echo lcnCallConfigTypesPath
   writeFile(lcnCallKitPath, generatedLcnCallKit().get)
   echo lcnCallKitPath
+  for kind in ExportListKind:
+    writeFile(lcnCallExportsPath(kind), generatedLcnCallExports(kind).get)
+    echo lcnCallExportsPath(kind)
   writeFile(storeTypesPath, generatedStoreTypes().get)
   echo storeTypesPath
   writeFile(carrierTypesPath, generatedCarrierTypes().get)

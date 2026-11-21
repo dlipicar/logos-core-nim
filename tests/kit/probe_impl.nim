@@ -28,7 +28,10 @@
 ##   after it if a binding came back);
 ## - `materialize <slot> <route> <hex root> <hex schema>`, the handle in
 ##   `slot` (0-15);
-## - `call <slot> <method> <hex params>`;
+## - `call <slot> <method> <hex params>`; `call-quiet` the same, except that a
+##   failure is answered `<code> message=<length> detail=<length>`, its text
+##   never copied (the erasure tests: a provider's failure may quote a
+##   marked payload);
 ## - `subscribe <slot> <event> <tag>` (its id as the value), each delivery
 ##   appended to `deliveries` as `<tag> <name> <hex data>`;
 ##   `unsubscribe <slot> <id>`;
@@ -37,8 +40,9 @@
 ## - `sub-end <slot or rc> <tag or null>`: `observe_subscription_end` on that
 ##   route handle or the probe's binding, with a null handler for `null`; a
 ##   reported end would be appended to `subends` as `<tag> <id> <code>`;
-## - `prepare <slot> <call> <method> <hex params> <timeout ms or ->`, its
-##   completion appended to `done` as `<call> <code> <hex value or message>`;
+## - `prepare <slot or rc> <call> <method> <hex params> <timeout ms or ->`, on
+##   that route handle or the probe's binding, its completion appended to
+##   `done` as `<call> <code> <hex value or message>`;
 ##   `submit <call>`, `cancel <call>`, `release-call <call>`;
 ## - `release <slot>`.
 ##
@@ -256,7 +260,7 @@ proc command(p: ptr Probe, line: string): string =
           addr p.routes[parseInt(w[1])],
         )
       )
-    of "call":
+    of "call", "call-quiet":
       let h = addr p.routes[parseInt(w[1])]
       if h.vtable == nil:
         return "no route" # not materialized: an answer, not a crash
@@ -277,6 +281,11 @@ proc command(p: ptr Probe, line: string): string =
       if int64(r.code) == 0:
         result = "0 " & hex(outBuf, outLen)
         h.vtable.releaseResponse(h, outBuf, outLen)
+      elif w[0] == "call-quiet":
+        # [DECISIONS G276] A failure whose text may quote a marked payload:
+        # only the lengths, read in place, so the probe keeps no copy.
+        let n = (if r.message == nil: 0 else: len(r.message))
+        result = $int64(r.code) & " message=" & $n & " detail=" & $int(r.detailLen)
       else:
         result = fullLine(r)
       return
@@ -309,9 +318,11 @@ proc command(p: ptr Probe, line: string): string =
         return "no route"
       return resultLine(h.vtable.observeSubscriptionEnd(h, handler, p.newTag(w[2])))
     of "prepare":
-      let h = addr p.routes[parseInt(w[1])]
-      if h.vtable == nil:
-        return "no route"
+      var h: ptr LogosRouteHandle = nil
+      if w[1] != "rc":
+        h = addr p.routes[parseInt(w[1])]
+        if h.vtable == nil:
+          return "no route"
       var params = unhex(w[4])
       var opts = LogosAsyncOptions(
         abiVersion: AsyncCallAbiVersion,
@@ -325,15 +336,27 @@ proc command(p: ptr Probe, line: string): string =
         complete: onDone,
         userData: p.newTag(w[2]),
       )
-      let r = h.vtable.prepareCall(
-        h,
-        cstring(w[3]),
-        ptrOf(params),
-        csize_t(params.len),
-        addr opts,
-        addr cbs,
-        addr p.calls[parseInt(w[2])],
-      )
+      let r =
+        if h == nil:
+          p.rc.vtable.prepareCall(
+            p.rc,
+            cstring(w[3]),
+            ptrOf(params),
+            csize_t(params.len),
+            addr opts,
+            addr cbs,
+            addr p.calls[parseInt(w[2])],
+          )
+        else:
+          h.vtable.prepareCall(
+            h,
+            cstring(w[3]),
+            ptrOf(params),
+            csize_t(params.len),
+            addr opts,
+            addr cbs,
+            addr p.calls[parseInt(w[2])],
+          )
       wipe(params) # [DECISIONS I92] the call keeps its own copy
       return resultLine(r)
     of "submit", "cancel", "release-call":

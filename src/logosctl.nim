@@ -19,12 +19,23 @@
 ## the store's; a purge removes a retired instance's preserved state (G143,
 ## I96 part 7c; DAEMON.md §11).
 ##
+## `call` and `describe` are not logosctl instance commands: the shell is the
+## CLI module's launcher (Tier 5 step N-2b; G344, G349; DAEMON.md §7a). It
+## hands its stdout, stderr and each `@FILE` to the `lcn_call` instance, which
+## makes the calls through its own binding and writes the result to them; no
+## argument, response or event passes through logosd. The launcher starts
+## `lcn_call` through the logosctl instance when its socket does not answer.
+## SIGINT or SIGTERM cancels the command; a second one ends the shell at once.
+##
 ## | Exit | Meaning |
 ## |---|---|
 ## | 0 | done |
 ## | 1 | usage, a refused frame or command, an offline command that failed |
 ## | 2 | no daemon, busy, or the outcome unknown |
 ## | 4 | the Runtime Control call failed: its code and message |
+## | 5 | `call`: the provider's error channel answered (G349) |
+## | 6 | a stream `lcn_call` ended (N-2c) |
+## | 130 | interrupted |
 
 {.push raises: [].}
 
@@ -56,6 +67,8 @@ when defined(posix):
       compose, ctlwire, evexport, evkey, evstore, render, session, sessioninit,
       trustfile,
     ]
+  import ./logos_core/cli/[cli_types, launcher]
+  from logos_sdk/codegen/nimrt import wipeTyped
 
   const
     Usage =
@@ -65,6 +78,7 @@ online (through logosd's socket):
   status
   module ls [--module M]
   module status MODULE [--instance I]
+  module wait MODULE [--instance I] [--state unloaded|loaded|ready|stopping]
   module summary INSTANCE
   module create MODULE [--request-key K]
   module start|stop MODULE [--instance I] [--if-revision N]
@@ -76,6 +90,14 @@ online (through logosd's socket):
   config discard INSTANCE [--revision N --schema HEX]
   config apply INSTANCE [--revision N]
   daemon stop [--wait]
+
+online, through the lcn_call instance (it writes the result itself):
+  call MODULE METHOD [NAME=VALUE | NAME=@FILE | NAME=@-]... [--request JSON]
+       [--instance I] [--contract ROOT] [--node NAME]
+  describe MODULE [--instance I] [--contract ROOT] [--node NAME]
+  subscribe MODULE EVENT [--count N] [--for DURATION]
+       [--instance I] [--contract ROOT] [--node NAME]
+  events [NAME]... [--count N] [--for DURATION] [--node NAME]
 
 offline (the session's files; writers hold its lock):
   init [--config @FILE] [--policy @FILE] [--module-config INSTANCE=@FILE]... [--development]
@@ -105,6 +127,8 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
     ExitUsage = 1
     ExitUnreachable = 2
     ExitRc = 4
+    ExitInterrupted = 130
+    MaxFileArgs = 14 ## [G344] 16 descriptors, stdout and stderr included
     NoValue = [
       "json", "text", "wait", "development", "remove", "print-template", "help",
       "version", "yes",
@@ -157,6 +181,40 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
       ok(Opt.some(parseBiggestUInt(v.get).uint64))
     except ValueError:
       err(usage("--" & name & " takes a non-negative integer"))
+
+  proc durationOpt(c: Cli, name: string): Result[Opt[uint32], Fail] =
+    ## [G349] `--for`: milliseconds, or a number with `ms`, `s`, `m` or `h`.
+    let v = c.opt(name)
+    if v.isNone:
+      return ok(Opt.none(uint32))
+    var text = v.get
+    var unit = 1'u64
+    for (suffix, ms) in [
+      ("ms", 1'u64), ("s", 1_000'u64), ("m", 60_000'u64), ("h", 3_600_000'u64)
+    ]:
+      if text.endsWith(suffix) and text.len > suffix.len:
+        text = text[0 ..< text.len - suffix.len]
+        unit = ms
+        break
+    var n: uint64
+    try:
+      n = parseBiggestUInt(text).uint64
+    except ValueError:
+      return err(usage("--" & name & " takes a duration such as 500ms, 30s or 2m"))
+    if n == 0 or n > high(uint32).uint64 div unit:
+      return err(usage("--" & name & " is 1 ms to 49 days"))
+    ok(Opt.some(uint32(n * unit)))
+
+  proc countOpt(c: Cli): Result[Opt[uint32], Fail] =
+    let n = ?c.uintOpt("count")
+    if n.isSome and (n.get < 1 or n.get > high(uint32).uint64):
+      return err(usage("--count is 1 to " & $high(uint32)))
+    ok(
+      n.map(
+        proc(x: uint64): uint32 =
+          uint32(x)
+      )
+    )
 
   proc arg(c: Cli, i: int, what: string): Result[string, Fail] =
     if i < c.args.len:
@@ -468,9 +526,56 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
       return err(fail(ExitUsage, "no randomness for a request key"))
     ok("lcli-" & toHex(b).toLowerAscii)
 
+  proc cmdWait(cl: var Client, c: Cli): Result[Done, Fail] =
+    ## [G349; plan §3.7] `module wait`: `get_readiness` until the state is
+    ## reached (0), the instance is in `error` (4) or the timeout (2). It polls
+    ## every 100 ms, backing off to 1 s.
+    let module = ?c.arg(2, "MODULE")
+    let wanted = c.opt("state").get("ready")
+    var want = LogosNSRuntimeControlStateKind.Ready
+    block found:
+      for k in LogosNSRuntimeControlStateKind:
+        if k != LogosNSRuntimeControlStateKind.Error and ($k).toLowerAscii == wanted:
+          want = k
+          break found
+      return err(usage("--state is unloaded, loaded, ready or stopping"))
+    var ms = 100
+    while true:
+      let (r, bytes) = ?cl.callTyped(
+        LcnCtlMethodKind.Get_readiness,
+        LogosNSRuntimeControlGetReadinessRequest(
+          module: module, instance: c.opt("instance")
+        ),
+        LogosNSRuntimeControlGetReadinessResponse,
+      )
+      if r.state.kind == want:
+        return ok(cl.done("module wait", jsonOfBytes(bytes), stateText(r.state)))
+      if r.state.kind == LogosNSRuntimeControlStateKind.Error:
+        var f = fail(
+          ExitRc,
+          module & " is in error" &
+            (if r.reason.isSome: ": " & declaredText(r.reason.get)
+            else: ""),
+          r.failure.get(""),
+        )
+        f.result = jsonOfBytes(bytes)
+        return err(f)
+      if getMonoTime() + initDuration(milliseconds = ms) >= cl.deadline:
+        return err(
+          fail(
+            ExitUnreachable,
+            module & " did not reach " & wanted & " within " & $c.timeoutMs &
+              " ms (last state " & stateText(r.state) & ")",
+          )
+        )
+      sleep(ms)
+      ms = min(ms * 2, 1000)
+
   proc cmdModule(cl: var Client, c: Cli): Result[Done, Fail] =
     let sub = ?c.arg(1, "a module command")
     case sub
+    of "wait":
+      cl.cmdWait(c)
     of "ls":
       let xs = ?cl.listModules(c.opt("module"), Opt.none(string))
       ok(cl.done("module ls", %*{"modules": recordsJson(xs)}, moduleRows(xs)))
@@ -810,6 +915,201 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
       cl.cmdStop(c, s)
     else:
       err(usage("unknown command " & c.args[0]))
+
+  # The launcher (Tier 5 step N-2b; G344, G349) ---------------------------------------
+
+  var cancelPipe = [cint(-1), cint(-1)]
+  var signals = 0
+
+  proc onSignal(sig: cint) {.noconv.} =
+    ## The first SIGINT or SIGTERM cancels the command (the launcher half-closes
+    ## and waits for `done`); a second ends the shell at once.
+    inc signals
+    if signals > 1:
+      exitnow(ExitInterrupted)
+    var one = 1'u8
+    discard posix.write(cancelPipe[1], addr one, 1)
+
+  proc cancelOnSignals(): Result[cint, Fail] =
+    ## A descriptor that becomes readable on SIGINT or SIGTERM.
+    if pipe(cancelPipe) != 0:
+      return err(fail(ExitUsage, "pipe: " & $strerror(errno)))
+    for f in cancelPipe:
+      discard fcntl(f, F_SETFD, FD_CLOEXEC)
+    discard fcntl(cancelPipe[1], F_SETFL, fcntl(cancelPipe[1], F_GETFL) or O_NONBLOCK)
+    var sa: Sigaction
+    sa.sa_handler = onSignal
+    discard sigemptyset(sa.sa_mask)
+    sa.sa_flags = SA_RESTART
+    for sig in [SIGINT, SIGTERM]:
+      discard sigaction(sig, sa, nil)
+    ok(cancelPipe[0])
+
+  proc cliSocketOf(s: Session): string =
+    ## [G344] lcn_call's socket, from the daemon configuration's `cli`.
+    let r = readDaemonConfig(s)
+    var dir = ""
+    if r.isOk and r.get[0].cli.isSome and r.get[0].cli.get.socket_dir.isSome:
+      dir = r.get[0].cli.get.socket_dir.get
+    cliSocketPath(s, dir)
+
+  proc providerOf(c: Cli, module: string): Result[LcnCliProvider, Fail] =
+    var p = LcnCliProvider(module: module, instance: c.opt("instance"))
+    let root = c.opt("contract")
+    if root.isSome:
+      let b = hex.fromHex(root.get)
+      if b.isErr or b.get.len != 32:
+        return err(usage("--contract takes a contract root, 64 hex digits"))
+      p.contract = Opt.some(b.get)
+    ok(p)
+
+  proc argsOf(c: Cli, files: var seq[cint]): Result[seq[LcnCliArg], Fail] =
+    ## [D26 (a); G349] `NAME=VALUE`, or `NAME=@FILE` (`@-`: stdin) passed as a
+    ## descriptor; lcn_call types each from the method's request rule.
+    ##
+    ## [N-2d] The launcher has no schema, so it treats every argument as one
+    ## that may be marked: a malformed one is named by its position, never
+    ## echoed, and the copies made here are wiped (`launch` wipes the
+    ## message). The process's own argv is not erased: lcn_call refuses an
+    ## inline value for a marked request.
+    var args: seq[LcnCliArg]
+    var stdinUsed = false
+    for k in 3 ..< c.args.len:
+      template a(): untyped =
+        c.args[k]
+
+      let eq = a.find('=')
+      if eq <= 0:
+        return err(
+          usage(
+            "argument " & $(k - 2) & " after the method is not NAME=VALUE or NAME=@FILE"
+          )
+        )
+      let name = a[0 ..< eq]
+      if a.len <= eq + 1 or a[eq + 1] != '@':
+        args.add(
+          LcnCliArg(
+            kind: LcnCliArgKind.lcn_Cli_text_arg,
+            arm_lcn_Cli_text_arg: LcnCliTextArg(name: name, value: a[eq + 1 .. ^1]),
+          )
+        )
+        continue
+      let value = a[eq + 1 .. ^1]
+      if files.len >= MaxFileArgs:
+        return err(usage("at most " & $MaxFileArgs & " @FILE arguments"))
+      let path = value[1 .. ^1]
+      var fd = cint(0)
+      if path == "-":
+        if stdinUsed:
+          return err(usage("@- (stdin) can be given once"))
+        stdinUsed = true
+      else:
+        fd = posix.open(cstring(path), O_RDONLY or O_CLOEXEC)
+        if fd < 0:
+          return err(fail(ExitUsage, path & ": " & $strerror(errno)))
+      files.add(fd)
+      # The message's descriptors are stdout, stderr, then the files.
+      args.add(
+        LcnCliArg(
+          kind: LcnCliArgKind.lcn_Cli_file_arg,
+          arm_lcn_Cli_file_arg: LcnCliFileArg(name: name, fd: uint8(files.len + 1)),
+        )
+      )
+    ok(args)
+
+  proc commandOf(c: Cli, files: var seq[cint]): Result[LcnCliCommand, Fail] =
+    if c.args[0] == "events":
+      # [G346, G349] The target's Runtime Control events; no names: the
+      # events rule's three.
+      let names = c.args[1 .. ^1]
+      if names.len > 16:
+        return err(usage("events takes at most 16 names"))
+      let count = ?c.countOpt()
+      let forMs = ?c.durationOpt("for")
+      var cmd = LcnCliEventsCommand(count: count, for_ms: forMs)
+      if names.len > 0:
+        cmd.names = Opt.some(names)
+      return ok(
+        LcnCliCommand(
+          kind: LcnCliCommandKind.lcn_Cli_events_command,
+          arm_lcn_Cli_events_command: cmd,
+        )
+      )
+    let module = ?c.arg(1, "MODULE")
+    let provider = ?c.providerOf(module)
+    if c.args[0] == "subscribe":
+      let event = ?c.arg(2, "EVENT")
+      if c.args.len > 3:
+        return err(usage("subscribe takes one MODULE and one EVENT"))
+      let count = ?c.countOpt()
+      let forMs = ?c.durationOpt("for")
+      return ok(
+        LcnCliCommand(
+          kind: LcnCliCommandKind.lcn_Cli_subscribe_command,
+          arm_lcn_Cli_subscribe_command: LcnCliSubscribeCommand(
+            provider: provider, event: event, count: count, for_ms: forMs
+          ),
+        )
+      )
+    if c.args[0] == "describe":
+      if c.args.len > 2:
+        return err(usage("describe takes one MODULE"))
+      return ok(
+        LcnCliCommand(
+          kind: LcnCliCommandKind.lcn_Cli_describe_command,
+          arm_lcn_Cli_describe_command: LcnCliDescribeCommand(provider: provider),
+        )
+      )
+    let meth = ?c.arg(2, "METHOD")
+    var call =
+      LcnCliCallCommand(`method`: meth, provider: provider, json: c.opt("request"))
+    let args = ?c.argsOf(files)
+    if args.len > 0:
+      if call.json.isSome:
+        return err(usage("--request and NAME=VALUE arguments exclude each other"))
+      call.args = Opt.some(args)
+    ok(
+      LcnCliCommand(
+        kind: LcnCliCommandKind.lcn_Cli_call_command, arm_lcn_Cli_call_command: call
+      )
+    )
+
+  proc cmdLaunch(c: Cli, s: Session): Result[int, Fail] =
+    ## [G344] Hands the command to lcn_call; its exit status, or a failure the
+    ## shell prints itself.
+    var files: seq[cint]
+    defer:
+      for f in files:
+        if f > 0:
+          discard posix.close(f)
+    var command = ?c.commandOf(files)
+    let cancelFd = ?cancelOnSignals()
+    var l = Launch(
+      cliSocket: cliSocketOf(s),
+      ctlSocket: socketOf(s),
+      message: LcnCliMessage(
+        target: c.opt("node"),
+        output: LcnCliOutput(
+          kind: if c.json: LcnCliOutputKind.Json else: LcnCliOutputKind.Text
+        ),
+        # [G349] A stream has no deadline; `--timeout` bounds activation.
+        deadline_ms: (
+          if c.args[0] in ["subscribe", "events"]: Opt.none(uint32)
+          else: Opt.some(uint32(c.timeoutMs))
+        ),
+        command: move command,
+      ),
+      stdoutFd: 1,
+      stderrFd: 2,
+      files: files,
+      timeoutMs: c.timeoutMs,
+      cancelFd: cancelFd,
+    )
+    let r = launch(l)
+    wipeTyped(l.message) # [N-2d] the arguments' values
+    if r.isErr:
+      return err(fail(r.error.exit, r.error.message, r.error.code))
+    ok(r.get)
 
   # Offline commands -----------------------------------------------------------------
 
@@ -1652,6 +1952,13 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
       c.emitFail(c.args[0], "unknown", fail(ExitUsage, error))
       return ExitUsage
     let command = c.args.join(" ")
+    if c.args[0] in ["call", "describe", "subscribe", "events"]:
+      let r = cmdLaunch(c, s)
+      if r.isErr:
+        if r.error.exit != ExitInterrupted:
+          c.emitFail(command, "unknown", r.error)
+        return r.error.exit
+      return r.get
     let r =
       case c.args[0]
       of "init":
@@ -1691,6 +1998,10 @@ else:
     2
 
 when isMainModule:
-  quit(main())
+  # [IMPL] Not `quit`: it saturates at `high(int8)` on POSIX (Nim's system.nim),
+  # so 130 would leave as 127. exit(3) keeps the low 8 bits and still runs the
+  # exit procedures and flushes stdio.
+  proc cExit(code: cint) {.importc: "exit", header: "<stdlib.h>", noreturn.}
+  cExit(cint(main()))
 
 {.pop.}

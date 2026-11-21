@@ -154,7 +154,11 @@ proc checkDetail*(code: ErrorCode, detail: openArray[byte]): Result[void, string
   let v = decodeCbor(detail).valueOr:
     return err("detail is not one deterministic CBOR value: " & $error)
   let decl = commonSchema().find("logos.invalid_params_detail").get
-  if not schemaSet(commonSchema()).validates(0, decl.body, v):
+  let valid = schemaSet(commonSchema()).validates(0, decl.body, v)
+  # [DECISIONS G276] The tree is a copy of the detail, which may be a
+  # provider's for a marked method: zeroed before it is released.
+  wipe(v)
+  if not valid:
     return err("detail is not a logos.invalid_params_detail")
   ok()
 

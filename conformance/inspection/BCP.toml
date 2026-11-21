@@ -190,7 +190,7 @@ reason = "docs/DEPLOYMENT.md row 18b and §17: there is no user-facing approval 
 # bcp-deploy-activation (DECISIONS I97, G309, G296)
 [[item]]
 ids = ["BCP-0085"]
-reason = "docs/DEPLOYMENT.md row 19 and §17 index docs/DAEMON.md §7, Activation, which documents the five items BCP l.389 lists for the logosctl socket: mechanism, admission (the peer uid), accepted application selection (one instance, seventeen methods), presentation handoff (what crosses at initialization, nothing that authenticates) and failure behaviour. Supported; BCP-0086 to BCP-0089 are tested (step 4b-6)."
+reason = "docs/DEPLOYMENT.md row 19 and §17 index docs/DAEMON.md §7, Activation, which documents the five items BCP l.389 lists for the logosctl socket: mechanism, admission (the peer uid), accepted application selection (one instance, seventeen methods), presentation handoff (what crosses at initialization, nothing that authenticates) and failure behaviour; and §7a, which documents the same five for the CLI module's socket (Tier 5 step N-2b, DECISIONS G344): activation through the logosctl instance under its authority, admission by peer uid, one instance fixed by composition, settings at initialization and terminal descriptors per command, and its exit codes. Supported; BCP-0086 to BCP-0089 are tested (step 4b-6, and tests/test_lcn_call.nim for the CLI socket)."
 
 # bcp-deploy-state-at-rest (DECISIONS I97, G309, G143)
 [[item]]

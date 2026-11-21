@@ -1171,14 +1171,14 @@ proc methodPieces(
   r
 
 proc setGen(
-    s: ContractSet, schema: string, emitLiterals = false
+    cset: CSchemaSet, contracts: seq[Contract], schema: string, emitLiterals = false
 ): Result[(MGen, seq[MDoc]), string] =
-  ## A generator over the set's documents and the pinned common one, with every
-  ## declared aggregate's converters (`MGen.emitLiterals`).
-  let layout = ?cLayout(s.cSchemaSet)
+  ## A generator over a set's or a binding's documents and the pinned common
+  ## one, with every declared aggregate's converters (`MGen.emitLiterals`).
+  let layout = ?cLayout(cset)
   var docs: seq[MDoc]
   var roots: seq[Digest]
-  for c in s.documents:
+  for c in contracts:
     docs.add(MDoc(model: c.model))
     roots.add(c.root)
   let ctx = pinnedContext()
@@ -1342,12 +1342,58 @@ proc markedKitCall(
   body.add("  okResult()")
   body
 
+proc confinedKitCall(
+    symbol, methodName: string,
+    k: int,
+    params: seq[string],
+    mp: MethodPieces,
+    mres: bool,
+): string =
+  ## [DECISIONS G335] A confined kit's typed function, on the module thread:
+  ## its C arguments as one tuple the entry thread borrows, the inputs as
+  ## request bytes (which take the dispatch route, so validation, handler and
+  ## response check are the dispatch path's, IFC-0751) and the checked
+  ## response as the outputs. The runtime zeroes the bytes and trees; a marked
+  ## response's staged outputs are zeroed here (DECISIONS G276).
+  var body =
+    "type KitArgs" & $k & " = tuple[" & params.join(", ") & "]\n\n" &
+    "proc kitConfinedRequest" & $k &
+    "(args: pointer, bytes: var seq[byte]): Result[void, string] =\n" & "  ## `" & symbol &
+    "` (INTERFACE §2.4): `" & methodName & "`'s inputs as request bytes.\n" &
+    "  let a = cast[ptr KitArgs" & $k & "](args)\n" & "  var r = kitRequest" & $k & "(" &
+    mp.ins.mapIt("a." & it).join(", ") & ")\n" &
+    "  if r.isErr:\n    return err(r.unsafeError)\n" &
+    "  bytes = move(r.get)\n  ok()\n\n" & "proc kitConfinedRespond" & $k &
+    "(args: pointer, v: CborValue): Result[void, string] =\n" & "  ## `" & symbol &
+    "`: the checked response as its outputs.\n" & "  let a = cast[ptr KitArgs" & $k &
+    "](args)\n"
+  if mp.staged.len > 0:
+    body.add("  var arena: CallArena\n")
+    for (local, t) in mp.staged:
+      body.add("  var " & local & ": " & t & "\n")
+    body.add(
+      "  kitRespond" & $k & "(arena, v, " & mp.staged.mapIt(it[0]).join(", ") &
+        ").isOkOr:\n" & "    arena.release()\n" &
+        (if mres: mp.stagedWipes("    ") else: "") & "    return err(error)\n"
+    )
+    for i, p in mp.outs:
+      body.add("  a." & p & "[] = " & mp.staged[i][0] & "\n")
+    if mres:
+      body.add(mp.stagedWipes("  "))
+    body.add("  a.p1[] = arena.owner\n")
+  else:
+    body.add("  a.p1[] = LogosResponseOwner()\n")
+  body.add("  ok()")
+  body
+
 proc kitMirrors*(
-    s: ContractSet, prefix: string, methods: seq[KitMethod]
+    b: ModuleBinding, prefix: string, methods: seq[KitMethod], confined = false
 ): Result[KitMirrors, string] =
   ## [SPEC INTERFACE §2.4] The typed provider functions of the module binding
-  ## `s`, for `kitgen`; `prefix` starts the exported procs' Nim names.
-  var (g, docs) = ?setGen(s, "kitSchema()")
+  ## `b`, for `kitgen`; `prefix` starts the exported procs' Nim names. A
+  ## `confined` kit's functions hand their work to the module thread
+  ## (`confinedrt`) over the route `<prefix>KitRoute` its template defines.
+  var (g, docs) = ?setGen(b.cSchemaSet, b.documents, "kitSchema()")
   let marked = markedHalves(docs)
   var byRequest: Table[string, KitMethod]
   for m in methods:
@@ -1365,6 +1411,21 @@ proc kitMirrors*(
     let params =
       @["p0: ptr LogosModuleContext", "p1: ptr LogosResponseOwner"] & mp.params
     let nonNull = @["p0", "p1"] & mp.outs
+    let names = toSeq(0 ..< params.len).mapIt("p" & $it)
+    if confined:
+      callProcs.add(confinedKitCall(call.symbol, call.methodName, k, params, mp, mres))
+      res.symbols.add((call.symbol, prefix & "KitCall" & $k))
+      res.exports.add(
+        "  proc " & prefix & "KitCall" & $k & "(" & params.join(", ") &
+          "): LogosResult {.exportc: \"" & call.symbol &
+          "\", dynlib, cdecl, gcsafe, raises: [].} =\n" & "    kitEnter()\n" & "    if " &
+          nonNull.mapIt(it & " == nil").join(" or ") & ":\n" &
+          "      return failureResult(moduleError(\"a null module, response owner or output\"))\n" &
+          "    var a: KitArgs" & $k & " = (" & names.join(", ") & ")\n" &
+          "    confinedCall(p0, " & escape(km.bare) & ", addr a, kitConfinedRequest" & $k &
+          ", kitConfinedRespond" & $k & ", " & prefix & "KitRoute)"
+      )
+      continue
     if mreq or mres:
       callProcs.add(
         markedKitCall(
@@ -1378,7 +1439,6 @@ proc kitMirrors*(
           km, call.symbol, call.methodName, call.response, k, params, nonNull, mp
         )
       )
-    let names = toSeq(0 ..< params.len).mapIt("p" & $it)
     res.symbols.add((call.symbol, prefix & "KitCall" & $k))
     res.exports.add(
       "  proc " & prefix & "KitCall" & $k & "(" & params.join(", ") &
@@ -1501,7 +1561,8 @@ proc callMirrors*(
   ## `nimgen` type of each declaration) and, for C callers, the bodies of
   ## `lcn_invoke_<namespace>_<Method>` and `lcn_clear_<namespace>_<Method>`,
   ## which the export template defines; `prefix` starts their Nim names.
-  var (g, docs) = ?setGen(s, "callsSchema()", emitLiterals = true)
+  var (g, docs) =
+    ?setGen(s.cSchemaSet, s.documents, "callsSchema()", emitLiterals = true)
   let marked = markedHalves(docs)
   var res = KitMirrors()
   var callProcs: seq[string]

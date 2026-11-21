@@ -5,7 +5,7 @@ This page is the daemon's chapter of the deployment documentation (BOOTSTRAP-COM
 BCP), and the documentation BCP l.364 asks for of `logos-core-nim.daemon-config.v1`, logosd's
 deployment input. The host configuration logosd derives from it is documented in
 [HOST-CONFIG.md](HOST-CONFIG.md); the authority policy in [AUTHORITY-POLICY.md](AUTHORITY-POLICY.md).
-Decisions: DECISIONS I95, G293–G304.
+Decisions: DECISIONS I95, G293–G304; the CLI module `lcn_call`, I102 and G343–G350.
 
 | | |
 |---|---|
@@ -14,12 +14,14 @@ Decisions: DECISIONS I95, G293–G304.
 | Session | `--session-dir DIR`, else `$LOGOSCTL_SESSION_DIR`, else `$HOME/.logos-core` |
 | Socket | `<session>/run/logosctl.sock` (or in `ctl.socket_dir`), owner-only |
 | Wire format | `logos-core-nim.ctl.v1` (§7) |
+| CLI module | `lcn_call`, from `liblcn_call` installed with logosd; socket `<session>/run/lcn_call.sock` (or in `cli.socket_dir`), wire format `logos-core-nim.cli.v1` (§7a) |
 
 ```sh
 logosctl init                 # the session: daemon-config, trust file, evidence key
 logosd &                      # or under a service manager (§13)
 logosctl status
 logosctl module create my_module
+logosctl call my_module ping       # through the CLI module, lcn_call (§7a)
 logosctl daemon stop --wait
 ```
 
@@ -36,7 +38,8 @@ host). It is not a participant: it has no module identity of its own and makes n
 - every operator module the configuration realizes as `direct_dynamic`.
 
 A `hosted_dynamic` module (placement `process`) runs in its own `logos-module-host` process, which logosd
-starts through the Runtime, under logosd's user ([HOST-CONFIG.md](HOST-CONFIG.md), "Module Hosts").
+starts through the Runtime, under logosd's user ([HOST-CONFIG.md](HOST-CONFIG.md), "Module Hosts"). So does
+the CLI module `lcn_call` once a CLI command has started it (§7a).
 
 **`direct_dynamic` means this module's payloads are in the daemon's process** (R l.1525-1527): its
 method payloads and events pass through logosd's memory, as any in-process module's do. Choose
@@ -56,7 +59,7 @@ marked field, as the library does (G277).
   keys/                    0700  evidence keys and their bindings (§9)
   state/                   0700  trust-mark.cbor, store/, modules/, evidence/
   work/                    0700  runtime.work_dir; never emptied (restart locks)
-  run/                     0700  recreated at each start: logosctl.sock, ep/
+  run/                     0700  recreated at each start: logosctl.sock, lcn_call.sock, ep/
 ```
 
 - Every directory is owner-only. A session directory that group or other can access is refused, as is a
@@ -116,6 +119,7 @@ lcn.daemon_config = {
   ? permissions: lcn.dc_permissions,
   ? state_transfers: [* lcn.app_state_transfer],
   ? ctl: lcn.dc_ctl,
+  ? cli: lcn.dc_cli,
   ? test_hooks: lcn.dc_test_hooks,
 }
 
@@ -203,6 +207,20 @@ lcn.dc_ctl = {
   ? idle_timeout_ms: uint32,
 }
 
+; The lcn_call instance, the CLI module (DECISIONS G343, G344; DAEMON.md
+; §7a). artifact replaces the library installed with logosd; socket_dir must
+; be owner-only, as ctl.socket_dir; workers 1-32 (default 8), streams 1-64
+; (default 8), idle_timeout_ms 100-600000 (default 30000), route_idle_ms
+; 1000-86400000 (default 600000).
+lcn.dc_cli = {
+  ? artifact: lcn.app_artifact,
+  ? socket_dir: lcn.app_path,
+  ? workers: uint8,
+  ? streams: uint8,
+  ? idle_timeout_ms: uint32,
+  ? route_idle_ms: uint32,
+}
+
 ; Accepted only by a logosd built with lcnTestHooks, with the development
 ; switch on (G300); a packaged logosd refuses the field. The Module Loader
 ; reports its failure loader_failure_after_ms after the start, or once the
@@ -243,6 +261,7 @@ the meaning those pages give them.
 | `permissions` | `profile`: absent selects the reference profile `logos-core-nim.permission-profile.v1`, since logosd always selects one; `initial`: the operator instances' settings. An entry naming a system instance or module is refused: logosd provisions those itself (§5). |
 | `state_transfers` | As in the host configuration: an operator instance's replacement continues from its state, applied once at the next start (§11, "Replacing an instance"). Neither side may be a system instance. |
 | `ctl` | The socket (§7): `socket_dir` (absolute; default `<session>/run`), `workers` (1–32, default 4), `idle_timeout_ms` (100–600000, default 30000). |
+| `cli` | The CLI module (§7a): `artifact` (`lcn.app_artifact`, an absolute path; default the library installed with logosd, with the hash compiled into logosd), `socket_dir` (absolute, owner-only; default `<session>/run`), `workers` (1–32, default 8), `streams` (1–64, default 8), `idle_timeout_ms` (100–600000, default 30000), `route_idle_ms` (1000–86400000, default 600000). |
 | `test_hooks` | Refused by a packaged logosd (§6). `ctl_command_delay_ms` holds each socket command; `loader_failure_after_ms` has the Module Loader report its failure that long after the start, and `loader_failure_on_file` once the file it names exists, whichever comes first; `diagnostics` has the Runtime record `count` diagnostics holding `text`, as text it did not write, after the start's own are logged (§12). |
 
 ### The checks
@@ -252,13 +271,13 @@ reported with the field it concerns, and logosd exits 1.
 
 1. The bytes decode as one deterministic-CBOR `lcn.daemon_config`.
 2. Names and strategies: no operator instance uses a reserved id (`orchestrator`, `authority`,
-   `logosctl`, `logos_module_loader`) and no operator module a reserved name (`logos_module_loader`,
-   `logos_capability_authority`, `logosctl`, `lcn_orchestrator`); no `direct_static`; `ordering` and
+   `logosctl`, `lcn_call`, `logos_module_loader`) and no operator module a reserved name
+   (`logos_module_loader`, `logos_capability_authority`, `logosctl`, `lcn_call`, `lcn_orchestrator`); no `direct_static`; `ordering` and
    `orchestration.start` name operator instances, each once; `permissions.initial` names no system one;
    `state_transfers` names no system instance on either side, and no `orchestration.start` entry is
    the source of a transfer (the transfer retires it).
 3. The development switch: `allow-all` and `test_hooks` need it (§6).
-4. `ctl`'s bounds; `call_audit.store` needs `call_audit.evidence`; the evidence key's file, its `kid`
+4. `ctl`'s and `cli`'s bounds and absolute paths; `call_audit.store` needs `call_audit.evidence`; the evidence key's file, its `kid`
    and its binding name this Runtime (§9).
 5. The derived host configuration passes the library's own checks (`logos_runtime_create`'s), and the
    orchestrator's value passes the module's.
@@ -278,6 +297,7 @@ Runtime id, the instances of §4, the merged policy of §5, and the permission s
 | `orchestrator` | `lcn_orchestrator` | `direct_static` binding `lcn_orchestrator` | `orchestrator` |
 | `authority` | `logos_capability_authority` | the library's static binding (capability-authority only) | `authority` |
 | `logosctl` | `logosctl` | `direct_static` binding `logosctl` | none |
+| `lcn_call` | `lcn_call` | `hosted_dynamic`, the companion library or `cli.artifact` (§7a); not started at boot | none |
 | operator | daemon-config `modules` | `direct_dynamic` or `hosted_dynamic` | as configured |
 
 - The Module Loader is established first, by the Runtime, before anything else is realized; every other
@@ -298,7 +318,7 @@ Runtime id, the instances of §4, the merged policy of §5, and the permission s
 Under `capability-authority`, logosd merges the operator's rules with its own system rules into one
 `logos-core-nim.authority-policy.v1` value for the `authority` instance. The system rules are derived
 from the reserved ids and the orchestrator's start list; they are not configurable. With `init`'s
-default configuration they are, one per line:
+default configuration they are, one per line (S1–S5; S6–S8 below come with `lcn_call`):
 
 ```text
 {"kind": "allow", "subject": {"modules": ["logos_capability_authority"]}, "scopes": [{"kind": "provider-access", "contract": "capability-authority", "actions": ["publish-event"], "access": {"publish_events": ["observed_change"]}}]}
@@ -327,12 +347,47 @@ default configuration they are, one per line:
   so they answer `consumer-denied`; S4 and S5 protect the targets they name, so they answer
   `target-denied`.
 
+When logosd composes the CLI module `lcn_call` (§7a), it adds four more:
+
+```text
+{"kind": "allow", "subject": {"instances": ["lcn_call"]}, "scopes": [{"kind": "runtime-control", "methods": ["get_self", "list_modules", "describe_provider", "establish_route", "renew_route", "close_route"]}]}
+{"kind": "deny", "subject": {"instances": ["lcn_call"]}, "scopes": [{"kind": "runtime-control", "methods": [], "events": ["configuration_state_changed", "permission_settings_changed", "route_state_changed"]}], "code": "consumer-denied"}
+{"kind": "deny", "subject": {"instances": ["lcn_call"]}, "scopes": [{"kind": "module-execution", "targets": {}, "actions": ["start", "stop"]}], "code": "consumer-denied"}
+{"kind": "deny", "subject": {"instances": ["logosctl"]}, "scopes": [{"kind": "runtime-control", "methods": ["retire_module", "update_configuration", "apply_configuration"], "targets": {"modules": ["lcn_call"]}}], "code": "target-denied"}
+```
+
+- **S6**: `lcn_call` may call the six Runtime Control methods a consumer needs to discover providers
+  and hold routes (`materialize_route` and `connect_remote` are operations of its binding, not methods).
+  A method list with no event list also covers every subscription.
+- **S7** (the next two) and **the events rule** (G346): of the Runtime Control events, `lcn_call` may
+  follow only `module_state_changed`, `execution_state_changed` and `inventory_changed`, the read-only
+  three `logosctl events` follows; each is checked per observed instance before delivery (R l.3362).
+  S7's event deny is needed because S6, a method list with no event list, would otherwise allow every
+  subscription. It may originate no execution, start or stop, on any target.
+- **S8**: `logosctl` may not retire or reconfigure `lcn_call`, whose configuration is daemon-config's; it
+  may start, stop and recover it, which is the launcher's activation (§7a).
+- **What an operator rule can add.** The system rules give `lcn_call` no provider access: operator rules
+  grant it, provider by provider (§7a, "Grants"). An operator rule may also grant it more Runtime Control
+  methods, but no rule can let it start or stop an instance, itself included: a start or stop also needs
+  an execution decision for the requester, which S7 denies (so `lcn_call` never stops itself, G350). Nor
+  can a rule give it another Runtime Control event: S7 denies `configuration_state_changed`,
+  `permission_settings_changed` and `route_state_changed`, and a deny wins over any allow (G346). A
+  granted `recover_module` would take effect, since a recovery is decided on the authority of the
+  instance's original starter (its execution decision is for the retained origin); `lcn_call` never
+  calls it. A deny over every other method cannot be written: in this policy language a deny that
+  covers a method request covers every event subscription too, which would remove the events rule.
+  S3 has the same shape: an operator rule may grant the `logosctl` instance methods beyond its
+  seventeen, and only S3's event deny keeps it from every subscription. These limits bind under the
+  `capability-authority` policy; under the development switch (allow-all) nothing is denied to any
+  module, and neither `lcn_call` nor the `logosctl` instance calls a method outside its list.
+- **Codes:** S7 denies the consumer (`consumer-denied`), S8 protects its target (`target-denied`).
+
 The operator's rules follow, sorted and deduplicated with the system ones. An operator rule may grant
 more to operator instances, and may grant the `logosctl` instance access to operator providers; it
 cannot undo a system deny, since a deny wins ([AUTHORITY-POLICY.md](AUTHORITY-POLICY.md)).
 
 **Permission settings.** The reference profile is always selected. logosd writes `host-ambient` (empty
-constraints) for `orchestrator`, `logosctl` and `authority`, and the module entry `host-ambient` for each
+constraints) for `orchestrator`, `logosctl`, `authority` and, when composed, `lcn_call`, and the module entry `host-ambient` for each
 operator module the operator gave no module entry: the minimum each realization needs. No module
 administers the system instances' settings: `update_permission_settings` is not among `logosctl`'s
 methods, and no system rule grants it (BCP l.369).
@@ -583,9 +638,10 @@ the instance's log lines; they never reach a Runtime Control request and never s
 
 **No payload is relayed.** The seventeen methods are reads, lifecycle, configuration and shutdown. No
 method payload of any operator module, and no event, crosses the socket or passes through the instance.
-Calls to providers from the command line come with the CLI module `lcn_call` (Tier 5 plan A3, step
-N-2), a module instance of its own whose routes carry the payloads between module processes; neither
-this instance nor logosd relays them.
+Calls to providers from the command line go through the CLI module `lcn_call` (§7a), a module instance
+of its own whose routes carry the payloads between module processes; neither this instance nor logosd
+relays them. The shell never holds a route, ticket or endpoint: for `call` and `describe` it is only
+`lcn_call`'s launcher.
 
 ### The methods
 
@@ -727,6 +783,377 @@ CANCELLED), unlinks its socket and joins its threads. A `shutdown_runtime` comma
 the instance stops, with the Runtime's own outcome: its call is the one call the closing does not cancel,
 so the wait for it ends with that outcome or the command's deadline (I97).
 
+## 7a. The `lcn_call` instance and its socket
+
+`logosctl call`, `describe`, `subscribe` and `events` are not logosctl instance commands. They go to `lcn_call`, the CLI module: a consumer-only system instance,
+`hosted_dynamic` in a Module Host of its own, that makes the calls through its own binding and routes
+and writes the result to the user's terminal itself (DECISIONS G343–G350; Tier 5 plan A3, design (f)).
+The shell is its launcher: it hands over its stdout, stderr and each `@FILE`, names the command, and waits
+for an exit status. The data path is provider host ⇄ `lcn_call`'s host (the route's session) ⇄ the
+terminal; logosd issues the routes and decides each Hello as for any consumer, and no argument, response
+or event passes through logosd or the logosctl instance. Argument values pass through the launcher only
+because the user typed them there.
+
+```sh
+logosctl describe shapes_module
+logosctl call shapes_module reflect n=3 label=@label.txt
+logosctl call shapes_module reflect --request '{"n": 3, "label": "x"}' --text
+logosctl module wait shapes_module --state ready
+logosctl subscribe meter_module changed --count 3
+logosctl events --for 30s
+```
+
+### Composition and lifetime
+
+- **The instance.** `lcn_call` (module `lcn_call`, both names reserved, §3), `hosted_dynamic` with
+  placement `process`, no state assignment, `host-ambient` with empty constraints (§5).
+- **The artifact.** The library installed with logosd, `<d>/../lib/logos-core/liblcn_call.{so,dylib}`
+  (`<d>` as for the Module Host, §3), whose BLAKE3-256 is compiled into logosd at build time: a protected
+  bootstrap digest (SEC l.519). `cli.artifact` overrides it; it is protected configuration like every
+  other field of this file. A logosd built without the hash and given no `cli.artifact` composes no
+  `lcn_call`: `logosctl call` then exits 2, "this logosd has no CLI module (lcn_call)". A missing or
+  altered file fails the start with `loader-artifact-unavailable` or `loader-artifact-integrity-failed`,
+  which the launcher prints. The start log names the source logosd used.
+- **When it runs.** `lcn_call` is not started with logosd. The first `logosctl call`, `describe`,
+  `subscribe` or `events` starts it. From then on it is resumed at every start of logosd, like any
+  instance with requested intent, until `logosctl module stop lcn_call` cancels that intent; the next CLI
+  command starts it again. Stopping it ends no other instance and drops its routes.
+- **Idle.** It does not stop itself (an [IMPL] choice, G350: a self-stop would cancel the retained intent,
+  R l.1735). What expires is routes: each closes after `cli.route_idle_ms` without a call (R l.3123).
+- **After a crash.** The Module Host exits when its carrier to logosd closes, so a killed logosd leaves no
+  live `lcn_call` socket. The next start empties `run/` and restores `lcn_call` as `error`
+  `host-terminated` (R l.3634) with its requested intent: the orchestrator's first pass resumes it, as it
+  does any such instance (G289), and a command that comes first recovers it itself (Activation, below).
+- **Configuration.** `lcn_call.settings`, provisioned by logosd at every start from `cli` and the trust
+  file (socket, workers, streams, idle timeouts, deployment). The logosctl instance may not stage, apply
+  or retire it (S8, §5).
+
+### Activation (BCP l.389)
+
+1. **Mechanism.** A Unix stream socket at `<session>/run/lcn_call.sock` (or in `cli.socket_dir`, owner-only
+   as `ctl.socket_dir` is), 0600, bound in the instance's initialization and served only after the
+   initialization returned (BCP l.393). When the socket is absent or refuses, the launcher starts
+   `lcn_call` through the logosctl instance (§7): it reads the instance's record with `list_modules`, and
+   - `unloaded` → `start_module`;
+   - `error` with `requested` intent (`host-terminated` after an unclean end included) →
+     `recover_module` at the record's execution revision; `error` with any other intent →
+     `start_module` (R l.3512; recovery would be refused, R l.3403);
+   - `loaded` or `stopping` → wait; `ready` → the socket again;
+   - `NOT_READY` (a cleanup not yet resolved, R l.578) or the error arm `stale-revision` (R l.1819) → read
+     again; any other error → exit 4;
+   - an attempt the launcher's own request began that ended in `error` → exit 4 with its classification.
+
+   It backs off from 20 to 500 ms, acting again whenever the record is `unloaded` or `error` again, until
+   `--timeout`, then exits 2 naming the last state it read. It does not depend on when `start_module`
+   answers: it waits for the socket.
+2. **Admission.** As §7: the peer's uid on accept, another uid closed with nothing written and logged at
+   most once a second; the launcher checks the listener's uid before it sends anything, descriptors
+   included.
+3. **Selection.** The socket reaches exactly one instance, `lcn_call`, fixed by composition. The launcher
+   selects nothing: the start and recovery run under the logosctl instance's own authority (S3) and name
+   the exact instance (BCP l.391-392).
+4. **Presentation handoff.** At initialization, the settings above. Per command, the terminal's
+   descriptors and the output format (BCP l.524-526). Nothing that authenticates crosses: no binding,
+   ticket or Runtime descriptor. The peer's uid and pid are requester provenance, in `lcn_call`'s log line
+   only (BCP l.387).
+5. **Failure behaviour.** The exit codes below.
+
+### The wire format `logos-core-nim.cli.v1`
+
+BCP l.395 assigns no encoding; this one is logos-core-nim's, in `src/logos_core/cli/cli.cddl`. Frames are
+§7's: a 4-byte big-endian length, one deterministic-CBOR value. A connection carries one command.
+
+```cddl
+; logos-core-nim.cli.v1: the protocol between the logosctl launcher and the
+; lcn_call instance's socket (Tier 5 step N-2; DECISIONS G344; BOOTSTRAP
+; l.384-390). BOOTSTRAP assigns no interoperable activation encoding or
+; terminal protocol, so this one is the implementation's own; docs/DAEMON.md
+; §7a documents it.
+;
+; A frame is a 4-byte big-endian length, then one Logos deterministic-CBOR
+; value. A connection carries one command: the launcher sends one
+; lcn.cli_request, with its descriptors attached to the frame's first byte as
+; SCM_RIGHTS ancillary data, in the order its fds list names them; lcn_call
+; answers accepted once it has taken the command, then done with the exit
+; status, or refused instead of both. lcn_call writes everything the user reads
+; to the passed descriptors itself; a reply carries no payload, argument or
+; provider text. The launcher cancels by shutting down its write side. (Names
+; ending in _request or _response are callable rules, INTERFACE §1.3; the
+; request here is lcn.cli_message.)
+
+; Lists are [* ...] (G10: no other occurrence); lcn_call checks the limits the
+; comments give.
+lcn.cli_message = {
+  protocol: "logos-core-nim.cli.v1",
+  ? target: lcn.cli_node_name,
+  output: lcn.cli_output,
+  fds: [* lcn.cli_fd_role],
+  ? deadline_ms: uint32,
+  command: lcn.cli_command,
+}
+
+; The target node's name: "local" is this Runtime (G347); absent, lcn_call's
+; default, "local" in N-2. lcn_call checks the name's syntax,
+; [a-z][a-z0-9_-]*.
+lcn.cli_node_name = tstr .size (1..63)
+
+lcn.cli_output = "json" / "text"
+
+; 2 to 16 descriptors: the first two are always stdout and stderr; each file is
+; the content of one @FILE argument (@- passes the launcher's stdin).
+lcn.cli_fd_role = "stdout" / "stderr" / "file"
+
+lcn.cli_command =
+  lcn.cli_call_command / lcn.cli_describe_command /
+  lcn.cli_subscribe_command / lcn.cli_events_command / lcn.cli_rc_command
+
+; A provider: the instance of a module, and the contract to use, an
+; implemented interface by its root; absent, the primary contract.
+lcn.cli_provider = {
+  module: tstr .size (1..64),
+  ? instance: tstr .size (1..128),
+  ? contract: bstr .size 32,
+}
+
+; One call (D26: named arguments only). args (at most 256) and json are
+; exclusive; json is one JSON object, the whole request.
+lcn.cli_call_command = {
+  op: "call",
+  provider: lcn.cli_provider,
+  method: tstr .size (1..128),
+  ? args: [* lcn.cli_arg],
+  ? json: tstr .size (1..1048576),
+}
+
+; key=value, or key=@FILE: fd indexes the message's fds, a "file" role.
+lcn.cli_arg = lcn.cli_text_arg / lcn.cli_file_arg
+
+lcn.cli_text_arg = {
+  kind: "text",
+  name: tstr .size (1..128),
+  value: tstr .size (0..65536),
+}
+
+lcn.cli_file_arg = {
+  kind: "file",
+  name: tstr .size (1..128),
+  fd: uint8,
+}
+
+lcn.cli_describe_command = {
+  op: "describe",
+  provider: lcn.cli_provider,
+}
+
+; A stream ends at count events, after for_ms, at the launcher's EOF, or when
+; lcn_call ends it (G349).
+lcn.cli_subscribe_command = {
+  op: "subscribe",
+  provider: lcn.cli_provider,
+  event: tstr .size (1..128),
+  ? count: uint32,
+  ? for_ms: uint32,
+}
+
+; The target Runtime's own Runtime Control events; names (1 to 16) absent:
+; the default set, the three the events rule grants (G346).
+lcn.cli_events_command = {
+  op: "events",
+  ? names: [* tstr .size (1..128)],
+  ? count: uint32,
+  ? for_ms: uint32,
+}
+
+; Runtime Control at a named node, through lcn_call's binding for it (RUNTIME
+; l.238; G347): reserved for Tier 5 step 5-7a, refused until then. params is
+; the method's deterministic-CBOR request.
+lcn.cli_rc_command = {
+  op: "rc",
+  method: tstr .size (1..64),
+  params: bstr .size (0..1048576),
+}
+
+lcn.cli_reply = {
+  protocol: "logos-core-nim.cli.v1",
+  outcome: lcn.cli_outcome,
+}
+
+lcn.cli_outcome = lcn.cli_accepted / lcn.cli_done / lcn.cli_refused
+
+lcn.cli_accepted = { status: "accepted" }
+
+; The launcher's exit status (G349).
+lcn.cli_done = { status: "done", exit: uint8 }
+
+; A frame or a command lcn_call refuses before taking it; the connection is
+; closed after it and every descriptor that arrived is closed.
+lcn.cli_refused = {
+  status: "refused",
+  reason: "protocol" / "too-large" / "busy" / "closing",
+  ? message: tstr .size (0..512),
+}
+```
+
+
+- The launcher sends one `lcn.cli_message`: `protocol`, an optional `target` node (absent: `local`, this
+  Runtime), `output` (`json` or `text`), `fds` naming each descriptor's role (`stdout`, `stderr`, then one
+  `file` per `@FILE`), an optional `deadline_ms`, and the `command`: `call` (provider, method, `args` or
+  `json`), `describe` (provider), `subscribe` and `events` (Streams, below), or `rc` (reserved for
+  remote nodes, refused). A provider is a module, an optional instance, and an optional `contract` root
+  that selects any of its exact contract views (primary, implemented interface or extended view;
+  absent: primary).
+- The descriptors travel as `SCM_RIGHTS` on the frame's first byte, at most 16. `lcn_call` makes them
+  close-on-exec at once, closes every one it received when it refuses a frame, and closes them all when
+  the command ends, before it answers, so a reader of a pipe sees its end.
+- `lcn_call` answers `accepted` once it has taken the command, then one `done` with the exit status; or
+  `refused` (`protocol`, `too-large`, `busy` or `closing`, with a message) instead of both. A reply
+  carries no payload, argument or provider text.
+- **Cancel = half-close.** On SIGINT or SIGTERM the launcher shuts down its write side; `lcn_call` cancels
+  the call in flight, writes nothing more and answers `done` with 130. A second signal ends the launcher
+  at once. A launcher that disappears is the same end of input.
+
+### Arguments and output (G349)
+
+- **Arguments** are named only (D26): `NAME=VALUE` for a scalar field of the request, `NAME=@FILE` (or
+  `@-` for stdin) for one read from the passed descriptor, or `--request '{…}'` for the whole request as
+  JSON (structured fields, unions, arrays). Values are typed from the method's request rule: integers in
+  decimal, `true`/`false`, text as given, byte strings as hex, a text-literal choice as its text. From
+  `@FILE`, a text or byte string is the file's bytes as they are (text must be UTF-8), and any other kind
+  is the file's text less exactly one trailing newline (`echo 3 > n`); in a union each alternative reads
+  the file by its own rule, so `12` and a newline is refused for `uint32 / tstr` as ambiguous. A file is
+  read up to 16 MiB, or up to its field's `.size` bound and one byte more, and refused past either. An unknown field, a structured field
+  given as `NAME=VALUE`, a value that a union's alternatives read differently, and a float are refused
+  (exit 1) with the field's name and the request's fields. The value is checked against the request rule
+  before it is sent; the provider's host checks it again.
+- **Output** follows §7's rule (JSON when stdout is not a terminal; `--json`, `--text`): the logosctl
+  envelope with the response rendered as G89 writes values, or the response in diagnostic notation. Text
+  a provider supplied (an error message or detail) is labelled "(declared)" and has control characters
+  replaced. Every output carries the `NON-PRODUCTION deployment` line when the switch is on.
+- **Marked methods** (a request or response with a marked field; G349's N-2d amendment, INTERFACE §1.4.1)
+  are called on the local node only. A marked request takes each field from a file, `NAME=@FILE` or
+  `NAME=@-`: a `NAME=VALUE` or `--request` for one is refused before anything is read (exit 1), since a
+  value on the command line is in the shell's history and in the process's arguments, which nothing
+  erases; do not type a secret there even so. A structured field of a marked request cannot be given
+  yet (there is no `--request @FILE`). A marked response is written to stdout only, as any response, and
+  never to a failure or the log. The launcher and `lcn_call` erase every copy they make of a marked
+  request or response, whatever the outcome: a refusal, a provider's failure, a cancel, a reader that
+  closed stdout. Their messages name the field and the request's fields, never a value: a type error
+  says the file does not read as the field's type, and a size error states the length. A marked method
+  is refused (exit 1) on another node (a remote path has no erasure promise, INTERFACE l.373) and by a
+  refc build of `lcn_call` (G277). `@-` on a terminal echoes what is typed, and the newline that ends it
+  is part of a text or byte value (use `printf %s`, or a file without one). Text a provider puts in its
+  own failure is its own and is shown "(declared)": a provider that quotes a secret there discloses it
+  (CONFORMANCE.md).
+- **`describe`** lists the provider's contract views (primary, interfaces, extended views) with their
+  roots, the roots its module record carries, and the selected contract's methods (request fields and
+  response rule) and events.
+- **`module wait MODULE [--instance I] [--state S]`** is a logosctl instance command: it polls
+  `get_readiness` (100 ms, backing off to 1 s) until the state is `S` (default `ready`; exit 0), the
+  instance is in `error` (exit 4, with its failure), or `--timeout` (exit 2, naming the last state).
+
+### Exit codes
+
+| Exit | Meaning |
+|---|---|
+| 0 | done |
+| 1 | refused before anything was called: usage, an unknown node, module, method or event, invalid arguments, a marked value on the command line, a marked method on another node, a refused frame |
+| 2 | no daemon, `lcn_call` not reachable or not started before `--timeout`, busy or closing past it, or **the outcome unknown**: a `TRANSPORT_ERROR`, `TIMEOUT` or a `CANCELLED` nobody asked for after the call was sent, or a lost `done`. The provider may have run the call. |
+| 4 | a Runtime Control failure: `NOT_AUTHORISED`, `NOT_READY`, an error arm, a continuation fault, with code and message |
+| 5 | the provider's error channel answered the call (`METHOD_NOT_FOUND`, `INVALID_PARAMS`, `MODULE_ERROR`): the code and the provider's declared text |
+| 6 | a stream `lcn_call` or the Runtime ended: the route, its session or the subscription ended, the terminal did not keep up, or `lcn_call` is stopping (Streams, below) |
+| 130 | interrupted |
+
+**One retry.** A call whose `prepare_call` failed (nothing was submitted), or that completed `NOT_READY`
+or `NOT_AUTHORISED` (refused before the provider ran it), is retried once on a new route, within what
+remains of the deadline. A `TRANSPORT_ERROR`, `TIMEOUT` or `CANCELLED` after submission is never retried:
+the call may have run. A route whose handle has ended is never used again.
+
+### Grants
+
+The system rules give `lcn_call` the Runtime Control methods it needs and the three events `events`
+follows (S6, the events rule, §5); they give it no provider access. To call a provider, an operator rule
+allows `discover` on **every exact contract view** of that provider (`describe_provider` answers all of
+them or nothing; R l.413-416, l.428, l.90-91), and `establish-route`, `renew-route` and `call` (or
+`subscribe-event`) on the contract called (R l.1642):
+
+```cbor-diag
+{
+  "kind": "allow",
+  "subject": {"instances": ["lcn_call"]},
+  "scopes": [
+    {
+      "kind": "provider-access",
+      "contract": {
+        "commitment_model": "logos.commitment-model.2026-10",
+        "schema_root": h'<the root logosctl describe prints>',
+        "hash_profile": "logos.hash-profile.2026-08.choice-index",
+        "hash_suite": "logos.hash-suite.blake3-256"
+      },
+      "actions": ["discover", "establish-route", "renew-route", "call"]
+    }
+  ]
+}
+```
+
+with one more `discover` scope for each other contract view of the provider; `logosctl describe`
+prints the roots. Where the Runtime answers `NOT_AUTHORISED`, the launcher prints that code and the
+Runtime's message; it guesses no reason. Every process of logosd's user can use `lcn_call` with all of
+these grants, as with the logosctl instance (§7): grant it what the session's user may call.
+
+### Streams (G349)
+
+- **`subscribe MODULE EVENT [--count N] [--for DURATION] [--instance I] [--contract ROOT]`**: one event
+  the provider declares, named by its identifier (`meter.changed_event`), without its namespace
+  (`changed_event`), or without the `_event` suffix too (`changed`); an unknown or ambiguous name is
+  refused (1) with the provider's events. `lcn_call` establishes a route whose access names that event
+  only (`subscribe_events: [root]`), so the grant needs `establish-route` and `subscribe-event` on the
+  contract (Grants), then subscribes on it. A refused subscription writes nothing but the failure (4).
+  Each delivery also needs the provider's own `publish-event` on that contract (CA l.244-247), an
+  operator rule naming the provider's instance, as S1 does for the Capability Authority. Without it
+  every publication is skipped: the stream stays open and sees nothing.
+- **`events [NAME]... [--count N] [--for DURATION]`**: this Runtime's Runtime Control events, on
+  `lcn_call`'s own binding. NAME as above (`module_state_changed`,
+  `logos.runtime_control.module_state_changed_event`), at most 16; none names the events rule's three
+  (§5). Another Runtime Control event is `NOT_AUTHORISED` (4): S7 denies it, and a deny wins over any
+  operator rule.
+- **Output.** One line per event, written as it arrives: JSON `{"event": ID, "data": VALUE}`, VALUE as
+  G89 renders a response, or with `--text` `ID VALUE` in diagnostic notation. A stream that fails after
+  its events adds the failure: one envelope line on stdout in JSON, `logosctl: CODE: message` on stderr
+  in text.
+- **Its end.** `--count` events written, or `--for` elapsed (milliseconds, or a number with `ms`, `s`, `m`
+  or `h`; 1 ms to 49 days): 0. The launcher's EOF, at SIGINT or SIGTERM: 130. Exit 6, after the events it
+  had, when `lcn_call` or the Runtime ends it:
+  - "the route ended: the provider is not ready" (`NOT_READY`): the provider stopped, or `lcn_call`
+    is stopping and the Runtime ended its routes before `lcn_call` ended the stream itself;
+  - "the route's session ended; run the command again" (`NOT_AUTHORISED`): below;
+  - "the subscription ended: authority to receive the event ended" (`NOT_AUTHORISED`): the authority
+    no longer allows a delivery, such as after a revoked grant (T l.753; IF l.1472-1485);
+  - "the terminal did not keep up; the stream ended": below;
+  - "lcn_call is stopping; the stream ended": `module stop lcn_call`, or logosd's stop, for an `events`
+    stream, or a `subscribe` stream whose route had not ended yet.
+- **One route session.** A subscription stays on the route it was made on and ends with that route's
+  session: the decision's validity, one hour by default ([AUTHORITY-POLICY.md](AUTHORITY-POLICY.md)). A
+  renewal does not extend a session (R l.3337-3338).
+- **A terminal that does not keep up.** `lcn_call` copies each event into a queue of 1024 events or 16
+  MiB; when it is full, the stream ends (6) rather than lose events silently. The message goes to stderr
+  whatever the output (in JSON, its envelope), since stdout waits for the same reader; `lcn_call` waits
+  at most a second for room there.
+
+### Limits
+
+| | |
+|---|---|
+| Workers | `cli.workers` (1–32, default 8): one-shot commands in service at once; one more is refused `busy` and retried until `--timeout` |
+| Streams | `cli.streams` (1–64, default 8): subscriptions and event streams at once |
+| Stream queue | 1024 events or 16 MiB per stream; `events` names at most 16 |
+| Idle timeout | `cli.idle_timeout_ms` (100–600000, default 30 s): a connection without a complete request |
+| Route idle | `cli.route_idle_ms` (1000–86400000, default 10 min) |
+| Request frame | 1 MiB of argument text and 128 KiB for the rest; larger values as `@FILE` |
+| Descriptors | 16: stdout, stderr and 14 `@FILE` |
+| Call deadline | the shell's `--timeout` (default 65 s), what remains of it after activation |
+| Hops | 4 continuations on one call (remote nodes, Tier 5 step 5-7a) |
+| Listen backlog | 64 |
+
 ## 8. Administration
 
 There is no approval path and no client command that changes authority. The policy, its grants and the
@@ -742,6 +1169,8 @@ set`, `logosctl trust …`, or the owner's own edits, each applying at the next 
 - **State transfers** are the same kind of input (decision 9): an entry in `state_transfers`, set with
   `daemon config set` while logosd is stopped, authorizes one replacement instance to take another's
   state at the next start (§11). No socket command and no Runtime Control method moves state.
+- **Grants to `lcn_call`** for operator providers are ordinary policy rules in the same file (§7a,
+  "Grants"); the system rules give it none.
 - **State disposal** is offline too: `logosctl state purge`, with logosd stopped, removes a retired
   instance's preserved state directory, the separately authorized deletion of BCP l.400;
   `logosctl state list` shows what is kept and where it came from (§11). No socket command and no
@@ -938,7 +1367,9 @@ logosd logs to stderr, one line per event: `logosd[<pid>]: <level>: <text>`, lev
 `info` (`--log-level`, default `info`). A service manager collects it. The start log has the ready line
 (§4), the `NON-PRODUCTION` warning when the switch is on, the call-evidence store's line when it is on
 (§9), the orchestrator's lines, the Runtime's diagnostics (below), and one line per socket command
-(`logosctl: <method> from uid U pid P: <code>`). The store warns when it drops records or cuts off a torn
+(`logosctl: <method> from uid U pid P: <code>`). The `lcn_call` instance's Module Host writes to the same
+stream: `lcn_call: serving <socket>` when it starts, and one line per CLI command
+(`lcn_call: <command> node <name> from uid U pid P: exit N [code]`), never an argument or a result. The store warns when it drops records or cuts off a torn
 tail.
 
 **The logging rule** (IF l.375, SEC l.305-306, l.404, G278): no log line holds a payload, a value root, a

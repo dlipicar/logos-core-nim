@@ -24,14 +24,16 @@ when defined(posix):
     ]
   from ../src/logos_core/runtime/evidence import
     newEvidenceContext, accept, verifyEvidence
-  from ../src/logos_core/authority/scopes import encode
+  from ../src/logos_core/authority/scopes import encode, sortSet
   from ../src/logos_core/daemon/supervise import heldLocks
   from ../src/logos_core/runtime/plumbing import MaxDiagnostics
   from logos_sdk/iface/accept import acceptContractSet
   from ../src/logos_core/durable import
     acquire, ensurePrivateDir, release, removeIfPresent, writeAtomic
   import
-    ./support/[daemonbuild, daemonproc, evfixture, modulehostbuild, shortdir, slowdown],
+    ./support/[
+      clibuild, daemonbuild, daemonproc, evfixture, modulehostbuild, shortdir, slowdown
+    ],
     logos_sdk/testing/[kitbuild, testdirs]
 
   import std/posix
@@ -57,6 +59,14 @@ when defined(posix):
       ## `tests/kit/chatter_impl.nim`'s line, which ends with the writer's pid
     ChatterInstance = "chatter-1"
     ChatterDelayVar = "LCN_CHATTER_INIT_DELAY_MS" ## `chatter_impl`'s init delay
+    MeterInstance = "meter-1" ## a hosted provider `lcn_call` is granted
+    LedgerInstance = "ledger-1" ## the confined ledger, `lcn_call`'s provider
+    LedgerShells = 8 ## concurrent `logosctl call`s: `cli.workers`' default
+    ledgerSkips = kitMm == "refc" or (defined(msan) and otherMm == "refc")
+      ## [DECISIONS G277] a refc logosd refuses every route to a contract that
+      ## marks a payload, as the ledger's `seal` does; [G342] a refc library is
+      ## built without the sanitizer, and MemorySanitizer takes what it writes
+      ## for uninitialized (I77)
 
   let
     dExe = logosdProgram()
@@ -68,6 +78,26 @@ when defined(posix):
       acceptContractSet(readFile(repoDir / fixtureDir / "beacon_module.cddl"))
       .expect("the beacon_module contract set").primary.root
     ) ## so `chatter-1` provides it: a hosted provider's endpoint is made in `run/ep`
+    cliArt = cliArtifact()
+    meterLib = buildKitLibrary("meter_impl.nim", "lgdmeter")
+    meterRoot = @(
+      acceptContractSet(readFile(repoDir / "spec/mirrors/IFC/3.9.1.module.cddl"))
+      .expect("the meter_module contract set").primary.root
+    )
+    # [DECISIONS G342, G335] The thread-confined ledger built with the other
+    # memory manager: refc beside this orc logosd, the node's own pairing.
+    # Under refc it is not built, since its cases skip (`ledgerSkips`).
+    ledgerLib =
+      if ledgerSkips:
+        ""
+      else:
+        buildKitLibrary(
+          "ledger_lib.nim", "lgdledger", otherMm, exports = "ledger_module"
+        )
+    ledgerRoot = @(
+      acceptContractSet(readFile(repoDir / fixtureDir / "ledger_module.cddl"))
+      .expect("the ledger_module contract set").primary.root
+    )
 
   var cases = 0
   var children: seq[Child]
@@ -254,6 +284,113 @@ when defined(posix):
   proc startChatter(c: Case): Ran =
     c.ctl("module", "start", "beacon_module", "--instance", ChatterInstance)
 
+  proc providerModule(
+      instance, module, lib: string, root: seq[byte], hosted = true
+  ): LcnAppModule =
+    ## An operator provider realized from `lib` by a Module Host, or in
+    ## logosd's own process when `hosted` is off (`direct_dynamic`).
+    let artifact = LcnAppArtifact(id: module, local_path: lib, hash: digestOfFile(lib))
+    LcnAppModule(
+      instance: instance,
+      module: module,
+      primary_contract: Opt.some(SchemaCommitment(schema_root: root)),
+      implementation:
+        if hosted:
+          LcnAppImplementation(
+            kind: LcnAppImplementationKind.Process_hosted_dynamic,
+            arm_Process_hosted_dynamic:
+              LcnAppImplementationARProcessHostedDynamicMap(artifact: artifact),
+          )
+        else:
+          LcnAppImplementation(
+            kind: LcnAppImplementationKind.Direct_dynamic,
+            arm_Direct_dynamic:
+              LcnAppImplementationARDirectDynamicMap(artifact: artifact),
+          ),
+    )
+
+  proc initCli(
+      c: Case,
+      provider = providerModule(MeterInstance, "meter_module", meterLib, meterRoot),
+  ): Ran =
+    ## [DAEMON.md §7a] The default configuration with the operator module
+    ## `provider` (by default the hosted `meter-1`; not started), an operator
+    ## rule granting `lcn_call` all of its provider actions, its event
+    ## included, the provider's own `publish-event`, and `cli.artifact`
+    ## naming the library `support/clibuild` builds.
+    var dc = defaultDaemonConfig("assigned-by-init")
+    dc.runtime.module_host = Opt.some(hostExe)
+    dc.runtime.module_host_env = Opt.some(@SanitizerEnv)
+    dc.modules = Opt.some(@[provider])
+    let root = provider.primary_contract.get.schema_root
+    var actions = @[
+      LcnApAction(kind: LcnApActionKind.Discover),
+      LcnApAction(kind: LcnApActionKind.Establish_route),
+      LcnApAction(kind: LcnApActionKind.Renew_route),
+      LcnApAction(kind: LcnApActionKind.Call),
+      LcnApAction(kind: LcnApActionKind.Subscribe_event),
+    ]
+    sortSet(actions)
+    dc.policy.arm_Capability_authority.rules = @[
+      LcnApRule(
+        kind: LcnApRuleKind.lcn_Ap_allow,
+        arm_lcn_Ap_allow: LcnApAllow(
+          subject: LcnApSubject(instances: Opt.some(@[CliInstance])),
+          scopes: @[
+            LcnApScope(
+              kind: LcnApScopeKind.lcn_Ap_provider_access,
+              arm_lcn_Ap_provider_access: LcnApProviderAccess(
+                contract: LcnApProviderAccessContractChoice(
+                  kind: LcnApProviderAccessContractChoiceKind.logos_Schema_commitment,
+                  arm_logos_Schema_commitment: SchemaCommitment(schema_root: root),
+                ),
+                actions: actions,
+              ),
+            )
+          ],
+        ),
+      ),
+      # [SPEC CA l.244-247] The provider's own `publish-event`: a delivery
+      # needs it as well as the subscriber's `subscribe-event`.
+      LcnApRule(
+        kind: LcnApRuleKind.lcn_Ap_allow,
+        arm_lcn_Ap_allow: LcnApAllow(
+          subject: LcnApSubject(instances: Opt.some(@[provider.instance])),
+          scopes: @[
+            LcnApScope(
+              kind: LcnApScopeKind.lcn_Ap_provider_access,
+              arm_lcn_Ap_provider_access: LcnApProviderAccess(
+                contract: LcnApProviderAccessContractChoice(
+                  kind: LcnApProviderAccessContractChoiceKind.logos_Schema_commitment,
+                  arm_logos_Schema_commitment: SchemaCommitment(schema_root: root),
+                ),
+                actions: @[LcnApAction(kind: LcnApActionKind.Publish_event)],
+              ),
+            )
+          ],
+        ),
+      ),
+    ]
+    sortSet(dc.policy.arm_Capability_authority.rules)
+    dc.cli = Opt.some(LcnDcCli(artifact: Opt.some(cliArt)))
+    c.initWith(dc)
+
+  func hexOf(bytes: openArray[byte]): string =
+    for b in bytes:
+      result.add(toHex(b, 2).toLowerAscii)
+
+  proc startMeter(c: Case): Ran =
+    c.ctl("module", "start", "meter_module", "--instance", MeterInstance)
+
+  proc lcn(c: Case, args: varargs[string]): Ran =
+    ## A CLI command with no output flag: stdout is a file, so JSON (G89).
+    runOnce(
+      ctlExe, @["--session-dir", c.s.dir] & @args, c.dir, timeoutMs = 120_000 * Slow
+    )
+
+  proc cliSocket(c: Case): string =
+    c.s.dir / "run" / "lcn_call.sock"
+
   proc chatterLogged(d: Child, count: int): seq[int] =
     ## The chatter pids in `d`'s log once there are `count`, or what there is
     ## after `ReadyMs`.
@@ -262,6 +399,95 @@ when defined(posix):
     while result.len < count and getMonoTime() < until:
       sleep(20)
       result = chatterPids(d.errText)
+
+  proc ledgerCall(c: Case, args: varargs[string]): (int, JsonNode) =
+    ## `logosctl call ledger_module …` with JSON output: its exit code and
+    ## the response.
+    let r = c.lcn(@["call", "ledger_module"] & @args)
+    checkpoint r.stdout & r.stderr
+    try:
+      (r.code, parseJson(r.stdout){"result"})
+    except CatchableError:
+      (r.code, newJNull())
+
+  proc settles(c: Case, instance: string): string =
+    ## The instance's state once it is no longer `ready` or `stopping`, or
+    ## what it is after `ReadyMs`.
+    let until = getMonoTime() + initDuration(milliseconds = ReadyMs)
+    result = c.state(instance)
+    while result in ["ready", "stopping"] and getMonoTime() < until:
+      sleep(20)
+      result = c.state(instance)
+
+  proc ledgerCase(hosted: bool) =
+    ## [DECISIONS G342, G335-G338] The ledger, a thread-confined refc kit
+    ## module, realized by orc logosd in its own process or by a Module Host;
+    ## `lcn_call` calls it.
+    let c = newCase()
+    check c.initCli(
+      providerModule(LedgerInstance, "ledger_module", ledgerLib, ledgerRoot, hosted)
+    ).code == 0
+    let d = c.start()
+    c.expectReady(d)
+    check c.ctl("module", "start", "ledger_module", "--instance", LedgerInstance).code ==
+      0
+    check c.ctl("module", "wait", "ledger_module", "--instance", LedgerInstance).code ==
+      0
+    # Its GC'd state is kept in the instance, on its module thread.
+    let (a, first) = c.ledgerCall("post", "key=k", "amount=5")
+    check a == 0
+    check first{"total"}.getBiggestInt == 5
+    let thread = first{"thread"}.getBiggestInt
+    check thread != 0
+    # [IF l.1899-1905, l.1942-1947] Calls that arrive at once, on whatever
+    # threads the host calls from, all run on that thread.
+    var shells: seq[Child]
+    for i in 0 ..< LedgerShells:
+      shells.add(
+        spawnChild(
+          ctlExe,
+          [
+            "--session-dir", c.s.dir, "call", "ledger_module", "post", "key=k",
+            "amount=1",
+          ],
+          c.dir,
+          "post" & $i,
+        )
+      )
+    for sh in shells:
+      check waitExit(sh, 120_000 * Slow) == 0
+      try:
+        check parseJson(sh.outText){"result", "thread"}.getBiggestInt == thread
+      except CatchableError:
+        checkpoint("not JSON: " & sh.outText & sh.errText)
+        fail()
+    let (b, after) = c.ledgerCall("post", "key=k", "amount=0")
+    check b == 0
+    check after{"total"}.getBiggestInt == 5 + LedgerShells
+    # [G338] An async handler, through the deferred surface; and a plain one
+    # reading its caller.
+    let (w, waited) = c.ledgerCall("wait", "channel=1", "millis=20", "value=7")
+    check w == 0
+    check waited{"value"}.getBiggestInt == 7
+    check waited{"thread"}.getBiggestInt == thread
+    check waited{"note"}.getStr == CliInstance
+    let (p, probed) = c.ledgerCall("probe", "channel=1", "value=0")
+    check p == 0
+    check probed{"note"}.getStr == CliInstance
+    check probed{"thread"}.getBiggestInt == thread
+    # Stopped and started again: a new instance, with its own state.
+    check c.ctl("module", "stop", "ledger_module", "--instance", LedgerInstance).code ==
+      0
+    check c.settles(LedgerInstance) in ["loaded", "unloaded"]
+    check c.ctl("module", "start", "ledger_module", "--instance", LedgerInstance).code ==
+      0
+    check c.ctl("module", "wait", "ledger_module", "--instance", LedgerInstance).code ==
+      0
+    let (r, again) = c.ledgerCall("post", "key=k", "amount=2")
+    check r == 0
+    check again{"total"}.getBiggestInt == 2
+    check d.stopped == 0
+    check hostsGone()
 
   suite "daemon.logosd: logosd and logosctl as processes (DAEMON.md) [IMPL-DECISION G88] [IMPL-DECISION G89] [IMPL-DECISION G296]":
     teardown:
@@ -1165,6 +1391,160 @@ when defined(posix):
       check reaped.code == 1
       check "seq 1 is not retained" in reaped.stderr
       check not fileExists(outFile & ".2")
+
+    test "[IMPL-DECISION G343] [IMPL-DECISION G349] call, describe and module wait as processes: the first command starts lcn_call; JSON on a file, diagnostic notation with --text; exits 1, 2 and 5":
+      let c = newCase()
+      check c.initCli().code == 0
+      let d = c.start()
+      c.expectReady(d)
+      check c.startMeter().code == 0
+      let mw = c.ctl("module", "wait", "meter_module", "--instance", MeterInstance)
+      checkpoint mw.stderr
+      check mw.code == 0
+      # [G350] Not started with logosd: a wait for it ends at the timeout (2).
+      let early =
+        c.ctl("--timeout", "300", "module", "wait", CliModule, "--state", "ready")
+      checkpoint early.stderr
+      check early.code == 2
+      check "last state unloaded" in early.stderr
+      check not entryExists(c.cliSocket)
+      # [G89] JSON when stdout is not a terminal, as here.
+      let a = c.lcn("call", "meter_module", "read", "channel=7")
+      checkpoint a.stdout & a.stderr
+      check a.code == 0
+      check a.stderr == ""
+      let j = parseJson(a.stdout)
+      check j{"command"}.getStr == "call meter_module.read"
+      check j{"status"}.getStr == "ok"
+      check j{"result", "label"}.getStr == "ch7"
+      check j{"result", "reading", "value"}.getInt == 70
+      check c.state(CliInstance) == "ready"
+      check entryExists(c.cliSocket)
+      check c.ctl("module", "wait", CliModule).code == 0
+      let t = c.ctl("call", "meter_module", "read", "channel=8")
+      checkpoint t.stdout & t.stderr
+      check t.code == 0
+      check "\"ch8\"" in t.stdout
+      check "\"deployment\"" notin t.stdout
+      let desc = c.lcn("describe", "meter_module")
+      checkpoint desc.stdout & desc.stderr
+      check desc.code == 0
+      let r = parseJson(desc.stdout){"result"}
+      check r{"instance"}.getStr == MeterInstance
+      check r{"selected"}.getStr == hexOf(meterRoot)
+      check r{"methods"}.getElems.anyIt(it{"method"}.getStr == "read")
+      let dt = c.ctl("describe", "meter_module")
+      check dt.code == 0
+      check hexOf(meterRoot) & " (selected)" in dt.stdout
+      # A value its field does not read (1); the provider's error channel (5).
+      let bad = c.ctl("call", "meter_module", "read", "channel=x")
+      check bad.code == 1
+      check bad.stdout == ""
+      check bad.stderr.startsWith("logosctl: ")
+      let pe = c.ctl("call", "meter_module", "read", "channel=13")
+      checkpoint pe.stderr
+      check pe.code == 5
+      # [G349 N-2d] A malformed argument is named by its position, never
+      # echoed: the launcher cannot tell a marked one.
+      let typo = c.ctl("call", "meter_module", "read", "QZXtypo7")
+      checkpoint typo.stderr
+      check typo.code == 1
+      check "QZXtypo7" notin typo.stdout & typo.stderr
+      check "argument 1 after the method" in typo.stderr
+      check d.stopped == 0
+      check hostsGone()
+
+    test "[IMPL-DECISION G349] subscribe as a process: SIGINT ends it (130) and lcn_call serves the next command; a stream open at logosd's stop ends (6), logosd exits 0 and lcn_call's socket is gone":
+      let c = newCase()
+      check c.initCli().code == 0
+      let d = c.start()
+      c.expectReady(d)
+      check c.startMeter().code == 0
+      check c.ctl("module", "wait", "meter_module", "--instance", MeterInstance).code ==
+        0
+      proc streaming(c: Case, name: string): Child =
+        ## `logosctl subscribe meter_module changed`, once its first event is
+        ## on stdout: channel 15 publishes one, and a publication before the
+        ## subscription is active reaches no one.
+        result = spawnChild(
+          ctlExe,
+          ["--session-dir", c.s.dir, "subscribe", "meter_module", "changed"],
+          c.dir,
+          name,
+        )
+        children.add(result)
+        let until = getMonoTime() + initDuration(milliseconds = ReadyMs)
+        while "meter.changed_event" notin result.outText and result.alive and
+            getMonoTime() < until:
+          discard c.lcn("call", "meter_module", "read", "channel=15")
+          sleep(20)
+        checkpoint(name & ": " & result.outText & result.errText)
+        check "{\"event\":\"meter.changed_event\",\"data\":{\"value\":150}}" in
+          result.outText
+
+      let first = c.streaming("sub1")
+      check posix.kill(first.pid, SIGINT) == 0
+      let firstExit = waitExit(first, StopMs)
+      checkpoint("sub1 exit " & $firstExit & ": " & first.outText & first.errText)
+      if firstExit != 130:
+        checkpoint("logosd: " & d.errText)
+      check firstExit == 130
+      check first.errText == ""
+      let after = c.lcn("call", "meter_module", "read", "channel=7")
+      checkpoint after.stdout & after.stderr
+      check after.code == 0
+      # [plan §3.7] lcn_call ends the stream as logosd stops (6, not 130):
+      # lcn_call stopping, or the meter's route ending first.
+      let second = c.streaming("sub2")
+      check d.stopped == 0
+      let secondExit = waitExit(second, StopMs)
+      checkpoint("sub2 exit " & $secondExit)
+      check secondExit == 6
+      checkpoint second.outText & second.errText
+      check "\"status\":\"error\"" in second.outText
+      check not entryExists(c.cliSocket)
+      check hostsGone()
+
+    test "[IMPL-DECISION G289] [IMPL-DECISION G350] kill -9 with lcn_call ready, then a restart: lcn_call comes back, resumed or recovered, and the next logosctl call succeeds":
+      let c = newCase()
+      check c.initCli().code == 0
+      var d = c.start()
+      c.expectReady(d)
+      check c.startMeter().code == 0
+      check c.ctl("module", "wait", "meter_module", "--instance", MeterInstance).code ==
+        0
+      check c.lcn("call", "meter_module", "read", "channel=7").code == 0
+      check c.state(CliInstance) == "ready"
+      killChild(d)
+      d = c.start("logosd2")
+      c.expectReady(d)
+      # Both were restored as `error`, `host-terminated` (RUN-1194), with
+      # requested intent: the orchestrator's first pass resumes them (G289),
+      # and a command that comes first recovers lcn_call itself (DAEMON.md
+      # §7a, Activation). Neither is `unloaded`: the intent was kept.
+      check c.state(CliInstance) in ["error", "loaded", "ready"]
+      check c.ctl("module", "wait", "meter_module", "--instance", MeterInstance).code ==
+        0
+      let b = c.lcn("call", "meter_module", "read", "channel=9")
+      checkpoint b.stdout & b.stderr
+      check b.code == 0
+      if b.code == 0:
+        check parseJson(b.stdout){"result", "label"}.getStr == "ch9"
+      check c.state(CliInstance) == "ready"
+      check d.stopped == 0
+      check hostsGone()
+
+    test "[IMPL-DECISION G342] [IMPL-DECISION G335] a thread-confined refc kit module in orc logosd's own process (direct_dynamic): its state on its module thread under concurrent calls, an async handler, its caller, stop and start again":
+      if ledgerSkips:
+        skip()
+      else:
+        ledgerCase(hosted = false)
+
+    test "[IMPL-DECISION G342] [IMPL-DECISION G335] the same module realized by a Module Host (hosted_dynamic): the same calls, stop and start again, and no host left after logosd stops":
+      if ledgerSkips:
+        skip()
+      else:
+        ledgerCase(hosted = true)
 else:
   import unittest2
 

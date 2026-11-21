@@ -317,9 +317,11 @@ proc providerChecked*(c: sink AbiCheck, cancelKnown: bool): AbiCheck =
   ## result handed over, as for any rejected result).
   if c.isOk or providerStatusAllowed(c.error.code, cancelKnown):
     return c
-  var f = c.error
-  let code = f.code
-  wipe(f)
+  # Zeroed in place: `var f = c.error` copied the diagnostics and left the
+  # parameter's own to be released unzeroed (DECISIONS G276).
+  var c = c
+  let code = c.unsafeError.code
+  wipe(c.eResultPrivate)
   moduleFailure("a provider status outside the set: " & $code)
 
 func transfersBuffer*(r: LogosResult, buffer: pointer): bool =

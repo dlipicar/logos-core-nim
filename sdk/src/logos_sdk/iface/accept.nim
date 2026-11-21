@@ -587,6 +587,24 @@ func binding*(s: ContractSet): Result[ModuleBinding, string] =
     )
   )
 
+func documents*(b: ModuleBinding): seq[Contract] =
+  ## The binding's primary document when it has one, then its interfaces, then
+  ## its supporting schemas: `ContractSet.documents`' order.
+  if b.primary.isSome:
+    result.add(b.primary.get)
+  result.add(b.interfaces)
+  result.add(b.supporting)
+
+func exposedCount*(b: ModuleBinding): int =
+  ## How many of `documents` are exposed contracts (the primary and the
+  ## interfaces); the supporting schemas follow them.
+  (if b.primary.isSome: 1 else: 0) + b.interfaces.len
+
+proc context*(b: ModuleBinding): SchemaContext =
+  ## What the binding's documents were built against: the pinned common schema
+  ## with its supporting schemas and interfaces (`dependencyContext`).
+  dependencyContext(b.supporting, b.interfaces)
+
 func interfacesOf*(b: ModuleBinding, c: Contract): seq[Contract] =
   ## [SPEC INTERFACE §1.1] The binding's interfaces that `c`'s `_implements`
   ## selects, in that order: all of them for the primary contract, none for an
