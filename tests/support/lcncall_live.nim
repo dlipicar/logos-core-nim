@@ -6,7 +6,7 @@
 
 import
   std/[
-    algorithm, atomics, json, locks, monotimes, os, sequtils, strutils, times,
+    algorithm, atomics, json, locks, monotimes, os, sequtils, strutils, tables, times,
     typedthreads,
   ]
 import std/posix except Time
@@ -34,14 +34,29 @@ let liveTree = kitTreeOf(currentSourcePath().parentDir.parentDir / "test_lcn_cal
   ## [kitbuild] the tests directory's tree, as a suite there would use
 
 const
-  Patience = 60 * Slow ## seconds a bounding wait allows
-  Timeout = 30_000 * Slow ## a command's, and a client's, wait, ms
-  IdleMs = min(60_000 * Slow, 600_000)
+  Load = when compileOption("mm", "refc"): 4 else: 1
+    ## [IMPL] `Slow` for a refc build of the whole stack. CI's refc jobs run
+    ## the heaviest refc suites side by side: there test_lcn_call took 1207 s
+    ## (x86_64) and 936 s (arm64) against 245 s under orc-release (run
+    ## 44888184613), and its waits ran out; on the Mac refc takes 1.3 times
+    ## orc's time. Like `Slow`, it multiplies only bounds, never a deadline a
+    ## case is about. A shutdown takes 0.5 to 1.3 s on a loaded Mac.
+  Patience = 60 * Slow * Load ## seconds a bounding wait allows
+  Timeout = 30_000 * Slow * Load ## a command's, and a client's, wait, ms
+  IdleMs = min(60_000 * Slow * Load, 600_000)
     ## `ctl.idle_timeout_ms` and `cli.idle_timeout_ms` where no case is about
     ## them (test_ctl_module's reason)
   StopDeadlineMs = 5_000 * Slow
-    ## `stop_deadline_ms` and `shutdown_grace_ms`: L-13's provider ignores
-    ## its cancellation, so its stop ends at this deadline
+    ## L-13's `stop_deadline_ms`: its provider ignores its cancellation, so
+    ## its stop ends at this deadline
+  StopBoundMs = Patience * 1000
+    ## every other session's `stop_deadline_ms`, and every session's
+    ## `shutdown_grace_ms`: a bound, since a stop past it is a cleanup timeout
+    ## and the shutdown's result MODULE_ERROR (CI's refc and MSan runs went
+    ## past 5 s and 15 s)
+  HelloMs = Timeout
+    ## `transport.hello_timeout_ms`: a hosted provider's Hello asks the
+    ## Runtime about the ticket over the carrier (test_hosted_routes' `roomy`)
   SanitizerEnv =
     ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
   MeterInstance = "meter-1"
@@ -218,8 +233,21 @@ type Shape = object ## What a case changes in the session.
   meterGrant: bool
     ## the meter's `subscribe-event` is not in its rule: `lcn_call` issues it
     ## itself (L-11), with the authority's methods granted
+  stopDeadlineMs: int = StopBoundMs ## `stop_deadline_ms`
+  providers: seq[string]
+    ## [IMPL] the providers started at boot, of `Providers`; empty: all. A
+    ## Module Host's start and stop are most of a boot's cost under a
+    ## sanitizer, so a case starts only those it uses.
 
-var sessions = 0
+func started(shape: Shape): seq[string] =
+  if shape.providers.len == 0:
+    Providers
+  else:
+    shape.providers.filterIt(it in Providers)
+
+var
+  sessions = 0
+  startedIn: Table[string, seq[string]] ## a session directory's `started`
 
 proc newSession(shape = Shape()): Session =
   inc sessions
@@ -231,8 +259,9 @@ proc newSession(shape = Shape()): Session =
   var dc = defaultDaemonConfig("assigned-by-init")
   dc.runtime.module_host = Opt.some(hostExe)
   dc.runtime.module_host_env = Opt.some(@SanitizerEnv)
-  dc.runtime.stop_deadline_ms = Opt.some(uint32(StopDeadlineMs))
-  dc.runtime.shutdown_grace_ms = Opt.some(uint32(StopDeadlineMs))
+  dc.runtime.stop_deadline_ms = Opt.some(uint32(shape.stopDeadlineMs))
+  dc.runtime.shutdown_grace_ms = Opt.some(uint32(StopBoundMs))
+  dc.transport = Opt.some(LcnAppTransport(hello_timeout_ms: Opt.some(uint32(HelloMs))))
   dc.modules = Opt.some(
     @[
       hosted(MeterInstance, "meter_module", meterRoot, meterLib, MeterState),
@@ -242,7 +271,8 @@ proc newSession(shape = Shape()): Session =
     ]
   )
   var o = dc.orchestration.get(LcnDcOrchestration())
-  o.start = Opt.some(Providers)
+  o.start = Opt.some(shape.started)
+  startedIn[s.dir] = shape.started
   dc.orchestration = Opt.some(o)
   var rules = @[
     grant(shapesRoot, Full),
@@ -289,8 +319,44 @@ type Live = object
   up: bool
   cli: string ## lcn_call's socket
   outDir: string
+  shared: bool ## `sharedLive`'s, which the teardown keeps (`share`)
+  last: bool ## the last case to share it: the teardown ends it
 
-var live: ptr Live ## what the teardown ends, if a case left it running
+var
+  live: ptr Live ## what the teardown ends, if a case left it running
+  sharedLive: Live ## the session consecutive cases share (`share`)
+  sharedShape: Shape
+
+# What a case costs [IMPL]: one line per case, so a CI log shows where the
+# suite's time goes.
+
+type Cost = object ## The main thread's; commands run from other threads too.
+  began: MonoTime
+  boots, shutdowns: int
+  bootMs, shutdownMs: int64
+
+var
+  cost: Cost
+  costCommands, costCommandMs: Atomic[int64] ## `run`'s, from any thread
+
+proc costBegin() =
+  cost = Cost(began: getMonoTime())
+  costCommands.store(0)
+  costCommandMs.store(0)
+
+proc msSince(t: MonoTime): int64 =
+  inMilliseconds(getMonoTime() - t)
+
+proc costLine(name: string): string =
+  let at = name.find("L-")
+  let tag =
+    if at >= 0:
+      name[at ..< max(at, name.find(':', at))]
+    else:
+      name
+  "lcn_call cost " & tag & ": " & $msSince(cost.began) & " ms; " & $cost.boots & " boot " &
+    $cost.bootMs & " ms, " & $cost.shutdowns & " shutdown " & $cost.shutdownMs & " ms, " &
+    $costCommands.load & " commands " & $costCommandMs.load & " ms"
 
 proc rc[Req](l: Live, m: LcnCtlMethodKind, req: Req): LcnCtlReply =
   let fd = connectCtl(l.d.socketPath, Timeout).expect("a connection")
@@ -357,9 +423,16 @@ proc start(l: Live, module, instance: string) =
   )
   discard r.okBytes
 
+proc finish(l: var Live)
+
 proc boot(s: Session): Live =
-  ## Assembles and starts, then waits for the logosctl socket and the four
-  ## providers (DAEMON.md §4); `lcn_call` is not started.
+  ## Assembles and starts, then waits for the logosctl socket and the
+  ## providers the session starts (DAEMON.md §4); `lcn_call` is not started.
+  ## A shared session still up is ended first: one logosd at a time, since
+  ## `finish` checks that no Module Host is left.
+  if sharedLive.up:
+    finish(sharedLive)
+  let began = getMonoTime()
   result.s = s
   result.outDir = s.dir.parentDir / "o"
   result.lock = lockSession(s).expect("the session lock")
@@ -379,9 +452,11 @@ proc boot(s: Session): Live =
     doAssert getMonoTime() < until,
       "not serving: " & result.d.socketPath & "; the log:\n" & logText()
     sleep(5)
-  for p in Providers:
+  for p in startedIn.getOrDefault(s.dir, Providers):
     doAssert result.reaches(p, LogosNSRuntimeControlStateKind.Ready),
       p & " is not ready; the log:\n" & logText()
+  inc cost.boots
+  cost.bootMs += msSince(began)
 
 proc hostsGone(): bool =
   let until = getMonoTime() + initDuration(seconds = Patience)
@@ -395,13 +470,59 @@ proc finish(l: var Live) =
   if not l.up:
     return
   l.up = false
+  let began = getMonoTime()
   discard runtimeRequestShutdown(l.d.rt)
-  check int64(runtimeWaitForShutdown(l.d.rt).code) == 0
+  let down = runtimeWaitForShutdown(l.d.rt)
+  let tookMs = inMilliseconds(getMonoTime() - began)
+  if int64(down.code) != 0:
+    # What overran, in a log that has nothing else to say it.
+    checkpoint(
+      "the shutdown took " & $tookMs & " ms: " &
+        (if down.message.isNil: "" else: $down.message)
+    )
+  check int64(down.code) == 0
   check destroyRuntime(l.d).isOk
   l.d.release()
   l.lock.release()
   check hostsGone()
   check not fileExists(l.cli)
+  inc cost.shutdowns
+  cost.shutdownMs += msSince(began)
+
+proc healthy(l: Live, shape: Shape): bool =
+  ## What a passing case leaves for the next: the providers ready, and
+  ## `lcn_call` ready or not started.
+  l.up and shape.started.allIt(l.state(it) == LogosNSRuntimeControlStateKind.Ready) and
+    l.state(CliInstance) in
+    [LogosNSRuntimeControlStateKind.Ready, LogosNSRuntimeControlStateKind.Unloaded]
+
+proc share(shape = Shape(), last = false): Live =
+  ## [IMPL] The session consecutive cases of one shape share, with its
+  ## `lcn_call` and routes: booted by the first, kept while each case passes
+  ## and leaves it healthy, ended by the `last` one or a failed case (the
+  ## teardown) or another shape. A boot, a shutdown and `lcn_call`'s start
+  ## are most of a case's cost under a sanitizer; none of these cases is
+  ## about them.
+  if sharedLive.up and (sharedShape != shape or not sharedLive.healthy(shape)):
+    finish(sharedLive)
+  if not sharedLive.up:
+    sharedLive = boot(newSession(shape))
+    sharedShape = shape
+  result = sharedLive
+  result.shared = true
+  result.last = last
+
+proc release(l: var Live, failed: bool) =
+  ## The teardown's end of a case's session: a shared one is kept for the
+  ## next case unless this was the last or failed.
+  if not l.up:
+    return
+  if l.shared:
+    if failed or l.last:
+      finish(sharedLive)
+    l.up = false
+  else:
+    finish(l)
 
 # Commands, as logosctl's launcher runs them ---------------------------------------------
 
@@ -426,9 +547,11 @@ proc run(
     timeoutMs = Timeout,
     credOf: CredFn = nil,
     files: seq[cint] = @[],
+    deadlineMs = 0,
 ): Ran =
   ## `files` are the `@FILE` descriptors, in the order `fileArg`'s `fd`
-  ## indexes them (2 is the first); `run` closes them.
+  ## indexes them (2 is the first); `run` closes them. `deadlineMs` > 0 is the
+  ## message's `deadline_ms`.
   let (op, ofd) = outFile(l.outDir)
   let (ep, efd) = outFile(l.outDir)
   var msg = LcnCliMessage(
@@ -441,6 +564,9 @@ proc run(
   )
   if target.len > 0:
     msg.target = Opt.some(target)
+  if deadlineMs > 0:
+    msg.deadline_ms = Opt.some(uint32(deadlineMs))
+  let began = getMonoTime()
   let r = launch(
     Launch(
       cliSocket: l.cli,
@@ -454,6 +580,8 @@ proc run(
       files: files,
     )
   )
+  discard costCommands.fetchAdd(1)
+  discard costCommandMs.fetchAdd(msSince(began))
   discard posix.close(ofd)
   discard posix.close(efd)
   for f in files:
@@ -618,6 +746,30 @@ proc reader(arg: (ptr Live, int)) {.thread.} =
   let (lp, i) = arg
   concurrent[i].store(lp[].run(meterRead(30 + i)).exit)
   releasePerThread()
+
+proc nowWallMs(): int64 =
+  ## The wall clock in ms, as a route record's `expires_at` counts it.
+  let t = getTime()
+  t.toUnix * 1000 + int64(t.nanosecond div 1_000_000)
+
+proc callsUntil(l: Live, until: int64, idleMs: int, cost: var int64) =
+  ## [IMPL] Commands keep `l`'s meter route in use until the wall clock reaches
+  ## `until` (ms), then return. Each gap is a third of `idleMs`; the last is
+  ## cut so the next command can start at `until`, leaving room for `cost`, the
+  ## longest command so far. So no gap reaches `idleMs` while a command costs
+  ## less than two thirds of it, and one that costs no more than `cost` ends
+  ## before `until`.
+  while true:
+    let left = until - nowWallMs()
+    if left <= idleMs div 3 + cost:
+      sleep(int(max(left, 0)))
+      return
+    sleep(idleMs div 3)
+    let began = getMonoTime()
+    let r = l.run(meterRead(7))
+    checkpoint r.said
+    check r.exit == 0
+    cost = max(cost, msSince(began))
 
 proc otherUid(fd: cint): Result[Peer, string] {.nimcall, gcsafe, raises: [].} =
   let p = ?peerOf(fd)

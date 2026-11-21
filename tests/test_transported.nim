@@ -689,16 +689,34 @@ suite "run.transported: tickets and the Runtime-served endpoint (I90 part 4b-2a)
     e.finish()
 
   ltTest "[RUN-1179] [IMPL-DECISION G257] an endpoint that cannot be created fails the establishment MODULE_ERROR and makes no route":
-    # 120 bytes of directory: no socket path under it fits `sun_path`.
+    # The open made the base and checked it; read-only afterwards, it can hold
+    # no endpoint directory.
+    when defined(posix):
+      if posix.geteuid() == 0:
+        skip() # root writes through 0500
+      else:
+        let base = shortBase / "ro"
+        let e = fixtureEngine(transported(dir = base))
+        discard e.started(meter())
+        let (_, rc) = e.startClient()
+        setFilePermissions(base, {fpUserRead, fpUserExec})
+        let r = rc.establish("k")
+        setFilePermissions(base, {fpUserRead, fpUserWrite, fpUserExec})
+        check r.code == ecModule
+        check e.routes().len == 0
+        check e.diagnostics().anyIt("endpoint" in it)
+        e.finish()
+
+  ltTest "[IMPL-DECISION G58] a base that leaves no room in sun_path for an endpoint fails the open MODULE_ERROR":
+    # 120 bytes of directory: not even `<8 hex>/logos_.sock` fits under it.
     let long = shortBase / repeat('d', 120)
-    let e = fixtureEngine(transported(dir = long))
-    discard e.started(meter())
-    let (_, rc) = e.startClient()
-    let r = rc.establish("k")
-    check r.code == ecModule
-    check e.routes().len == 0
-    check e.diagnostics().anyIt("endpoint" in it)
-    e.finish()
+    let e = openEngine(transported(dir = long))
+    check e.isErr
+    if e.isErr:
+      check e.error.code == ecModule
+      check "the base leaves no room for an endpoint" in e.error.message
+    else:
+      e.get.finish()
 
 # Part 4b-2b: the caller side -------------------------------------------------------------
 

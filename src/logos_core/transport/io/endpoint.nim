@@ -1,8 +1,10 @@
-## TRANSPORT §8.2, §9.1; RUNTIME §2.3, §6.2; G58: the endpoints of
+## TRANSPORT §8.2, §9.1; RUNTIME l.284-297, §6.2; G58: the endpoints of
 ## `logos.local.unix-stream`.
 ##
-## `createEndpoint` makes `<base>/<8 hex>/logos_<module>.sock`: a fresh directory,
-## mode 0700 and owned by the effective uid whatever the umask; a socket bound
+## `createEndpoint` makes `<base>/<8 hex>/logos_<module>.sock`, the module's name
+## cut when the path would not fit `sun_path` (G58 amended 2026-11-21; the
+## spelling is not an interoperability identifier, TRANSPORT l.1356-1358): a
+## fresh directory, mode 0700 and owned by the effective uid whatever the umask; a socket bound
 ## there without ever following, removing or replacing an existing object; mode
 ## 0600; listening before any handoff. The Runtime keeps its own listener and
 ## directory descriptors and the dev/ino of both objects, so `validateEndpoint`
@@ -13,8 +15,10 @@
 
 {.push raises: [].}
 
+from std/strutils import repeat
 import results
 import logos_sdk/base/hex
+from logos_sdk/iface/names import checkModuleName
 import ../ticket
 import ./sock
 
@@ -23,7 +27,7 @@ export results
 type
   EndpointErrorKind* = enum
     eeBase ## the base directory is unsafe or missing
-    eeTooLong ## the path does not fit `sun_path`: the placement fails (G58)
+    eeTooLong ## not even the shortest socket name fits `sun_path` (G58)
     eeExists ## an object already exists at the path; it is left untouched
     eeCreate ## a system call failed
     eeInvalid ## validation failed: the endpoint is not the one created
@@ -42,7 +46,7 @@ type
   Endpoint* = object
     dir*: EndpointDir
     path*: string ## the socket path the descriptor carries
-    sockName*: string ## `logos_<module>.sock`
+    sockName*: string ## `logos_<module>.sock`, fitted (`fittedSocketName`)
     listener*: cint ## the Runtime's own copy, kept until removal
     dev*, ino*: uint64 ## the socket object's identity
 
@@ -51,13 +55,47 @@ const
   SockMode = 0o600'u32
   SockPrefix* = "logos_"
   SockSuffix* = ".sock"
+  DirNameBytes = 4 ## the random bytes a per-instance directory is named by
+  DirNameLen* = 2 * DirNameBytes ## its name's length, `<8 hex>`
 
 func fail(k: EndpointErrorKind, msg: string): EndpointError =
   EndpointError(kind: k, msg: msg)
 
 func socketName*(moduleName: string): string =
-  ## [G58] The socket's file name for a flat runtime module name.
+  ## [G58] The socket's file name for a flat runtime module name, before
+  ## `fittedSocketName` cuts it.
   SockPrefix & moduleName & SockSuffix
+
+func nameRoom(dirPathLen, max: int): int =
+  ## [G58 amended 2026-11-21; IMPL] The bytes `<dir>/logos_<name>.sock` and
+  ## its NUL leave for `<name>` in `max`, for a directory path of that length;
+  ## negative when not even `logos_.sock` fits.
+  max - 1 - dirPathLen - 1 - SockPrefix.len - SockSuffix.len
+
+func baseRoom*(base: string, max: int): int =
+  ## [G58 amended 2026-11-21; IMPL] `nameRoom` for every endpoint under `base`,
+  ## whose per-instance directory adds `/<8 hex>`: the same for all of them.
+  nameRoom(base.len + 1 + DirNameLen, max)
+
+func shortestSocketPath*(base: string): string =
+  ## [G58 amended 2026-11-21; IMPL] The shortest path an endpoint under `base`
+  ## can have, `<base>/<8 hex>/logos_.sock`, for messages: a base whose
+  ## `baseRoom` is negative can place no endpoint.
+  base & "/" & repeat('0', DirNameLen) & "/" & socketName("")
+
+func fittedSocketName*(dirPath, moduleName: string, max: int): Opt[string] =
+  ## [G58 amended 2026-11-21; SPEC RUNTIME l.296-297, TRANSPORT l.1356-1358;
+  ## IMPL] The socket's name in the per-instance directory `dirPath`:
+  ## `logos_<module>.sock` when the path and its NUL fit `max` bytes, otherwise
+  ## `logos_<p>.sock` with `p` the longest prefix of the name that fits. The
+  ## name is one `bindEndpoint` accepted (`[a-z][a-z0-9_]*`, RUNTIME l.284), so
+  ## a cut never splits a character. The directory holds this one socket, so a
+  ## prefix names nothing else, and the path, not the name, is what tickets
+  ## carry. None when not even `logos_.sock` fits.
+  let room = nameRoom(dirPath.len, max)
+  if room < 0:
+    return Opt.none(string)
+  Opt.some(socketName(moduleName[0 ..< min(room, moduleName.len)]))
 
 when unixStream:
   proc stat(fd: cint): Result[StatInfo, cint] =
@@ -83,7 +121,16 @@ when unixStream:
 
   proc checkBase(base: string): Result[void, EndpointError] =
     ## [IMPL] The base is a real directory (not a symbolic link) that only this
-    ## uid can write to, or root's sticky directory such as `/tmp`.
+    ## uid can write to, or root's sticky directory such as `/tmp`, and it
+    ## leaves `sun_path` room for the shortest endpoint (G58 amended).
+    if baseRoom(base, int(sunPathMax())) < 0:
+      return err(
+        fail(
+          eeTooLong,
+          shortestSocketPath(base) & " does not fit sun_path (" & $(sunPathMax() - 1) &
+            " bytes): the base leaves no room for an endpoint",
+        )
+      )
     let st = lstat(base).valueOr:
       return err(fail(eeBase, base & ": " & errText(error)))
     if not st.isDir:
@@ -119,7 +166,7 @@ proc makeEndpointDir*(base: string): Result[EndpointDir, EndpointError] =
       return err(fail(eeBase, base & ": " & errText(baseFd)))
     var name = ""
     for attempt in 0 ..< 8:
-      var r: array[4, byte]
+      var r: array[DirNameBytes, byte]
       if not osRandom(r):
         discard fdClose(baseFd)
         return err(fail(eeCreate, "the random source failed"))
@@ -200,21 +247,26 @@ proc validateEndpoint*(ep: Endpoint): Result[void, EndpointError] {.gcsafe.}
 proc bindEndpoint*(
     d: EndpointDir, moduleName: string, backlog = 128
 ): Result[Endpoint, EndpointError] =
-  ## [SPEC TRANSPORT §8.2] Binds and listens on `<dir>/logos_<module>.sock`.
-  ## Any object already at the path, a symbolic link included, makes `bind`
-  ## fail; it is never followed, removed or replaced (`eeExists`). A path that
-  ## does not fit `sun_path` is `eeTooLong` and nothing is created (G58).
+  ## [SPEC TRANSPORT §8.2] Binds and listens on `<dir>/logos_<module>.sock`,
+  ## the module's name cut to fit `sun_path` (`fittedSocketName`; G58
+  ## amended). The name must be a runtime module name (RUNTIME l.284), so a cut
+  ## splits no character and no other name gets a socket. Any object already
+  ## at the path, a symbolic link included, makes `bind` fail; it is never
+  ## followed, removed or replaced (`eeExists`), so two cut names bound in one
+  ## directory would fail closed. A directory that leaves no room even for
+  ## `logos_.sock` is `eeTooLong` and nothing is created.
   when unixStream:
-    if moduleName.len == 0 or '/' in moduleName or '\0' in moduleName:
-      return err(fail(eeCreate, "not a flat module name: " & moduleName))
-    let name = socketName(moduleName)
-    let path = d.path & "/" & name
-    if not fitsSunPath(path):
+    checkModuleName(moduleName, system = true).isOkOr:
+      return err(fail(eeCreate, "not a runtime module name: " & error))
+    let name = fittedSocketName(d.path, moduleName, int(sunPathMax())).valueOr:
       return err(
         fail(
-          eeTooLong, path & " does not fit sun_path (" & $(sunPathMax() - 1) & " bytes)"
+          eeTooLong,
+          d.path & "/" & socketName(moduleName) & " does not fit sun_path (" &
+            $(sunPathMax() - 1) & " bytes), shortened or not",
         )
       )
+    let path = d.path & "/" & name
     # Darwin's bind follows a dangling symbolic link and creates the socket at
     # its target; Linux refuses. So anything at the path, looked up without
     # following, is refused first. Only this uid can write in the fresh 0700
@@ -267,7 +319,7 @@ proc bindEndpoint*(
 proc createEndpoint*(
     base, moduleName: string, backlog = 128
 ): Result[Endpoint, EndpointError] =
-  ## [SPEC TRANSPORT §8.2; RUNTIME §2.3; G58] A new endpoint under `base`. On
+  ## [SPEC TRANSPORT §8.2; RUNTIME l.296-297; G58] A new endpoint under `base`. On
   ## any failure only what this call created is undone.
   let d = ?makeEndpointDir(base)
   let ep = bindEndpoint(d, moduleName, backlog).valueOr:

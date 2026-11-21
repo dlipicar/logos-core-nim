@@ -27,6 +27,7 @@ when defined(posix):
   from ../src/logos_core/authority/scopes import encode, sortSet
   from ../src/logos_core/daemon/supervise import heldLocks
   from ../src/logos_core/runtime/plumbing import MaxDiagnostics
+  from ../src/logos_core/transport/io/sock import sunPathMax
   from logos_sdk/iface/accept import acceptContractSet
   from ../src/logos_core/durable import
     acquire, ensurePrivateDir, release, removeIfPresent, writeAtomic
@@ -1019,6 +1020,24 @@ when defined(posix):
       check waitExit(d, ReadyMs) == 1
       check "ctl.socket_dir" in d.errText
 
+    test "[IMPL-DECISION G58] a session directory that leaves an endpoint no room in sun_path: the start fails (2) naming the endpoint path":
+      # [G58 amended 2026-11-21] An endpoint's socket name is shortened down to
+      # `logos_.sock`, so only an endpoint directory that leaves no room for
+      # `<8 hex>/logos_.sock` is refused: by the Runtime as it opens with local
+      # transport (a Module Host here). The logosctl and lcn_call sockets
+      # (`run/*.sock`) still fit.
+      inc cases
+      let dir = makeShortBase("lgd" & $cases, deepest = "/" & repeat("s", 90))
+      let length = int(sunPathMax()) - 20 # `<session>/run/lcn_call.sock` fits
+      let c = Case(dir: dir, s: Session(dir: dir / repeat("s", length - dir.len - 1)))
+      check c.s.dir.len == length
+      check c.initHosted(start = false).code == 0
+      let d = c.start()
+      check waitExit(d, ReadyMs) == 2
+      checkpoint d.errText
+      check c.s.dir & "/run/ep/00000000/logos_.sock does not fit sun_path" in d.errText
+      check "the base leaves no room for an endpoint" in d.errText
+
     test "[G302] a Loader loss (test_hooks.loader_failure_after_ms, the switch on): logosd logs the termination and exits 4":
       let c = newCase()
       check c.initDefault().code == 0
@@ -1437,8 +1456,11 @@ when defined(posix):
       checkpoint mw.stderr
       check mw.code == 0
       # [G350] Not started with logosd: a wait for it ends at the timeout (2).
-      let early =
-        c.ctl("--timeout", "300", "module", "wait", CliModule, "--state", "ready")
+      # The timeout bounds each reply as well, so it leaves a loaded host room
+      # for the first one (ASan in CI waited longer than 300 ms).
+      let early = c.ctl(
+        "--timeout", $(2000 * Slow), "module", "wait", CliModule, "--state", "ready"
+      )
       checkpoint early.stderr
       check early.code == 2
       check "last state unloaded" in early.stderr

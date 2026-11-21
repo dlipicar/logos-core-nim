@@ -347,11 +347,64 @@ suite "trnio.endpoint: endpoint placement and validation (TRANSPORT §8.2, G58)"
     discard unlink(cstring(ep.path))
     discard rmdir(cstring(ep.dir.path))
 
-  test "[G58] a path that does not fit sun_path fails and leaves nothing":
-    let before = entries(base)
-    let r = createEndpoint(base, repeat('m', 100))
+  proc baseOfRoom(room: int): string =
+    ## A private base under `base` whose endpoints leave `room` bytes of
+    ## `sun_path` for the module's name (`baseRoom`).
+    let max = int(sunPathMax())
+    let length = max - 1 - (1 + DirNameLen + 1 + "logos_.sock".len) - room
+    result = base / repeat('r', length - base.len - 1)
+    createDir(result)
+    doAssert chmod(cstring(result), 0o700) == 0
+    doAssert baseRoom(result, max) == room
+
+  proc connects(path: string): bool =
+    let fd = unixSocket()
+    result = fd >= 0 and sockConnect(fd, cstring(path)) == 0
+    discard fdClose(fd)
+
+  proc servedAtLimit(b, module, sockName: string) =
+    ## An endpoint whose path and NUL are exactly `sun_path`: bound,
+    ## listening, valid, connectable and removed.
+    let ep = createEndpoint(b, module).expect("an endpoint")
+    checkpoint ep.path
+    check ep.sockName == sockName
+    check ep.path == ep.dir.path & "/" & sockName
+    check ep.path.len + 1 == int(sunPathMax())
+    check statOf(ep.path).isSocket
+    check validateEndpoint(ep).isOk
+    check connects(ep.path)
+    check removeEndpoint(ep).isOk
+    check not fileExists(ep.path) and not dirExists(ep.dir.path)
+
+  test "[G58] a socket name that does not fit sun_path is cut, down to logos_.sock, and binds, validates and connects at the limit [IMPL]":
+    # [G58 amended 2026-11-21; RUNTIME l.284, l.296-297; TRANSPORT
+    # l.1356-1358] A 64-byte module name is legal, and the pathname is the
+    # implementation's.
+    check fittedSocketName("/d", "storage_module", int(sunPathMax())) ==
+      Opt.some("logos_storage_module.sock")
+    let ten = baseOfRoom(10)
+    # The full name just fits.
+    servedAtLimit(ten, repeat('m', 10), "logos_" & repeat('m', 10) & ".sock")
+    # One byte over: one byte cut.
+    servedAtLimit(ten, repeat('m', 10) & "n", "logos_" & repeat('m', 10) & ".sock")
+    # The longest module name.
+    servedAtLimit(ten, repeat('m', 64), "logos_" & repeat('m', 10) & ".sock")
+    # The floor: no room for any of the name.
+    servedAtLimit(baseOfRoom(0), "meter_module", "logos_.sock")
+
+  test "[G58] a base one byte past the floor fails at its check and leaves nothing; a name that is not a module name is refused [IMPL]":
+    let past = baseOfRoom(-1)
+    let before = entries(past)
+    let r = createEndpoint(past, "m")
     check r.error.kind == eeTooLong
-    check entries(base) == before
+    check "the base leaves no room for an endpoint" in r.error.msg
+    check entries(past) == before
+    # [RUNTIME l.284] Only a runtime module name is cut, so a cut never
+    # splits a character or names another object.
+    let held = entries(base)
+    for name in ["", "Meter", "a-b", "m/x", "é", repeat('m', 65)]:
+      check createEndpoint(base, name).error.kind == eeCreate
+    check entries(base) == held
 
   test "removal removes only the endpoint's own objects":
     let ep = newEndpoint()

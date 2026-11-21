@@ -326,7 +326,17 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
             false,
           )
         )
-      return err((fail(ExitUnreachable, "no reply: " & error.message), true))
+      # [IMPL] The client's own words, as `roundTrip`'s: `readFrame`'s texts
+      # are the server's ("no request before the idle timeout").
+      let why =
+        case error.kind
+        of feTimeout:
+          "no reply within " & $cl.timeoutMs & " ms"
+        of feEof, fePartial:
+          "no reply: the daemon closed the connection"
+        else:
+          "no reply: " & error.message
+      return err((fail(ExitUnreachable, why), true))
     let r = LcnCtlReply.decode(frame).valueOr:
       return
         err((fail(ExitUnreachable, "the reply does not decode: " & error), wrote.isOk))

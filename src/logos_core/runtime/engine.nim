@@ -8948,13 +8948,24 @@ proc hostedResult(st: State, q: Request) =
       ConnectFailure(q.failCause)
     else:
       cfConnect
+  # [IMPL] The host reports the cause, not the I/O thread's text: the cause's
+  # words tell a deadline or a loss from a refusal.
+  let why =
+    case cause
+    of cfCapacity: "too many outbound connections"
+    of cfConnect: "the endpoint could not be connected to"
+    of cfPeerMismatch: "the peer is not the expected identity"
+    of cfHello: "the Hello exchange failed or timed out"
+    of cfContract: "the selected contract's construction input is invalid"
+    of cfUnsupported: "this platform has no unix-stream profile"
+    of cfShutdown: "the host's transport is stopping"
   st.linkConnectFailed(
     IoEvent(
       conn: l.conn,
       kind: IoEventKind.evConnectFailed,
       failCode: q.code,
       failCause: cause,
-      failMsg: "reported by the consumer's Module Host",
+      failMsg: "reported by the consumer's Module Host: " & why,
     )
   )
 
