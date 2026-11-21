@@ -1,5 +1,6 @@
-## Run first by every `nimble test*` task (`runSuites` in logos_core.nimble), and as its own step
-## after `nimble setup` in CI and in `tools/ci/windows.ps1` [IMPL] (DECISIONS G436): each install
+## Run by `checkInstalls` in logos_core.nimble (first in every `nimble test*` task and in
+## `build_runtime_lib`, and before `nimble build` in a checkout with `nimbledeps/`), and as its own
+## step after `nimble setup` in CI and in `tools/ci/windows.ps1` [IMPL] (DECISIONS G436): each install
 ## `nimble.paths` names must be the one `nimble.lock` records. Nimble 0.26.2 checks no checksum of
 ## the lock (draft #191), so without this a changed or foreign install would run the suites. Run
 ## from the repository's root; exits 1 with one line per finding.

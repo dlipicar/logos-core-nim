@@ -71,10 +71,20 @@ proc shardOf(spec: string): (int, int) =
     quit(QuitFailure)
   (k, n)
 
-proc runSuites(flags, outDir: string) =
+proc checkInstalls() =
   # [DECISIONS G436] Nimble 0.26.2 checks none of nimble.lock's checksums (draft #191), so every
   # install nimble.paths names is first compared with the lock's.
   exec "nim r --hints:off tools/check_installs.nim"
+
+# Nimble also runs this hook when a dependent installs logos_core, in its buildtemp/ copy of the
+# package, which leaves nimbledeps/ out: there the check is skipped. In a checkout set up with
+# `setup -l` it runs. A checkout on global dependencies has no nimbledeps/ and is not checked.
+before build:
+  if dirExists(thisDir() / "nimbledeps"):
+    checkInstalls()
+
+proc runSuites(flags, outDir: string) =
+  checkInstalls()
   var suites: seq[string]
   for dir in ["tests", "sdk/tests"]:
     for file in listFiles(dir):
@@ -111,6 +121,7 @@ task test_msan, "Run every test suite under MemorySanitizer (clang on Linux)":
 
 task build_runtime_lib,
   "Build liblogos_runtime and logos_runtime.h under build/lib/ (RUNTIME §13)":
+  checkInstalls()
   let dir = "build/lib/orc" & (if defined(release): "-release" else: "")
   mkDir(dir)
   # -d:noSignalHandler: loading the library leaves the host's signal handlers (DECISIONS G340).

@@ -139,9 +139,9 @@ nimble --useSystemNim setup -l
 nimble --useSystemNim test && nimble --useSystemNim test_refc
 ```
 
-Nimble checks none of the lock's checksums, so every `nimble test*` task first runs
-`tools/check_installs.nim`, which stops it unless each install in `nimble.paths` is the one
-`nimble.lock` records (DECISIONS G436).
+Nimble checks none of the lock's checksums, so every `nimble test*` task, `build_runtime_lib` and
+`nimble build` first run `tools/check_installs.nim`, which stops them unless each install in
+`nimble.paths` is the one `nimble.lock` records (DECISIONS G436).
 
 Under the sanitizers (DECISIONS I77): AddressSanitizer with UndefinedBehaviorSanitizer,
 ThreadSanitizer, and on Linux with clang MemorySanitizer. On macOS they build with the Xcode
