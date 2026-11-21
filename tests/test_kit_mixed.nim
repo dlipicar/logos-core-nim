@@ -285,14 +285,26 @@ when defined(posix):
     ).code
 
   proc counted(n: int): bool =
-    ## `n` deliveries handled, and no more after a pause.
-    let came = waitUntil(
-      proc(): bool =
-        posted.count.load >= n,
-      Answer,
-    )
+    ## `n` deliveries handled, and no more after a pause. [IMPL] `Answer`
+    ## bounds the wait for the next delivery, not for all `n`: a lost one stops
+    ## the count, while a slow build still delivers each in time. A hosted
+    ## event costs the host two carrier requests before its subscriber's
+    ## transport: the 62 or 63 events MX-2's kit still held when the posts
+    ## ended came at about ten a second on a Mac and one a second there under
+    ## AddressSanitizer, and on a loaded four-core CI runner they took longer
+    ## than `Answer` together (CI run 44888184613, 2026-11-21).
+    var seen = posted.count.load
+    var since = getMonoTime()
+    while seen < n and getMonoTime() - since <= initDuration(seconds = Answer):
+      sleep(2)
+      let k = posted.count.load
+      if k != seen:
+        seen = k
+        since = getMonoTime()
     sleep(50 * Slow)
-    came and posted.count.load == n
+    result = posted.count.load == n
+    if not result:
+      checkpoint $posted.count.load & " of " & $n & " deliveries handled"
 
   # Posting from many threads ------------------------------------------------------------
 
