@@ -25,7 +25,7 @@ from ../src/logos_core/transport/io/sock import unixStream
 from ../src/logos_core/transport/framing import MinFrameLimit
 import
   logos_sdk/testing/[kitbuild, tunerconfig],
-  ./support/[permfixture, slowdown, withoutloader]
+  ./support/[permfixture, shortdir, slowdown, withoutloader]
 import logos_sdk/testing/fixtures/meter_impl
 
 let work = currentSourcePath().parentDir.parentDir / "build" / "host" / kitVariant
@@ -1911,8 +1911,13 @@ suite "run.host-api: startup (RUNTIME §13.2, l.1640, l.3838-3940) [G191]":
           kind: LcnAppRoutingRuleModeChoiceKind.Local_transport
         ),
       )
+      # [G58 amended 2026-11-21] The endpoint base must leave `sun_path` room
+      # for an endpoint, so the work directories with a rule are short.
+      let short =
+        makeShortBase("lchost", deepest = "/u/open/12345678/logos_meter_module.sock")
       var c = deployment()
       c.routing = Opt.some(@[rule])
+      c.runtime.work_dir = short / "c"
       let rt = registered(c)
       check runtimeStart(rt).ec == ecOk
       let dir = c.runtime.work_dir / "endpoints"
@@ -1928,6 +1933,7 @@ suite "run.host-api: startup (RUNTIME §13.2, l.1640, l.3838-3940) [G191]":
       # One that others can write to is refused: the start fails, nothing runs.
       var u = deployment()
       u.routing = Opt.some(@[rule])
+      u.runtime.work_dir = short / "u"
       let open = u.runtime.work_dir / "open"
       createDir(open)
       check chmod(cstring(open), Mode(0o777)) == 0
@@ -1936,7 +1942,9 @@ suite "run.host-api: startup (RUNTIME §13.2, l.1640, l.3838-3940) [G191]":
       let r = runtimeStart(rt3)
       checkpoint r.text
       check r.ec == ecModule and "the endpoint directory" in r.text
+      check "writable by others" in r.text
       rt3.finish()
+      removeDir(short)
     else:
       skip()
 

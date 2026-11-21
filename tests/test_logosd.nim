@@ -1035,7 +1035,7 @@ when defined(posix):
       let d = c.start()
       check waitExit(d, ReadyMs) == 2
       checkpoint d.errText
-      check c.s.dir & "/run/ep/12345678/logos_.sock does not fit sun_path" in d.errText
+      check c.s.dir & "/run/ep/00000000/logos_.sock does not fit sun_path" in d.errText
       check "the base leaves no room for an endpoint" in d.errText
 
     test "[G302] a Loader loss (test_hooks.loader_failure_after_ms, the switch on): logosd logs the termination and exits 4":

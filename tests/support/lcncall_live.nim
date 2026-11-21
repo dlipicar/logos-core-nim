@@ -6,7 +6,7 @@
 
 import
   std/[
-    algorithm, atomics, json, locks, monotimes, os, sequtils, strutils, times,
+    algorithm, atomics, json, locks, monotimes, os, sequtils, strutils, tables, times,
     typedthreads,
   ]
 import std/posix except Time
@@ -234,8 +234,20 @@ type Shape = object ## What a case changes in the session.
     ## the meter's `subscribe-event` is not in its rule: `lcn_call` issues it
     ## itself (L-11), with the authority's methods granted
   stopDeadlineMs: int = StopBoundMs ## `stop_deadline_ms`
+  providers: seq[string]
+    ## [IMPL] the providers started at boot, of `Providers`; empty: all. A
+    ## Module Host's start and stop are most of a boot's cost under a
+    ## sanitizer, so a case starts only those it uses.
 
-var sessions = 0
+func started(shape: Shape): seq[string] =
+  if shape.providers.len == 0:
+    Providers
+  else:
+    shape.providers.filterIt(it in Providers)
+
+var
+  sessions = 0
+  startedIn: Table[string, seq[string]] ## a session directory's `started`
 
 proc newSession(shape = Shape()): Session =
   inc sessions
@@ -259,7 +271,8 @@ proc newSession(shape = Shape()): Session =
     ]
   )
   var o = dc.orchestration.get(LcnDcOrchestration())
-  o.start = Opt.some(Providers)
+  o.start = Opt.some(shape.started)
+  startedIn[s.dir] = shape.started
   dc.orchestration = Opt.some(o)
   var rules = @[
     grant(shapesRoot, Full),
@@ -306,8 +319,40 @@ type Live = object
   up: bool
   cli: string ## lcn_call's socket
   outDir: string
+  shared: bool ## `sharedLive`'s, which the teardown keeps (`share`)
+  last: bool ## the last case to share it: the teardown ends it
 
-var live: ptr Live ## what the teardown ends, if a case left it running
+var
+  live: ptr Live ## what the teardown ends, if a case left it running
+  sharedLive: Live ## the session consecutive cases share (`share`)
+  sharedShape: Shape
+
+# What a case costs [IMPL]: one line per case, so a CI log shows where the
+# suite's time goes.
+
+type Cost = object
+  began: MonoTime
+  boots, shutdowns, commands: int
+  bootMs, shutdownMs, commandMs: int64
+
+var cost: Cost
+
+proc costBegin() =
+  cost = Cost(began: getMonoTime())
+
+proc msSince(t: MonoTime): int64 =
+  inMilliseconds(getMonoTime() - t)
+
+proc costLine(name: string): string =
+  let at = name.find("L-")
+  let tag =
+    if at >= 0:
+      name[at ..< max(at, name.find(':', at))]
+    else:
+      name
+  "lcn_call cost " & tag & ": " & $msSince(cost.began) & " ms; " & $cost.boots & " boot " &
+    $cost.bootMs & " ms, " & $cost.shutdowns & " shutdown " & $cost.shutdownMs & " ms, " &
+    $cost.commands & " commands " & $cost.commandMs & " ms"
 
 proc rc[Req](l: Live, m: LcnCtlMethodKind, req: Req): LcnCtlReply =
   let fd = connectCtl(l.d.socketPath, Timeout).expect("a connection")
@@ -374,9 +419,16 @@ proc start(l: Live, module, instance: string) =
   )
   discard r.okBytes
 
+proc finish(l: var Live)
+
 proc boot(s: Session): Live =
-  ## Assembles and starts, then waits for the logosctl socket and the four
-  ## providers (DAEMON.md §4); `lcn_call` is not started.
+  ## Assembles and starts, then waits for the logosctl socket and the
+  ## providers the session starts (DAEMON.md §4); `lcn_call` is not started.
+  ## A shared session still up is ended first: one logosd at a time, since
+  ## `finish` checks that no Module Host is left.
+  if sharedLive.up:
+    finish(sharedLive)
+  let began = getMonoTime()
   result.s = s
   result.outDir = s.dir.parentDir / "o"
   result.lock = lockSession(s).expect("the session lock")
@@ -396,9 +448,11 @@ proc boot(s: Session): Live =
     doAssert getMonoTime() < until,
       "not serving: " & result.d.socketPath & "; the log:\n" & logText()
     sleep(5)
-  for p in Providers:
+  for p in startedIn.getOrDefault(s.dir, Providers):
     doAssert result.reaches(p, LogosNSRuntimeControlStateKind.Ready),
       p & " is not ready; the log:\n" & logText()
+  inc cost.boots
+  cost.bootMs += msSince(began)
 
 proc hostsGone(): bool =
   let until = getMonoTime() + initDuration(seconds = Patience)
@@ -428,6 +482,43 @@ proc finish(l: var Live) =
   l.lock.release()
   check hostsGone()
   check not fileExists(l.cli)
+  inc cost.shutdowns
+  cost.shutdownMs += msSince(began)
+
+proc healthy(l: Live, shape: Shape): bool =
+  ## What a passing case leaves for the next: the providers ready, and
+  ## `lcn_call` ready or not started.
+  l.up and shape.started.allIt(l.state(it) == LogosNSRuntimeControlStateKind.Ready) and
+    l.state(CliInstance) in
+    [LogosNSRuntimeControlStateKind.Ready, LogosNSRuntimeControlStateKind.Unloaded]
+
+proc share(shape = Shape(), last = false): Live =
+  ## [IMPL] The session consecutive cases of one shape share, with its
+  ## `lcn_call` and routes: booted by the first, kept while each case passes
+  ## and leaves it healthy, ended by the `last` one or a failed case (the
+  ## teardown) or another shape. A boot, a shutdown and `lcn_call`'s start
+  ## are most of a case's cost under a sanitizer; none of these cases is
+  ## about them.
+  if sharedLive.up and (sharedShape != shape or not sharedLive.healthy(shape)):
+    finish(sharedLive)
+  if not sharedLive.up:
+    sharedLive = boot(newSession(shape))
+    sharedShape = shape
+  result = sharedLive
+  result.shared = true
+  result.last = last
+
+proc release(l: var Live, failed: bool) =
+  ## The teardown's end of a case's session: a shared one is kept for the
+  ## next case unless this was the last or failed.
+  if not l.up:
+    return
+  if l.shared:
+    if failed or l.last:
+      finish(sharedLive)
+    l.up = false
+  else:
+    finish(l)
 
 # Commands, as logosctl's launcher runs them ---------------------------------------------
 
@@ -467,6 +558,7 @@ proc run(
   )
   if target.len > 0:
     msg.target = Opt.some(target)
+  let began = getMonoTime()
   let r = launch(
     Launch(
       cliSocket: l.cli,
@@ -480,6 +572,8 @@ proc run(
       files: files,
     )
   )
+  inc cost.commands
+  cost.commandMs += msSince(began)
   discard posix.close(ofd)
   discard posix.close(efd)
   for f in files:

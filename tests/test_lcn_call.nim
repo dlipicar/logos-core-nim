@@ -1,11 +1,16 @@
 ## lcn_call, the CLI module, in a logosd in this process (Tier 5 steps N-2b
 ## and N-2c; DECISIONS G343-G350; docs/DAEMON.md §7a; plan §5, L-1 to L-13).
 ##
-## Each case makes a session with `logosctl init`'s library function: the
-## meter, shapes, vault (orc and arc only, G277) and bulk kit modules hosted as operator providers,
-## operator rules granting `lcn_call` the first three (and `discover` alone on
-## bulk), and `cli.artifact` naming the library `support/clibuild` builds. It
-## runs `assembleDaemon` and `startDaemon` as logosd's `main` does, and runs
+## A session is made with `logosctl init`'s library function: the meter,
+## shapes, vault (orc and arc only, G277) and bulk kit modules hosted as
+## operator providers, operator rules granting `lcn_call` the first three (and
+## `discover` alone on bulk), and `cli.artifact` naming the library
+## `support/clibuild` builds. A case that changes the session (`Shape`) makes
+## its own and starts only the providers it uses; the cases of the default
+## shape share one session, its `lcn_call` and its routes (`share`), since
+## under a sanitizer a boot, a shutdown and `lcn_call`'s start cost most of a
+## case, and none of those cases is about them. Each case prints its cost.
+## The harness runs `assembleDaemon` and `startDaemon` as logosd's `main` does, and runs
 ## each command with the launcher's library function (`launch`), as `logosctl
 ## call` does, from the test's threads, with regular files for stdout and
 ## stderr; a stream (`subscribe`, `events`) runs from a thread of its own,
@@ -30,6 +35,7 @@ when defined(posix):
     setup:
       var l {.inject.} = Live()
       live = addr l
+      costBegin()
 
     teardown:
       if live != nil:
@@ -42,12 +48,12 @@ when defined(posix):
         if watching:
           interrupt()
           discard endStream()
-        if live[].up:
-          finish(live[])
+        release(live[], testStatusIMPL == TestStatus.FAILED)
       live = nil
+      stderr.writeLine(costLine(testName))
 
     test "[BCP-0086] [BCP-0088] L-1: the first command starts lcn_call, later ones reuse it and its route; a restarted Runtime resumes it; after module stop the next command starts it again":
-      let s = newSession()
+      let s = newSession(Shape(providers: @[MeterInstance]))
       l = boot(s)
       check l.state(CliInstance) == LogosNSRuntimeControlStateKind.Unloaded
       check not fileExists(l.cli)
@@ -81,7 +87,7 @@ when defined(posix):
       check l.run(meterRead(10)).exit == 0
 
     test "L-2: key=value typed from the request rule, --request, JSON and text output":
-      l = boot(newSession())
+      l = share()
       let a = l.run(meterRead(9))
       checkpoint a.said
       check a.exit == 0
@@ -111,7 +117,7 @@ when defined(posix):
       check badText.errors.startsWith("logosctl: ")
 
     test "L-3: refusals (1), a Runtime Control failure (4) and the provider's error channel (5)":
-      l = boot(newSession())
+      l = share()
       for (cmd, what) in [
         (callOf("nosuch_module", "read", [("channel", "1")]), "an unknown module"),
         (callOf("meter_module", "nosuch"), "an unknown method"),
@@ -141,7 +147,7 @@ when defined(posix):
       check "(declared)" in peText.errors
 
     test "[IFC-0942] L-4: describe prints the provider's contracts, roots and methods":
-      l = boot(newSession())
+      l = share()
       for (module, instance, root, meth) in [
         ("meter_module", MeterInstance, meterRoot, "read"),
         ("shapes_module", ShapesInstance, shapesRoot, "reflect"),
@@ -171,7 +177,7 @@ when defined(posix):
 
     test "L-5: a marked request comes from files only, refused before any route otherwise; a marked response is printed (G349 N-2d)":
       when ChannelsMove:
-        l = boot(newSession())
+        l = share()
         let d = l.run(describeOf("vault_module"))
         check d.exit == 0
         check d.env{"result", "methods"}.getElems.anyIt(
@@ -201,12 +207,12 @@ when defined(posix):
         )
         checkpoint mixed.said
         check mixed.exit == 1
-        check l.cliRoutes.len == 0
+        check l.cliRoutes.filterIt(it.module == "vault_module").len == 0
         let p = l.run(callOf("vault_module", "peek", [("slot", "1")]))
         checkpoint p.said
         check p.exit == 0
         check p.env{"result", "stored"}.getBool == false
-        check l.cliRoutes.len == 1
+        check l.cliRoutes.filterIt(it.module == "vault_module").len == 1
         # Every field from a file: `slot` as its text, less one newline.
         let stored = l.run(
           callWith("vault_module", "store", @[fileArg("slot", 2), fileArg("secret", 3)]),
@@ -241,10 +247,10 @@ when defined(posix):
         skip()
 
     test "[BCP-0089] L-6: the route is lcn_call's, to the hosted provider; the launcher gets an exit status and the output, no route":
-      l = boot(newSession())
+      l = share()
       let a = l.run(meterRead(7))
       check a.exit == 0
-      let rs = l.cliRoutes
+      let rs = l.cliRoutes.filterIt(it.module == "meter_module")
       check rs.len == 1
       if rs.len == 1:
         let r = rs[0]
@@ -258,7 +264,7 @@ when defined(posix):
       check keys.sorted == @["command", "deployment", "result", "status"]
 
     test "[BCP-0087] L-7: activation cannot select: an instance or artifact field, or an unknown op, is refused protocol":
-      l = boot(newSession())
+      l = share()
       check l.run(meterRead(7)).exit == 0 # lcn_call is up
       let good =
         LcnCliMessage(
@@ -300,8 +306,61 @@ when defined(posix):
         discard posix.close(efd)
       check l.run(meterRead(7)).exit == 0 # still serving
 
+    test "L-9: lcn_call's host killed: the next command recovers it and succeeds":
+      l = share()
+      # Not started, so the next command's host is the one new process.
+      if l.state(CliInstance) != LogosNSRuntimeControlStateKind.Unloaded:
+        l.stop("lcn_call", CliInstance)
+        check l.reaches(CliInstance, LogosNSRuntimeControlStateKind.Unloaded)
+      let before = hostPids()
+      check l.run(meterRead(7)).exit == 0
+      let mine = hostPids().filterIt(it notin before)
+      check mine.len == 1
+      if mine.len == 1:
+        check posix.kill(Pid(mine[0]), SIGKILL) == 0
+        check l.reaches(CliInstance, LogosNSRuntimeControlStateKind.Error)
+        let r = l.run(meterRead(7))
+        checkpoint r.said
+        check r.exit == 0
+        check l.state(CliInstance) == LogosNSRuntimeControlStateKind.Ready
+        check mine[0] notin hostPids()
+
+    test "L-12: events follows a module start; an event outside the events rule is NOT_AUTHORISED (4); an unknown one is refused (1) [IMPL-DECISION G346] [IMPL-DECISION G349]":
+      l = share(last = true)
+      # The default set, the events rule's three. Until the subscriptions are
+      # active a start is not seen, so shapes is stopped and started until
+      # one is.
+      l.stream(eventsOf(count = 1))
+      check within(streamEnded(), l.restart("shapes_module", ShapesInstance))
+      check endStream() == 0
+      let seen = streamLines()
+      checkpoint saidStream()
+      check seen.len == 1
+      if seen.len == 1:
+        check seen[0]{"event"}.getStr in [
+          "logos.runtime_control.module_state_changed_event",
+          "logos.runtime_control.execution_state_changed_event",
+        ]
+        check seen[0]{"data", "instance"}.getStr == ShapesInstance
+      check l.reaches(ShapesInstance, LogosNSRuntimeControlStateKind.Ready)
+      # [G345 S7] route_state_changed is outside the events rule.
+      let denied = l.run(eventsOf(["route_state_changed"], count = 1))
+      checkpoint denied.said
+      check denied.exit == 4
+      check denied.env{"code"}.getStr == "NOT_AUTHORISED"
+      let unknown = l.run(eventsOf(["module_flashed"]))
+      checkpoint unknown.said
+      check unknown.exit == 1
+      check "module_state_changed" in unknown.env{"message"}.getStr
+
     test "L-8: with workers = 1 a second command is refused busy until its timeout; a listener of another uid is refused; without discover, describe is a Runtime Control failure (4)":
-      l = boot(newSession(Shape(workers: 1, bulkDiscover: false)))
+      l = boot(
+        newSession(
+          Shape(
+            workers: 1, bulkDiscover: false, providers: @[MeterInstance, BulkInstance]
+          )
+        )
+      )
       l.hold(22)
       let busy = l.run(meterRead(7), timeoutMs = 1_500 * Slow)
       checkpoint busy.said
@@ -322,21 +381,6 @@ when defined(posix):
       check nd.exit == 4
       check nd.env{"code"}.getStr == "NOT_AUTHORISED"
 
-    test "L-9: lcn_call's host killed: the next command recovers it and succeeds":
-      l = boot(newSession())
-      let before = hostPids()
-      check l.run(meterRead(7)).exit == 0
-      let mine = hostPids().filterIt(it notin before)
-      check mine.len == 1
-      if mine.len == 1:
-        check posix.kill(Pid(mine[0]), SIGKILL) == 0
-        check l.reaches(CliInstance, LogosNSRuntimeControlStateKind.Error)
-        let r = l.run(meterRead(7))
-        checkpoint r.said
-        check r.exit == 0
-        check l.state(CliInstance) == LogosNSRuntimeControlStateKind.Ready
-        check mine[0] notin hostPids()
-
     test "L-10: calls past a short decision validity, concurrent calls on one route, an idle close, and a call after the provider restarted":
       # [IMPL] A decision takes up to about 1.5 s on a loaded host (refc, or a
       # load of 100), and its validity runs from it. With 8 s and a command
@@ -344,23 +388,38 @@ when defined(posix):
       # idle close comes only after the calls stop. A refc build takes `Load`
       # times as long for a decision and a renewal.
       let validity = 8_000 * Slow * Load
-      let idle = validity
-      l = boot(newSession(Shape(validityMs: validity, routeIdleMs: idle)))
+      # Unused for half the validity, the route closes: longer than the gap
+      # between two calls below, an eighth of it and a call.
+      let idle = validity div 2
+      l = boot(
+        newSession(
+          Shape(validityMs: validity, routeIdleMs: idle, providers: @[MeterInstance])
+        )
+      )
       check l.run(meterRead(7)).exit == 0
       let first = l.cliRoutes
       check first.len == 1
-      # [G348] Past the decision's validity the route is renewed onto a new
-      # handle: the calls go on, on the same route.
+      # [G348] Past the first decision's validity the route has been renewed
+      # onto a new handle: the calls go on, on the same route. The calls stop
+      # once both are seen, not at a fixed time.
       let began = getMonoTime()
+      let bound =
+        initDuration(milliseconds = 2 * validity) + initDuration(seconds = Patience)
       var calls = 0
-      while calls < 3 or
-          getMonoTime() - began < initDuration(milliseconds = 2 * validity):
+      var renewed = first
+      while getMonoTime() - began < bound and (
+        calls < 3 or getMonoTime() - began < initDuration(milliseconds = validity) or
+        renewed.len != 1 or first.len != 1 or
+        renewed[0].decision_id == first[0].decision_id
+      )
+      :
         let r = l.run(meterRead(7))
         checkpoint r.said
         check r.exit == 0
         inc calls
+        renewed = l.cliRoutes
         sleep(validity div 8)
-      let renewed = l.cliRoutes
+      checkpoint $calls & " calls in " & $inMilliseconds(getMonoTime() - began) & " ms"
       check renewed.len == 1
       if first.len == 1 and renewed.len == 1:
         check renewed[0].route == first[0].route
@@ -396,7 +455,13 @@ when defined(posix):
       check after.exit == 0
 
     test "L-11: subscribe: --count and --for, the event's three name forms, text output, the launcher's EOF (130), a stalled reader (6), the provider stopping (6), lcn_call stopping (6) [IMPL-DECISION G349]":
-      l = boot(newSession(Shape(bulkStream: true)))
+      l = boot(
+        newSession(
+          Shape(
+            bulkStream: true, providers: @[MeterInstance, ShapesInstance, BulkInstance]
+          )
+        )
+      )
       # [G349] `--count 3`: three lines, then 0. Until the subscription is
       # active a publication reaches no one, so the meter publishes until
       # the stream has its three.
@@ -485,7 +550,7 @@ when defined(posix):
       check l.reaches(CliInstance, LogosNSRuntimeControlStateKind.Unloaded)
 
     test "[TRN-0392] [RUN-1095] L-11: a revoked grant ends a stream through the subscription-end observer (6) [IMPL-DECISION G349]":
-      l = boot(newSession(Shape(meterGrant: true)))
+      l = boot(newSession(Shape(meterGrant: true, providers: @[MeterInstance])))
       # Without `subscribe-event` the subscription is refused (4): nothing
       # was subscribed, nothing is written but the failure.
       let refused = l.run(subscribeOf("meter_module", "changed", count = 1))
@@ -549,7 +614,7 @@ when defined(posix):
       # [P5; R l.3337-3338] A renewal does not extend a session; nothing
       # renews the stream's route, so it ends at the decision's valid_until.
       let validity = 8_000 * Slow
-      l = boot(newSession(Shape(validityMs: validity)))
+      l = boot(newSession(Shape(validityMs: validity, providers: @[MeterInstance])))
       l.stream(subscribeOf("meter_module", "changed"), text = true)
       check within("meter.changed_event" in streamOutput(), l.publish())
       check within(streamEnded(), sleep(10))
@@ -558,36 +623,10 @@ when defined(posix):
       check "the route's session ended; run the command again" in streamErrors()
       check l.run(meterRead(7)).exit == 0
 
-    test "L-12: events follows a module start; an event outside the events rule is NOT_AUTHORISED (4); an unknown one is refused (1) [IMPL-DECISION G346] [IMPL-DECISION G349]":
-      l = boot(newSession())
-      # The default set, the events rule's three. Until the subscriptions are
-      # active a start is not seen, so shapes is stopped and started until
-      # one is.
-      l.stream(eventsOf(count = 1))
-      check within(streamEnded(), l.restart("shapes_module", ShapesInstance))
-      check endStream() == 0
-      let seen = streamLines()
-      checkpoint saidStream()
-      check seen.len == 1
-      if seen.len == 1:
-        check seen[0]{"event"}.getStr in [
-          "logos.runtime_control.module_state_changed_event",
-          "logos.runtime_control.execution_state_changed_event",
-        ]
-        check seen[0]{"data", "instance"}.getStr == ShapesInstance
-      check l.reaches(ShapesInstance, LogosNSRuntimeControlStateKind.Ready)
-      # [G345 S7] route_state_changed is outside the events rule.
-      let denied = l.run(eventsOf(["route_state_changed"], count = 1))
-      checkpoint denied.said
-      check denied.exit == 4
-      check denied.env{"code"}.getStr == "NOT_AUTHORISED"
-      let unknown = l.run(eventsOf(["module_flashed"]))
-      checkpoint unknown.said
-      check unknown.exit == 1
-      check "module_state_changed" in unknown.env{"message"}.getStr
-
     test "L-13: a route ended while its call is in flight: exit 2, the outcome unknown, no retry; the provider saw one call":
-      l = boot(newSession(Shape(stopDeadlineMs: StopDeadlineMs)))
+      l = boot(
+        newSession(Shape(stopDeadlineMs: StopDeadlineMs, providers: @[MeterInstance]))
+      )
       check l.run(meterRead(7)).exit == 0
       # Channel 23 waits for `open` alone: the stop ends at its deadline, and
       # the provider's host with it, while the call is admitted and running.
