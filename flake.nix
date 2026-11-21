@@ -693,6 +693,28 @@
             python3 ${./tools/lint/firstwrite.py} src sdk/src sdk/tests tests
             touch $out
           '';
+          # [DECISIONS G433-G436] The SDK's and core's Nimble packages: install lists, requirements,
+          # the lock against the SDK's ranges, the Nimble 0.26 guard, and no hand-typed URL of our
+          # repositories (tools/lint/packaging.py). The whole tree but build outputs, for that last
+          # rule.
+          lint-packaging =
+            let
+              tree = lib.cleanSourceWith {
+                src = ./.;
+                filter =
+                  path: _:
+                  let
+                    name = baseNameOf path;
+                  in
+                  !(lib.elem name [ ".git" "build" "nimbledeps" "nimcache" ] || lib.hasPrefix "result" name);
+              };
+            in
+            s.pkgs.runCommand "lint-packaging" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
+              cd ${tree}
+              python3 ${./tools/lint/packaging.py} --self-test
+              python3 ${./tools/lint/packaging.py}
+              touch $out
+            '';
           # The import direction between the SDK, core, the daemon and the CLI.
           lint-layers = s.pkgs.runCommand "lint-layers" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
             cd ${s.nimSources}
