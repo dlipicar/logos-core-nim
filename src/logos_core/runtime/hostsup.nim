@@ -173,7 +173,9 @@ type
 
   ProxyJob = object
     host: Host ## nil: the worker stops
-    frame: seq[byte]
+    msg: LcnCarrierMessage
+      ## [IMPL] (DECISIONS I101) the lane-1 request `route` decoded, so the
+      ## worker does not decode and validate the frame a second time
 
   SpawnReq = object
     ## [IMPL] A spawn the supervision thread runs: on Linux a host's
@@ -1208,10 +1210,8 @@ when defined(posix):
       owner.release(owner.state)
     discard p.host.sendMsg(toMessage(done))
 
-  proc runJob(h: Host, frame: seq[byte]) =
+  proc runJob(h: Host, m: LcnCarrierMessage) =
     ## One lane-1 request, through the attempt's own binding.
-    let m = decodeMessage(frame).valueOr:
-      return
     type K = LcnCarrierMessageKind
     case m.kind
     of K.lcn_Carrier_rc_call:
@@ -1449,7 +1449,7 @@ when defined(posix):
         dec s.idle
         dec s.queued
       if j.host.enterOp():
-        runJob(j.host, j.frame)
+        runJob(j.host, j.msg)
         j.host.leaveOp()
       dropHost(j.host)
       withLock s.lock:
@@ -1459,7 +1459,7 @@ when defined(posix):
     workerLoop(s)
     releasePerThread()
 
-  proc enqueue(s: HostSupervisor, h: Host, f: seq[byte]) =
+  proc enqueue(s: HostSupervisor, h: Host, m: sink LcnCarrierMessage) =
     ## Supervision thread: a request for a proxy worker; the pool grows while
     ## every worker is busy, up to its bound.
     retain(h)
@@ -1478,7 +1478,7 @@ when defined(posix):
           dec s.workerCount
           dec s.idle
     try:
-      s.jobs.send(ProxyJob(host: h, frame: f))
+      s.jobs.send(ProxyJob(host: h, msg: m))
     except Exception:
       withLock s.lock:
         dec s.queued
@@ -1528,7 +1528,7 @@ when defined(posix):
         return false
     when defined(lcnTestHooks):
       trace(f)
-    let m = decodeMessage(f).valueOr:
+    var m = decodeMessage(f).valueOr:
       h.carrierLost("the carrier to the Module Host failed: a frame does not decode")
       return false
     case m.kind
@@ -1558,7 +1558,7 @@ when defined(posix):
         K.lcn_Carrier_rc_async_release, K.lcn_Carrier_rc_materialize,
         K.lcn_Carrier_rc_link_result, K.lcn_Carrier_rc_link_admit,
         K.lcn_Carrier_rc_link_closed, K.lcn_Carrier_rc_link_released:
-      s.enqueue(h, f)
+      s.enqueue(h, move m)
     of K.lcn_Carrier_rc_unsubscribe:
       let u = m.arm_lcn_Carrier_rc_unsubscribe
       if u.in_handler.isSome:
@@ -1575,7 +1575,7 @@ when defined(posix):
               broadcast(h.cond)
         if beside:
           return true
-      s.enqueue(h, f)
+      s.enqueue(h, move m)
     of K.lcn_Carrier_rc_delivered:
       let d = m.arm_lcn_Carrier_rc_delivered
       let p = h.findSub(d.local)

@@ -99,6 +99,20 @@ type
     memo: Table[string, bool]
     visiting: HashSet[string]
 
+  PlanTable = Table[(int, pointer), (SchemaNode, SelectionPlan)]
+    ## A choice node's document and identity -> the node and its plan. The
+    ## entry holds the node, so no other node takes that address while it lives.
+
+  PlannedSet* = object
+    ## [IMPL] (DECISIONS I101) A schema set with the selection plan of every
+    ## choice its values can reach, built once from it by `planned`, so that
+    ## validating many values does not rebuild the plans. The set is a copy the
+    ## object owns and never changes, and a plan depends on that set (its
+    ## documents and imports), not on the node alone: the plans are only ever
+    ## used with the set they were built from, and go when it goes.
+    base: SchemaSet
+    plans: PlanTable
+
 const
   MaxCapacity = high(uint64) ## "more values than any schema names"
   Utf8OneByte = 127'u64 ## U+0001..U+007F; Logos text excludes NUL
@@ -536,6 +550,56 @@ func selectionPlan*(s: SchemaSet, doc: int, n: SchemaNode): Opt[SelectionPlan] =
     all.add(i)
   p.plan(doc, n.arms, all)
 
+# Planned sets ----------------------------------------------------------------------
+
+func addChoices(t: var PlanTable, s: SchemaSet, doc: int, n: SchemaNode) =
+  case n.kind
+  of snMap:
+    for f in n.fields:
+      t.addChoices(s, doc, f.node)
+  of snList:
+    t.addChoices(s, doc, n.element)
+  of snTuple:
+    for x in n.items:
+      t.addChoices(s, doc, x)
+  of snChoice:
+    let k = (doc, cast[pointer](n))
+    if k notin t:
+      let plan = s.selectionPlan(doc, n)
+      if plan.isSome:
+        t[k] = (n, plan.get)
+    for x in n.arms:
+      t.addChoices(s, doc, x)
+  else:
+    discard
+
+func planned*(s: SchemaSet): PlannedSet =
+  ## [IMPL] (DECISIONS I101) `s` with the plan of every choice in the bodies of
+  ## its documents' type, request, response and event declarations: every
+  ## choice a value can reach, since references lead only to declarations of
+  ## the set. A choice no plan separates gets no plan, and validation still
+  ## rejects every value at it.
+  result.base = s
+  for d in 0 ..< s.docs.len:
+    for decl in s.docs[d].declarations:
+      if decl.kind != dkMethod:
+        result.plans.addChoices(result.base, d, decl.body)
+
+func schemaSet*(p: PlannedSet): lent SchemaSet =
+  ## The set `p` was built from.
+  p.base
+
+func lookup(t: PlanTable, doc: int, n: SchemaNode): Opt[SelectionPlan] =
+  let (node, plan) = t.getOrDefault((doc, cast[pointer](n)))
+  if plan.isNil or cast[pointer](node) != cast[pointer](n):
+    return Opt.none(SelectionPlan)
+  Opt.some(plan)
+
+func planOf*(p: PlannedSet, doc: int, n: SchemaNode): Opt[SelectionPlan] =
+  ## The plan `planned` built for the choice `n` of `p.schemaSet.docs[doc]`;
+  ## none for a node it did not reach or a choice no plan separates.
+  p.plans.lookup(doc, n)
+
 # Selection -------------------------------------------------------------------------
 
 func observe(test: PlanTest, field: string, v: CborValue, o: Outcome): bool =
@@ -623,6 +687,7 @@ type Entered = enum
 
 func enterValidate(
     s: SchemaSet,
+    plans: PlanTable,
     stack: var seq[ValidateFrame],
     doc: int,
     n: SchemaNode,
@@ -644,7 +709,12 @@ func enterValidate(
       return eFailed # references and arms that cycle without a container
     followed.add(n)
     if n.kind == snChoice:
-      let plan = s.selectionPlan(doc, n)
+      # [IMPL] (DECISIONS I101) The plan `planned` built from this same set,
+      # else built here; either way it only picks the arm the whole value is
+      # then validated against.
+      var plan = plans.lookup(doc, n)
+      if plan.isNone:
+        plan = s.selectionPlan(doc, n)
       if plan.isNone:
         return eFailed
       let arm = plan.get.select(v)
@@ -691,6 +761,7 @@ func enterValidate(
 
 func validateAt(
     s: SchemaSet,
+    plans: PlanTable,
     doc: int,
     n: SchemaNode,
     v: CborValue,
@@ -706,7 +777,7 @@ func validateAt(
   ## depth up to `DefaultMaxDepth` is supported on any thread
   ## [SPEC INTERFACE §4.5.1] (DECISIONS I51).
   var stack: seq[ValidateFrame]
-  if s.enterValidate(stack, doc, n, v, depth, false, path) == eFailed:
+  if s.enterValidate(plans, stack, doc, n, v, depth, false, path) == eFailed:
     return false
   while stack.len > 0:
     let t = stack.high
@@ -748,7 +819,7 @@ func validateAt(
       if stack.pop().member:
         discard path.pop()
       continue
-    case s.enterValidate(stack, d, child, x, stack[t].depth + 1, true, path)
+    case s.enterValidate(plans, stack, d, child, x, stack[t].depth + 1, true, path)
     of eFailed:
       return false
     of eValid:
@@ -763,7 +834,18 @@ func validatePath*(
   ## Whether `v` is valid under `n` of `s.docs[doc]`; the error is the path to the
   ## first offending item (INTERFACE §5.1 `invalid_params_path_segment`s).
   var path: seq[CborValue]
-  if s.validateAt(doc, n, v, 0, path):
+  if s.validateAt(default(PlanTable), doc, n, v, 0, path):
+    ok()
+  else:
+    err(path)
+
+func validatePath*(
+    p: PlannedSet, doc: int, n: SchemaNode, v: CborValue
+): Result[void, seq[CborValue]] =
+  ## As `validatePath` over `p.schemaSet`, with the plans `planned` built
+  ## [IMPL] (DECISIONS I101): the same checks, and the same result.
+  var path: seq[CborValue]
+  if p.base.validateAt(p.plans, doc, n, v, 0, path):
     ok()
   else:
     err(path)
@@ -773,9 +855,14 @@ func validates*(s: SchemaSet, doc: int, n: SchemaNode, v: CborValue, depth = 0):
   ## `s.docs[doc]`. Maps are closed; a choice selects its one candidate arm by its
   ## structural selection plan and then validates the whole value against that arm
   ## [SPEC COMMITMENT §3.1]. Plans are rebuilt per call [IMPL]; a decoder that
-  ## validates many values caches them.
+  ## validates many values validates over a `PlannedSet` (DECISIONS I101).
   var path: seq[CborValue]
-  s.validateAt(doc, n, v, depth, path)
+  s.validateAt(default(PlanTable), doc, n, v, depth, path)
+
+func validates*(p: PlannedSet, doc: int, n: SchemaNode, v: CborValue, depth = 0): bool =
+  ## As `validates` over `p.schemaSet`, with the plans `planned` built.
+  var path: seq[CborValue]
+  p.base.validateAt(p.plans, doc, n, v, depth, path)
 
 # Every choice in a document ----------------------------------------------------------
 
