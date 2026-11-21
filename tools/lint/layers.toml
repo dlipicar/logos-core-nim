@@ -52,7 +52,7 @@ daemon_allowlist = [
 ]
 
 # Besides the test trees, what may import logos_sdk/testing.
-testing_importers = ["tools/regen_nim.nim"]
+testing_importers = ["tools/regen_nim.nim", "tools/check_installs.nim"]
 
 [layers]
 sdk_base = ["sdk/src/logos_sdk/"]

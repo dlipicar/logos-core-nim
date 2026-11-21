@@ -154,8 +154,25 @@ function Step-Setup {
   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
   Invoke-WebRequest -UseBasicParsing -OutFile $list `
     -Uri 'https://raw.githubusercontent.com/nim-lang/packages/master/packages.json'
-  Invoke-Native 'nimble setup -l' { nimble --useSystemNim -y setup -l }
+  # [DECISIONS G436] A package's checksum is over the bytes Nimble checks out. Nimble turns
+  # core.autocrlf off in each clone, but a fetch by revision leaves core.eol native, so a package
+  # whose .gitattributes marks files as text would check out with CRLF here and carry another
+  # checksum than the lock's. These hold for Nimble's git only (GIT_CONFIG_*, git 2.31 or later),
+  # not for the machine's git configuration.
+  $gitConfig = [ordered]@{
+    GIT_CONFIG_COUNT = '2'
+    GIT_CONFIG_KEY_0 = 'core.autocrlf'; GIT_CONFIG_VALUE_0 = 'false'
+    GIT_CONFIG_KEY_1 = 'core.eol'; GIT_CONFIG_VALUE_1 = 'lf'
+  }
+  foreach ($name in $gitConfig.Keys) { Set-Item "Env:$name" $gitConfig[$name] }
+  try {
+    Invoke-Native 'nimble setup -l' { nimble --useSystemNim -y setup -l }
+  } finally {
+    foreach ($name in $gitConfig.Keys) { Remove-Item -ErrorAction SilentlyContinue "Env:$name" }
+  }
   Get-Content (Join-Path $Repo 'nimble.paths')
+  # Nimble checks none of nimble.lock's checksums (draft #191); `test` runs this again first.
+  Invoke-Native 'check_installs' { nim r --hints:off tools/check_installs.nim }
 }
 
 function Step-Test {

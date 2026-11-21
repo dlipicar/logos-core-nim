@@ -272,10 +272,17 @@ jobs:
           diff -u "$RUNNER_TEMP/nimble.lock" nimble.lock
 
       # Nix only supplies nim and nimble here; Nimble resolves and fetches the dependencies.
-      - name: nimble setup and ${{ matrix.task }}
-        run: |
-          nix develop -c nimble --useSystemNim setup -l
-          nix develop -c nimble --useSystemNim "$TASK"
+      - name: nimble setup
+        run: nix develop -c nimble --useSystemNim setup -l
+
+      # [DECISIONS G436] Nimble checks none of nimble.lock's checksums (draft #191). Each install
+      # nimble.paths names must carry the lock's before anything in this job compiles against
+      # them: the task below runs the same check first, but the peer check compiles directly.
+      - name: The installs are the ones nimble.lock records
+        run: nix develop -c nim r --hints:off tools/check_installs.nim
+
+      - name: nimble ${{ matrix.task }}
+        run: nix develop -c nimble --useSystemNim "$TASK"
 
       # G129: the caller's peer check against a listener another OS user created (TRANSPORT §8.2,
       # TRN-0190). It needs a throwaway user and passwordless sudo to it, so it runs only here;

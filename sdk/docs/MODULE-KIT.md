@@ -346,9 +346,14 @@ in one of two ways.
 **One SDK revision per Nimble directory.** The SDK's version stays `0.1.0` while it changes, so two
 installs with different content can share it. When they meet in one Nimble directory, `setup` and
 `lock` take whichever the filesystem lists first, and `setup` keeps it even over a lock that names the
-other's checksum, without a word; `bin/lcn-gen` links the one installed last. So install each SDK
-revision into a fresh Nimble directory, record the core commit it came from, and have a test check that
-the directory `nimble.paths` names for `logos_sdk` ends in the checksum the lock records for it.
+other's checksum, without a word; `bin/lcn-gen` links the one installed last. Nimble checks no lock
+checksum for any package (Nimble 0.26.2; core's DECISIONS G436). So install each SDK revision into a
+fresh Nimble directory, record the core commit it came from, and have a suite check that every
+directory `nimble.paths` names, `logos_sdk`'s among them, ends in the checksum the lock records for
+it. `logos_sdk/testing/lockcheck`'s `installMismatches` does that from the project's root; pass the
+names of any packages you take from a develop link, written in the suite itself rather than read from
+the environment. The same suite checks that `nimbledeps/bin/lcn-gen` resolves into the directory
+`nimble.paths` names for `logos_sdk`: the link follows the last install, not the lock.
 
 **The generated-code check.** A module repository that commits its generated files compares them with a
 fresh generation by the installed SDK's `lcn-gen`, which Nimble builds at install with the module

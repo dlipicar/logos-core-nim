@@ -72,6 +72,9 @@ proc shardOf(spec: string): (int, int) =
   (k, n)
 
 proc runSuites(flags, outDir: string) =
+  # [DECISIONS G436] Nimble 0.26.2 checks none of nimble.lock's checksums (draft #191), so every
+  # install nimble.paths names is first compared with the lock's.
+  exec "nim r --hints:off tools/check_installs.nim"
   var suites: seq[string]
   for dir in ["tests", "sdk/tests"]:
     for file in listFiles(dir):

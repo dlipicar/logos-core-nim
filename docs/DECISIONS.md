@@ -7716,10 +7716,11 @@ their history.
   place), in the order install, lock, setup; or with a develop link, which builds but cannot be locked.
   **One SDK revision per Nimble directory:** with two installs of one version, `setup` and `lock` take the
   one the filesystem lists first, `setup` keeps it even over a lock that names the other's checksum, and
-  `bin/lcn-gen` links the one installed last (Nimble 0.26.2 `packageinfo.nim:341-353`). So a module
-  repository installs each SDK revision into a fresh Nimble directory, records the commit, and tests that
-  the directory `nimble.paths` names for `logos_sdk` carries the lock's checksum. Until the extraction
-  every SDK revision is `0.1.0`, so `lcn-gen --version` cannot tell two apart; that test does.
+  `bin/lcn-gen` links the one installed last (Nimble 0.26.2 `packageinfo.nim:341-353`). Nimble checks
+  no lock checksum for any package (draft #191, G436). So a module repository installs each SDK revision
+  into a fresh Nimble directory, records the commit, and tests with `logos_sdk/testing/lockcheck` that
+  every directory `nimble.paths` names, `logos_sdk`'s among them, carries the lock's checksum. Until the
+  extraction every SDK revision is `0.1.0`, so `lcn-gen --version` cannot tell two apart; that test does.
 - **Addresses** (the owner's question 6, plan §3.6): `lint-packaging` matches the account followed by a
   slash, in every spelling, and allows an address of ours only where §3.6 does, in its one spelling;
   `flake.lock` and this record are exempt. The extraction keeps the old names unused and re-tags each
@@ -7786,7 +7787,53 @@ their history.
 - **CI** keeps no cache of `~/.nimble`, so a runner starts empty. 0.26.2 fetches the package list itself,
   so the workaround for 0.20.1's segfault goes. The lock check regenerates the lock from scratch and
   compares it byte for byte. `workflow_dispatch` gains `nimble_only`, which runs only the `nimble` and
-  `windows` jobs.
+  `windows` jobs. That check recomputes every checksum from fresh downloads into `~/.nimble`, not from
+  the `nimbledeps/` the suites use.
+- **What the lock does not pin.** Nimble 0.26.2 compares none of a lock's checksums with what it installs
+  or finds installed: it takes an install by name, version and revision (draft #191). So
+  `tools/check_installs.nim` checks, through `logos_sdk/testing/lockcheck`, and exits 1 with one line per
+  finding unless:
+  - the lock records a SHA-1 checksum for every package but `nim` (also `lint-packaging`'s
+    `lock-complete`);
+  - each such package has exactly one `pkgs2/<name>-<version>-<sha1>` directory in `nimble.paths`, whose
+    suffix is the lock's `checksums.sha1` (Nimble names the directory after the checksum it computed at
+    install, and reads it back from the name ever after);
+  - its version is the lock's where that is a plain version (a `#commit` entry installs under the
+    package's declared version);
+  - `nimble.paths` names no install the lock lacks, and no other directory but the project's own
+    `srcDir` (which Nimble lists too) and the listed develop links: a local source is a finding.
+  - **Where it runs.** First in every `nimble test*` task (`runSuites` in `logos_core.nimble`), and as a
+    step of its own right after `nimble setup` in CI's `nimble` job and in `windows.ps1 setup`, so a
+    suite the job compiles directly is covered too. Not covered: a suite a developer compiles by hand,
+    `nimble build`, `build_runtime_lib` and `regen`. Deployed outputs come from Nix.
+  - **Setup not run.** No `nimble.paths`, or install directories that are gone, is one finding that says
+    to run `nimble setup`: never a crash or an empty pass. A mismatch says it too, for a `nimble.paths`
+    left from before the lock moved.
+  - **Develop links.** A package may come from a `nimble develop` link instead only if `developLinks` in
+    `tools/check_installs.nim` names it; the link's package is read from the nimble file in or above its
+    directory. Core names none, and a name is added there in a reviewed change, never by an environment
+    variable or a flag. A module repository calls the same helper from its own suite.
+  - **What an equal suffix shows:** that the tracked files of the tree Nimble installed from had the
+    lock's names and bytes when the directory was made. CI is the strong case: no cache and a fresh
+    fetch, so the suffix is computed in that job. On a developer's machine it is as old as the
+    directory. It does not show:
+    - a later edit to an installed file;
+    - a directory copied in, or left from before, under the right name: the name travels with the
+      content, and in lock mode Nimble uses an existing directory rather than replacing it;
+    - untracked files in the tree installed from, as a reused clone can hold;
+    - a package's git submodules, which Nimble's checksum leaves out. BoringSSL's sources are one, so
+      only Nix's fixed-output hash (`fetchSubmodules = true`) covers them.
+  - **Line endings.** The checksum is over the bytes checked out. Nimble turns `core.autocrlf` off in
+    each clone, but a fetch by revision leaves `core.eol` native, so a package whose `.gitattributes`
+    marks files as text would get CRLF on Windows and another checksum. The eight locked revisions hold
+    no `.gitattributes` at any depth. `windows.ps1 setup` sets both for Nimble's git alone
+    (`GIT_CONFIG_*`).
+  - **The checker** imports only the standard library and the helper, both from this tree: it is built
+    from the installs it judges.
+  - **Not elsewhere.** Not a lint: Nix's sandbox has no Nimble installs. Not a core suite: Nix writes its
+    own `nimble.paths` with `pkgs2/<name>-<version>` and no checksum (`nix/nim-derivation.nix`), so it
+    would skip in every Nix check. Not `config.nims`, which runs on every compile, kit builds in
+    temporary trees included.
 - **A check that must fetch nothing, or show that a package stands alone,** runs with `HOME`,
   `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` in a fresh directory outside every checkout. Nim reads every
   `config.nims` above a source, and Nimble's `buildtemp/` guard holds only when nothing above `HOME`

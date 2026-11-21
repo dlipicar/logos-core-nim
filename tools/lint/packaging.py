@@ -18,7 +18,8 @@ this lint checks that they do. The rules:
                    compiler with the requirement, and on Windows nothing else does
   lock-in-range    each version `nimble.lock` holds for a package the SDK requires lies inside the
                    SDK's range; for `nim`, which the lock does not hold, core's pin does
-  lock-complete    no `nimble.lock` entry has an empty `url` or `vcsRevision`
+  lock-complete    no `nimble.lock` entry has an empty `url` or `vcsRevision`, and each has a SHA-1
+                   checksum: `tools/check_installs.nim` compares the installs with it (G436)
   lock-nim         `nimble.lock` has no `nim` entry: one means a lock made without `--useSystemNim`
   system-nim       every Nimble command in CI's files, README.md and the module guide carries
                    `--useSystemNim` (off while SYSTEM_NIM_PENDING, which fails once it is stale)
@@ -426,6 +427,10 @@ def check(root, system_nim_pending=SYSTEM_NIM_PENDING, unguarded=None):
             for key in ("url", "vcsRevision"):
                 if not entry.get(key):
                     findings.append((LOCK, 1, "lock-complete", f"{name}: empty {key}"))
+            sha1 = (entry.get("checksums") or {}).get("sha1") or ""
+            if not re.fullmatch(r"[0-9a-f]{40}", sha1):
+                message = f"{name}: no SHA-1 checksum ({sha1 or 'none'})"
+                findings.append((LOCK, 1, "lock-complete", message))
     else:
         findings.append((LOCK, 1, "lock-in-range", "no nimble.lock"))
     if SDK_NIMBLE in texts:
@@ -547,7 +552,7 @@ requires "chronos == 4.4.1"
 
 def lock_entry(version, url):
     return {"version": version, "vcsRevision": "40f8087c", "url": url, "downloadMethod": "git",
-            "dependencies": [], "checksums": {"sha1": "38d45a83"}}
+            "dependencies": [], "checksums": {"sha1": "38d45a837f3a9d51e5851615322bf48c90f7ac69"}}
 
 
 LOCK_PACKAGES = {
@@ -610,6 +615,8 @@ PLANTS = [
     ("lock-in-range", "sdk/logos_sdk.nimble", GOOD_SDK + 'requires "bearssl >= 0.2.0"\n'),
     ("lock-complete", "nimble.lock", GOOD_LOCK.replace('"40f8087c"', '""')),
     ("lock-complete", "nimble.lock", GOOD_LOCK.replace("https://github.com/status-im/nim-chronos", "")),
+    ("lock-complete", "nimble.lock", GOOD_LOCK.replace("38d45a837f3a9d51e5851615322bf48c90f7ac69", "")),
+    ("lock-complete", "nimble.lock", GOOD_LOCK.replace("38d45a837f3a9d51e5851615322bf48c90f7ac69", "38d45a83")),
     ("nimble-guard", "sdk/logos_sdk.nimble", GOOD_SDK.replace("when (NimbleMajor", "when (NimbleMinor")),
     ("nimble-guard", "logos_core.nimble", GOOD_CORE.replace(GUARD_TEXT, "")),
     ("address", "README.md", "See " + URL + ".\n"),
