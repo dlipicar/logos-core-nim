@@ -12,11 +12,19 @@
 ## | `orchestrator` | `lcn_orchestrator`           | `direct_static` `lcn_orchestrator` | `orchestrator` |
 ## | `authority`    | `logos_capability_authority` | the library's static binding       | `authority` (capability-authority only) |
 ## | `logosctl`     | `logosctl`                   | `direct_static` `logosctl`         | none |
+## | `lcn_call`     | `lcn_call`                   | `hosted_dynamic` (process), the companion library | none |
 ## | operator ones  | daemon-config `modules`      | `direct_dynamic` or `hosted_dynamic` | as configured |
 ##
-## Under `capability-authority` logosd merges its system rules S1-S5 with the
+## `lcn_call`, the CLI module (Tier 5 step N-2; G343), is composed when its
+## artifact is known: daemon-config `cli.artifact`, else the library installed
+## with logosd at `<d>/../lib/logos-core/`, whose BLAKE3-256 is compiled in
+## (`-d:lcnCallArtifactHash=<hex>`). It is not in the start list: the first
+## launcher starts it (DAEMON.md §7a).
+##
+## Under `capability-authority` logosd merges its system rules S1-S8 with the
 ## operator's into one `lcn.authority_policy`. They are derived from the
-## reserved ids, not configurable, and listed in DAEMON.md §5.
+## reserved ids, not configurable, and listed in DAEMON.md §5; S6-S8 only
+## when `lcn_call` is composed.
 ##
 ## `prepareDaemon` runs DAEMON.md §3's five checks: the first four
 ## (`config.nim`) and the derived configuration through the library's own
@@ -28,12 +36,14 @@ import std/[algorithm, os, sets, strutils, tables]
 import results
 import logos_sdk/cbor
 import ../loader/contract
+from logos_sdk/base/hex import fromHex
 from logos_sdk/abi/host import AppConfigFormat
 from ../runtime/authscopes import AuthorityModule
 from ../authority/scopes import rcContractInfo
 from ../runtime/host_config import parseHostConfig
 from ../permissions import HostAmbient
 import ../orchestration/[settings, needs]
+import ../cli/callsettings
 import ./[config, session, trustfile]
 
 when defined(posix):
@@ -50,7 +60,22 @@ const
   AuthorityState* = "authority"
   ModuleHostName* = "logos-module-host" ## [G264]
   LibexecHost* = ".." / "libexec" / "logos-core" / ModuleHostName
+  LibDir* = ".." / "lib" / "logos-core" ## [G343] the companion library's directory
+  CliLibrary* = DynlibFormat.replace("$1", CliModule) ## `liblcn_call.so` or `.dylib`
   RcEventPrefix = "logos.runtime_control."
+  lcnCallArtifactHash* {.strdefine.} = ""
+    ## [G343 Q3 (a)] BLAKE3-256 of the companion `liblcn_call`, in hex, compiled
+    ## into a packaged logosd; empty: only `cli.artifact` composes lcn_call
+  CliMethods* = [
+    "get_self", "list_modules", "describe_provider", "establish_route", "renew_route",
+    "close_route",
+  ] ## [G345] S6: what the lcn_call instance may call
+  CliEvents* = ["module_state_changed", "execution_state_changed", "inventory_changed"]
+    ## [G346] the events rule: the events `logosctl events` follows by default
+
+static:
+  doAssert lcnCallArtifactHash.len in [0, 64],
+    "lcnCallArtifactHash is 64 hex digits (BLAKE3-256)"
 
 type
   Composition* = object ## What logosd hands to the Runtime.
@@ -153,10 +178,13 @@ func bareEvent(name: string): string =
 
 # The system rules -------------------------------------------------------------------
 
-proc systemRules*(orch: OrchestratorSettings): Result[seq[CborValue], string] =
-  ## [G295] S1 to S5 (DAEMON.md §5). Every start rule holds its execution
-  ## scope and the host-ambient permission scope together (G207); an absent
-  ## `modes` covers direct and hosted starts alike.
+proc systemRules*(
+    orch: OrchestratorSettings, cli = false
+): Result[seq[CborValue], string] =
+  ## [G295] S1 to S5 (DAEMON.md §5), and S6 to S8 when the lcn_call instance
+  ## is composed (`cli`; G345, G346). Every start rule holds its execution scope and
+  ## the host-ambient permission scope together (G207); an absent `modes`
+  ## covers direct and hosted starts alike.
   let n = ?orchestratorNeeds(orch)
   var rules: seq[CborValue]
   # S1: the authority publishes its change notices.
@@ -260,14 +288,44 @@ proc systemRules*(orch: OrchestratorSettings): Result[seq[CborValue], string] =
     ),
     execScope(orchTarget, ["stop"]),
   )
+  if cli:
+    # S6: lcn_call's Runtime Control, as a consumer: discovery and routes. A
+    # method list with no event list covers every subscription too (as in S2).
+    let cliSubject = subjectOf("instances", [CliInstance])
+    rules.add rule("allow", cliSubject, rcScope(CliMethods, Opt.none(seq[string])))
+    # S7: of the events, only those `events` follows by default (an event
+    # request names no method: methods [], events [e]); and no execution.
+    var otherEvents: seq[string]
+    for name in rcContractInfo().events.keys:
+      if name notin CliEvents:
+        otherEvents.add(name)
+    otherEvents.sort() # the listing in DAEMON.md §5 does not follow a table's order
+    if otherEvents.len > 0:
+      rules.add denyRule(
+        "consumer-denied", cliSubject, rcScope(newSeq[string](), Opt.some(otherEvents))
+      )
+    rules.add denyRule(
+      "consumer-denied", cliSubject, execScope(cborMap(), ["start", "stop"])
+    )
+    # S8: the shell cannot reconfigure or retire lcn_call; it may start, stop
+    # and recover it (the activation, DAEMON.md §7a).
+    rules.add denyRule(
+      "target-denied",
+      ctlSubject,
+      rcScope(
+        ["retire_module", "update_configuration", "apply_configuration"],
+        Opt.none(seq[string]),
+        Opt.some(subjectOf("modules", [CliModule])),
+      ),
+    )
   ok(rules)
 
 proc mergedPolicy*(
-    p: LcnDcPolicyARCapabilityAuthorityMap, orch: OrchestratorSettings
+    p: LcnDcPolicyARCapabilityAuthorityMap, orch: OrchestratorSettings, cli = false
 ): Result[LcnAuthorityPolicy, string] =
   ## [G295] The operator's rules and options with the system rules, as one
   ## `lcn.authority_policy`, every array canonical.
-  var rules = ?systemRules(orch)
+  var rules = ?systemRules(orch, cli)
   for r in p.rules:
     rules.add(toCbor(r))
   var entries: seq[CborEntry] = @[
@@ -341,7 +399,7 @@ proc orchestratorValue*(dc: LcnDaemonConfig): Result[OrchestratorSettings, strin
 func ambient(): LcnAppPermissionSetting =
   LcnAppPermissionSetting(permission: HostAmbient, constraints: @AmbientConstraints)
 
-func permissionsOf(dc: LcnDaemonConfig): LcnAppPermissions =
+func permissionsOf(dc: LcnDaemonConfig, cli: bool): LcnAppPermissions =
   ## [G294; decision 3; G110, G284] The reference profile unless one is named;
   ## the operator's entries; host-ambient for each system instance; and, for
   ## each operator module the operator gave no module entry, the module entry
@@ -365,6 +423,12 @@ func permissionsOf(dc: LcnDaemonConfig): LcnAppPermissions =
       module: CtlModule, instance: Opt.some(CtlInstance), permissions: @[ambient()]
     )
   )
+  if cli:
+    initial.add(
+      LcnAppInitialSettings(
+        module: CliModule, instance: Opt.some(CliInstance), permissions: @[ambient()]
+      )
+    )
   if dc.policy.kind == LcnDcPolicyKind.Capability_authority:
     initial.add(
       LcnAppInitialSettings(
@@ -406,6 +470,69 @@ proc defaultModuleHost*(exe: string): Opt[string] =
       return Opt.some(realPath(p))
   Opt.none(string)
 
+proc companionLibrary*(exe: string): Opt[string] =
+  ## [G343] `<d>/../lib/logos-core/liblcn_call.{so,dylib}`, `<d>` as for the
+  ## Module Host; none when `exe` is empty.
+  if exe.len == 0:
+    return Opt.none(string)
+  Opt.some((realPath(exe).parentDir / LibDir / CliLibrary).normalizedPath)
+
+proc cliArtifact*(c: DaemonConfig, exe: string): Opt[LcnAppArtifact] =
+  ## [G343] `cli.artifact`, else the companion library with the compiled hash;
+  ## none: this logosd composes no lcn_call.
+  if c.cli.artifact.isSome:
+    return c.cli.artifact
+  when lcnCallArtifactHash.len == 0:
+    Opt.none(LcnAppArtifact)
+  else:
+    let path = companionLibrary(exe).valueOr:
+      return Opt.none(LcnAppArtifact)
+    let hash = hex.fromHex(lcnCallArtifactHash).valueOr:
+      return Opt.none(LcnAppArtifact)
+    Opt.some(LcnAppArtifact(id: LcnCallArtifactId, local_path: path, hash: hash))
+
+func cliSocketPath*(s: Session, socketDir: string): string =
+  ## [G344] `run/lcn_call.sock`, or in `cli.socket_dir`; logosctl's launcher
+  ## reads the same rule.
+  (if socketDir.len > 0: socketDir else: s.runDir) / CliSocketName
+
+func cliSocketPath*(s: Session, c: DaemonConfig): string =
+  cliSocketPath(s, c.cli.socketDir)
+
+proc cliRecord(
+    s: Session, c: DaemonConfig, artifact: LcnAppArtifact
+): Result[LcnAppModule, string] =
+  ## [G343] The lcn_call instance: hosted, its settings provisioned.
+  let settings = LcnCallSettings(
+    socket: cliSocketPath(s, c),
+    deployment: LcnCallSettingsDeploymentChoice(
+      kind:
+        if c.production:
+          LcnCallSettingsDeploymentChoiceKind.Production
+        else:
+          LcnCallSettingsDeploymentChoiceKind.Non_production
+    ),
+    workers: uint8(c.cli.workers),
+    streams: uint8(c.cli.streams),
+    idle_timeout_ms: uint32(c.cli.idleTimeoutMs),
+    route_idle_ms: uint32(c.cli.routeIdleMs),
+  )
+  let declaration = ?lcnCallDeclaration()
+  let provisioned = ?encodeSettings(settings)
+  ok(
+    LcnAppModule(
+      instance: CliInstance,
+      module: CliModule,
+      implementation: LcnAppImplementation(
+        kind: LcnAppImplementationKind.Process_hosted_dynamic,
+        arm_Process_hosted_dynamic:
+          LcnAppImplementationARProcessHostedDynamicMap(artifact: artifact),
+      ),
+      configuration: Opt.some(declaration),
+      provisioned_configuration: Opt.some(provisioned),
+    )
+  )
+
 # Composition ------------------------------------------------------------------------
 
 func staticModule(instance, module, binding: string): LcnAppModule =
@@ -429,13 +556,16 @@ proc compose*(s: Session, c: DaemonConfig, exe = ""): Result[Composition, string
   orchRecord.configuration = Opt.some(?orchestratorDeclaration())
   orchRecord.provisioned_configuration = Opt.some(?encodeSettings(orch))
   var modules = @[orchRecord, staticModule(CtlInstance, CtlModule, CtlBinding)]
+  let cliArt = cliArtifact(c, exe)
+  if cliArt.isSome:
+    modules.add(?cliRecord(s, c, cliArt.get))
   var policy = LcnAppPolicy(kind: LcnAppPolicyKind.Allow_all)
   if dc.policy.kind == LcnDcPolicyKind.Capability_authority:
     let p = dc.policy.arm_Capability_authority
     var ca = staticModule(AuthorityInstance, AuthorityModule, AuthorityModule)
     ca.state_assignment = Opt.some(AuthorityState)
     modules.add(ca)
-    let merged = ?mergedPolicy(p, orch)
+    let merged = ?mergedPolicy(p, orch, cliArt.isSome)
     policy = LcnAppPolicy(
       kind: LcnAppPolicyKind.Capability_authority,
       arm_Capability_authority: LcnAppPolicyARCapabilityAuthorityMap(
@@ -473,7 +603,7 @@ proc compose*(s: Session, c: DaemonConfig, exe = ""): Result[Composition, string
     declarations: dc.declarations,
     routing: dc.routing,
     transport: dc.transport,
-    permissions: Opt.some(permissionsOf(dc)),
+    permissions: Opt.some(permissionsOf(dc, cliArt.isSome)),
     # [I96; G306; decision 9] The operator's transfers as they are: protected
     # offline input, applied once at the next start (DAEMON.md §11).
     state_transfers: dc.state_transfers,

@@ -1522,6 +1522,45 @@ when defined(posix):
       check c.materializeVia(1, closed) == Opt.some(ecNotReady)
       e.finish()
 
+    test "[RUN-0174] [RUN-0177] C-2b a prepared establish_route or renew_route keeps the route's material in the host, as a synchronous one does: the handle materializes (Tier 5 step N-2b)":
+      let cfg = hosted()
+      var c = cfg.serving()
+      let e = fixtureEngine(cfg)
+      discard e.started(meter(), "m")
+      discard e.started(consumerRecord(), "c")
+      check codeIn(
+        c.run("prepare rc 0 establish_route " & hexOf(establishReq("k")) & " -")
+      ) == Opt.some(ecOk)
+      check codeIn(c.run("submit 0")) == Opt.some(ecOk)
+      check c.noted("done", "0 ")
+      let made = c.doneOf(0).split(' ', 1)
+      check made.len == 2 and made[0] == "0"
+      var route = ""
+      if made.len == 2:
+        let resp = LogosNSRuntimeControlEstablishRouteResponse.decode(unhexOf(made[1]))
+        check resp.isOk and resp.get.routes.len == 1
+        if resp.isOk and resp.get.routes.len == 1:
+          route = resp.get.routes[0].route
+      check codeIn(c.run("release-call 0")) == Opt.some(ecOk)
+      check c.materializeVia(0, route) == Opt.some(ecOk)
+      check readingOf(c.readVia(0, 4)).isSome
+      # The ticket is used: a renewal through a prepared call issues the next.
+      check c.materializeVia(1, route) == Opt.some(ecNotAuthorised)
+      let renew = encode(
+        LogosNSRuntimeControlRenewRouteRequest(request_key: "k2", route: route)
+      ).tryGet
+      check codeIn(c.run("prepare rc 1 renew_route " & hexOf(renew) & " -")) ==
+        Opt.some(ecOk)
+      check codeIn(c.run("submit 1")) == Opt.some(ecOk)
+      check c.noted("done", "1 ")
+      check c.doneOf(1).startsWith("0 ")
+      check codeIn(c.run("release-call 1")) == Opt.some(ecOk)
+      check c.materializeVia(1, route) == Opt.some(ecOk)
+      check readingOf(c.readVia(1, 5)).isSome
+      check codeIn(c.run("release 0")) == Opt.some(ecOk)
+      check codeIn(c.run("release 1")) == Opt.some(ecOk)
+      e.finish()
+
     test "[RUN-0175] [RUN-0176] C-3 a hosted consumer cannot materialize another consumer's route: NOT_AUTHORISED; its own still works":
       let cfg = hosted()
       var first = cfg.serving("c")

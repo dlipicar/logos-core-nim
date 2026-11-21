@@ -71,4 +71,5 @@ daemon_cli = [
   "src/logos_core/cli/",
   "src/logosd.nim",
   "src/logosctl.nim",
+  "src/lcn_call.nim",
 ]

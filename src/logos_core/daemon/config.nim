@@ -29,9 +29,13 @@ const
   CtlInstance* = "logosctl"
   CtlModule* = "logosctl" ## [G53] the logosctl module's name and binding
   CtlBinding* = "logosctl"
-  ReservedInstances* =
-    [OrchestratorInstance, AuthorityInstance, CtlInstance, LoaderInstanceId]
-  ReservedModules* = [LoaderModuleName, AuthorityModule, CtlModule, OrchestratorModule]
+  CliInstance* = "lcn_call" ## [G343] the CLI module's instance id and name
+  CliModule* = "lcn_call"
+  ReservedInstances* = [
+    OrchestratorInstance, AuthorityInstance, CtlInstance, CliInstance, LoaderInstanceId
+  ]
+  ReservedModules* =
+    [LoaderModuleName, AuthorityModule, CtlModule, CliModule, OrchestratorModule]
   CtlMethods* = [
     "get_self", "list_modules", "list_routes", "get_readiness", "get_execution_summary",
     "get_permission_settings", "get_configuration_schema", "get_configuration_summary",
@@ -43,6 +47,12 @@ const
   DefaultIdleTimeoutMs* = 30_000
   MinIdleTimeoutMs* = 100
   MaxIdleTimeoutMs* = 600_000
+  DefaultCliWorkers* = 8 ## [G344] `cli`
+  MaxCliStreams* = 64
+  DefaultCliStreams* = 8
+  DefaultRouteIdleMs* = 600_000 ## [G348] ten minutes
+  MinRouteIdleMs* = 1_000
+  MaxRouteIdleMs* = 86_400_000
   DefaultStoreRecords* = 1_000_000 ## [G143; G301]
   MaxStoreRecords* = 100_000_000
   DefaultStoreAgeDays* = 30
@@ -56,6 +66,11 @@ type
     socketDir*: string ## empty: `run/`
     workers*: int
     idleTimeoutMs*: int
+
+  CliSettings* = object ## [G343, G344] the lcn_call instance
+    artifact*: Opt[LcnAppArtifact] ## none: the library installed with logosd
+    socketDir*: string ## empty: `run/`
+    workers*, streams*, idleTimeoutMs*, routeIdleMs*: int
 
   StoreSettings* = object ## [G301] the call-evidence store
     maxRecords*: int
@@ -71,6 +86,8 @@ type
   DaemonConfig* = object ## A decoded daemon-config that passed checks 1 to 4.
     value*: LcnDaemonConfig
     ctl*: CtlSettings
+    cli*: CliSettings
+    production*: bool ## the trust file's development switch is off
     store*: Opt[StoreSettings]
     hooks*: HookSelection
 
@@ -213,6 +230,43 @@ proc checkCtl(dc: LcnDaemonConfig): Result[CtlSettings, string] =
     c.idleTimeoutMs = t
   ok(c)
 
+proc checkCli(dc: LcnDaemonConfig): Result[CliSettings, string] =
+  ## [G344] The lcn_call instance's settings, with their defaults.
+  var c = CliSettings(
+    workers: DefaultCliWorkers,
+    streams: DefaultCliStreams,
+    idleTimeoutMs: DefaultIdleTimeoutMs,
+    routeIdleMs: DefaultRouteIdleMs,
+  )
+  if dc.cli.isNone:
+    return ok(c)
+  let x = dc.cli.get
+  if x.artifact.isSome:
+    if not isAbsolute(x.artifact.get.local_path):
+      return err("cli.artifact.local_path must be an absolute path")
+    c.artifact = x.artifact
+  if x.socket_dir.isSome:
+    if not isAbsolute(x.socket_dir.get):
+      return err("cli.socket_dir must be an absolute path")
+    c.socketDir = x.socket_dir.get
+  if x.workers.isSome:
+    c.workers = int(x.workers.get)
+    if c.workers < 1 or c.workers > MaxWorkers:
+      return err("cli.workers must be 1 to 32")
+  if x.streams.isSome:
+    c.streams = int(x.streams.get)
+    if c.streams < 1 or c.streams > MaxCliStreams:
+      return err("cli.streams must be 1 to 64")
+  if x.idle_timeout_ms.isSome:
+    c.idleTimeoutMs = int(x.idle_timeout_ms.get)
+    if c.idleTimeoutMs < MinIdleTimeoutMs or c.idleTimeoutMs > MaxIdleTimeoutMs:
+      return err("cli.idle_timeout_ms must be 100 to 600000")
+  if x.route_idle_ms.isSome:
+    c.routeIdleMs = int(x.route_idle_ms.get)
+    if c.routeIdleMs < MinRouteIdleMs or c.routeIdleMs > MaxRouteIdleMs:
+      return err("cli.route_idle_ms must be 1000 to 86400000")
+  ok(c)
+
 proc checkAudit(
     dc: LcnDaemonConfig, checkKey: bool
 ): Result[Opt[StoreSettings], string] =
@@ -259,7 +313,17 @@ proc checkDaemonConfig*(
   ?checkNames(dc)
   let hooks = ?checkGates(dc, trust, hooksBuild)
   let ctl = ?checkCtl(dc)
+  let cli = ?checkCli(dc)
   let store = ?checkAudit(dc, checkKey)
-  ok(DaemonConfig(value: dc, ctl: ctl, store: store, hooks: hooks))
+  ok(
+    DaemonConfig(
+      value: dc,
+      ctl: ctl,
+      cli: cli,
+      production: not trust.file.development,
+      store: store,
+      hooks: hooks,
+    )
+  )
 
 {.pop.}

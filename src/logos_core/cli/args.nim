@@ -5,10 +5,11 @@
 ## - `key=value`: one scalar field of the request map. Integers in decimal,
 ##   `true`/`false`, text as given, byte strings as hex, a text-literal choice
 ##   as its text. A structured field (map, list, tuple) is refused: the whole
-##   request goes with `--json`.
+##   request goes with `--request`.
 ## - `key=@FILE`: a text field (the bytes must be UTF-8) or a byte-string field,
 ##   from a descriptor the launcher passed.
-## - `--json`: the whole request as one JSON object, read as G89 writes it:
+## - `--request` (plan R4: `--json` is logosctl's output flag; the wire field
+##   keeps the name `json`): the whole request as one JSON object, read as G89 writes it:
 ##   byte strings as hex text, integers beyond ±2^53 as decimal text. JSON
 ##   numbers with a fraction or an exponent are floats, which Logos CBOR does
 ##   not have (INTERFACE §4.4); duplicate object keys are refused.
@@ -32,7 +33,7 @@ import logos_sdk/iface/surface
 export results
 
 const
-  MaxJsonDepth = 256 ## [IMPL] nesting of `--json` arrays and objects
+  MaxJsonDepth = 256 ## [IMPL] nesting of `--request` arrays and objects
   JsonSafe = 9_007_199_254_740_992'u64 ## 2^53, G89's integer bound
   MaxRefHops = 64
 
@@ -63,17 +64,38 @@ func refusal(msg: string): Conv =
 
 # The request rule --------------------------------------------------------------------
 
-func requestShape*(cs: ContractSet, m: SurfaceMethod): Result[RequestShape, string] =
-  ## [SPEC INTERFACE §1.2] `m`'s request declaration in its defining document's
-  ## schema set (the one the payload validator uses).
+func shapeOf(
+    cs: ContractSet, doc: int, decl, what: string
+): Result[RequestShape, string] =
+  ## [SPEC INTERFACE §1.2] The declaration `decl` in the schema set of the
+  ## document `doc` (the one the payload validator uses).
   let docs = cs.documents
-  if m.doc < 0 or m.doc >= docs.len:
-    return err(m.bare & " names no document of the contract set")
-  let set = schemaSetFor(docs[m.doc].model, cs.context)
-  let d = set.docs[0].find(m.request)
+  if doc < 0 or doc >= docs.len:
+    return err(what & " names no document of the contract set")
+  let set = schemaSetFor(docs[doc].model, cs.context)
+  let d = set.docs[0].find(decl)
   if d.isNone or d.get.kind == dkMethod:
-    return err(m.request & " is not declared")
-  ok(RequestShape(set: set, body: d.get.body, methodName: m.bare))
+    return err(decl & " is not declared")
+  ok(RequestShape(set: set, body: d.get.body, methodName: what))
+
+func requestShape*(cs: ContractSet, m: SurfaceMethod): Result[RequestShape, string] =
+  ## `m`'s request rule.
+  shapeOf(cs, m.doc, m.request, m.bare)
+
+func responseShape*(cs: ContractSet, m: SurfaceMethod): Result[RequestShape, string] =
+  ## `m`'s response rule, for `describe`.
+  shapeOf(cs, m.doc, m.response, m.bare)
+
+func eventShape*(cs: ContractSet, e: SurfaceEvent): Result[RequestShape, string] =
+  ## [SPEC INTERFACE §1.5] `e`'s payload rule: the event declaration's body.
+  let docs = cs.documents
+  if e.doc < 0 or e.doc >= docs.len:
+    return err(e.id & " names no document of the contract set")
+  let set = schemaSetFor(docs[e.doc].model, cs.context)
+  let d = set.docs[0].find(e.id)
+  if d.isNone or d.get.kind != dkEvent:
+    return err(e.id & " is not declared as an event")
+  ok(RequestShape(set: set, body: d.get.body, methodName: e.id))
 
 func deref(s: SchemaSet, doc: int, n: SchemaNode): Result[(int, SchemaNode), string] =
   ## The node a chain of references names, and the document it is in.
@@ -147,6 +169,10 @@ func typeText(s: SchemaSet, doc: int, n: SchemaNode, depth = 0): string =
   of snLocalRef, snImportedRef:
     "?"
 
+func ruleText*(sh: RequestShape): string =
+  ## The rule's type, as `describe` shows it.
+  typeText(sh.set, 0, sh.body)
+
 func isStructured(s: SchemaSet, doc: int, n: SchemaNode): bool =
   let r = deref(s, doc, n)
   if r.isErr:
@@ -159,13 +185,13 @@ func topMap(sh: RequestShape): Result[(int, SchemaNode), string] =
   if x.kind != snMap:
     return err(
       "the request of " & sh.methodName &
-        " is not one map: give the whole request with --json"
+        " is not one map: give the whole request with --request"
     )
   ok((d, x))
 
 func fieldList*(sh: RequestShape): string =
   ## The request's fields: `name: type`, `name?:` for an optional one, and
-  ## `(--json)` after a structured one.
+  ## `(--request)` after a structured one.
   let t = sh.topMap()
   if t.isErr:
     return "(" & typeText(sh.set, 0, sh.body) & ")"
@@ -176,7 +202,7 @@ func fieldList*(sh: RequestShape): string =
   for f in m.fields:
     var p = f.name & (if f.optional: "?: " else: ": ") & typeText(sh.set, d, f.node)
     if isStructured(sh.set, d, f.node):
-      p.add(" (--json)")
+      p.add(" (--request)")
     parts.add(p)
   parts.join(", ")
 
@@ -456,7 +482,7 @@ proc fromArgs*(sh: RequestShape, args: openArray[ArgInput]): Result[CborValue, s
       if e.structured and not e.hard:
         return err(
           a.name & " is " & typeText(sh.set, d, f.node) &
-            ": give the whole request with --json"
+            ": give the whole request with --request"
         )
       if e.hard:
         return err(e.msg)
@@ -472,7 +498,7 @@ proc fromArgs*(sh: RequestShape, args: openArray[ArgInput]): Result[CborValue, s
     )
   ok(cborMap(entries))
 
-# --json --------------------------------------------------------------------------------
+# --request --------------------------------------------------------------------------------
 
 type
   JKind = enum
@@ -505,7 +531,7 @@ type
     depth: int
 
 func jerr(p: JParser, msg: string): string =
-  "--json at byte " & $p.i & ": " & msg
+  "--request at byte " & $p.i & ": " & msg
 
 proc skipWs(p: var JParser, t: string) =
   while p.i < t.len and t[p.i] in {' ', '\t', '\n', '\r'}:
@@ -725,7 +751,7 @@ proc parseValue(p: var JParser, t: string): Result[JVal, string] =
 
 proc parseJsonText(t: string): Result[JVal, string] =
   if not isValidUtf8(t):
-    return err("--json is not UTF-8")
+    return err("--request is not UTF-8")
   var p = JParser()
   let v = ?p.parseValue(t)
   p.skipWs(t)

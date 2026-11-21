@@ -12,6 +12,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -50,16 +51,37 @@ int lcn_sun_path_max(void) {
   return (int)sizeof(((struct sockaddr_un *)0)->sun_path);
 }
 
-static int set_flags(int fd) {
+static int fd_flags(int fd) {
   int fl = fcntl(fd, F_GETFL, 0);
   if (fl < 0 || fcntl(fd, F_SETFL, fl | O_NONBLOCK) < 0) return neg();
   int fdf = fcntl(fd, F_GETFD, 0);
   if (fdf < 0 || fcntl(fd, F_SETFD, fdf | FD_CLOEXEC) < 0) return neg();
+  return 0;
+}
+
+static int no_sigpipe(int fd) {
 #ifdef SO_NOSIGPIPE
   int one = 1;
   if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one) < 0) return neg();
+#else
+  (void)fd;
 #endif
   return 0;
+}
+
+static int set_flags(int fd) {
+  int r = fd_flags(fd);
+  return r < 0 ? r : no_sigpipe(fd);
+}
+
+static int hung_up(int fd) {
+  /* Whether poll reports the socket shut down in both directions. */
+  struct pollfd p = {fd, POLLIN, 0};
+  int n;
+  do {
+    n = poll(&p, 1, 0);
+  } while (n < 0 && errno == EINTR);
+  return n == 1 && (p.revents & POLLHUP) != 0;
 }
 
 int lcn_set_flags(int fd) { return set_flags(fd); }
@@ -120,10 +142,25 @@ int lcn_connect_result(int fd) {
 }
 
 int lcn_accept(int lfd) {
+  /* [IMPL] A connection whose peer closed before it was accepted is closed
+     and the next one taken. Only Darwin and iOS see one here: their kernel
+     refuses every socket option, SO_NOSIGPIPE included, with EINVAL on a
+     socket shut down in both directions, and poll then reports POLLHUP.
+     Elsewhere such a socket is accepted and its first read is end of input.
+     Nothing could be answered on it either way, so reporting it as an accept
+     failure only logged noise. Every other failure, every other EINVAL
+     among them, is still returned. */
   for (;;) {
     int fd = accept(lfd, NULL, NULL);
     if (fd >= 0) {
-      int r = set_flags(fd);
+      int r = fd_flags(fd);
+      if (r == 0) {
+        r = no_sigpipe(fd);
+        if (r == -EINVAL && hung_up(fd)) {
+          close(fd);
+          continue;
+        }
+      }
       if (r < 0) {
         close(fd);
         return r;

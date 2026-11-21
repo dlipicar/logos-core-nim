@@ -620,6 +620,17 @@ call of its own while the callee calls back is a route-call cycle, outside these
 so. The consumer helpers' callbacks run on the module thread through the handle's dispatcher (G339),
 with no change to what the Runtime sees.
 
+### What Tier 5 step N-2b changes
+
+The CLI module `lcn_call` (DECISIONS I102; G343 to G350). No unit changes status. The CLI socket is a
+second activation surface beside the logosctl instance's, documented with BCP l.389's five items in
+[DAEMON.md](DAEMON.md) §7a: BCP-0085's inspection reason names both, BCP-0090's wire format now covers
+`logos-core-nim.cli.v1` too, and `tests/test_lcn_call.nim` adds evidence for BCP-0086 to BCP-0089 (activation
+through the logosctl instance, a request that cannot select an instance or artifact, the route `lcn_call`
+holds, the launcher's uid check). IFC-0942 gains `describe`, which materializes from the surface projected to
+the selected contract. RUN-0174 is re-tested for a Module Host's prepared `establish_route` and
+`renew_route` (`test_hosted_routes` C-2b), which kept no material before this step.
+
 ## Properties not claimed
 
 - A complete Logos module system (BCP §5.1; owner decision 10 (a), K18; DECISIONS G310, I97): there
@@ -675,6 +686,12 @@ with no change to what the Runtime sees.
     done with it.
   - **Values on the stack**: fixed-size values held in locals (a digest, a scalar) are not zeroed;
     every heap and shared-heap copy is.
+  - **Argument text typed for a marked method, until step N-2d** (DECISIONS I102, G349; planning,
+    2026-11-20): `lcn_call` refuses a method with a marked request or response before any route,
+    so no marked value reaches a provider or comes back. But `key=value` or `--request` text typed for
+    such a method crosses the launcher and the `lcn_call` instance in the `cli.v1` frame, and their
+    buffers hold it, unwiped, until the refusal and after it. N-2d erases every buffer in both,
+    with a wipe-audit test.
 
 ## Unix-stream endpoints and peer checks
 

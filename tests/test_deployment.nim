@@ -13,7 +13,7 @@
 ## `spectrace deploydoc` checks the document's tables against the claims.
 
 when defined(posix):
-  import std/[json, locks, monotimes, os, sequtils, strutils, tables, times]
+  import std/[algorithm, json, locks, monotimes, os, sequtils, strutils, tables, times]
   import unittest2
   import logos_sdk/crypto/blake3
   import ../src/logos_core/permissions
@@ -34,14 +34,17 @@ when defined(posix):
   from logos_sdk/iface/provider import callSurfaceDescriptor
   from ../src/logos_core/durable import DurableLock, release
   from ../src/logos_core/daemon/config import
-    DefaultStoreQueue, DefaultStoreRecords, DefaultStoreAgeDays, OrchestratorInstance
+    DefaultStoreQueue, DefaultStoreRecords, DefaultStoreAgeDays, OrchestratorInstance,
+    CliInstance, CliModule, DefaultCliWorkers, DefaultCliStreams, DefaultIdleTimeoutMs,
+    DefaultRouteIdleMs
+  from ../src/logos_core/cli/hops import MaxHops
   from ../src/logos_core/orchestration/settings import OrchestratorModule
   from ../src/logos_core/daemon/evstore import
     DefaultSegmentEntries, DefaultSegmentBytes
   import
     ../src/logos_core/daemon/
       [assemble, ctlwire, daemon_config_types, logging, session, sessioninit]
-  from ../src/logos_core/daemon/compose import prepareDaemon
+  from ../src/logos_core/daemon/compose import prepareDaemon, CliEvents, cliSocketPath
   from ../src/logos_core/daemon/trustfile import TrustFileState, floorTrust
   import
     logos_sdk/testing/kitbuild,
@@ -616,6 +619,45 @@ when defined(posix):
       check DefaultSegmentEntries == f["segment_entries"].getInt
       check DefaultSegmentBytes == f["segment_bytes"].getInt
       check MaxDiagnostics == facts["diagnostics_retained"].getInt
+
+    test "[IMPL-DECISION G343] [IMPL-DECISION G344] [IMPL-DECISION G346] the CLI module's facts are the code's: its instance hosted in a process of its own, not started at boot, its socket, its defaults, the events it may follow and its bound on continuations":
+      let f = facts["cli"]
+      check f["instance"].getStr == CliInstance
+      check f["socket"].getStr == "run" / "lcn_call.sock"
+      let s = Session(dir: makeShortBase("dpcli") / "s")
+      check cliSocketPath(s, "") == s.dir / f["socket"].getStr
+      check f["workers"].getInt == DefaultCliWorkers
+      check f["streams"].getInt == DefaultCliStreams
+      check f["idle_timeout"].getInt == DefaultIdleTimeoutMs
+      check f["route_idle"].getInt == DefaultRouteIdleMs
+      check f["events"].getElems.mapIt(it.getStr) == CliEvents.sorted
+      check f["max_hops"].getInt == MaxHops
+      var dc = defaultDaemonConfig("assigned-by-init")
+      dc.runtime.module_host = Opt.some(hostExe)
+      dc.cli = Opt.some(
+        LcnDcCli(
+          artifact: Opt.some(
+            LcnAppArtifact(
+              id: "lcn_call",
+              local_path: "/opt/lib/liblcn_call.so",
+              hash: newSeq[byte](32),
+            )
+          )
+        )
+      )
+      let p = prepareDaemon(s, dc.encode.get, TrustFileState(file: floorTrust()))
+      check p.isOk
+      if p.isOk:
+        let comp = p.get.composition
+        let m = comp.appConfig.modules.filterIt(it.instance == CliInstance)
+        check m.len == 1
+        if m.len == 1:
+          check m[0].module == CliModule
+          check f["placement"].getStr == "process"
+          check m[0].implementation.kind ==
+            LcnAppImplementationKind.Process_hosted_dynamic
+        check f["started_at_boot"].getBool == false
+        check comp.orchestrator.defaults.get(@[]).allIt(it.instance != CliInstance)
 
     test "[BCP-0102] [TXT-0555] [TXT-0350] the admission pools' totals and per-consumer limits are the facts', and so is the authority's audit bound; logosd's Runtime instance is the engine with the facts' orchestration module and instance; logosd composes no Credential Store, accepts an operator module named logos_credential_store, and its start fails at binding":
       # The pools (DEPLOYMENT.md §12, "Admission pools"), with logosd's
