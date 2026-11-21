@@ -677,6 +677,37 @@
             touch $out
           '';
         }
+        // lib.optionalAttrs s.pkgs.stdenv.hostPlatform.isLinux {
+          # [DECISIONS G341] The test kit libraries built with the switches the node's libraries
+          # build with (`LCN_KIT_SWITCHES`, `testing/kitbuild`), on this toolchain: logos-storage-nim
+          # 4fe02344's (`config.nims`; `-d:chronosHandleException` changes how `async` procs
+          # compile) and logos-delivery d20ee361's library set (`config.nims`,
+          # `library/config.nims`). Under each, refc libraries in a refc host (`test_kit_dylib`,
+          # the confined sensor included) and in orc Runtimes and Module Hosts (`run.mixed`, and
+          # `test_kit_mixed`'s confined ledger), the node's pairing.
+          kit-toolchains =
+            let
+              switchSets = [
+                "--threads:on --tlsEmulation:off --opt:speed --excessiveStackTrace:on -d:metrics -d:nimTypeNames --styleCheck:usages --styleCheck:error --fieldChecks:on --warningAsError:ProveField:on --legacy:procParamTypeBackendAliases -d:withoutPCRE -d:nimOldCaseObjects -d:chronosHandleException -d:release"
+                "--threads:on --deepcopy:on -d:nimOldCaseObjects -d:nimTypeNames -d:metrics"
+              ];
+            in
+            s.nimDerivation {
+              name = "kit-toolchains";
+              src = s.nimSources;
+              buildPhase = ''
+                runHook preBuild
+                for set in ${lib.escapeShellArgs switchSets}; do
+                  export LCN_KIT_SWITCHES="$set"
+                  echo "kit-toolchains: $set"
+                  nim c -r --mm:refc --outdir:build sdk/tests/test_kit_dylib.nim
+                  nim c -r --mm:orc --outdir:build tests/test_hosted_routes.nim 'run.mixed:*::*'
+                  nim c -r --mm:orc --outdir:build tests/test_kit_mixed.nim
+                done
+                runHook postBuild
+              '';
+            };
+        }
       );
 
       # Every check in exactly one group, so CI can run each Linux leg as parallel jobs
@@ -749,6 +780,8 @@
             # [N-2b] an estimate until a CI run measures it: in-process logosd with hosted
             # lcn_call and providers, as test_hosted.
             test_lcn_call = 18;
+            # [N-1.6] an estimate: three suites under two switch sets, without sanitizers.
+            kit-toolchains = 30;
             test_hosted_routes = 27;
             test_wipe_routes = 18;
             test_hosted = 18;

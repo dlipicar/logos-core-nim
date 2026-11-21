@@ -523,8 +523,11 @@ methods include a marked one is refused (RUNTIME l.1808; DECISIONS G277, G327).
 A module library logosd maps (`direct_dynamic`) or a Module Host loads may be built with either memory
 manager (DECISIONS G342; measured with the Runtime and the Module Host on macOS and x86_64 Linux). Build
 it with `-d:noSignalHandler`, so that loading it leaves the process's signal handlers alone (G340; the
-kit warns without it), and link it with its kit's export list (G341). In a refc module written with
-today's kit, handlers on threads other than the loading one must not store GC'd values (DECISIONS I71).
+kit warns without it), and link it with its kit's export list (G341). A refc module whose handlers keep
+GC'd values in the instance must be generated with `lcn-gen kit --confined`, which runs each instance
+on a thread of its own (G335; measured in logosd too, both placements, `tests/test_logosd.nim`); in a
+refc module without it, handlers on threads other than the loading one must not store GC'd values
+(DECISIONS I71). The author's guide is [sdk/docs/MODULE-KIT.md](../sdk/docs/MODULE-KIT.md).
 
 ## 23. Diagnostics and logs
 

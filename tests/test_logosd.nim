@@ -60,6 +60,13 @@ when defined(posix):
     ChatterInstance = "chatter-1"
     ChatterDelayVar = "LCN_CHATTER_INIT_DELAY_MS" ## `chatter_impl`'s init delay
     MeterInstance = "meter-1" ## a hosted provider `lcn_call` is granted
+    LedgerInstance = "ledger-1" ## the confined ledger, `lcn_call`'s provider
+    LedgerShells = 8 ## concurrent `logosctl call`s: `cli.workers`' default
+    ledgerSkips = kitMm == "refc" or (defined(msan) and otherMm == "refc")
+      ## [DECISIONS G277] a refc logosd refuses every route to a contract that
+      ## marks a payload, as the ledger's `seal` does; [G342] a refc library is
+      ## built without the sanitizer, and MemorySanitizer takes what it writes
+      ## for uninitialized (I77)
 
   let
     dExe = logosdProgram()
@@ -76,6 +83,20 @@ when defined(posix):
     meterRoot = @(
       acceptContractSet(readFile(repoDir / "spec/mirrors/IFC/3.9.1.module.cddl"))
       .expect("the meter_module contract set").primary.root
+    )
+    # [DECISIONS G342, G335] The thread-confined ledger built with the other
+    # memory manager: refc beside this orc logosd, the node's own pairing.
+    # Under refc it is not built, since its cases skip (`ledgerSkips`).
+    ledgerLib =
+      if ledgerSkips:
+        ""
+      else:
+        buildKitLibrary(
+          "ledger_lib.nim", "lgdledger", otherMm, exports = "ledger_module"
+        )
+    ledgerRoot = @(
+      acceptContractSet(readFile(repoDir / fixtureDir / "ledger_module.cddl"))
+      .expect("the ledger_module contract set").primary.root
     )
 
   var cases = 0
@@ -263,31 +284,44 @@ when defined(posix):
   proc startChatter(c: Case): Ran =
     c.ctl("module", "start", "beacon_module", "--instance", ChatterInstance)
 
-  proc initCli(c: Case): Ran =
-    ## [DAEMON.md §7a] The default configuration with the hosted `meter-1`
-    ## (not started), an operator rule granting `lcn_call` all of the meter's
-    ## provider actions, and `cli.artifact` naming the library
-    ## `support/clibuild` builds.
+  proc providerModule(
+      instance, module, lib: string, root: seq[byte], hosted = true
+  ): LcnAppModule =
+    ## An operator provider realized from `lib` by a Module Host, or in
+    ## logosd's own process when `hosted` is off (`direct_dynamic`).
+    let artifact = LcnAppArtifact(id: module, local_path: lib, hash: digestOfFile(lib))
+    LcnAppModule(
+      instance: instance,
+      module: module,
+      primary_contract: Opt.some(SchemaCommitment(schema_root: root)),
+      implementation:
+        if hosted:
+          LcnAppImplementation(
+            kind: LcnAppImplementationKind.Process_hosted_dynamic,
+            arm_Process_hosted_dynamic:
+              LcnAppImplementationARProcessHostedDynamicMap(artifact: artifact),
+          )
+        else:
+          LcnAppImplementation(
+            kind: LcnAppImplementationKind.Direct_dynamic,
+            arm_Direct_dynamic:
+              LcnAppImplementationARDirectDynamicMap(artifact: artifact),
+          ),
+    )
+
+  proc initCli(
+      c: Case,
+      provider = providerModule(MeterInstance, "meter_module", meterLib, meterRoot),
+  ): Ran =
+    ## [DAEMON.md §7a] The default configuration with the operator module
+    ## `provider` (by default the hosted `meter-1`; not started), an operator
+    ## rule granting `lcn_call` all of its provider actions, and
+    ## `cli.artifact` naming the library `support/clibuild` builds.
     var dc = defaultDaemonConfig("assigned-by-init")
     dc.runtime.module_host = Opt.some(hostExe)
     dc.runtime.module_host_env = Opt.some(@SanitizerEnv)
-    dc.modules = Opt.some(
-      @[
-        LcnAppModule(
-          instance: MeterInstance,
-          module: "meter_module",
-          primary_contract: Opt.some(SchemaCommitment(schema_root: meterRoot)),
-          implementation: LcnAppImplementation(
-            kind: LcnAppImplementationKind.Process_hosted_dynamic,
-            arm_Process_hosted_dynamic: LcnAppImplementationARProcessHostedDynamicMap(
-              artifact: LcnAppArtifact(
-                id: "meter", local_path: meterLib, hash: digestOfFile(meterLib)
-              )
-            ),
-          ),
-        )
-      ]
-    )
+    dc.modules = Opt.some(@[provider])
+    let root = provider.primary_contract.get.schema_root
     var actions = @[
       LcnApAction(kind: LcnApActionKind.Discover),
       LcnApAction(kind: LcnApActionKind.Establish_route),
@@ -306,7 +340,7 @@ when defined(posix):
               arm_lcn_Ap_provider_access: LcnApProviderAccess(
                 contract: LcnApProviderAccessContractChoice(
                   kind: LcnApProviderAccessContractChoiceKind.logos_Schema_commitment,
-                  arm_logos_Schema_commitment: SchemaCommitment(schema_root: meterRoot),
+                  arm_logos_Schema_commitment: SchemaCommitment(schema_root: root),
                 ),
                 actions: actions,
               ),
@@ -342,6 +376,95 @@ when defined(posix):
     while result.len < count and getMonoTime() < until:
       sleep(20)
       result = chatterPids(d.errText)
+
+  proc ledgerCall(c: Case, args: varargs[string]): (int, JsonNode) =
+    ## `logosctl call ledger_module …` with JSON output: its exit code and
+    ## the response.
+    let r = c.lcn(@["call", "ledger_module"] & @args)
+    checkpoint r.stdout & r.stderr
+    try:
+      (r.code, parseJson(r.stdout){"result"})
+    except CatchableError:
+      (r.code, newJNull())
+
+  proc settles(c: Case, instance: string): string =
+    ## The instance's state once it is no longer `ready` or `stopping`, or
+    ## what it is after `ReadyMs`.
+    let until = getMonoTime() + initDuration(milliseconds = ReadyMs)
+    result = c.state(instance)
+    while result in ["ready", "stopping"] and getMonoTime() < until:
+      sleep(20)
+      result = c.state(instance)
+
+  proc ledgerCase(hosted: bool) =
+    ## [DECISIONS G342, G335-G338] The ledger, a thread-confined refc kit
+    ## module, realized by orc logosd in its own process or by a Module Host;
+    ## `lcn_call` calls it.
+    let c = newCase()
+    check c.initCli(
+      providerModule(LedgerInstance, "ledger_module", ledgerLib, ledgerRoot, hosted)
+    ).code == 0
+    let d = c.start()
+    c.expectReady(d)
+    check c.ctl("module", "start", "ledger_module", "--instance", LedgerInstance).code ==
+      0
+    check c.ctl("module", "wait", "ledger_module", "--instance", LedgerInstance).code ==
+      0
+    # Its GC'd state is kept in the instance, on its module thread.
+    let (a, first) = c.ledgerCall("post", "key=k", "amount=5")
+    check a == 0
+    check first{"total"}.getBiggestInt == 5
+    let thread = first{"thread"}.getBiggestInt
+    check thread != 0
+    # [IF l.1899-1905, l.1942-1947] Calls that arrive at once, on whatever
+    # threads the host calls from, all run on that thread.
+    var shells: seq[Child]
+    for i in 0 ..< LedgerShells:
+      shells.add(
+        spawnChild(
+          ctlExe,
+          [
+            "--session-dir", c.s.dir, "call", "ledger_module", "post", "key=k",
+            "amount=1",
+          ],
+          c.dir,
+          "post" & $i,
+        )
+      )
+    for sh in shells:
+      check waitExit(sh, 120_000 * Slow) == 0
+      try:
+        check parseJson(sh.outText){"result", "thread"}.getBiggestInt == thread
+      except CatchableError:
+        checkpoint("not JSON: " & sh.outText & sh.errText)
+        fail()
+    let (b, after) = c.ledgerCall("post", "key=k", "amount=0")
+    check b == 0
+    check after{"total"}.getBiggestInt == 5 + LedgerShells
+    # [G338] An async handler, through the deferred surface; and a plain one
+    # reading its caller.
+    let (w, waited) = c.ledgerCall("wait", "channel=1", "millis=20", "value=7")
+    check w == 0
+    check waited{"value"}.getBiggestInt == 7
+    check waited{"thread"}.getBiggestInt == thread
+    check waited{"note"}.getStr == CliInstance
+    let (p, probed) = c.ledgerCall("probe", "channel=1", "value=0")
+    check p == 0
+    check probed{"note"}.getStr == CliInstance
+    check probed{"thread"}.getBiggestInt == thread
+    # Stopped and started again: a new instance, with its own state.
+    check c.ctl("module", "stop", "ledger_module", "--instance", LedgerInstance).code ==
+      0
+    check c.settles(LedgerInstance) in ["loaded", "unloaded"]
+    check c.ctl("module", "start", "ledger_module", "--instance", LedgerInstance).code ==
+      0
+    check c.ctl("module", "wait", "ledger_module", "--instance", LedgerInstance).code ==
+      0
+    let (r, again) = c.ledgerCall("post", "key=k", "amount=2")
+    check r == 0
+    check again{"total"}.getBiggestInt == 2
+    check d.stopped == 0
+    check hostsGone()
 
   suite "daemon.logosd: logosd and logosctl as processes (DAEMON.md) [IMPL-DECISION G88] [IMPL-DECISION G89] [IMPL-DECISION G296]":
     teardown:
@@ -1156,6 +1279,18 @@ when defined(posix):
       check c.state(CliInstance) == "ready"
       check d.stopped == 0
       check hostsGone()
+
+    test "[IMPL-DECISION G342] [IMPL-DECISION G335] a thread-confined refc kit module in orc logosd's own process (direct_dynamic): its state on its module thread under concurrent calls, an async handler, its caller, stop and start again":
+      if ledgerSkips:
+        skip()
+      else:
+        ledgerCase(hosted = false)
+
+    test "[IMPL-DECISION G342] [IMPL-DECISION G335] the same module realized by a Module Host (hosted_dynamic): the same calls, stop and start again, and no host left after logosd stops":
+      if ledgerSkips:
+        skip()
+      else:
+        ledgerCase(hosted = true)
 else:
   import unittest2
 

@@ -647,6 +647,17 @@ No Runtime or Module Host code changes: both take a provider's binding from its 
 without a primary contract (the interface-only case of `tests/test_events.nim`'s I106 test); no core
 suite loads one of these kits yet.
 
+Sub-part 6 places the confined kit in logosd and writes the author's guide. No unit changes status.
+The ledger, a confined kit module built with refc, runs in orc logosd's own process
+(`direct_dynamic`) and in a Module Host it starts (`hosted_dynamic`), called through `logosctl call`
+by `lcn_call`: its GC'd state stays on its module thread under concurrent calls, an async handler
+answers with its caller, and it stops and starts again (`tests/test_logosd.nim`; G342). The
+`kit-toolchains` flake check (Linux) builds the test kit libraries with logos-storage-nim's and
+logos-delivery's switch sets and runs `test_kit_dylib`, `run.mixed` and `test_kit_mixed` against them
+(G341). `sdk/docs/MODULE-KIT.md` is the author's guide, its example built and called by
+`sdk/tests/test_module_kit_guide.nim`. I71's limit, that a refc module's handlers on threads other
+than the loading one must not store GC'd values, now holds for kits without `--confined` only.
+
 ### What Tier 5 step N-2b changes
 
 The CLI module `lcn_call` (DECISIONS I102; G343 to G350). No unit changes status. The CLI socket is a
