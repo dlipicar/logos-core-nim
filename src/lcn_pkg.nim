@@ -10,7 +10,10 @@
 ##   PK.seed || PK.root` as 192 hex digits, readable only by its owner (PM §4.3
 ##   leaves private-key storage to the producer);
 ## - a trust file is JSON: {"anchors": [{"kid": "<text>" | "kid_hex": "<hex>",
-##   "public_key": "<hex>", "packages": ["<exact name>", ...]}]}.
+##   "public_key": "<hex>", "packages": ["<exact name>", ...]}]}. It is a
+##   producer's test convenience and no trust input (PM l.421; DECISIONS I41):
+##   logosd reads only the package trust file (docs/DAEMON.md §6), whose
+##   `logosctl trust anchor --kid` takes a hex kid as `hex:`, as `sign` does.
 
 import std/[algorithm, json, os, parseopt, strutils]
 import results

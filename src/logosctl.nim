@@ -68,6 +68,7 @@ when defined(posix):
       trustfile,
     ]
   import ./logos_core/cli/[cli_types, launcher]
+  from logos_sdk/codegen/nimrt import wipeTyped
 
   const
     Usage =
@@ -94,6 +95,9 @@ online, through the lcn_call instance (it writes the result itself):
   call MODULE METHOD [NAME=VALUE | NAME=@FILE | NAME=@-]... [--request JSON]
        [--instance I] [--contract ROOT] [--node NAME]
   describe MODULE [--instance I] [--contract ROOT] [--node NAME]
+  subscribe MODULE EVENT [--count N] [--for DURATION]
+       [--instance I] [--contract ROOT] [--node NAME]
+  events [NAME]... [--count N] [--for DURATION] [--node NAME]
 
 offline (the session's files; writers hold its lock):
   init [--config @FILE] [--policy @FILE] [--module-config INSTANCE=@FILE]... [--development]
@@ -103,6 +107,9 @@ offline (the session's files; writers hold its lock):
   daemon config set @FILE
   daemon config module-config INSTANCE (@FILE | --remove)
   trust show
+  trust anchor add --kid KID --key HEX|@FILE [--development] NAME...
+  trust anchor remove --kid KID
+  trust anchor add-names|remove-names --kid KID NAME...
   trust development on|off
   trust reestablish --revision N
   trust evidence-keys ls|rotate
@@ -111,7 +118,10 @@ offline (the session's files; writers hold its lock):
   state list
   state purge INSTANCE [--yes]
   state purge --assignment A [--yes]
-  version"""
+  version
+
+KID is text, or hex: and hex digits, as lcn-pkg sign --kid takes it; HEX is the
+public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too)."""
     DefaultTimeoutMs = 65_000
     ExitOk = 0
     ExitUsage = 1
@@ -171,6 +181,40 @@ offline (the session's files; writers hold its lock):
       ok(Opt.some(parseBiggestUInt(v.get).uint64))
     except ValueError:
       err(usage("--" & name & " takes a non-negative integer"))
+
+  proc durationOpt(c: Cli, name: string): Result[Opt[uint32], Fail] =
+    ## [G349] `--for`: milliseconds, or a number with `ms`, `s`, `m` or `h`.
+    let v = c.opt(name)
+    if v.isNone:
+      return ok(Opt.none(uint32))
+    var text = v.get
+    var unit = 1'u64
+    for (suffix, ms) in [
+      ("ms", 1'u64), ("s", 1_000'u64), ("m", 60_000'u64), ("h", 3_600_000'u64)
+    ]:
+      if text.endsWith(suffix) and text.len > suffix.len:
+        text = text[0 ..< text.len - suffix.len]
+        unit = ms
+        break
+    var n: uint64
+    try:
+      n = parseBiggestUInt(text).uint64
+    except ValueError:
+      return err(usage("--" & name & " takes a duration such as 500ms, 30s or 2m"))
+    if n == 0 or n > high(uint32).uint64 div unit:
+      return err(usage("--" & name & " is 1 ms to 49 days"))
+    ok(Opt.some(uint32(n * unit)))
+
+  proc countOpt(c: Cli): Result[Opt[uint32], Fail] =
+    let n = ?c.uintOpt("count")
+    if n.isSome and (n.get < 1 or n.get > high(uint32).uint64):
+      return err(usage("--count is 1 to " & $high(uint32)))
+    ok(
+      n.map(
+        proc(x: uint64): uint32 =
+          uint32(x)
+      )
+    )
 
   proc arg(c: Cli, i: int, what: string): Result[string, Fail] =
     if i < c.args.len:
@@ -922,22 +966,35 @@ offline (the session's files; writers hold its lock):
   proc argsOf(c: Cli, files: var seq[cint]): Result[seq[LcnCliArg], Fail] =
     ## [D26 (a); G349] `NAME=VALUE`, or `NAME=@FILE` (`@-`: stdin) passed as a
     ## descriptor; lcn_call types each from the method's request rule.
+    ##
+    ## [N-2d] The launcher has no schema, so it treats every argument as one
+    ## that may be marked: a malformed one is named by its position, never
+    ## echoed, and the copies made here are wiped (`launch` wipes the
+    ## message). The process's own argv is not erased: lcn_call refuses an
+    ## inline value for a marked request.
     var args: seq[LcnCliArg]
     var stdinUsed = false
-    for a in c.args[3 .. ^1]:
+    for k in 3 ..< c.args.len:
+      template a(): untyped =
+        c.args[k]
+
       let eq = a.find('=')
       if eq <= 0:
-        return err(usage("an argument is NAME=VALUE or NAME=@FILE, got " & a))
+        return err(
+          usage(
+            "argument " & $(k - 2) & " after the method is not NAME=VALUE or NAME=@FILE"
+          )
+        )
       let name = a[0 ..< eq]
-      let value = a[eq + 1 .. ^1]
-      if not value.startsWith("@"):
+      if a.len <= eq + 1 or a[eq + 1] != '@':
         args.add(
           LcnCliArg(
             kind: LcnCliArgKind.lcn_Cli_text_arg,
-            arm_lcn_Cli_text_arg: LcnCliTextArg(name: name, value: value),
+            arm_lcn_Cli_text_arg: LcnCliTextArg(name: name, value: a[eq + 1 .. ^1]),
           )
         )
         continue
+      let value = a[eq + 1 .. ^1]
       if files.len >= MaxFileArgs:
         return err(usage("at most " & $MaxFileArgs & " @FILE arguments"))
       let path = value[1 .. ^1]
@@ -961,8 +1018,39 @@ offline (the session's files; writers hold its lock):
     ok(args)
 
   proc commandOf(c: Cli, files: var seq[cint]): Result[LcnCliCommand, Fail] =
+    if c.args[0] == "events":
+      # [G346, G349] The target's Runtime Control events; no names: the
+      # events rule's three.
+      let names = c.args[1 .. ^1]
+      if names.len > 16:
+        return err(usage("events takes at most 16 names"))
+      let count = ?c.countOpt()
+      let forMs = ?c.durationOpt("for")
+      var cmd = LcnCliEventsCommand(count: count, for_ms: forMs)
+      if names.len > 0:
+        cmd.names = Opt.some(names)
+      return ok(
+        LcnCliCommand(
+          kind: LcnCliCommandKind.lcn_Cli_events_command,
+          arm_lcn_Cli_events_command: cmd,
+        )
+      )
     let module = ?c.arg(1, "MODULE")
     let provider = ?c.providerOf(module)
+    if c.args[0] == "subscribe":
+      let event = ?c.arg(2, "EVENT")
+      if c.args.len > 3:
+        return err(usage("subscribe takes one MODULE and one EVENT"))
+      let count = ?c.countOpt()
+      let forMs = ?c.durationOpt("for")
+      return ok(
+        LcnCliCommand(
+          kind: LcnCliCommandKind.lcn_Cli_subscribe_command,
+          arm_lcn_Cli_subscribe_command: LcnCliSubscribeCommand(
+            provider: provider, event: event, count: count, for_ms: forMs
+          ),
+        )
+      )
     if c.args[0] == "describe":
       if c.args.len > 2:
         return err(usage("describe takes one MODULE"))
@@ -994,27 +1082,31 @@ offline (the session's files; writers hold its lock):
       for f in files:
         if f > 0:
           discard posix.close(f)
-    let command = ?c.commandOf(files)
+    var command = ?c.commandOf(files)
     let cancelFd = ?cancelOnSignals()
-    let r = launch(
-      Launch(
-        cliSocket: cliSocketOf(s),
-        ctlSocket: socketOf(s),
-        message: LcnCliMessage(
-          target: c.opt("node"),
-          output: LcnCliOutput(
-            kind: if c.json: LcnCliOutputKind.Json else: LcnCliOutputKind.Text
-          ),
-          deadline_ms: Opt.some(uint32(c.timeoutMs)),
-          command: command,
+    var l = Launch(
+      cliSocket: cliSocketOf(s),
+      ctlSocket: socketOf(s),
+      message: LcnCliMessage(
+        target: c.opt("node"),
+        output: LcnCliOutput(
+          kind: if c.json: LcnCliOutputKind.Json else: LcnCliOutputKind.Text
         ),
-        stdoutFd: 1,
-        stderrFd: 2,
-        files: files,
-        timeoutMs: c.timeoutMs,
-        cancelFd: cancelFd,
-      )
+        # [G349] A stream has no deadline; `--timeout` bounds activation.
+        deadline_ms: (
+          if c.args[0] in ["subscribe", "events"]: Opt.none(uint32)
+          else: Opt.some(uint32(c.timeoutMs))
+        ),
+        command: move command,
+      ),
+      stdoutFd: 1,
+      stderrFd: 2,
+      files: files,
+      timeoutMs: c.timeoutMs,
+      cancelFd: cancelFd,
     )
+    let r = launch(l)
+    wipeTyped(l.message) # [N-2d] the arguments' values
     if r.isErr:
       return err(fail(r.error.exit, r.error.message, r.error.code))
     ok(r.get)
@@ -1276,6 +1368,91 @@ offline (the session's files; writers hold its lock):
         return toHex(xs[i].binding.kid).toLowerAscii
     ""
 
+  proc trustEvidenceKeys(
+      s: Session, files: openArray[LcnPackageTrust]
+  ): Result[seq[seq[byte]], string] =
+    ## [G397] What logosd's start compares for key separation: the session's
+    ## evidence keys, the configured one included, read only when one of
+    ## `files` names an anchor.
+    var anchors = false
+    for f in files:
+      if f.signing.anchors.len > 0:
+        anchors = true
+    if not anchors:
+      return ok(newSeq[seq[byte]]())
+    let (dc, _) = ?readDaemonConfig(s)
+    if dc.call_audit.isSome and dc.call_audit.get.evidence.isSome:
+      let e = dc.call_audit.get.evidence.get
+      return sessionEvidenceKeys(s, e.secret_key_file, e.kid)
+    sessionEvidenceKeys(s)
+
+  proc kidOpt(c: Cli): Result[seq[byte], Fail] =
+    ## [G397; I41] `--kid KID`: text, or `hex:` and hex digits, as
+    ## `lcn-pkg sign --kid` takes it, so the operator passes the value the
+    ## producer signed with.
+    let v = c.opt("kid")
+    if v.isNone:
+      return err(usage("--kid KID is required"))
+    if v.get.startsWith("hex:"):
+      return hex.fromHex(v.get[4 .. ^1]).mapErr(
+          proc(e: string): Fail =
+            usage("--kid hex: takes hex digits: " & e)
+        )
+    ok(@(v.get.toOpenArrayByte(0, v.get.high)))
+
+  proc keyOpt(c: Cli): Result[seq[byte], Fail] =
+    ## [G397; IMPL] `--key HEX`: the public key's 96 hex digits, or `@FILE`
+    ## holding them alone or as the `public key: <hex>` line `lcn-pkg keygen`
+    ## prints; surrounding whitespace is ignored and nothing else is taken.
+    const Line = "public key:"
+    let v = c.opt("key")
+    if v.isNone:
+      return err(usage("--key HEX is required"))
+    var text = v.get
+    if text.startsWith("@"):
+      try:
+        text = readFile(text[1 .. ^1])
+      except IOError as e:
+        return err(fail(ExitUsage, text[1 .. ^1] & ": " & e.msg))
+    text = text.strip
+    if text.startsWith(Line):
+      text = text[Line.len .. ^1].strip
+    let key = hex.fromHex(text)
+    if key.isErr or key.get.len != 48:
+      return err(
+        fail(
+          ExitUsage,
+          "--key: a public key is 96 hex digits (48 bytes), alone or as lcn-pkg keygen's \"public key:\" line",
+        )
+      )
+    ok(key.get)
+
+  proc trustCommit(
+      s: Session, cur: TrustFileState, next: LcnPackageTrust
+  ): Result[TrustChange, Fail] =
+    ## [G397] Every writer's last step: logosd's checks, the unchanged rule.
+    let keys = trustEvidenceKeys(s, [cur.file, next]).valueOr:
+      return err(fail(ExitUsage, "the evidence keys: " & error))
+    commitTrust(s, cur, next, keys).mapErr(
+      proc(e: string): Fail =
+        fail(ExitUsage, e)
+    )
+
+  proc trustWritten(
+      s: Session, command: string, ch: TrustChange, what: string, extra: JsonNode
+  ): Done =
+    ## [G397; Q16] A writer's answer: the revision written, or unchanged.
+    let rev = $ch.state.file.revision
+    var j = %*{"revision": ch.state.file.revision, "changed": ch.changed}
+    for k, v in extra.pairs:
+      j[k] = v
+    let text =
+      if ch.changed:
+        "trust revision " & rev & ": " & what & "; it applies at the next start"
+      else:
+        "unchanged at trust revision " & rev & ": nothing was written"
+    s.offline(command, j, text)
+
   proc cmdTrust(c: Cli, s: Session): Result[Done, Fail] =
     let sub = ?c.arg(1, "a trust command")
     case sub
@@ -1284,37 +1461,111 @@ offline (the session's files; writers hold its lock):
         return err(fail(ExitUsage, error))
       let mark = readMark(s).valueOr:
         return err(fail(ExitUsage, error))
+      # [G397] The file is decoded without the rules, so a refused one shows,
+      # with the reason logosd's start would give.
+      let refusal = block:
+        let keys = trustEvidenceKeys(s, [t.file])
+        if keys.isErr:
+          Opt.some("the evidence keys: " & keys.error)
+        else:
+          let v = validateTrust(t.file, keys.get)
+          if v.isErr:
+            Opt.some(v.error)
+          else:
+            Opt.none(string)
+      # [G396] A start applies the rules before continuity, so a file they
+      # refuse never reaches it.
       let continuity = block:
         let d = decide(t, mark)
-        if d.isErr:
+        if refusal.isSome:
+          "not reached: a start refuses the file before continuity (see refusal)"
+        elif d.isErr:
           "refused: " & d.error
         elif d.get == cAccept:
           "accepted (the revision in use)"
         else:
           "accepted at the next start (a higher revision)"
-      var j = %*{
-        "revision": t.file.revision,
-        "development": t.file.development,
-        "file": t.present,
-        "continuity": continuity,
-      }
+      var j = trustJson(t.file)
+      j["file"] = %t.present
+      j["continuity"] = %continuity
+      if refusal.isSome:
+        j["refusal"] = %refusal.get
       if mark.isSome:
         j["mark"] = %*{
           "revision": mark.get.revision, "digest": toHex(mark.get.digest).toLowerAscii
         }
-      let text = table(
-        ["FIELD", "VALUE"],
-        [
-          @[
-            "revision",
-            $t.file.revision & (if t.present: "" else: " (the floor; no file)"),
-          ],
-          @["development", (if t.file.development: "on" else: "off")],
-          @["mark", (if mark.isSome: $mark.get.revision else: "none")],
-          @["continuity", continuity],
-        ],
-      )
+      var rows = @[
+        @[
+          "revision",
+          $t.file.revision & (if t.present: "" else: " (the floor; no file)"),
+        ]
+      ]
+      rows.add(trustRows(t.file))
+      rows.add(@["mark", (if mark.isSome: $mark.get.revision else: "none")])
+      rows.add(@["continuity", continuity])
+      if refusal.isSome:
+        rows.add(@["refusal", refusal.get])
+      var text = table(["FIELD", "VALUE"], rows)
+      if t.file.signing.anchors.len > 0:
+        text.add("\n\n" & anchorsTable(t.file))
       ok(s.offline("trust show", j, text))
+    of "anchor":
+      let op = ?c.arg(2, "add, remove, add-names or remove-names")
+      if op notin ["add", "remove", "add-names", "remove-names"]:
+        return err(usage("unknown trust anchor command " & op))
+      let kid = ?c.kidOpt
+      let names =
+        if c.args.len > 3:
+          c.args[3 .. ^1]
+        else:
+          newSeq[string]()
+      var key: seq[byte]
+      if op == "add":
+        key = ?c.keyOpt
+      if op == "remove" and names.len > 0:
+        return
+          err(usage("trust anchor remove takes no NAME; remove-names removes names"))
+      if op != "remove" and names.len == 0:
+        return err(usage("trust anchor " & op & " needs at least one NAME"))
+      var lock = ?locked(s)
+      defer:
+        lock.release()
+      let cur = readTrust(s).valueOr:
+        return err(fail(ExitUsage, error))
+      let next =
+        case op
+        of "add":
+          cur.file.withAnchor(
+            LcnTrustAnchor(
+              kid: kid,
+              public_key: key,
+              packages: names,
+              development: "development" in c.flags,
+            )
+          )
+        of "remove":
+          cur.file.withoutAnchor(kid)
+        of "add-names":
+          cur.file.withNames(kid, names)
+        else:
+          cur.file.withoutNames(kid, names)
+      let f = next.valueOr:
+        return err(fail(ExitUsage, error))
+      let ch = ?trustCommit(s, cur, f)
+      let what =
+        case op
+        of "add": "anchor added"
+        of "remove": "anchor removed"
+        of "add-names": "names added"
+        else: "names removed"
+      ok(
+        s.trustWritten(
+          "trust anchor " & op,
+          ch,
+          what & " (kid " & toHex(kid) & ")",
+          %*{"kid": toHex(kid)},
+        )
+      )
     of "development":
       let v = ?c.arg(2, "on or off")
       if v notin ["on", "off"]:
@@ -1322,14 +1573,24 @@ offline (the session's files; writers hold its lock):
       var lock = ?locked(s)
       defer:
         lock.release()
-      let t = setDevelopment(s, v == "on").valueOr:
+      let cur = readTrust(s).valueOr:
         return err(fail(ExitUsage, error))
+      let ch = ?trustCommit(s, cur, cur.file.withDevelopment(v == "on"))
+      # [G137] The anchors the file marks `development`: those that enter or
+      # leave force with a change, and are in or out of force without one.
+      var marked = 0
+      for a in ch.state.file.signing.anchors:
+        if a.development:
+          inc marked
+      let anchors =
+        $marked & " development anchor" & (if marked == 1: " " else: "s ") &
+        (if v == "on": "enter" else: "leave") & (if marked == 1: "s" else: "") & " force"
       ok(
-        s.offline(
+        s.trustWritten(
           "trust development",
-          %*{"revision": t.file.revision, "development": t.file.development},
-          "trust revision " & $t.file.revision & ": development switch " & v &
-            "; it applies at the next start",
+          ch,
+          "development switch " & v & ", " & anchors,
+          %*{"development": ch.state.file.development, "development_anchors": marked},
         )
       )
     of "reestablish":
@@ -1339,7 +1600,11 @@ offline (the session's files; writers hold its lock):
       var lock = ?locked(s)
       defer:
         lock.release()
-      let t = reestablish(s, rev.get).valueOr:
+      let cur = readTrust(s).valueOr:
+        return err(fail(ExitUsage, error))
+      let keys = trustEvidenceKeys(s, [cur.file]).valueOr:
+        return err(fail(ExitUsage, "the evidence keys: " & error))
+      let t = reestablish(s, rev.get, keys).valueOr:
         return err(fail(ExitUsage, error))
       ok(
         s.offline(
@@ -1678,7 +1943,7 @@ offline (the session's files; writers hold its lock):
       c.emitFail(c.args[0], "unknown", fail(ExitUsage, error))
       return ExitUsage
     let command = c.args.join(" ")
-    if c.args[0] in ["call", "describe"]:
+    if c.args[0] in ["call", "describe", "subscribe", "events"]:
       let r = cmdLaunch(c, s)
       if r.isErr:
         if r.error.exit != ExitInterrupted:
@@ -1724,6 +1989,10 @@ else:
     2
 
 when isMainModule:
-  quit(main())
+  # [IMPL] Not `quit`: it saturates at `high(int8)` on POSIX (Nim's system.nim),
+  # so 130 would leave as 127. exit(3) keeps the low 8 bits and still runs the
+  # exit procedures and flushes stdio.
+  proc cExit(code: cint) {.importc: "exit", header: "<stdlib.h>", noreturn.}
+  cExit(cint(main()))
 
 {.pop.}

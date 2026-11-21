@@ -77,6 +77,22 @@
 ## A failed initialization joins both threads the same way, dropping the
 ## queued events.
 ##
+## **Deferred provider** (DECISIONS G338). With `lcn-gen kit --confined
+## --async-api` the kit exports `_MODULE_async_api` (INTERFACE §2.9.2). Its
+## `submit` copies nothing: it queues a job in C memory for the module thread
+## and returns at once; the job runs the same route a dispatch runs, over the
+## Runtime's method and request bytes (borrowed until the release), with the
+## invocation's own context. Once the handler returned and its scoped
+## publications were answered, the job completes the invocation once, with
+## the response or the failure's diagnostics in one C block that its owner
+## zeroes and frees on any thread, and releases execution once. The
+## invocation's `Invocation` refuses use before that release. `request_cancel`
+## finds the invocation among the context's outstanding ones under the lock,
+## or returns; otherwise it queues one notice, which cancels an `async`
+## handler's future on the module thread (a plain handler sees
+## `isCancelled`). A job queued when a cancellation arrived completes
+## CANCELLED without its handler. Neither operation waits.
+##
 ## **Marked payloads** (INTERFACE l.363; DECISIONS G276). Every copy this
 ## module makes in C memory (queued events, a status's message and detail) and
 ## every request, response and tree it holds is zeroed after its last use,
@@ -186,6 +202,21 @@ type
     status: StatusCopy
     inflight: int ## module thread: scoped publications not yet answered
     drained: pointer ## module thread: a `DrainFuture` waiting for `inflight` to be 0
+    deferred: bool ## a `DeferredJob`'s: no entry thread waits for it
+
+  DeferredJob = object
+    ## [DECISIONS G338] One submitted provider invocation (INTERFACE §2.9.2),
+    ## in C memory from `submit` until its last reference is dropped.
+    job: ConfinedJob ## first: the queue's node is the job's
+    invocation: ptr LogosProviderInvocation ## the Runtime's, until `execution_release`
+    route: ConfinedRoute
+    next, prev: ptr DeferredJob ## the context's outstanding invocations, under its lock
+    cancelTask: TaskNode ## the cancellation notice, reserved
+    cancelQueued: bool ## under the context's lock
+    cancelRequested: bool ## under the context's lock
+    finished: bool ## under the context's lock: completed, not yet released
+    refs: int ## under the context's lock: the job's own, and a queued notice's
+    inv: pointer ## module thread: the job's `InvocationObj` while its handler runs
 
   PostFn* = proc(payload: pointer) {.cdecl, gcsafe, raises: [].}
     ## A callback `post` runs on the module thread.
@@ -218,6 +249,7 @@ type
     room: bool ## the publisher took an event while the module thread wanted room
     stopping: bool
     closed: bool ## the module thread drained its queue for the last time
+    live: ptr DeferredJob ## submitted invocations not yet completed (G338)
     deliveries: int ## counted tasks queued (G339's delivery bound)
     maxDeliveries: int
     signal: ThreadSignalPtr
@@ -242,6 +274,9 @@ type
 
   InvocationObj = object
     job: ptr ConfinedJob
+    handler: FutureBase
+      ## [DECISIONS G338] an `async` handler's future while it is awaited: what
+      ## a cancellation of a submitted invocation cancels
 
   Invocation* = ref InvocationObj
     ## [DECISIONS G336] An `async` handler's invocation: valid until its job
@@ -629,14 +664,39 @@ template settled*(fut: untyped): untyped =
     move(f.internalValue)
 
 template settleHandler*(response: untyped, call: untyped) =
-  ## [DECISIONS G336] An `async` handler's outcome, moved out of its future
-  ## once it finished. In an `async` proc.
+  ## [DECISIONS G336] An `async` hook's outcome, moved out of its future once
+  ## it finished; a future that ended cancelled answers CANCELLED. In an
+  ## `async` proc.
   block:
     let f = call
     if not f.finished():
       await noCancel(join(f))
     if f.completed():
       response = move(f.internalValue)
+    elif f.cancelled():
+      response.err(failure(ecCancelled, "the handler was cancelled"))
+    else:
+      response.err(moduleError("the handler's future did not complete"))
+
+proc recordHandler(inv: Invocation, f: FutureBase) =
+  if not inv.isNil:
+    inv.handler = f
+
+template settleHandler*(response: untyped, call: untyped, inv: Invocation) =
+  ## [DECISIONS G336, G338] An `async` handler's outcome, as above; while it is
+  ## awaited, a cancellation of `inv`'s submitted invocation cancels its
+  ## future. In an `async` proc.
+  bind recordHandler
+  block:
+    let f = call
+    if not f.finished():
+      recordHandler(inv, f)
+      await noCancel(join(f))
+      recordHandler(inv, nil)
+    if f.completed():
+      response = move(f.internalValue)
+    elif f.cancelled():
+      response.err(failure(ecCancelled, "the handler was cancelled"))
     else:
       response.err(moduleError("the handler's future did not complete"))
 
@@ -766,6 +826,184 @@ proc typedTask(job: ptr ConfinedJob) {.async: (raises: []).} =
   await drain(job)
   finishJob(job, inv, outcome)
 
+# Submitted invocations (DECISIONS G338) ---------------------------------------------
+
+proc isCancelled*(inv: Invocation): bool
+
+type OwnedBlock = object
+  ## What a completion's response owner governs: `size` bytes follow.
+  size: int
+
+proc blockBytes(b: ptr OwnedBlock): ptr UncheckedArray[uint8] =
+  cast[ptr UncheckedArray[uint8]](cast[uint](b) + uint(sizeof(OwnedBlock)))
+
+proc newBlock(size: int): ptr OwnedBlock =
+  result = cast[ptr OwnedBlock](cCalloc(1, csize_t(sizeof(OwnedBlock) + size)))
+  if result != nil:
+    result.size = size
+
+proc releaseBlock(state: pointer) {.cdecl, gcsafe, raises: [].} =
+  ## [SPEC INTERFACE §2.7.1, l.2085-2091] A completion's response owner: the
+  ## response, or the failure's message and detail, zeroed and freed (G276).
+  ## Any thread: only the C allocator.
+  let b = cast[ptr OwnedBlock](state)
+  if b != nil:
+    secureZero(state, sizeof(OwnedBlock) + b.size)
+    cFree(state)
+
+proc completeNow(
+    invocation: ptr LogosProviderInvocation, code: ErrorCode, message: cstring
+) =
+  ## A completion whose message is static, then the release. Any thread; no
+  ## Nim heap.
+  invocation.complete(
+    invocation,
+    LogosResult(code: CErrorCode(ord(code)), message: message),
+    nil,
+    0,
+    LogosResponseOwner(),
+  )
+  invocation.executionRelease(invocation)
+
+proc link(ctx: ptr ConfinedObj, dj: ptr DeferredJob) =
+  ## Under the context's lock.
+  dj.prev = nil
+  dj.next = ctx.live
+  if ctx.live != nil:
+    ctx.live.prev = dj
+  ctx.live = dj
+
+proc unlink(ctx: ptr ConfinedObj, dj: ptr DeferredJob) =
+  ## Under the context's lock.
+  if dj.prev != nil:
+    dj.prev.next = dj.next
+  elif ctx.live == dj:
+    ctx.live = dj.next
+  if dj.next != nil:
+    dj.next.prev = dj.prev
+  dj.next = nil
+  dj.prev = nil
+
+proc unref(dj: ptr DeferredJob) =
+  ## Drops one reference; the last frees the job.
+  let ctx = dj.job.ctx
+  acquire(ctx.lock)
+  dec dj.refs
+  let last = dj.refs == 0
+  release(ctx.lock)
+  if last:
+    secureZero(cast[pointer](dj), sizeof(DeferredJob))
+    cFree(dj)
+
+proc completeDeferred(
+    dj: ptr DeferredJob, outcome: var Result[seq[byte], InvocationFailure]
+) =
+  ## [SPEC INTERFACE §2.9.2] The invocation's one completion and then its one
+  ## release (IFC-0753). The response, or the failure's message and detail as
+  ## a status carries them, go in one C block the owner governs until it is
+  ## cleared, on any thread (IFC-0754). The outstanding list forgets the
+  ## invocation first, so a later `request_cancel` finds nothing (IFC-0763).
+  ## Module thread; `outcome` is the caller's to zero.
+  let invocation = dj.invocation
+  let ctx = dj.job.ctx
+  acquire(ctx.lock)
+  ctx.unlink(dj)
+  dj.finished = true
+  release(ctx.lock)
+  if outcome.isOk and outcome.unsafeGet.len == 0:
+    outcome = Result[seq[byte], InvocationFailure].err(
+      moduleError("the handler's response is empty")
+    )
+  var r = LogosResult()
+  var data: ptr UncheckedArray[uint8] = nil
+  var len = 0
+  var owner = LogosResponseOwner()
+  if outcome.isOk:
+    let n = outcome.unsafeGet.len
+    let b = newBlock(n)
+    if b == nil:
+      r = LogosResult(
+        code: CErrorCode(ord(ecModule)), message: "out of memory for the response"
+      )
+    else:
+      let d = b.blockBytes
+      for i in 0 ..< n:
+        d[i] = outcome.unsafeGet[i]
+      data = d
+      len = n
+      owner = LogosResponseOwner(state: b, release: releaseBlock)
+  else:
+    var f = normalizedFailure(outcome.unsafeError)
+    r.code = CErrorCode(ord(f.code))
+    if f.message.isSome or f.detail.isSome:
+      let m = (if f.message.isSome: f.message.unsafeGet.len + 1 else: 0)
+      let dl = (if f.detail.isSome: f.detail.unsafeGet.len else: 0)
+      let b = newBlock(m + dl)
+      if b != nil:
+        # Out of memory, the code goes without its diagnostics.
+        let d = b.blockBytes
+        if f.message.isSome:
+          for i, c in f.message.unsafeGet:
+            d[i] = uint8(c)
+          d[m - 1] = 0
+          r.message = cast[cstring](d)
+        if f.detail.isSome:
+          let p = cast[ptr UncheckedArray[uint8]](cast[uint](d) + uint(m))
+          for i, x in f.detail.unsafeGet:
+            p[i] = x
+          r.detail = p
+          r.detailLen = csize_t(dl)
+        owner = LogosResponseOwner(state: b, release: releaseBlock)
+    wipe(f)
+  invocation.complete(invocation, r, data, csize_t(len), owner)
+  invocation.executionRelease(invocation)
+  dj.unref()
+
+proc deferredTask(dj: ptr DeferredJob) {.async: (raises: []).} =
+  ## [SPEC INTERFACE §2.9.2; DECISIONS G338] One submitted invocation on the
+  ## module thread: the route over the Runtime's method and request bytes,
+  ## borrowed until the release (IFC-0752), with the invocation's own context
+  ## (l.2131); then its scoped publications answered, its `Invocation`
+  ## closed (IFC-0779), its completion and its release.
+  let job = addr dj.job
+  let ctx = job.ctx
+  let inv = startJob(job)
+  let i = dj.invocation
+  var outcome: Result[seq[byte], InvocationFailure]
+  acquire(ctx.lock)
+  let cancelled = dj.cancelRequested
+  release(ctx.lock)
+  if ctx.instance == nil:
+    outcome.err(failure(ecNotReady, "the module instance is not running"))
+  elif cancelled or inv.isCancelled():
+    outcome.err(failure(ecCancelled, "cancelled before its handler ran"))
+  else:
+    dj.inv = cast[pointer](inv)
+    outcome = settled(
+      dj.route(ctx.instance, $i.`method`, i.paramsCbor, int(i.paramsCborLen), inv)
+    )
+    dj.inv = nil
+  await drain(job)
+  inv.job = nil
+  completeDeferred(dj, outcome)
+  wipe(outcome)
+
+proc runCancel(task: ptr TaskNode, drop: bool) {.nimcall, gcsafe, raises: [].} =
+  ## [SPEC INTERFACE §2.9.2 l.2112; DECISIONS G338] A cancellation notice on
+  ## the module thread: cancels an `async` handler's future while it runs.
+  let dj =
+    cast[ptr DeferredJob](cast[uint](task) - uint(offsetOf(DeferredJob, cancelTask)))
+  let ctx = dj.job.ctx
+  acquire(ctx.lock)
+  dj.cancelQueued = false
+  let finished = dj.finished
+  release(ctx.lock)
+  if not drop and not finished and dj.inv != nil:
+    let inv {.cursor.} = cast[Invocation](dj.inv)
+    if not inv.handler.isNil and not inv.handler.finished():
+      inv.handler.cancelSoon()
+  dj.unref()
+
 proc launchInit(job: ptr ConfinedJob) =
   asyncSpawn initTask(job)
 
@@ -780,6 +1018,9 @@ proc launchDispatch(job: ptr ConfinedJob) =
 
 proc launchTyped(job: ptr ConfinedJob) =
   asyncSpawn typedTask(job)
+
+proc launchDeferred(job: ptr ConfinedJob) =
+  asyncSpawn deferredTask(cast[ptr DeferredJob](job))
 
 proc runNode(ctx: ptr ConfinedObj, n: ptr Node) =
   case n.kind
@@ -852,6 +1093,41 @@ proc pollUntil(ctx: ptr ConfinedObj, flag: ptr bool) =
     poll()
   discard swapConfinedScope(saved)
 
+proc deferredScopedPublish(
+    job: ptr ConfinedJob, eventId: string, data: openArray[byte]
+): Result[void, InvocationFailure] =
+  ## [DECISIONS G337, G338, P3] A plain handler's `publishScoped` in a
+  ## submitted invocation, which no entry thread waits for: through the
+  ## publisher thread with the invocation's context, while this thread serves
+  ## with the confined scope cleared.
+  let ctx = job.ctx
+  if data.len == 0:
+    return err(moduleError("an event payload is one CBOR map"))
+  let item = ?newItem(pkScoped, eventId, data)
+  item.invocation = job.invocation
+  item.job = job
+  let reply = newReply()
+  item.reply = cast[pointer](reply)
+  inc job.inflight
+  let saved = swapConfinedScope(nil)
+  var queued = ctx.tryQueue(item, wantRoom = true)
+  while not queued and not ctx.disposed:
+    let room = ctx.waitRoom()
+    while not room.finished() and not ctx.disposed:
+      poll()
+    queued = ctx.tryQueue(item, wantRoom = true)
+  if queued:
+    while not reply.finished() and not ctx.disposed:
+      poll()
+  discard swapConfinedScope(saved)
+  if not queued:
+    dec job.inflight
+    GC_unref(reply)
+    freeItem(item)
+  if not reply.finished():
+    return err(failure(ecNotReady, "the module instance is not running"))
+  move(reply.internalValue)
+
 proc scopedPublish(
     job: pointer, eventId: string, data: openArray[byte]
 ): Result[void, InvocationFailure] {.nimcall, gcsafe, raises: [].} =
@@ -859,6 +1135,8 @@ proc scopedPublish(
   ## thread, which waits for this job anyway; this thread serves meanwhile. An
   ## inline job publishes here, on the entry's own thread.
   let job = cast[ptr ConfinedJob](job)
+  if job.deferred:
+    return deferredScopedPublish(job, eventId, data)
   if job.inline:
     return publishVia(job.invocation, eventId, data)
   let ctx = job.ctx
@@ -903,13 +1181,33 @@ proc teardown(ctx: ptr ConfinedObj) =
     case n.kind
     of nkJob:
       let job = cast[ptr ConfinedJob](n)
-      var outcome = notReady()
-      finishJob(job, nil, outcome)
+      if job.deferred:
+        var outcome = Result[seq[byte], InvocationFailure].err(
+          failure(ecNotReady, "the module was destroyed")
+        )
+        completeDeferred(cast[ptr DeferredJob](job), outcome)
+      else:
+        var outcome = notReady()
+        finishJob(job, nil, outcome)
     of nkPost:
       cFree(n)
     of nkTask:
       let t = cast[ptr TaskNode](n)
       t.run(t, true)
+  # [DECISIONS G338] Submitted invocations whose tasks still wait (a Runtime
+  # that destroys before their release, against INTERFACE l.2114): completed
+  # NOT_READY and released here, once each; their tasks never resume.
+  while true:
+    acquire(ctx.lock)
+    let dj = ctx.live
+    release(ctx.lock)
+    if dj == nil:
+      break
+    dj.inv = nil
+    var outcome = Result[seq[byte], InvocationFailure].err(
+      failure(ecNotReady, "the module was destroyed")
+    )
+    completeDeferred(dj, outcome)
   roomWaiters = @[]
   discard ctx.signal.close()
   let disp = getThreadDispatcher()
@@ -1157,6 +1455,78 @@ proc confinedCall*(
     TypedArgs(route: route, bare: bare, args: args, request: request, respond: respond)
   handOff(ctx, launchTyped, addr a, ctx.services.currentContext())
 
+proc confinedSubmit*(
+    module: ptr LogosModuleContext,
+    invocation: ptr LogosProviderInvocation,
+    route: ConfinedRoute,
+) =
+  ## [SPEC INTERFACE §2.9.2; DECISIONS G338] The `submit` of a confined kit's
+  ## `_MODULE_async_api`: queues the invocation for the module thread, where
+  ## it takes the dispatch route (IFC-0748), and returns; it completes and is
+  ## released there. Any thread, the module thread included; never waits; only
+  ## the C allocator past the checks.
+  if invocation == nil or invocation.abiVersion != AsyncProviderAbiVersion or
+      invocation.structSize < csize_t(ProviderInvocationV1Extent) or
+      invocation.complete.isNil or invocation.executionRelease.isNil:
+    die("submit: a null or malformed provider invocation")
+  if module == nil or checkProviderInvocation(invocation).isErr:
+    completeNow(invocation, ecModule, "submit: a malformed provider invocation")
+    return
+  let ctx = module.confinedOf
+  let dj = cast[ptr DeferredJob](cCalloc(1, csize_t(sizeof(DeferredJob))))
+  if dj == nil:
+    completeNow(invocation, ecModule, "out of memory for a submitted invocation")
+    return
+  dj.job.node.kind = nkJob
+  dj.job.ctx = ctx
+  dj.job.launch = launchDeferred
+  dj.job.invocation = invocation.context
+  dj.job.deferred = true
+  dj.job.status.messageLen = -1
+  dj.job.status.detailLen = -1
+  dj.invocation = invocation
+  dj.route = route
+  dj.refs = 1
+  dj.cancelTask.run = runCancel
+  acquire(ctx.lock)
+  if ctx.stopping:
+    release(ctx.lock)
+    cFree(dj)
+    completeNow(invocation, ecNotReady, "the module is being destroyed")
+    return
+  ctx.link(dj)
+  ctx.enqueue(addr dj.job.node)
+  # Under the lock: the module thread closes its signal only after `stopping`.
+  fire(ctx.signal)
+  release(ctx.lock)
+
+proc confinedRequestCancel*(
+    module: ptr LogosModuleContext, invocation: ptr LogosProviderInvocation
+) =
+  ## [SPEC INTERFACE §2.9.2; DECISIONS G338] The descriptor's
+  ## `request_cancel`: finds the invocation among the context's outstanding
+  ## ones under its lock, which is the protected reference (IFC-0762), and
+  ## returns harmlessly when it is not there (IFC-0763); otherwise marks it
+  ## and queues one notice for the module thread, which cancels its `async`
+  ## handler's future (IFC-0767). Never waits (IFC-0766). Any thread; no
+  ## allocation.
+  if module == nil or invocation == nil:
+    return
+  let ctx = module.confinedOf
+  acquire(ctx.lock)
+  var dj = ctx.live
+  while dj != nil and dj.invocation != invocation:
+    dj = dj.next
+  if dj != nil:
+    dj.cancelRequested = true
+    if not dj.cancelQueued and not ctx.closed:
+      dj.cancelQueued = true
+      inc dj.refs
+      dj.cancelTask.node.kind = nkTask
+      ctx.enqueue(addr dj.cancelTask.node)
+      fire(ctx.signal)
+  release(ctx.lock)
+
 proc checkedRequestAt*(
     v: ContractValidator, bare: string, params: ptr UncheckedArray[uint8], len: int
 ): Result[CborValue, InvocationFailure] =
@@ -1329,3 +1699,8 @@ proc lcnKitPost(
 proc onItsModuleThread*(s: ModuleServices): bool =
   ## Whether the calling thread is the module thread of `s`'s context.
   cast[ptr ConfinedObj](s.confinedOf).onModuleThread
+
+proc onItsModuleThread*(d: Dispatcher): bool =
+  ## Whether `d` is a confined kit's dispatcher and the calling thread its
+  ## module thread.
+  d.confined and cast[ptr ConfinedObj](d.context).onModuleThread

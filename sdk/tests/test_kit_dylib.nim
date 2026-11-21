@@ -21,7 +21,7 @@ import logos_sdk/iface/[accept, provider]
 from logos_sdk/kit/rc_types import LogosNSModuleConfigurationConfigurationInput, encode
 import
   logos_sdk/testing/[kitbuild, kitruntime, specdata, tunerconfig],
-  ./support/[testroute, typedharness]
+  ./support/[fakeprovider, testroute, typedharness]
 import logos_sdk/testing/testdirs
 import
   logos_sdk/testing/generated/
@@ -37,6 +37,10 @@ type
   ApplyFn = proc(
     module: ptr LogosModuleContext, cbor: ptr UncheckedArray[uint8], len: csize_t
   ): LogosResult {.cdecl, gcsafe, raises: [].}
+  SnapshotFn = proc(
+    module: ptr LogosModuleContext, owner: ptr LogosResponseOwner, outCount: ptr uint64
+  ): LogosResult {.cdecl, gcsafe, raises: [].}
+    ## `metrics_provider.snapshot`'s typed provider function (INTERFACE §2.4)
 
   Library = object ## One kit module's exported symbols, as `dlsym` finds them.
     handle: LibHandle
@@ -104,12 +108,37 @@ let (ledger, pipeAfterLoad) = block:
   else:
     (load(path, "ledger_module"), pointer(nil))
 
+let sensorConfined = block:
+  ## [DECISIONS G338] The §3.9.2 sensor as a confined kit with
+  ## `_MODULE_async_api` (`sensor_confined_impl.nim`), linked with that kit's
+  ## export list (`sdk/tests/generated/confined/`).
+  var tree = kitTree()
+  tree.generated = @[repoDir / sdkGeneratedDir / "confined"]
+  load(
+    buildKitLibraryIn(
+      tree, "sensor_confined_impl.nim", "kitsensorc", exports = "sensor_module"
+    ),
+    "sensor_module",
+  )
+
 let ledgerOther = load(
   ## [DECISIONS G342] The same confined kit built with the other memory manager
   ## (refc beside this orc build, orc beside a refc one).
   buildKitLibrary("ledger_lib.nim", "kitledgerx", otherMm, exports = "ledger_module"),
   "ledger_module",
 )
+
+let metricsOnly =
+  build("metrics_only_impl.nim", "kitmetricsonly", "metrics_only_module")
+  ## [DECISIONS G339] The interface-only kit (`sdk/tests/kit/`): the §3.9.2
+  ## `metrics_provider` with no primary document.
+
+let idleLib = block:
+  ## [DECISIONS G339] A kit with lifecycle symbols and no contract, linked with
+  ## its export list.
+  let h = loadLib(buildKitLibrary("idle_impl.nim", "kitidle", exports = "idle_module"))
+  doAssert h != nil, "dlopen failed: kitidle"
+  h
 
 var otherPublished: Atomic[int]
 
@@ -167,6 +196,19 @@ let typed = ThFns(
   shapesPick: shapes.typedSymbol("logos_shapes_module_CALL_shapes_Pick"),
   shapesPing: shapes.typedSymbol("logos_shapes_module_CALL_shapes_Ping"),
 )
+
+let typedConfined = ThFns(
+  sensorConfigure:
+    sensorConfined.typedSymbol("logos_sensor_module_CALL_sensor_NS_control_Configure"),
+  sensorSnapshot:
+    sensorConfined.typedSymbol("logos_sensor_module_CALL_metrics_provider_Snapshot"),
+)
+
+proc asyncApiOf(lib: Library, module: string): ptr LogosAsyncProviderApi =
+  ## [SPEC INTERFACE §2.9.2] What the library's `_MODULE_async_api` returns.
+  let p = lib.handle.symAddr(cstring("logos_" & module & "_MODULE_async_api"))
+  doAssert p != nil, "missing symbol " & module & " async_api"
+  cast[ModuleAsyncApiFn](p)()
 
 let helpers = block:
   ## The call helpers the helper library exports, in the harness's slots.
@@ -264,15 +306,18 @@ suite "ifc.kit: kit modules as shared libraries (INTERFACE §2.6, §2.8) [IMPL]"
     check bytes == callSurfaceDescriptor(b).get
 
   test "[DECISIONS G341] a library linked with its kit's export list exports its ABI and nothing else":
-    for (lib, name, module) in [
-      (meter, "kitmeter", "meter_module"),
-      (sensor, "kitsensor", "sensor_module"),
-      (shapes, "kitshapes", "shapes_module"),
-      (tuner, "kittuner", "tuner_module"),
+    for (lib, name, module, dir) in [
+      (meter, "kitmeter", "meter_module", generatedDir),
+      (sensor, "kitsensor", "sensor_module", generatedDir),
+      (shapes, "kitshapes", "shapes_module", generatedDir),
+      (tuner, "kittuner", "tuner_module", generatedDir),
+      (sensorConfined, "kitsensorc", "sensor_module", sdkGeneratedDir / "confined"),
+      (ledger, "kitledger", "ledger_module", generatedDir),
+      (metricsOnly, "kitmetricsonly", "metrics_only_module", sdkGeneratedDir),
     ]:
-      checkpoint module
+      checkpoint name
       var listed = 0
-      for line in lines(repoDir / generatedDir / module & "_kit.exports"):
+      for line in lines(repoDir / dir / module & "_kit.exports"):
         if line.len > 0 and line[0] == '_':
           checkpoint line
           check lib.handle.symAddr(cstring(line[1 ..^ 1])) != nil
@@ -284,6 +329,51 @@ suite "ifc.kit: kit modules as shared libraries (INTERFACE §2.6, §2.8) [IMPL]"
         for hidden in ["lib" & name & "NimMain", "blake3_hasher_init", "blake3_version"]:
           checkpoint hidden
           check lib.handle.symAddr(cstring(hidden)) == nil
+
+  test "[IMPL-DECISION G339] [IFC-0880] an interface-only kit library: its descriptor, and its interface's method by dispatch and by typed function":
+    check $metricsOnly.name() == "metrics_only_module"
+    var n: csize_t
+    let p = metricsOnly.callSurface(addr n)
+    let bytes = @(cast[ptr UncheckedArray[uint8]](p).toOpenArray(0, int(n) - 1))
+    let b = acceptBinding(
+      "metrics_only_module", Opt.none(string), [mirror("IFC/3.9.2.interface.cddl")]
+    ).get
+    check bytes == callSurfaceDescriptor(b).get
+    check acceptCallSurfaceDescriptor(bytes, "metrics_only_module").get.primary.isNone
+    let ctx = metricsOnly.start(publish = false)
+    let c = call(metricsOnly.dispatch, metricsOnly.free, ctx, "snapshot", diag("{}"))
+    check c.status.isOk and c.response == diag("{\"count\": 1}")
+    let snap = cast[SnapshotFn](metricsOnly.handle.symAddr(
+      "logos_metrics_only_module_CALL_metrics_provider_Snapshot"
+    ))
+    check snap != nil
+    var owner: LogosResponseOwner
+    var count: uint64
+    check readStatus(snap(ctx, addr owner, addr count)).isOk and count == 2
+    if not owner.release.isNil:
+      owner.release(owner.state)
+    check call(metricsOnly.dispatch, metricsOnly.free, ctx, "configure", diag("{}")).code ==
+      ecMethodNotFound
+    metricsOnly.destroy(ctx)
+
+  test "[IMPL-DECISION G339] [IFC-0880] [IFC-0881] a kit library with lifecycle symbols and no contract exports no provider symbol":
+    for suffix in ["name", "init", "destroy"]:
+      check idleLib.symAddr(cstring("logos_idle_module_MODULE_" & suffix)) != nil
+    for suffix in ["call_surface", "free", "dispatch", "async_api"]:
+      check idleLib.symAddr(cstring("logos_idle_module_MODULE_" & suffix)) == nil
+    let name = cast[NameFn](idleLib.symAddr("logos_idle_module_MODULE_name"))
+    check $name() == "idle_module"
+    let init = cast[InitFn](idleLib.symAddr("logos_idle_module_MODULE_init"))
+    let destroy = cast[DestroyFn](idleLib.symAddr("logos_idle_module_MODULE_destroy"))
+    var i = input(publish = false)
+    var ctx: ptr LogosModuleContext
+    check checkOutcome(init(addr i, addr ctx), contextShape(ctx)).isOk
+    destroy(ctx)
+    var listed = 0
+    for line in lines(repoDir / sdkGeneratedDir / "idle_module_kit.exports"):
+      if line.len > 0 and line[0] == '_':
+        inc listed
+    check listed == 3
 
   test "calls from the loading thread: a response, a failure's message, an event":
     withLock publishedLock:
@@ -532,7 +622,68 @@ suite "ifc.kit: kit modules as shared libraries (INTERFACE §2.6, §2.8) [IMPL]"
       r.dispose()
     shapes.destroy(ctx)
 
-suite "ifc.kit: a thread-confined kit as a shared library (DECISIONS G335, G340) [IMPL]":
+suite "ifc.kit: a thread-confined kit as a shared library (DECISIONS G335, G338, G340) [IMPL]":
+  test "[IFC-0748] [IFC-0749] [IFC-0751] [IFC-0743] a confined kit's typed, dispatch and deferred surfaces give one answer, the implemented interface's method included":
+    let api = sensorConfined.asyncApiOf("sensor_module")
+    check checkAsyncProviderApi(api).isOk
+    check api == sensorConfined.asyncApiOf("sensor_module")
+    let s = sensorConfined.start(publish = false)
+    proc configure(limit: uint64): seq[byte] =
+      encode(
+        SensorNSControlConfigureRequest(settings: SensorNSControlSettings(limit: limit))
+      ).get
+
+    let snapshotRequest = encode(MetricsProviderSnapshotRequest()).get
+    proc deferred(i: int, bare: string, params: seq[byte]): ptr FakeInvocation =
+      result = prepareFake(i, bare, params)
+      submit(api, s, result)
+      doAssert result.settledIn()
+
+    # A success of each surface; the snapshot then counts all three.
+    check typedConfigure(typedConfined, s, "sensor", 3).status.isOk
+    let viaDispatch =
+      call(sensorConfined.dispatch, sensorConfined.free, s, "configure", configure(4))
+    check viaDispatch.status.isOk
+    let viaSubmit = deferred(0, "configure", configure(5))
+    check same(viaSubmit.status, viaDispatch.status)
+    check viaSubmit.responseOf == viaDispatch.response
+    check viaSubmit.exactlyOnce
+    clearFake(viaSubmit)
+    check typedSnapshot(typedConfined, s).text == "count=3"
+    let snap =
+      call(sensorConfined.dispatch, sensorConfined.free, s, "snapshot", snapshotRequest)
+    check MetricsProviderSnapshotResponse.decode(snap.response).get.count == 3
+    let snapSubmit = deferred(1, "snapshot", snapshotRequest)
+    check snapSubmit.status.isOk
+    check snapSubmit.responseOf == snap.response
+    clearFake(snapSubmit)
+    # A handler's failure: one code and one message on all three.
+    let typedFail = typedConfigure(typedConfined, s, "sensor", 13)
+    check typedFail.status.error.code == ecModule
+    check typedFail.untouched
+    let dispatchFail =
+      call(sensorConfined.dispatch, sensorConfined.free, s, "configure", configure(13))
+    check same(dispatchFail.status, typedFail.status)
+    let submitFail = deferred(2, "configure", configure(13))
+    check same(submitFail.status, typedFail.status)
+    check submitFail.message == "limit 13 is refused"
+    clearFake(submitFail)
+    # The kit's own refusals: an unknown method, a request off its schema.
+    for (i, bare, params) in [
+      (3, "nosuch", snapshotRequest),
+      (4, "configure", diag("{\"settings\": {\"kind\": \"sensor\", \"limit\": \"x\"}}")),
+      (5, "snapshot", diag("{\"extra\": 1}")),
+    ]:
+      checkpoint bare
+      let d = call(sensorConfined.dispatch, sensorConfined.free, s, bare, params)
+      check d.status.isErr
+      let fi = deferred(i, bare, params)
+      check same(fi.status, d.status)
+      check fi.exactlyOnce
+      clearFake(fi)
+    check typedSnapshot(typedConfined, s).text == "count=3"
+    sensorConfined.destroy(s)
+
   test "[IMPL-DECISION G340] a confined kit whose main module imports chronos first leaves the host's SIGPIPE as it was":
     when defined(posix):
       check pipeAfterLoad == cast[pointer](sentinel)

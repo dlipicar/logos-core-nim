@@ -14,6 +14,8 @@
 import std/[monotimes, times]
 import results
 import logos_sdk/cbor
+import logos_sdk/base/wipe
+from logos_sdk/codegen/nimrt import encodeChecked
 import ../transport/io/sock
 import ../daemon/ctlwire
 import ./[cli_types, fdpass]
@@ -160,9 +162,10 @@ proc readRequest*(
     if len > 0:
       let b = recvSome(fd, body, got, fds, deadline, true)
       if b.isErr:
+        wipe(body) # [N-2d] a partial frame may hold an argument's value
         closeAll(fds)
         return err(b.error)
-    ok(Request(bytes: body, fds: fds))
+    ok(Request(bytes: move body, fds: fds))
   else:
     err(requestError(feIo, "unix-stream sockets are not supported on this platform"))
 
@@ -179,7 +182,10 @@ proc writeRequest*(
       return err("more than " & $MaxFds & " descriptors")
     let deadline = getMonoTime() + initDuration(milliseconds = timeoutMs)
     let n = uint32(value.len)
+    # [N-2d] The frame holds the arguments: it is wiped on every return.
     var frame = newSeqOfCap[byte](HeaderBytes + value.len)
+    defer:
+      wipe(frame)
     frame.add([byte(n shr 24), byte(n shr 16), byte(n shr 8), byte(n)])
     frame.add(value)
     var local = newSeq[cint](fds.len)
@@ -258,18 +264,22 @@ func checkMessage*(m: LcnCliMessage, received: int): Result[void, string] =
   for i in 2 ..< m.fds.len:
     if m.fds[i].kind != LcnCliFdRoleKind.File:
       return err("descriptor " & $i & " must be a file")
-  let c = m.command
+  # [N-2d] Aliases, not `let` copies: a call command holds argument values.
+  template c(): untyped =
+    m.command
+
   case c.kind
   of LcnCliCommandKind.lcn_Cli_call_command:
-    let call = c.arm_lcn_Cli_call_command
+    template call(): untyped =
+      c.arm_lcn_Cli_call_command
+
     if call.args.isSome and call.json.isSome:
       return err("args and json are exclusive")
     var used: seq[bool] = newSeq[bool](m.fds.len)
     if call.args.isSome:
-      let args = call.args.get
-      if args.len > MaxArgs:
+      if call.args.get.len > MaxArgs:
         return err("more than " & $MaxArgs & " arguments")
-      for a in args:
+      for a in call.args.get:
         if a.kind == LcnCliArgKind.lcn_Cli_file_arg:
           let i = int(a.arm_lcn_Cli_file_arg.fd)
           if i < 2 or i >= m.fds.len:
@@ -296,14 +306,31 @@ func checkMessage*(m: LcnCliMessage, received: int): Result[void, string] =
 
 proc decodeMessage*(bytes: openArray[byte]): Result[LcnCliMessage, string] =
   ## [G344] Deterministic CBOR naming this protocol, of cli.cddl's shape.
+  ## [N-2d] The decoded tree is wiped on every return: it may hold an
+  ## argument's value. No error text quotes one: the CBOR decoder's are fixed,
+  ## and cli.cddl has no map with free keys, so a path names fields and
+  ## indices only.
   let v = decodeCbor(bytes).valueOr:
     return err(error.msg)
+  defer:
+    wipe(v)
   if v.kind != ckMap:
     return err("not a CBOR map")
   let p = v.lookup("protocol")
   if p.isNone or p.get.kind != ckText or p.get.text != CliProtocol:
     return err("not a " & CliProtocol & " message")
-  LcnCliMessage.fromCbor(v)
+  # The marked scope has the validator wipe its own temporaries too.
+  markedScope(true):
+    result = LcnCliMessage.fromCbor(v)
+
+proc encodeWiped*(m: LcnCliMessage): Result[seq[byte], string] =
+  ## [N-2d] `encode`, with its value tree wiped after it and the validator's
+  ## temporaries wiped too: the message may hold an argument's value, and the
+  ## launcher has no schema to tell which.
+  let tree = toCbor(m)
+  markedScope(true):
+    result = cliSchema().encodeChecked("lcn.cli_message", tree)
+  wipe(tree)
 
 # Replies ----------------------------------------------------------------------------
 

@@ -22,6 +22,10 @@
 ## and `initModule`, `destroyModule` and `applyConfiguration` may return a
 ## future of their result.
 ##
+## Deferred (DECISIONS G338): the kit exports `_MODULE_async_api`; a submitted
+## invocation runs the same handler on the module thread, and its cancellation
+## cancels an `async` handler's future.
+##
 ## The template also exports the typed provider functions (INTERFACE §2.4),
 ## which call the same handlers.
 
@@ -166,7 +170,7 @@ proc routeConfinedLedgerModule[T](instance: T, bare: string, params: ptr Uncheck
     var typed = fromChecked(LedgerPostRequest, request.unsafeGet)
     var response: Result[LedgerPostResponse, InvocationFailure]
     when compiles(`post`(instance, typed, inv)):
-      settleHandler(response, `post`(instance, typed, inv))
+      settleHandler(response, `post`(instance, typed, inv), inv)
     else:
       let saved = enterPlain(inv)
       response = `post`(instance, typed)
@@ -180,7 +184,7 @@ proc routeConfinedLedgerModule[T](instance: T, bare: string, params: ptr Uncheck
     var typed = fromChecked(LedgerProbeRequest, request.unsafeGet)
     var response: Result[LedgerProbeResponse, InvocationFailure]
     when compiles(`probe`(instance, typed, inv)):
-      settleHandler(response, `probe`(instance, typed, inv))
+      settleHandler(response, `probe`(instance, typed, inv), inv)
     else:
       let saved = enterPlain(inv)
       response = `probe`(instance, typed)
@@ -195,7 +199,7 @@ proc routeConfinedLedgerModule[T](instance: T, bare: string, params: ptr Uncheck
     wipe(request.unsafeGet)
     var response: Result[LedgerSealResponse, InvocationFailure]
     when compiles(`seal`(instance, typed, inv)):
-      settleHandler(response, `seal`(instance, typed, inv))
+      settleHandler(response, `seal`(instance, typed, inv), inv)
     else:
       let saved = enterPlain(inv)
       response = `seal`(instance, typed)
@@ -212,7 +216,7 @@ proc routeConfinedLedgerModule[T](instance: T, bare: string, params: ptr Uncheck
     var typed = fromChecked(LedgerWaitRequest, request.unsafeGet)
     var response: Result[LedgerWaitResponse, InvocationFailure]
     when compiles(`wait`(instance, typed, inv)):
-      settleHandler(response, `wait`(instance, typed, inv))
+      settleHandler(response, `wait`(instance, typed, inv), inv)
     else:
       let saved = enterPlain(inv)
       response = `wait`(instance, typed)
@@ -527,6 +531,19 @@ template exportLedgerModule*(T: typedesc) =
     kitEnter()
     confinedDispatch(module, methodName, paramsCbor, paramsLen, outResponseCbor, outResponseLen, ledgerModuleKitRoute)
 
+  proc ledgerModuleKitSubmit(module: ptr LogosModuleContext, invocation: ptr LogosProviderInvocation) {.cdecl, gcsafe, raises: [].} =
+    kitEnter()
+    confinedSubmit(module, invocation, ledgerModuleKitRoute)
+
+  proc ledgerModuleKitRequestCancel(module: ptr LogosModuleContext, invocation: ptr LogosProviderInvocation) {.cdecl, gcsafe, raises: [].} =
+    kitEnter()
+    confinedRequestCancel(module, invocation)
+
+  let ledgerModuleKitAsyncApiData = LogosAsyncProviderApi(abiVersion: AsyncProviderAbiVersion, structSize: csize_t(sizeof(LogosAsyncProviderApi)), submit: ledgerModuleKitSubmit, requestCancel: ledgerModuleKitRequestCancel)
+
+  proc ledgerModuleKitAsyncApi(): ptr LogosAsyncProviderApi {.exportc: "logos_ledger_module_MODULE_async_api", dynlib, cdecl, gcsafe, raises: [].} =
+    unsafeAddr ledgerModuleKitAsyncApiData
+
   proc ledgerModuleKitCall0(p0: ptr LogosModuleContext, p1: ptr LogosResponseOwner, p2: uint64, p3: logos_tstr_size_1_64_t, p4: ptr uint64, p5: ptr uint64): LogosResult {.exportc: "logos_ledger_module_CALL_ledger_Post", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
     if p0 == nil or p1 == nil or p4 == nil or p5 == nil:
@@ -564,6 +581,7 @@ template exportLedgerModule*(T: typedesc) =
       ("logos_ledger_module_MODULE_call_surface", cast[pointer](ledgerModuleKitCallSurface)),
       ("logos_ledger_module_MODULE_free", cast[pointer](ledgerModuleKitFree)),
       ("logos_ledger_module_MODULE_dispatch", cast[pointer](ledgerModuleKitDispatch)),
+      ("logos_ledger_module_MODULE_async_api", cast[pointer](ledgerModuleKitAsyncApi)),
       ("logos_ledger_module_CALL_ledger_Post", cast[pointer](ledgerModuleKitCall0)),
       ("logos_ledger_module_CALL_ledger_Probe", cast[pointer](ledgerModuleKitCall1)),
       ("logos_ledger_module_CALL_ledger_Seal", cast[pointer](ledgerModuleKitCall2)),

@@ -21,6 +21,15 @@ const
   storageFetchRootPath* = contractGeneratedDir & "/lcn_storage_fetch_root.nim"
   fetchFakeDocument* = fixtureDir & "/fetch_fake_module.cddl"
   ledgerDocument* = fixtureDir & "/ledger_module.cddl"
+  confinedSensorDir* = sdkGeneratedDir & "/confined"
+    ## [DECISIONS G338] the §3.9.2 sensor as a confined kit with
+    ## `_MODULE_async_api`, beside the plain one under testing/generated
+
+const
+  metricsInterface = "spec/mirrors/IFC/3.9.2.interface.cddl"
+  gaugeInterface* = sdkKitDir & "/gauge_interface.cddl"
+  gaugeEarlier* = sdkKitDir & "/gauge_interface_v1.cddl"
+  tallyDocument* = sdkKitDir & "/tally_module.cddl"
 
 const nimFixtures* = [
   NimFixture(
@@ -156,9 +165,70 @@ const nimFixtures* = [
   ),
   NimFixture(module: "ledger_module_types.nim", primary: ledgerDocument),
   NimFixture(
-    module: "ledger_module_kit.nim", primary: ledgerDocument, kit: true, confined: true
+    module: "ledger_module_kit.nim",
+    primary: ledgerDocument,
+    kit: true,
+    confined: true,
+    asyncApi: true,
   ),
   NimFixture(module: "ledger_module_calls.nim", primary: ledgerDocument, calls: true),
+  NimFixture(
+    module: "sensor_module_types.nim",
+    home: confinedSensorDir,
+    primary: "spec/mirrors/IFC/3.9.2.module.cddl",
+    interfaces: @["spec/mirrors/IFC/3.9.2.interface.cddl"],
+    supporting: @["spec/mirrors/IFC/3.9.2.supporting.cddl"],
+  ),
+  NimFixture(
+    module: "sensor_module_kit.nim",
+    home: confinedSensorDir,
+    primary: "spec/mirrors/IFC/3.9.2.module.cddl",
+    interfaces: @["spec/mirrors/IFC/3.9.2.interface.cddl"],
+    supporting: @["spec/mirrors/IFC/3.9.2.supporting.cddl"],
+    kit: true,
+    confined: true,
+    asyncApi: true,
+  ),
+  # [DECISIONS G339] The INTERFACE l.2833-2840 cases as kits: an interface-only
+  # provider, an events-only interface with an earlier contract, a types-only
+  # primary with a callable interface, and lifecycle without contracts.
+  NimFixture(
+    module: "metrics_only_module_types.nim",
+    binding: "metrics_only_module",
+    interfaces: @[metricsInterface],
+  ),
+  NimFixture(
+    module: "metrics_only_module_kit.nim",
+    binding: "metrics_only_module",
+    interfaces: @[metricsInterface],
+    kit: true,
+  ),
+  NimFixture(
+    module: "gauge_module_types.nim",
+    binding: "gauge_module",
+    interfaces: @[gaugeInterface],
+    extends: @[gaugeEarlier],
+  ),
+  NimFixture(
+    module: "gauge_module_kit.nim",
+    binding: "gauge_module",
+    interfaces: @[gaugeInterface],
+    extends: @[gaugeEarlier],
+    kit: true,
+  ),
+  NimFixture(
+    module: "tally_module_types.nim",
+    primary: tallyDocument,
+    interfaces: @[metricsInterface],
+  ),
+  NimFixture(
+    module: "tally_module_kit.nim",
+    primary: tallyDocument,
+    interfaces: @[metricsInterface],
+    kit: true,
+  ),
+  NimFixture(module: "idle_module_types.nim", binding: "idle_module"),
+  NimFixture(module: "idle_module_kit.nim", binding: "idle_module", kit: true),
 ]
 
 type ExportFixture* = object
@@ -166,6 +236,7 @@ type ExportFixture* = object
   ## `kitbuild` links a kit library with.
   kit*: string ## the kit's `NimFixture.module`
   kind*: ExportListKind
+  home*: string ## the kit's `NimFixture.home`
 
 const exportFixtures* = [
   ExportFixture(kit: "meter_module_kit.nim", kind: elDarwin),
@@ -180,6 +251,16 @@ const exportFixtures* = [
   ExportFixture(kit: "fetch_fake_module_kit.nim", kind: elGnu),
   ExportFixture(kit: "ledger_module_kit.nim", kind: elDarwin),
   ExportFixture(kit: "ledger_module_kit.nim", kind: elGnu),
+  ExportFixture(kit: "sensor_module_kit.nim", kind: elDarwin, home: confinedSensorDir),
+  ExportFixture(kit: "sensor_module_kit.nim", kind: elGnu, home: confinedSensorDir),
+  ExportFixture(kit: "metrics_only_module_kit.nim", kind: elDarwin),
+  ExportFixture(kit: "metrics_only_module_kit.nim", kind: elGnu),
+  ExportFixture(kit: "gauge_module_kit.nim", kind: elDarwin),
+  ExportFixture(kit: "gauge_module_kit.nim", kind: elGnu),
+  ExportFixture(kit: "tally_module_kit.nim", kind: elDarwin),
+  ExportFixture(kit: "tally_module_kit.nim", kind: elGnu),
+  ExportFixture(kit: "idle_module_kit.nim", kind: elDarwin),
+  ExportFixture(kit: "idle_module_kit.nim", kind: elGnu),
 ]
 
 proc fixtureName(f: ExportFixture): string =
@@ -192,16 +273,16 @@ proc fixtureName(f: ExportFixture): string =
 proc generated*(f: ExportFixture): Result[string, string] =
   ## The export list lcn-gen makes for `f` now.
   for k in nimFixtures:
-    if k.module == f.kit and k.kit:
-      let (set, opts) = ?fixtureSet(k)
-      let name = exportListName(set, f.kind)
+    if k.module == f.kit and k.home == f.home and k.kit:
+      let (b, opts) = ?fixtureBinding(k)
+      let name = exportListName(b, f.kind)
       if name != f.fixtureName:
         return err("lcn-gen names it " & name)
-      return ok(exportList(name, ?kitSymbols(set, opts, k.system), f.kind))
+      return ok(exportList(name, ?kitSymbols(b, opts, k.system), f.kind))
   err("no kit fixture " & f.kit)
 
 proc fixturePath*(f: ExportFixture): string =
-  homeOf("", f.fixtureName) / f.fixtureName
+  homeOf(f.home, f.fixtureName) / f.fixtureName
 
 const headerFixtures* = [
   HeaderFixture(header: "logos_types.h"),

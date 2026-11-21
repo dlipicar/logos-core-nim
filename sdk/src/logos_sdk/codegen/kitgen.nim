@@ -50,8 +50,22 @@
 ## <Event>)`, and the template restores the host's signal dispositions at the
 ## end of the library's initialization (G340).
 ##
-## Not generated yet: `_MODULE_async_api` (optional), and kits for an
-## interface-only provider (no primary document). A consumer's typed call
+## With `KitOptions.asyncApi` as well (`--async-api`; DECISIONS G338) a
+## provider's kit also exports `_MODULE_async_api`, a static descriptor whose
+## `submit` and `request_cancel` hand the invocation to the module thread
+## (`confinedSubmit`, `confinedRequestCancel`): the same route, handlers and
+## typed results as `_MODULE_dispatch` (INTERFACE §2.9.2).
+##
+## A kit is generated for a module binding (`ModuleBinding`; INTERFACE §2). One
+## with a primary document is the binding a concrete module document's set
+## establishes (`kitModule` of a `ContractSet`), or that set with the earlier
+## contracts its descriptor carries (`extends`, §2.6 l.1693-1696). An
+## interface-only binding (`lcn-gen kit --module:NAME` without a primary
+## document, l.2833-2840; DECISIONS G339) embeds its interfaces and supporting
+## schemas and checks its calls against them (`loadBindingValidator`); its
+## call surface is its interfaces' methods and events, and a binding with
+## neither a primary document nor an interface is no provider: its kit exports
+## the identity and lifecycle symbols alone (l.2573). A consumer's typed call
 ## helpers (App A.5) come from `callsgen`.
 
 {.push raises: [].}
@@ -74,6 +88,8 @@ type
     importPrefix*: string ## how the kit imports this library (`NimOptions`)
     configuration*: Opt[KitConfiguration]
     confined*: bool ## [DECISIONS G335] a module thread per context
+    asyncApi*: bool
+      ## [DECISIONS G338] export `_MODULE_async_api` (a confined provider's)
 
 proc configurationSet*(document: string): Result[ContractSet, string] =
   ## [SPEC CONFIG §2 l.62-66] A configuration document accepted as the Runtime
@@ -85,21 +101,41 @@ proc configurationSet*(document: string): Result[ContractSet, string] =
     return err("the configuration schema is not a supporting schema")
   ok(set)
 
+func configurationTypesName(header: string): string =
+  header & "_configuration_types"
+
 func configurationTypesName*(s: ContractSet): string =
   ## The configuration types module of the kit for the module set `s`.
-  s.cSchemaSet.headerName & "_configuration_types"
+  configurationTypesName(s.cSchemaSet.headerName)
+
+func configurationTypesName*(b: ModuleBinding): string =
+  ## The configuration types module of the kit for the module binding `b`.
+  configurationTypesName(b.cSchemaSet.headerName)
+
+proc configurationTypesFor(
+    header: string, c: KitConfiguration, opts: KitOptions
+): Result[string, string] =
+  let text = ?nimModule(c.set, NimOptions(importPrefix: opts.importPrefix))
+  let generic = c.set.cSchemaSet.headerName & "_types.nim:"
+  let first = "## " & generic
+  if not text.startsWith(first):
+    return err("unexpected nimModule output")
+  ok("## " & configurationTypesName(header) & ".nim:" & text[first.len .. ^1])
 
 proc configurationTypesModule*(
     s: ContractSet, c: KitConfiguration, opts = KitOptions(importPrefix: SdkImportRoot)
 ): Result[string, string] =
   ## `<module>_configuration_types.nim`: the configuration set's Nim types
   ## (`nimModule`), for the kit of the module set `s`.
-  let text = ?nimModule(c.set, NimOptions(importPrefix: opts.importPrefix))
-  let generic = c.set.cSchemaSet.headerName & "_types.nim:"
-  let first = "## " & generic
-  if not text.startsWith(first):
-    return err("unexpected nimModule output")
-  ok("## " & configurationTypesName(s) & ".nim:" & text[first.len .. ^1])
+  configurationTypesFor(s.cSchemaSet.headerName, c, opts)
+
+proc configurationTypesModule*(
+    b: ModuleBinding,
+    c: KitConfiguration,
+    opts = KitOptions(importPrefix: SdkImportRoot),
+): Result[string, string] =
+  ## `configurationTypesModule` for the kit of the module binding `b`.
+  configurationTypesFor(b.cSchemaSet.headerName, c, opts)
 
 func pascalModule(name: string): string =
   for part in name.split('_'):
@@ -123,13 +159,15 @@ func templateName*(module: string): string =
   "export" & pascalModule(module)
 
 proc kitParts(
-    s: ContractSet, opts: KitOptions, system: bool
+    b: ModuleBinding, opts: KitOptions, system: bool
 ): Result[(string, seq[string]), string] =
   ## The kit's text and the C symbols its template exports.
-  let b = ?s.binding
-  let header = s.cSchemaSet.headerName
-  let names = nimTypeNames(s)
-  let surface = callSurface(s)
+  let header = b.cSchemaSet.headerName
+  let names = nimTypeNames(b)
+  let surface = callSurface(b)
+  # [DECISIONS G339] An interface-only binding has no primary document: the kit
+  # reloads the binding itself, under its module name.
+  let primary = b.primary.isSome
   let provider = b.isProvider
   let moduleC = projectModule(b.module)
   let tmpl = templateName(b.module)
@@ -203,6 +241,8 @@ proc kitParts(
         ", InvocationFailure]\n"
     )
   let confined = opts.confined
+  if opts.asyncApi and not (confined and provider):
+    return err("_MODULE_async_api is generated for a confined provider's kit only")
   if confined:
     o.add(
       "##\n## Confined (DECISIONS G335-G337): every entry that uses the instance runs on\n" &
@@ -212,6 +252,12 @@ proc kitParts(
         "##       Future[Result[<Response>, InvocationFailure]] {.async: (raises: []).}\n##\n" &
         "## and `initModule`, `destroyModule` and `applyConfiguration` may return a\n" &
         "## future of their result.\n"
+    )
+  if opts.asyncApi:
+    o.add(
+      "##\n## Deferred (DECISIONS G338): the kit exports `_MODULE_async_api`; a submitted\n" &
+        "## invocation runs the same handler on the module thread, and its cancellation\n" &
+        "## cancels an `async` handler's future.\n"
     )
   var mirrors = KitMirrors()
   if provider:
@@ -226,7 +272,7 @@ proc kitParts(
           requestType: names.getOrDefault(m.request),
         )
       )
-    mirrors = ?kitMirrors(s, prefix, methods, confined)
+    mirrors = ?kitMirrors(b, prefix, methods, confined)
   if mirrors.exports.len > 0:
     o.add(
       "##\n## The template also exports the typed provider functions (INTERFACE §2.4),\n" &
@@ -234,7 +280,7 @@ proc kitParts(
     )
   let typeModules =
     if configured:
-      header & "_types, " & configurationTypesName(s)
+      header & "_types, " & configurationTypesName(header)
     else:
       header & "_types"
   let facade = if confined: "confined" else: "kit"
@@ -250,13 +296,27 @@ proc kitParts(
     else:
       @[]
   o.add(
-    "const\n  moduleName* = " & escape(b.module) & "\n  primaryDocument = " &
-      escape(s.primary.source) & "\n  interfaceDocuments: array[" & $s.interfaces.len &
-      ", string] = [" & s.interfaces.mapIt(escape(it.source)).join(", ") &
-      "]\n  supportingDocuments: array[" & $s.supporting.len & ", string] = [" &
-      s.supporting.mapIt(escape(it.source)).join(", ") & "]\n  declaresEvents = " &
+    "const\n  moduleName* = " & escape(b.module) & (
+      if primary:
+        "\n  primaryDocument = " & escape(b.primary.get.source)
+      else:
+        ""
+    ) & "\n  interfaceDocuments: array[" & $b.interfaces.len & ", string] = [" &
+      b.interfaces.mapIt(escape(it.source)).join(", ") &
+      "]\n  supportingDocuments: array[" & $b.supporting.len & ", string] = [" &
+      b.supporting.mapIt(escape(it.source)).join(", ") & "]\n  declaresEvents = " &
       $(surface.events.len > 0) & "\n"
   )
+  let documentsArgs =
+    if primary:
+      "primaryDocument, interfaceDocuments, supportingDocuments, " & $system
+    else:
+      "moduleName, interfaceDocuments, supportingDocuments, " & $system
+  let (loadValidatorCall, loadSchemaCall) =
+    if primary:
+      ("loadValidator", "loadSchema")
+    else:
+      ("loadBindingValidator", "loadBindingSchema")
   if provider:
     o.add(
       "  callSurfaceBytes: array[" & $descriptor.len & ", uint8] = " &
@@ -277,15 +337,13 @@ proc kitParts(
         "  loadSchema(configurationDocument, noDocuments, noDocuments),\n)\n"
     )
   o.add(
-    "\nperThread(\n  kitValidator,\n  ContractValidator,\n" &
-      "  loadValidator(primaryDocument, interfaceDocuments, supportingDocuments, " &
-      $system & "),\n)\n"
+    "\nperThread(\n  kitValidator,\n  ContractValidator,\n  " & loadValidatorCall & "(" &
+      documentsArgs & "),\n)\n"
   )
   if "kitSchema()" in mirrors.procs:
     o.add(
-      "\nperThread(\n  kitSchema,\n  GeneratedSchema,\n" &
-        "  loadSchema(primaryDocument, interfaceDocuments, supportingDocuments, " &
-        $system & "),\n)\n"
+      "\nperThread(\n  kitSchema,\n  GeneratedSchema,\n  " & loadSchemaCall & "(" &
+        documentsArgs & "),\n)\n"
     )
   # Events (App A.4).
   for e in surface.events:
@@ -355,7 +413,7 @@ proc kitParts(
       o.add(
         "    var response: Result[" & responseType & ", InvocationFailure]\n" &
           "    when compiles(" & h & "(instance, typed, inv)):\n" &
-          "      settleHandler(response, " & h & "(instance, typed, inv))\n" &
+          "      settleHandler(response, " & h & "(instance, typed, inv), inv)\n" &
           "    else:\n" & "      let saved = enterPlain(inv)\n" & "      response = " & h &
           "(instance, typed)\n" & "      leavePlain(saved)\n"
       )
@@ -513,6 +571,23 @@ proc kitParts(
           "    kitEnter()\n    confinedDispatch(module, methodName, paramsCbor, paramsLen, outResponseCbor, outResponseLen, " &
           prefix & "KitRoute)\n"
       )
+      if opts.asyncApi:
+        # [SPEC INTERFACE §2.9.2, App A.3; DECISIONS G338] The deferred surface:
+        # a descriptor that never changes, from a context-free getter.
+        o.add(
+          "\n  proc " & prefix &
+            "KitSubmit(module: ptr LogosModuleContext, invocation: ptr LogosProviderInvocation) {.cdecl, gcsafe, raises: [].} =\n" &
+            "    kitEnter()\n    confinedSubmit(module, invocation, " & prefix &
+            "KitRoute)\n\n" & "  proc " & prefix &
+            "KitRequestCancel(module: ptr LogosModuleContext, invocation: ptr LogosProviderInvocation) {.cdecl, gcsafe, raises: [].} =\n" &
+            "    kitEnter()\n    confinedRequestCancel(module, invocation)\n\n" &
+            "  let " & prefix &
+            "KitAsyncApiData = LogosAsyncProviderApi(abiVersion: AsyncProviderAbiVersion, structSize: csize_t(sizeof(LogosAsyncProviderApi)), submit: " &
+            prefix & "KitSubmit, requestCancel: " & prefix & "KitRequestCancel)\n\n" &
+            "  proc " & prefix & "KitAsyncApi(): ptr LogosAsyncProviderApi {.exportc: \"" &
+            sym("async_api") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
+            "    unsafeAddr " & prefix & "KitAsyncApiData\n"
+        )
       for e in mirrors.exports:
         o.add("\n" & e & "\n")
   else:
@@ -594,6 +669,8 @@ proc kitParts(
         (sym("dispatch"), prefix & "KitDispatch"),
       ]
     )
+    if opts.asyncApi:
+      table.add((sym("async_api"), prefix & "KitAsyncApi"))
     table.add(mirrors.symbols)
   o.add(
     "\n  proc " & prefix & "StaticSymbols*(): seq[(string, pointer)] =\n" &
@@ -609,18 +686,32 @@ proc kitParts(
   ok((o, table.mapIt(it[0])))
 
 proc kitModule*(
+    b: ModuleBinding, opts = KitOptions(importPrefix: SdkImportRoot), system = false
+): Result[string, string] =
+  ## The kit of the module binding `b`, beside the `<header>_types.nim` that
+  ## `nimModule` writes for its set (a binding with a primary document) or for
+  ## the binding itself (an interface-only one, DECISIONS G339).
+  ok((?kitParts(b, opts, system))[0])
+
+proc kitModule*(
     s: ContractSet, opts = KitOptions(importPrefix: SdkImportRoot), system = false
 ): Result[string, string] =
   ## The kit of the module binding `s` establishes, beside the
   ## `<header>_types.nim` that `nimModule` writes for the same set.
-  ok((?kitParts(s, opts, system))[0])
+  kitModule(?s.binding, opts, system)
+
+proc kitSymbols*(
+    b: ModuleBinding, opts = KitOptions(importPrefix: SdkImportRoot), system = false
+): Result[seq[string], string] =
+  ## [DECISIONS G341] The C symbols the kit's template exports: the module's
+  ## ABI (INTERFACE §2.4, §2.6) and nothing else, for `exportList`.
+  ok((?kitParts(b, opts, system))[1])
 
 proc kitSymbols*(
     s: ContractSet, opts = KitOptions(importPrefix: SdkImportRoot), system = false
 ): Result[seq[string], string] =
-  ## [DECISIONS G341] The C symbols the kit's template exports: the module's
-  ## ABI (INTERFACE §2.4, §2.6) and nothing else, for `exportList`.
-  ok((?kitParts(s, opts, system))[1])
+  ## `kitSymbols` of the binding `s` establishes.
+  kitSymbols(?s.binding, opts, system)
 
 type ExportListKind* = enum
   ## [DECISIONS G341] A linker's list of the symbols a shared library exports.
@@ -645,10 +736,17 @@ func exportList*(
     "/* " & stamp & " */\n{\n  global:\n" & symbols.mapIt("    " & it & ";\n").join &
       "  local: *;\n};\n"
 
-func exportListName*(s: ContractSet, kind: ExportListKind): string =
-  ## The file `lcn-gen kit` writes the export list of `kind` to.
-  s.cSchemaSet.headerName & "_kit" & (
+func exportListName(header: string, kind: ExportListKind): string =
+  header & "_kit" & (
     case kind
     of elDarwin: ".exports"
     of elGnu: ".map"
   )
+
+func exportListName*(s: ContractSet, kind: ExportListKind): string =
+  ## The file `lcn-gen kit` writes the export list of `kind` to.
+  exportListName(s.cSchemaSet.headerName, kind)
+
+func exportListName*(b: ModuleBinding, kind: ExportListKind): string =
+  ## The file `lcn-gen kit` writes the export list of `kind` to.
+  exportListName(b.cSchemaSet.headerName, kind)

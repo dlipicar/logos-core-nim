@@ -596,7 +596,7 @@ are 5-9's.
 
 ### What Tier 5 step N-1 changes
 
-The module kit (DECISIONS I101; G339 to G342). Sub-part 2 adds lcn-gen's consumer helpers (G339): a
+The module kit (DECISIONS I101; G335 to G342). Sub-part 2 adds lcn-gen's consumer helpers (G339): a
 generated `<stem>_calls.nim` has, over a wrapped route handle, a typed `subscribe` per event and
 `invoke` and `prepareInvoke` per method, and `logos_sdk/kit/routes` gives a module instance its
 routes and typed Runtime Control subscriptions. IFC-0671, the permission for a generated typed
@@ -620,6 +620,44 @@ call of its own while the callee calls back is a route-call cycle, outside these
 so. The consumer helpers' callbacks run on the module thread through the handle's dispatcher (G339),
 with no change to what the Runtime sees.
 
+Sub-part 4 adds the deferred provider (`lcn-gen kit --confined --async-api`; G338): the kit exports
+`_MODULE_async_api`, whose `submit` queues the invocation for the module thread and returns, whose
+`request_cancel` cancels an async handler's future, and whose job completes once and releases once,
+the response or the failure's diagnostics in one block its owner frees on any thread; and
+`invokeAsync`, a route call as a future on the module thread. **Twelve provider units are claimed**
+(they were out of scope as requirements on providers that export `_MODULE_async_api`): IFC-0743,
+0746, 0748, 0750 to 0752, 0754, 0762, 0763, 0766, 0769 and IFC-0779, whose reason ("a requirement on
+calling modules") was wrong, since l.2136 binds the provider. IFC-0753, claimed for the Runtime's own
+adapter, gains the generated provider's tests. IFC-0758 and IFC-0767 stay out of scope, relabelled
+"the author's backend": the kit cancels the handler's future, and backend work behind it is the
+author's. Evidence: `sdk/tests/test_kit_confined.nim` (in process, orc, refc and orc-release),
+`sdk/tests/test_kit_dylib.nim` (a confined library through its three surfaces) and
+`tests/test_kit_mixed.nim` MX-4 (through the Runtime, `direct_dynamic` and hosted). Nothing changes
+on the Runtime's or the Module Host's side, which already served deferred providers (I78).
+
+Sub-part 5 adds interface-only provider kits (`lcn-gen kit --module:NAME` without a primary
+document, and `--extends` for the descriptor's earlier contracts; G339). No unit changes status:
+INTERFACE l.2833-2840 (IFC-0877 to IFC-0881) were claimed for the C mapping and the reverse mapper,
+and the kit's cases join IFC-0880 and IFC-0881 for the conformance set's other three cases. An
+interface-only kit, an events-only one whose descriptor carries the earlier contract it extends, a
+types-only primary with a callable interface, and a lifecycle-only module each describe exactly
+their binding (IFC-0230, IFC-0231) and export exactly the functions its header declares (IFC-0878).
+Evidence: `sdk/tests/test_kit.nim`, `sdk/tests/test_kit_dylib.nim` and `sdk/tests/test_nimgen.nim`.
+No Runtime or Module Host code changes: both take a provider's binding from its descriptor, with or
+without a primary contract (the interface-only case of `tests/test_events.nim`'s I106 test); no core
+suite loads one of these kits yet.
+
+Sub-part 6 places the confined kit in logosd and writes the author's guide. No unit changes status.
+The ledger, a confined kit module built with refc, runs in orc logosd's own process
+(`direct_dynamic`) and in a Module Host it starts (`hosted_dynamic`), called through `logosctl call`
+by `lcn_call`: its GC'd state stays on its module thread under concurrent calls, an async handler
+answers with its caller, and it stops and starts again (`tests/test_logosd.nim`; G342). The
+`kit-toolchains` flake check (Linux) builds the test kit libraries with logos-storage-nim's and
+logos-delivery's switch sets and runs `test_kit_dylib`, `run.mixed` and `test_kit_mixed` against them
+(G341). `sdk/docs/MODULE-KIT.md` is the author's guide, its example built and called by
+`sdk/tests/test_module_kit_guide.nim`. I71's limit, that a refc module's handlers on threads other
+than the loading one must not store GC'd values, now holds for kits without `--confined` only.
+
 ### What Tier 5 step N-2b changes
 
 The CLI module `lcn_call` (DECISIONS I102; G343 to G350). No unit changes status. The CLI socket is a
@@ -630,6 +668,51 @@ through the logosctl instance, a request that cannot select an instance or artif
 holds, the launcher's uid check). IFC-0942 gains `describe`, which materializes from the surface projected to
 the selected contract. RUN-0174 is re-tested for a Module Host's prepared `establish_route` and
 `renew_route` (`test_hosted_routes` C-2b), which kept no material before this step.
+
+### What Tier 5 step N-2c changes
+
+`logosctl subscribe` and `events` (DECISIONS I102; G346, G349). No unit changes status. `test_lcn_call`
+adds end-to-end evidence for RUN-1095 and TRN-0392 in logosd: a grant `lcn_call` issued itself, once
+revoked, ends its subscription with `NOT_AUTHORISED` while the route stays usable, and the stream reports
+it (exit 6). Events cannot be marked (INTERFACE §1.2.1 l.215), so streams add no marked payload.
+
+### What Tier 5 step N-2d changes
+
+`logosctl call` of a marked method on the local node (DECISIONS I102; G349's N-2d amendment). No unit
+changes status. IFC-0575 gains evidence for a consumer outside the Runtime and the kits: `lcn_call` and
+the launcher erase every copy they make of a marked request or response, which `tests/test_wipe_cli.nim`
+(W-13) checks with the free scan in `lcn_call`'s audit Module Host, in the providers' and in the
+launcher's process, on success, refusal, provider failure, cancel and a closed stdout. A marked value
+reaches `lcn_call` only from a passed file, so none is in a process's arguments.
+
+### What Tier 5 step 5-3a-2 changes
+
+The package trust file and its administration (DECISIONS I114; G396, G397, G398; G137, G299, G303 amended).
+`<session>/trust.cbor` is the package trust file, `logos-core-nim.trust.v2`: one revision covers the
+development switch, the baseline signing profile, every anchor (kid, key, exact package names, development
+marker) and the catalog and provenance selections. Its schema and rules are core's
+(`src/logos_core/package/trustdoc.cddl`, `trustdoc.nim`), so the Package Manager reads the same document in
+5-3b; logosd applies them at both reads of a start, before continuity (`docs/DAEMON.md` §6), and
+`logosctl trust` writes it offline, each change as the next revision.
+
+- **Claimed:** PKG-0418 to PKG-0421 (continuity over every field; the mark survives restart; rollback and
+  other contents at one revision refused; no mark, no start, and `trust reestablish` restores it),
+  PKG-0083 (a development anchor through the same file, in force only with the switch on), PKG-0166 (only
+  the trust file selects a provenance profile) and PKG-0169 (a selected profile is refused before package
+  material is accepted). TXT-0463 (one added name is a later revision) leaves the pending list with
+  PKG-0418. PKG 253/253, with 333 units left for Tier 5.
+- **Limits of the claim.** PKG-0421 rests on the Package Manager getting its trust input only from
+  logosd's accepted start (5-3b builds it so; plan Q10). PKG-0166 covers "select" until a profile can be
+  selected: of the seven sources PM l.733-734 lists, the Storage object arrives with 5-3b and the caller
+  with 5-6a, and Nix metadata and the provenance object only if 5-10 and 5-11 are built, each adding its
+  case under the same tag. Rollback resistance is not
+  claimed beyond the session's own files (PM l.406): whoever can write the session can replace the file and
+  its mark together.
+- **Bounds.** The file is at most 1 MiB (`MaxTrustBytes`), the same wherever it is read; a kid and a
+  package name are 1 to 128 bytes and a key 48 bytes. The number of anchors and names is bounded only by
+  the file's size.
+- **Key separation** (PM l.533): no anchor may use a call-evidence key of the session, retired ones
+  included. It supplies evidence to PKG-0435, which stays with step 5-7a until the TLS key exists.
 
 ## Properties not claimed
 
@@ -686,12 +769,19 @@ the selected contract. RUN-0174 is re-tested for a Module Host's prepared `estab
     done with it.
   - **Values on the stack**: fixed-size values held in locals (a digest, a scalar) are not zeroed;
     every heap and shared-heap copy is.
-  - **Argument text typed for a marked method, until step N-2d** (DECISIONS I102, G349; planning,
-    2026-11-20): `lcn_call` refuses a method with a marked request or response before any route,
-    so no marked value reaches a provider or comes back. But `key=value` or `--request` text typed for
-    such a method crosses the launcher and the `lcn_call` instance in the `cli.v1` frame, and their
-    buffers hold it, unwiped, until the refusal and after it. N-2d erases every buffer in both,
-    with a wipe-audit test.
+  - **A marked value typed on the command line** (DECISIONS I102, G349's N-2d amendment): `logosctl`
+    takes its arguments from the process's argv, which it does not erase, and the shell keeps its
+    history. `lcn_call` refuses a marked request given as `NAME=VALUE` or `--request` before reading
+    anything, so the value reaches no provider; the launcher, which has no schema, sends it in the
+    `cli.v1` frame, and both wipe their copies of that frame. A marked value is given from a file or
+    stdin (DAEMON.md §7a).
+  - **What a marked response's reader keeps**: `lcn_call` writes a marked response to the stdout the
+    launcher passed and wipes its own copies; sensitivity does not protect plaintext from its
+    intended recipient (INTERFACE l.380-381), and a terminal, pipe or file that receives it is the user's.
+  - **A provider's own failure text**: a provider that puts a marked value in its failure message or
+    detail sends it to the caller, and `lcn_call` shows it, labelled "(declared)", without erasing its
+    copies of that text. §1.4.1 binds the marked request and response; the kits' typed consumers erase
+    a failure's text too (DECISIONS I115), `lcn_call` does not yet [IMPL].
 
 ## Unix-stream endpoints and peer checks
 

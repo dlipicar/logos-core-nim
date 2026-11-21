@@ -1,0 +1,10 @@
+; -- metadata --
+_interface = "gauge"
+
+; The earlier `gauge` contract that sdk/tests/kit/gauge_interface.cddl extends
+; (COMMITMENT §9.1): input for the `extends` entry of gauge_module's call-surface
+; descriptor (INTERFACE §2.6 l.1693-1696; DECISIONS G339).
+
+gauge.level_event = {
+  level: uint64,
+}

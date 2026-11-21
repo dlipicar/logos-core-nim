@@ -106,14 +106,15 @@ default = "deferred:tier-5"
 "PKG-0069" = "deferred:tier-5"
 # §4.1: verification caching, rotation and revocation act on resolution and the
 # installed set; catalog trust and the protected trust-input path come with the
-# Package Manager service.
+# Package Manager service. PKG-0083 (a development deployment's own anchor through
+# the same protected path) is claimed through "§4.1" by step 5-3a-2: the package
+# trust file's development anchor (DECISIONS G137, G396; tests [PKG-0083]).
 "PKG-0076" = "deferred:tier-5"
 "PKG-0077" = "deferred:tier-5"
 "PKG-0079" = "deferred:tier-5"
 "PKG-0080" = "deferred:tier-5"
 "PKG-0081" = "deferred:tier-5"
 "PKG-0082" = "deferred:tier-5"
-"PKG-0083" = "deferred:tier-5"
 # §4.3: freshness is the §4.2 catalog's.
 "PKG-0112" = "deferred:tier-5"
 # §4.3: key separation across package signing, provenance (§4.5), call evidence (CA
@@ -131,20 +132,31 @@ default = "deferred:tier-5"
 "PKG-0439" = "deferred:tier-5"
 "PKG-0440" = "deferred:tier-5"
 "PKG-0441" = "deferred:tier-5"
-# §4.1: trust-input continuity, withdrawal and their CA integration. Step 4b-6
-# builds the revisioned trust file's carrier for D27's development switch
-# (G299; tests tag PKG-0418 to PKG-0421 as evidence); the units are claimed with
-# the Package Manager, whose package-signing anchors the file carries then.
-# PKG-0418 is work item 5-3a's (DECISIONS G362, carrying TXT-0463).
-# PKG-0422, whether continued execution depends on that trust, is a documentation
-# duty this deployment meets now with a true "no" (docs/DEPLOYMENT.md §1;
-# DECISIONS G137 as amended 2026-11-16, I97): claimed through "§4.1".
-"PKG-0418" = "deferred:tier-5"
-"PKG-0419" = "deferred:tier-5"
-"PKG-0420" = "deferred:tier-5"
-"PKG-0421" = "deferred:tier-5"
+# §4.1: trust-input continuity. PKG-0418 to PKG-0421 are claimed through "§4.1" by
+# step 5-3a-2 (DECISIONS G396, G397, I114): the package trust file, whose one
+# revision covers the profile, every anchor's key and exact names and the
+# selections, and logosd's continuity over it (G299), administered offline by
+# logosctl trust; TXT-0463 (one added name is a later revision) rides PKG-0418.
+# PKG-0421 rests on the Package Manager getting its trust input only from
+# logosd's accepted start (5-3b's condition, plan Q10). PKG-0422, whether
+# continued execution depends on that trust, is a documentation duty this
+# deployment meets with a true "no" (docs/DEPLOYMENT.md §1; DECISIONS G137 as
+# amended 2026-11-16, I97): claimed through "§4.1". PKG-0423 and PKG-0424 are
+# step 5-8's.
 "PKG-0423" = "deferred:tier-5"
 "PKG-0424" = "deferred:tier-5"
+# §4.5, deferred to 5-11 as a section: two units bind without a provenance
+# profile and are claimed by step 5-3a-2 (DECISIONS G398, I114). PKG-0169: a file
+# that selects a provenance profile is refused before continuity, in
+# package/trustdoc.nim, so the Package Manager refuses it too. PKG-0166: only the
+# package trust file selects; a manifest field is refused by its decoder and a
+# source's provenance_object selects nothing. Of the sources PM l.733-734 lists,
+# the Storage object arrives with 5-3b and the caller with 5-6a, and Nix metadata
+# and the provenance object only if 5-10 and 5-11 are built: each of those steps
+# adds its case under [PKG-0166]. The claim covers "select" until a profile can
+# be selected; "disable" and "weaken" have no object before then.
+"PKG-0166" = "claimed"
+"PKG-0169" = "claimed"
 # §5: package identity, installed records, sources and retention; the
 # admission bound needs the Runtime handoff and exact Transport overheads.
 "PKG-0172" = "deferred:tier-5"

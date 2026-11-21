@@ -1,5 +1,5 @@
-## lcn_call, the CLI module, in a logosd in this process (Tier 5 step N-2b;
-## DECISIONS G343-G350; docs/DAEMON.md §7a; plan §5, L-1 to L-10 and L-13).
+## lcn_call, the CLI module, in a logosd in this process (Tier 5 steps N-2b
+## and N-2c; DECISIONS G343-G350; docs/DAEMON.md §7a; plan §5, L-1 to L-13).
 ##
 ## Each case makes a session with `logosctl init`'s library function: the
 ## meter, shapes, vault (orc and arc only, G277) and bulk kit modules hosted as operator providers,
@@ -8,7 +8,8 @@
 ## runs `assembleDaemon` and `startDaemon` as logosd's `main` does, and runs
 ## each command with the launcher's library function (`launch`), as `logosctl
 ## call` does, from the test's threads, with regular files for stdout and
-## stderr. `lcn_call` runs in a Module Host of its own, so the test cannot
+## stderr; a stream (`subscribe`, `events`) runs from a thread of its own,
+## with a pipe for the launcher's cancel. `lcn_call` runs in a Module Host of its own, so the test cannot
 ## reach its globals: what it did is read from exit codes, its output, the
 ## Runtime's records (through the logosctl instance), and the meter's `held`
 ## file (channels 22 and 23 hold a call until the file `open` is in the
@@ -20,505 +21,8 @@
 ## classifier) are `test_cli`'s.
 
 when defined(posix):
-  import
-    std/[
-      algorithm, atomics, json, locks, monotimes, os, sequtils, strutils, times,
-      typedthreads,
-    ]
-  import std/posix except Time
-  import unittest2
-  import logos_sdk/cbor
-  import logos_sdk/crypto/blake3
-  from logos_sdk/base/perthread import releasePerThread
-  from logos_sdk/base/wipe import ChannelsMove
-  from logos_sdk/iface/accept import acceptContractSet
-  import ../src/logos_core/runtime/[engine, host], logos_sdk/kit/[rc_arms, rc_types]
-  from ../src/logos_core/durable import DurableLock, release
-  from ../src/logos_core/authority/scopes import sortSet
-  import
-    ../src/logos_core/daemon/
-      [assemble, ctlwire, daemon_config_types, logging, session, sessioninit]
-  from ../src/logos_core/daemon/config import CliInstance
-  from ../src/logos_core/daemon/compose import cliSocketPath
-  import ../src/logos_core/cli/[cli_types, launcher]
-  from ../src/logos_core/cli/wire import writeRequest, readReply
-  import logos_sdk/testing/testdirs
-  import ./support/[clibuild, modulehostbuild, shortdir, slowdown]
-
-  const
-    Patience = 60 * Slow ## seconds a bounding wait allows
-    Timeout = 30_000 * Slow ## a command's, and a client's, wait, ms
-    IdleMs = min(60_000 * Slow, 600_000)
-      ## `ctl.idle_timeout_ms` and `cli.idle_timeout_ms` where no case is about
-      ## them (test_ctl_module's reason)
-    StopDeadlineMs = 5_000 * Slow
-      ## `stop_deadline_ms` and `shutdown_grace_ms`: L-13's provider ignores
-      ## its cancellation, so its stop ends at this deadline
-    SanitizerEnv =
-      ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
-    MeterInstance = "meter-1"
-    ShapesInstance = "shapes-1"
-    VaultInstance = "vault-1"
-    BulkInstance = "bulk-1"
-    MeterState = "meter-state"
-    # Started at boot. [DECISIONS G277] A refc Runtime or Module Host starts no
-    # marked provider, so `vault-1` is only declared there and L-5 skips.
-    Providers =
-      when ChannelsMove:
-        @[MeterInstance, ShapesInstance, VaultInstance, BulkInstance]
-      else:
-        @[MeterInstance, ShapesInstance, BulkInstance]
-    ZeroHex32 = repeat("00", 32)
-    ReflectRequest =
-      "{\"a\": 7, \"b\": -5, \"c\": \"hi\", \"d\": \"" & ZeroHex32 &
-      "\", \"e\": [\"0a0b0c0d\"], \"f\": [[3, \"x\"]], \"g\": 1, \"i\": " &
-      "{\"commitment_model\": \"logos.commitment-model.2026-10\", \"schema_root\": \"" &
-      ZeroHex32 & "\", \"hash_profile\": \"logos.hash-profile.2026-08.choice-index\", " &
-      "\"hash_suite\": \"logos.hash-suite.blake3-256\"}, \"j\": [], \"l\": \"\", " &
-      "\"m\": -1, \"n\": 2, \"o\": 3, \"p\": 0, \"r\": [\"ab\"], \"s\": \"ff\", " &
-      "\"t\": [{\"kind\": \"file\", \"path\": \"/x\"}], " &
-      "\"u\": {\"kids\": [], \"tag\": \"leaf\"}, \"v\": {\"w\": true}, " &
-      "\"y\": \"01\", \"z\": \"00000000\"}"
-      ## a whole `shapes.reflect_request`, as G89 writes it; `reflect`
-      ## answers with the same value
-
-  # Captured log lines --------------------------------------------------------------------
-
-  var
-    logLock: Lock
-    logBuf: ptr UncheckedArray[char]
-    logLen: int
-  const LogCap = 1 shl 20
-  initLock(logLock)
-  logBuf = cast[ptr UncheckedArray[char]](allocShared0(LogCap))
-
-  proc capture(line: string) {.nimcall, gcsafe, raises: [].} =
-    withLock logLock:
-      for c in line & "\n":
-        if logLen < LogCap:
-          logBuf[logLen] = c
-          inc logLen
-
-  proc logText(): string =
-    withLock logLock:
-      result = newString(logLen)
-      for i in 0 ..< logLen:
-        result[i] = logBuf[i]
-
-  setLogSink(capture)
-
-  proc notifyTest() {.nimcall, gcsafe, raises: [].} =
-    discard
-
-  # Providers, rules and sessions ---------------------------------------------------------
-
-  proc digestOfFile(path: string): seq[byte] =
-    var h: Blake3Hasher
-    h.init()
-    let bytes = readFile(path)
-    h.update(bytes.toOpenArrayByte(0, bytes.high))
-    @(h.finish())
-
-  proc rootOf(path: string): seq[byte] =
-    @(acceptContractSet(readFile(repoDir / path)).expect(path).primary.root)
-
-  func hexOf(bytes: openArray[byte]): string =
-    for b in bytes:
-      result.add(toHex(b, 2).toLowerAscii)
-
-  let
-    hostExe = moduleHostProgram()
-    cliArt = cliArtifact()
-    meterLib = buildKitLibrary("meter_impl.nim", "lcmeter")
-    shapesLib = buildKitLibrary("shapes_impl.nim", "lcshapes")
-    vaultLib = buildKitLibrary("vault_impl.nim", "lcvault")
-    bulkLib = buildKitLibrary("bulk_impl.nim", "lcbulk")
-    meterRoot = rootOf("spec/mirrors/IFC/3.9.1.module.cddl")
-    shapesRoot = rootOf(fixtureDir / "shapes_module.cddl")
-    vaultRoot = rootOf("tests/kit/vault_module.cddl")
-    bulkRoot = rootOf("tests/kit/bulk_module.cddl")
-
-  proc hosted(
-      instance, module: string, root: seq[byte], lib: string, state = ""
-  ): LcnAppModule =
-    result = LcnAppModule(
-      instance: instance,
-      module: module,
-      primary_contract: Opt.some(SchemaCommitment(schema_root: root)),
-      implementation: LcnAppImplementation(
-        kind: LcnAppImplementationKind.Process_hosted_dynamic,
-        arm_Process_hosted_dynamic: LcnAppImplementationARProcessHostedDynamicMap(
-          artifact:
-            LcnAppArtifact(id: instance, local_path: lib, hash: digestOfFile(lib))
-        ),
-      ),
-    )
-    if state.len > 0:
-      result.state_assignment = Opt.some(state)
-
-  proc grant(root: seq[byte], actions: openArray[LcnApActionKind]): LcnApRule =
-    ## [DAEMON.md §7a, "Grants"] An operator rule for `lcn_call` on one contract.
-    var xs: seq[LcnApAction]
-    for a in actions:
-      xs.add(LcnApAction(kind: a))
-    sortSet(xs)
-    LcnApRule(
-      kind: LcnApRuleKind.lcn_Ap_allow,
-      arm_lcn_Ap_allow: LcnApAllow(
-        subject: LcnApSubject(instances: Opt.some(@[CliInstance])),
-        scopes: @[
-          LcnApScope(
-            kind: LcnApScopeKind.lcn_Ap_provider_access,
-            arm_lcn_Ap_provider_access: LcnApProviderAccess(
-              contract: LcnApProviderAccessContractChoice(
-                kind: LcnApProviderAccessContractChoiceKind.logos_Schema_commitment,
-                arm_logos_Schema_commitment: SchemaCommitment(schema_root: root),
-              ),
-              actions: xs,
-            ),
-          )
-        ],
-      ),
-    )
-
-  const Full = [
-    LcnApActionKind.Discover, LcnApActionKind.Establish_route,
-    LcnApActionKind.Renew_route, LcnApActionKind.Call,
-  ]
-
-  type Shape = object ## What a case changes in the session.
-    workers: uint8 = 4
-    routeIdleMs: int ## 0: the default
-    validityMs: int ## 0: the default
-    bulkDiscover: bool = true ## `discover` on bulk, and nothing else
-
-  var sessions = 0
-
-  proc newSession(shape = Shape()): Session =
-    inc sessions
-    let base = makeShortBase(
-      "lcc" & $sessions, deepest = "/s/run/ep/12345678/logos_shapes_module.sock"
-    )
-    createDir(base / "o")
-    let s = Session(dir: base / "s")
-    var dc = defaultDaemonConfig("assigned-by-init")
-    dc.runtime.module_host = Opt.some(hostExe)
-    dc.runtime.module_host_env = Opt.some(@SanitizerEnv)
-    dc.runtime.stop_deadline_ms = Opt.some(uint32(StopDeadlineMs))
-    dc.runtime.shutdown_grace_ms = Opt.some(uint32(StopDeadlineMs))
-    dc.modules = Opt.some(
-      @[
-        hosted(MeterInstance, "meter_module", meterRoot, meterLib, MeterState),
-        hosted(ShapesInstance, "shapes_module", shapesRoot, shapesLib),
-        hosted(VaultInstance, "vault_module", vaultRoot, vaultLib, "vault-state"),
-        hosted(BulkInstance, "bulk_module", bulkRoot, bulkLib),
-      ]
-    )
-    var o = dc.orchestration.get(LcnDcOrchestration())
-    o.start = Opt.some(Providers)
-    dc.orchestration = Opt.some(o)
-    var rules =
-      @[grant(meterRoot, Full), grant(shapesRoot, Full), grant(vaultRoot, Full)]
-    if shape.bulkDiscover:
-      rules.add(grant(bulkRoot, [LcnApActionKind.Discover]))
-    sortSet(rules)
-    dc.policy.arm_Capability_authority.rules = rules
-    if shape.validityMs > 0:
-      dc.policy.arm_Capability_authority.decision_validity_ms =
-        Opt.some(uint64(shape.validityMs))
-    dc.ctl = Opt.some(
-      LcnDcCtl(workers: Opt.some(8'u8), idle_timeout_ms: Opt.some(uint32(IdleMs)))
-    )
-    var cli = LcnDcCli(
-      artifact: Opt.some(cliArt),
-      workers: Opt.some(shape.workers),
-      idle_timeout_ms: Opt.some(uint32(IdleMs)),
-    )
-    if shape.routeIdleMs > 0:
-      cli.route_idle_ms = Opt.some(uint32(shape.routeIdleMs))
-    dc.cli = Opt.some(cli)
-    let r = initSession(s, InitOptions(config: Opt.some(dc)))
-    doAssert r.isOk, "init: " & r.error
-    s
-
-  # A logosd in this process ---------------------------------------------------------------
-
-  type Live = object
-    s: Session
-    d: Daemon
-    lock: DurableLock
-    up: bool
-    cli: string ## lcn_call's socket
-    outDir: string
-
-  var live: ptr Live ## what the teardown ends, if a case left it running
-
-  proc rc[Req](l: Live, m: LcnCtlMethodKind, req: Req): LcnCtlReply =
-    let fd = connectCtl(l.d.socketPath, Timeout).expect("a connection")
-    result = roundTrip(fd, rcMessage(m, req.encode.expect("an encoding")), Timeout)
-      .expect("a reply")
-    closeFd(fd)
-
-  proc okBytes(r: LcnCtlReply): seq[byte] =
-    if r.outcome.kind == LcnCtlOutcomeKind.lcn_Ctl_rc_error:
-      let e = r.outcome.arm_lcn_Ctl_rc_error
-      checkpoint("rc error " & $e.code & ": " & e.message.get(""))
-    check r.outcome.kind == LcnCtlOutcomeKind.lcn_Ctl_ok
-    if r.outcome.kind == LcnCtlOutcomeKind.lcn_Ctl_ok:
-      return r.outcome.arm_lcn_Ctl_ok.result.get(@[])
-
-  proc target(l: Live, instance: string): LogosNSRuntimeModuleInstanceAddress =
-    LogosNSRuntimeModuleInstanceAddress(
-      module_instance_id: instance,
-      runtime_instance_id: l.d.prepared.config.value.runtime.runtime_instance_id,
-    )
-
-  proc state(l: Live, instance: string): LogosNSRuntimeControlStateKind =
-    let r = l.rc(
-      LcnCtlMethodKind.Get_execution_summary,
-      LogosNSRuntimeControlGetExecutionSummaryRequest(target: l.target(instance)),
-    )
-    LogosNSRuntimeControlGetExecutionSummaryResponse
-      .decode(r.okBytes)
-      .expect("a summary").state.kind
-
-  proc reaches(l: Live, instance: string, s: LogosNSRuntimeControlStateKind): bool =
-    let until = getMonoTime() + initDuration(seconds = Patience)
-    while getMonoTime() < until:
-      if l.state(instance) == s:
-        return true
-      sleep(20)
-    l.state(instance) == s
-
-  proc routes(l: Live): seq[LogosNSRuntimeControlRouteRecord] =
-    let r = l.rc(LcnCtlMethodKind.List_routes, LogosNSRuntimeControlListRoutesRequest())
-    LogosNSRuntimeControlListRoutesResponse.decode(r.okBytes).expect("routes").routes
-
-  proc cliRoutes(l: Live): seq[LogosNSRuntimeControlRouteRecord] =
-    ## `lcn_call`'s ready routes.
-    l.routes.filterIt(
-      it.consumer.module_instance_id == CliInstance and
-        it.state.kind == LogosNSRuntimeControlRouteStateKind.Ready
-    )
-
-  proc stop(l: Live, module, instance: string) =
-    let r = l.rc(
-      LcnCtlMethodKind.Stop_module,
-      LogosNSRuntimeControlStopModuleRequest(
-        module: module, instance: Opt.some(instance)
-      ),
-    )
-    discard r.okBytes
-
-  proc start(l: Live, module, instance: string) =
-    let r = l.rc(
-      LcnCtlMethodKind.Start_module,
-      LogosNSRuntimeControlStartModuleRequest(
-        module: module, instance: Opt.some(instance)
-      ),
-    )
-    discard r.okBytes
-
-  proc boot(s: Session): Live =
-    ## Assembles and starts, then waits for the logosctl socket and the four
-    ## providers (DAEMON.md §4); `lcn_call` is not started.
-    result.s = s
-    result.outDir = s.dir.parentDir / "o"
-    result.lock = lockSession(s).expect("the session lock")
-    let d = assembleDaemon(s, AssembleOptions(version: "test", notify: notifyTest))
-    doAssert d.isOk, "assemble: " & d.error.message
-    result.d = d.get
-    result.cli = cliSocketPath(s, result.d.prepared.config)
-    let serving = "logosctl: serving " & result.d.socketPath
-    let before = logText().count(serving)
-    let r = startDaemon(result.d)
-    doAssert r.isOk, "start: " & r.error.message
-    result.up = true
-    if live != nil:
-      live[] = result
-    let until = getMonoTime() + initDuration(seconds = Patience)
-    while logText().count(serving) == before:
-      doAssert getMonoTime() < until,
-        "not serving: " & result.d.socketPath & "; the log:\n" & logText()
-      sleep(5)
-    for p in Providers:
-      doAssert result.reaches(p, LogosNSRuntimeControlStateKind.Ready),
-        p & " is not ready; the log:\n" & logText()
-
-  proc hostsGone(): bool =
-    let until = getMonoTime() + initDuration(seconds = Patience)
-    while hostPids().len > 0:
-      if getMonoTime() >= until:
-        return false
-      sleep(20)
-    true
-
-  proc finish(l: var Live) =
-    if not l.up:
-      return
-    l.up = false
-    discard runtimeRequestShutdown(l.d.rt)
-    check int64(runtimeWaitForShutdown(l.d.rt).code) == 0
-    check destroyRuntime(l.d).isOk
-    l.d.release()
-    l.lock.release()
-    check hostsGone()
-    check not fileExists(l.cli)
-
-  # Commands, as logosctl's launcher runs them ---------------------------------------------
-
-  type Ran = object
-    exit: int
-    output, errors: string ## what `lcn_call` wrote to stdout and stderr
-    failure: string ## what the launcher printed itself, if anything
-
-  var outputs: Atomic[int]
-
-  proc outFile(dir: string): (string, cint) =
-    let p = dir / ("o" & $outputs.fetchAdd(1))
-    let fd = posix.open(cstring(p), O_CREAT or O_TRUNC or O_WRONLY or O_CLOEXEC, 0o600)
-    doAssert fd >= 0, p & ": " & $strerror(errno)
-    (p, fd)
-
-  proc run(
-      l: Live,
-      cmd: LcnCliCommand,
-      text = false,
-      target = "",
-      timeoutMs = Timeout,
-      credOf: CredFn = nil,
-  ): Ran =
-    let (op, ofd) = outFile(l.outDir)
-    let (ep, efd) = outFile(l.outDir)
-    var msg = LcnCliMessage(
-      command: cmd,
-      output:
-        if text:
-          LcnCliOutput(kind: LcnCliOutputKind.Text)
-        else:
-          LcnCliOutput(kind: LcnCliOutputKind.Json),
-    )
-    if target.len > 0:
-      msg.target = Opt.some(target)
-    let r = launch(
-      Launch(
-        cliSocket: l.cli,
-        ctlSocket: l.d.socketPath,
-        message: msg,
-        stdoutFd: ofd,
-        stderrFd: efd,
-        timeoutMs: timeoutMs,
-        cancelFd: -1,
-        credOf: credOf,
-      )
-    )
-    discard posix.close(ofd)
-    discard posix.close(efd)
-    result.output = readFile(op)
-    result.errors = readFile(ep)
-    if r.isOk:
-      result.exit = r.get
-    else:
-      result.exit = r.error.exit
-      result.failure = r.error.message
-
-  proc env(r: Ran): JsonNode =
-    ## The one JSON envelope on stdout.
-    try:
-      parseJson(r.output.strip)
-    except CatchableError as e:
-      checkpoint("stdout: " & r.output & "; stderr: " & r.errors & "; " & e.msg)
-      newJObject()
-
-  proc said(r: Ran): string =
-    "exit " & $r.exit & "; stdout: " & r.output & "; stderr: " & r.errors &
-      "; launcher: " & r.failure
-
-  func providerOf(module: string): LcnCliProvider =
-    LcnCliProvider(module: module)
-
-  func callOf(
-      module, meth: string, args: openArray[(string, string)] = [], request = ""
-  ): LcnCliCommand =
-    var c = LcnCliCallCommand(`method`: meth, provider: providerOf(module))
-    if args.len > 0:
-      var xs: seq[LcnCliArg]
-      for (k, v) in args:
-        xs.add(
-          LcnCliArg(
-            kind: LcnCliArgKind.lcn_Cli_text_arg,
-            arm_lcn_Cli_text_arg: LcnCliTextArg(name: k, value: v),
-          )
-        )
-      c.args = Opt.some(xs)
-    if request.len > 0:
-      c.json = Opt.some(request)
-    LcnCliCommand(
-      kind: LcnCliCommandKind.lcn_Cli_call_command, arm_lcn_Cli_call_command: c
-    )
-
-  func describeOf(module: string): LcnCliCommand =
-    LcnCliCommand(
-      kind: LcnCliCommandKind.lcn_Cli_describe_command,
-      arm_lcn_Cli_describe_command: LcnCliDescribeCommand(provider: providerOf(module)),
-    )
-
-  func meterRead(channel: int): LcnCliCommand =
-    callOf("meter_module", "read", [("channel", $channel)])
-
-  # A call held at the meter, from a thread of its own -----------------------------------
-
-  var
-    heldExit: Atomic[int]
-    heldUnknown: Atomic[bool] ## its output says the outcome is unknown
-    heldThread: Thread[(ptr Live, int)]
-    holding: bool ## `heldThread` runs and is not joined yet
-
-  proc heldCall(arg: (ptr Live, int)) {.thread.} =
-    let (lp, channel) = arg
-    let r = lp[].run(meterRead(channel))
-    heldUnknown.store(
-      "the outcome is unknown" in r.output or "the outcome is unknown" in r.errors or
-        "the outcome is unknown" in r.failure
-    )
-    heldExit.store(r.exit)
-    releasePerThread()
-
-  proc meterDir(l: Live): string =
-    l.s.modulesDir / MeterState
-
-  proc heldLines(l: Live): int =
-    try:
-      readFile(l.meterDir / "held").countLines - 1
-    except IOError:
-      0
-
-  proc hold(l: var Live, channel: int) =
-    ## Starts a meter read on `channel` and waits until the meter holds it.
-    heldExit.store(-1)
-    heldUnknown.store(false)
-    createThread(heldThread, heldCall, (addr l, channel))
-    holding = true
-    let until = getMonoTime() + initDuration(seconds = Patience)
-    while l.heldLines == 0:
-      doAssert getMonoTime() < until, "the meter holds no call; the log:\n" & logText()
-      sleep(5)
-
-  proc joinHeld() =
-    if holding:
-      joinThread(heldThread)
-      holding = false
-
-  var concurrent: array[6, Atomic[int]]
-
-  proc reader(arg: (ptr Live, int)) {.thread.} =
-    let (lp, i) = arg
-    concurrent[i].store(lp[].run(meterRead(30 + i)).exit)
-    releasePerThread()
-
-  proc otherUid(fd: cint): Result[Peer, string] {.nimcall, gcsafe, raises: [].} =
-    let p = ?peerOf(fd)
-    ok(Peer(uid: p.uid + 1, pid: p.pid))
+  const LivePrefix = "lcc" ## the short directories' prefix
+  include ./support/lcncall_live
 
   # Cases ---------------------------------------------------------------------------------
 
@@ -535,6 +39,9 @@ when defined(posix):
           except IOError:
             discard
         joinHeld()
+        if watching:
+          interrupt()
+          discard endStream()
         if live[].up:
           finish(live[])
       live = nil
@@ -662,7 +169,7 @@ when defined(posix):
       check hexOf(meterRoot) & " (selected)" in t.output
       check "  read " in t.output
 
-    test "L-5: a marked method is refused before any route; an unmarked one of the same provider is called":
+    test "L-5: a marked request comes from files only, refused before any route otherwise; a marked response is printed (G349 N-2d)":
       when ChannelsMove:
         l = boot(newSession())
         let d = l.run(describeOf("vault_module"))
@@ -670,19 +177,68 @@ when defined(posix):
         check d.env{"result", "methods"}.getElems.anyIt(
           it{"method"}.getStr == "store" and it{"marked"}.getBool
         )
+        # Inline, all or part: refused before any file is read or route made.
         let s =
           l.run(callOf("vault_module", "store", [("slot", "1"), ("secret", "00")]))
         checkpoint s.said
         check s.exit == 1
         check "store" in s.env{"message"}.getStr
+        check "NAME=@FILE" in s.env{"message"}.getStr
+        check "00" notin s.env{"message"}.getStr
+        let mixed = l.run(
+          callWith(
+            "vault_module",
+            "store",
+            @[
+              LcnCliArg(
+                kind: LcnCliArgKind.lcn_Cli_text_arg,
+                arm_lcn_Cli_text_arg: LcnCliTextArg(name: "slot", value: "1"),
+              ),
+              fileArg("secret", 2),
+            ],
+          ),
+          files = @[l.inFile("\xAA\xBB")],
+        )
+        checkpoint mixed.said
+        check mixed.exit == 1
         check l.cliRoutes.len == 0
         let p = l.run(callOf("vault_module", "peek", [("slot", "1")]))
         checkpoint p.said
         check p.exit == 0
         check p.env{"result", "stored"}.getBool == false
         check l.cliRoutes.len == 1
+        # Every field from a file: `slot` as its text, less one newline.
+        let stored = l.run(
+          callWith("vault_module", "store", @[fileArg("slot", 2), fileArg("secret", 3)]),
+          files = @[l.inFile("1\n"), l.inFile("\xAA\xBB\x00\x01")],
+        )
+        checkpoint stored.said
+        check stored.exit == 0
+        check stored.env{"result", "stored"}.getBool
+        let fetched = l.run(
+          callWith("vault_module", "fetch", @[fileArg("slot", 2)]),
+          files = @[l.inFile("1")],
+        )
+        checkpoint fetched.said
+        check fetched.exit == 0
+        check fetched.env{"result", "secret"}.getStr == "aabb0001"
+        check fetched.errors == ""
+        let shown = l.run(callOf("vault_module", "fetch", [("slot", "1")]), text = true)
+        checkpoint shown.said
+        check shown.exit == 0
+        check "h'aabb0001'" in shown.output
+        # A file past the field's bound is refused, its length named only.
+        let long = l.run(
+          callWith("vault_module", "store", @[fileArg("slot", 2), fileArg("secret", 3)]),
+          files = @[l.inFile("2"), l.inFile(repeat("\xCC", 300))],
+        )
+        checkpoint long.said
+        check long.exit == 1
+        check "longer than its field's 256 bytes" in long.env{"message"}.getStr
       else:
-        skip() # [DECISIONS G277] a refc build starts no marked provider
+        # [DECISIONS G277] A refc build starts no marked provider, and lcn_call
+        # refuses a marked method before reading any input.
+        skip()
 
     test "[BCP-0089] L-6: the route is lcn_call's, to the hosted provider; the launcher gets an exit status and the output, no route":
       l = boot(newSession())
@@ -837,6 +393,197 @@ when defined(posix):
       let after = l.run(meterRead(7))
       checkpoint after.said
       check after.exit == 0
+
+    test "L-11: subscribe: --count and --for, the event's three name forms, text output, the launcher's EOF (130), a stalled reader (6), the provider stopping (6), lcn_call stopping (6) [IMPL-DECISION G349]":
+      l = boot(newSession(Shape(bulkStream: true)))
+      # [G349] `--count 3`: three lines, then 0. Until the subscription is
+      # active a publication reaches no one, so the meter publishes until
+      # the stream has its three.
+      l.stream(subscribeOf("meter_module", "changed", count = 3))
+      check within(streamEnded(), l.publish())
+      check endStream() == 0
+      let three = streamLines()
+      checkpoint saidStream()
+      check three.len == 3
+      for x in three:
+        check x{"event"}.getStr == "meter.changed_event"
+        check x{"data"} == %*{"value": 150}
+      # `--for`: no event in 300 ms; 0, and nothing written.
+      l.stream(subscribeOf("meter_module", "meter.changed_event", forMs = 300))
+      check endStream() == 0
+      check streamOutput() == ""
+      check streamErrors() == ""
+      # An event the provider does not declare is refused before any route (1).
+      let unknown = l.run(subscribeOf("meter_module", "flashed"))
+      checkpoint unknown.said
+      check unknown.exit == 1
+      check "changed" in unknown.env{"message"}.getStr
+      # Text; the launcher's EOF ends the stream (130), and lcn_call serves
+      # the next command.
+      l.stream(subscribeOf("meter_module", "changed_event"), text = true)
+      check within(
+        "meter.changed_event {\"value\": 150}" in streamOutput(), l.publish()
+      )
+      interrupt()
+      check endStream() == 130
+      check streamErrors() == ""
+      check l.run(meterRead(7)).exit == 0
+      # [plan §3.7] A stalled reader: stdout is a pipe nothing reads, so the
+      # queue fills (16 MiB) with 2 MiB events and the stream ends (6); the
+      # failure's envelope goes to stderr, since stdout waits for the same
+      # reader.
+      l.stream(subscribeOf("bulk_module", "carried"), stalled = true)
+      check within(streamEnded(), l.sendBulk(2 * 1024 * 1024))
+      check endStream() == 6
+      checkpoint saidStream()
+      try:
+        let e = parseJson(streamErrors().strip)
+        check e{"status"}.getStr == "error"
+        check e{"message"}.getStr == "the terminal did not keep up; the stream ended"
+      except CatchableError as e:
+        checkpoint("stderr is not one envelope: " & e.msg)
+        fail()
+      check l.run(meterRead(7)).exit == 0
+      # The provider stops: the route ends, and the stream with it (6), after
+      # the lines it had.
+      l.stream(subscribeOf("meter_module", "changed"))
+      check within(streamLines().eventsIn.len >= 1, l.publish())
+      l.stop("meter_module", MeterInstance)
+      check within(streamEnded(), sleep(10))
+      check endStream() == 6
+      let stopped = streamLines()
+      checkpoint saidStream()
+      check stopped.eventsIn.len >= 1
+      if stopped.len > 0:
+        check stopped[^1]{"status"}.getStr == "error"
+        check "the route ended" in stopped[^1]{"message"}.getStr
+      # The route ends as the stop begins; a start is refused until it is done.
+      check l.reaches(MeterInstance, LogosNSRuntimeControlStateKind.Unloaded)
+      l.start("meter_module", MeterInstance)
+      check l.reaches(MeterInstance, LogosNSRuntimeControlStateKind.Ready)
+      # lcn_call stopping ends its streams (6), never as a cancel (130). The
+      # Runtime may end lcn_call's routes as the stop begins, before
+      # `_MODULE_destroy`: a subscription's stream then ends with its route.
+      l.stream(subscribeOf("meter_module", "changed"), text = true)
+      check within(
+        "meter.changed_event {\"value\": 150}" in streamOutput(), l.publish()
+      )
+      l.stop("lcn_call", CliInstance)
+      check endStream() == 6
+      checkpoint saidStream()
+      check "lcn_call is stopping; the stream ended" in streamErrors() or
+        "the route ended" in streamErrors()
+      check l.reaches(CliInstance, LogosNSRuntimeControlStateKind.Unloaded)
+      # `events` has no route: lcn_call's own stop ends it.
+      l.stream(eventsOf(), text = true)
+      check within(streamOutput().len > 0, l.restart("shapes_module", ShapesInstance))
+      l.stop("lcn_call", CliInstance)
+      check endStream() == 6
+      checkpoint saidStream()
+      check "lcn_call is stopping; the stream ended" in streamErrors()
+      check l.reaches(CliInstance, LogosNSRuntimeControlStateKind.Unloaded)
+
+    test "[TRN-0392] [RUN-1095] L-11: a revoked grant ends a stream through the subscription-end observer (6) [IMPL-DECISION G349]":
+      l = boot(newSession(Shape(meterGrant: true)))
+      # Without `subscribe-event` the subscription is refused (4): nothing
+      # was subscribed, nothing is written but the failure.
+      let refused = l.run(subscribeOf("meter_module", "changed", count = 1))
+      checkpoint refused.said
+      check refused.exit == 4
+      check refused.env{"code"}.getStr == "NOT_AUTHORISED"
+      # lcn_call issues itself the grant through the authority's issue_grant
+      # (an issue rule, SPEC CA l.696-792), with `logosctl call`.
+      let me = l.addressOf(CliInstance)
+      let issued = l.run(
+        callOf(
+          AuthorityModule,
+          "issue_grant",
+          request = $(
+            %*{
+              "consumer": me,
+              "target": me,
+              "scopes": [
+                {
+                  "kind": "provider-access",
+                  "contract": commitmentOf(meterRoot),
+                  "actions": ["subscribe-event"],
+                }
+              ],
+            }
+          ),
+        )
+      )
+      checkpoint issued.said
+      check issued.exit == 0
+      let grantId = issued.env{"result", "grant", "grant_id"}.getStr
+      check grantId.len > 0
+      l.stream(subscribeOf("meter_module", "changed"))
+      check within(streamLines().eventsIn.len >= 1, l.publish())
+      # [SPEC CA l.906-914] The revocation drops the decisions it allowed: the
+      # next delivery is denied, the provider's side ends the subscription,
+      # and lcn_call's observer ends the stream with NOT_AUTHORISED. The
+      # route was established under the meter's rule and stays.
+      let revoked = l.run(
+        callOf(
+          AuthorityModule,
+          "revoke_grant",
+          request = $(%*{"consumer": me, "grant_id": grantId}),
+        )
+      )
+      checkpoint revoked.said
+      check revoked.exit == 0
+      check revoked.env{"result", "grant", "status"}.getStr == "revoked"
+      check within(streamEnded(), l.publish())
+      check endStream() == 6
+      let lines = streamLines()
+      checkpoint saidStream()
+      check lines.eventsIn.len >= 1
+      if lines.len > 0:
+        check lines[^1]{"code"}.getStr == "NOT_AUTHORISED"
+        check lines[^1]{"message"}.getStr ==
+          "the subscription ended: authority to receive the event ended"
+      check l.run(meterRead(7)).exit == 0
+
+    test "L-11: a stream lasts one route session: under a short decision_validity_ms it ends with its route's session (6) [IMPL-DECISION G349]":
+      # [P5; R l.3337-3338] A renewal does not extend a session; nothing
+      # renews the stream's route, so it ends at the decision's valid_until.
+      let validity = 8_000 * Slow
+      l = boot(newSession(Shape(validityMs: validity)))
+      l.stream(subscribeOf("meter_module", "changed"), text = true)
+      check within("meter.changed_event" in streamOutput(), l.publish())
+      check within(streamEnded(), sleep(10))
+      check endStream() == 6
+      checkpoint saidStream()
+      check "the route's session ended; run the command again" in streamErrors()
+      check l.run(meterRead(7)).exit == 0
+
+    test "L-12: events follows a module start; an event outside the events rule is NOT_AUTHORISED (4); an unknown one is refused (1) [IMPL-DECISION G346] [IMPL-DECISION G349]":
+      l = boot(newSession())
+      # The default set, the events rule's three. Until the subscriptions are
+      # active a start is not seen, so shapes is stopped and started until
+      # one is.
+      l.stream(eventsOf(count = 1))
+      check within(streamEnded(), l.restart("shapes_module", ShapesInstance))
+      check endStream() == 0
+      let seen = streamLines()
+      checkpoint saidStream()
+      check seen.len == 1
+      if seen.len == 1:
+        check seen[0]{"event"}.getStr in [
+          "logos.runtime_control.module_state_changed_event",
+          "logos.runtime_control.execution_state_changed_event",
+        ]
+        check seen[0]{"data", "instance"}.getStr == ShapesInstance
+      check l.reaches(ShapesInstance, LogosNSRuntimeControlStateKind.Ready)
+      # [G345 S7] route_state_changed is outside the events rule.
+      let denied = l.run(eventsOf(["route_state_changed"], count = 1))
+      checkpoint denied.said
+      check denied.exit == 4
+      check denied.env{"code"}.getStr == "NOT_AUTHORISED"
+      let unknown = l.run(eventsOf(["module_flashed"]))
+      checkpoint unknown.said
+      check unknown.exit == 1
+      check "module_state_changed" in unknown.env{"message"}.getStr
 
     test "L-13: a route ended while its call is in flight: exit 2, the outcome unknown, no retry; the provider saw one call":
       l = boot(newSession())

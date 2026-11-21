@@ -19,6 +19,7 @@ import std/[json, strutils]
 import results
 import logos_sdk/cbor
 import logos_sdk/base/hex
+import ../package/trustdoc
 
 export json
 
@@ -147,6 +148,96 @@ func table*(header: openArray[string], rows: openArray[seq[string]]): string =
   result = line(header)
   for r in rows:
     result.add("\n" & line(r))
+
+# The package trust file (G397) --------------------------------------------------------
+
+func kidText*(kid: openArray[byte]): Opt[string] =
+  ## [G397] A kid as text when it is printable ASCII, as `lcn-pkg sign --kid`
+  ## takes it, so the text can be passed back to `--kid`; otherwise it is
+  ## shown in hex only. A text beginning `hex:` is hex only too: `--kid`
+  ## would read it as hex digits, a different kid.
+  var t = newString(kid.len)
+  for i, b in kid:
+    if b < 0x20 or b > 0x7e:
+      return Opt.none(string)
+    t[i] = char(b)
+  if t.startsWith("hex:"):
+    return Opt.none(string)
+  Opt.some(t)
+
+func selectionJson(x: LcnTrustSelection): JsonNode =
+  result = newJObject()
+  if x.selected.isSome:
+    result["selected"] = newJString(x.selected.get)
+
+func selectionText(x: LcnTrustSelection): string =
+  if x.selected.isSome:
+    "selects " & escapeJson(x.selected.get)
+  else:
+    "none selected"
+
+proc trustJson*(t: LcnPackageTrust): JsonNode =
+  ## [G89; G397] `trust show`'s file: the CBOR's fields, keys and kids in
+  ## hex, and per anchor its kid as text (`kidText`) and `in_force`, what the
+  ## file says (its switch and the anchor's marker), not what a running
+  ## logosd uses.
+  var anchors = newJArray()
+  for a in t.signing.anchors:
+    var j = %*{
+      "kid": toHex(a.kid),
+      "public_key": toHex(a.public_key),
+      "packages": a.packages,
+      "development": a.development,
+      "in_force": t.inForce(a),
+    }
+    let text = kidText(a.kid)
+    if text.isSome:
+      j["kid_text"] = newJString(text.get)
+    anchors.add(j)
+  %*{
+    "revision": t.revision,
+    "development": t.development,
+    "signing": {"profile": t.signing.profile, "anchors": anchors},
+    "catalog": selectionJson(t.catalog),
+    "provenance": selectionJson(t.provenance),
+  }
+
+func yesNo(b: bool): string =
+  if b: "yes" else: "no"
+
+func trustRows*(t: LcnPackageTrust): seq[seq[string]] =
+  ## [G397] `trust show`'s fields in text, after the revision.
+  var inForce = 0
+  for a in t.signing.anchors:
+    if t.inForce(a):
+      inc inForce
+  @[
+    @["development", (if t.development: "on" else: "off")],
+    @["profile", t.signing.profile],
+    @["anchors", $t.signing.anchors.len & " (" & $inForce & " in force)"],
+    @["catalog", selectionText(t.catalog)],
+    @["provenance", selectionText(t.provenance)],
+  ]
+
+func anchorsTable*(t: LcnPackageTrust): string =
+  ## [G397] One row per anchor. Names are quoted: they are compared byte for
+  ## byte and may hold anything (PM l.418-419).
+  var rows: seq[seq[string]]
+  for a in t.signing.anchors:
+    var names: seq[string]
+    for n in a.packages:
+      names.add(escapeJson(n))
+    rows.add(
+      @[
+        toHex(a.kid),
+        kidText(a.kid).get("-"),
+        yesNo(a.development),
+        yesNo(t.inForce(a)),
+        names.join(" "),
+        toHex(a.public_key),
+      ]
+    )
+  table(["KID", "TEXT", "DEVELOPMENT", "IN_FORCE", "PACKAGES", "PUBLIC_KEY"], rows)
 
 func field*(v: CborValue, key: string): Opt[CborValue] =
   if v.kind != ckMap:

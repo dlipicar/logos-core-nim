@@ -65,10 +65,10 @@ marked field, as the library does (G277).
 - Every directory is owner-only. A session directory that group or other can access is refused, as is a
   path component that is a link where a directory is expected.
 - `lock` is an advisory lock (`flock`). logosd holds it for its whole life. Every offline `logosctl`
-  command that writes (`init`, `daemon config set`, `trust development`, `trust reestablish`,
-  `trust evidence-keys rotate`, `state purge`), and `state list`, which reads the Runtime's store
-  under the store's own lock, takes it, and is refused while logosd runs: "another logosd or an
-  offline logosctl command holds this session" (exit 1). Other offline reads take no lock.
+  command that writes (`init`, `daemon config set`, `trust anchor …`, `trust development`,
+  `trust reestablish`, `trust evidence-keys rotate`, `state purge`), and `state list`, which reads the
+  Runtime's store under the store's own lock, takes it, and is refused while logosd runs: "another logosd
+  or an offline logosctl command holds this session" (exit 1). Other offline reads take no lock.
 - `run/` is emptied and recreated at each start while logosd holds the lock, so a socket left by a killed
   daemon never blocks a new one. The Runtime's transport endpoints are under `run/ep/`.
 - `work/` is the Runtime's `work_dir`. It keeps the Module Hosts' restart locks (`work/hosts/`), so it is
@@ -369,7 +369,9 @@ When logosd composes the CLI module `lcn_call` (§7a), it adds four more:
 - **What an operator rule can add.** The system rules give `lcn_call` no provider access: operator rules
   grant it, provider by provider (§7a, "Grants"). An operator rule may also grant it more Runtime Control
   methods, but no rule can let it start or stop an instance, itself included: a start or stop also needs
-  an execution decision for the requester, which S7 denies (so `lcn_call` never stops itself, G350). A
+  an execution decision for the requester, which S7 denies (so `lcn_call` never stops itself, G350). Nor
+  can a rule give it another Runtime Control event: S7 denies `configuration_state_changed`,
+  `permission_settings_changed` and `route_state_changed`, and a deny wins over any allow (G346). A
   granted `recover_module` would take effect, since a recovery is decided on the authority of the
   instance's original starter (its execution decision is for the retained origin); `lcn_call` never
   calls it. A deny over every other method cannot be written: in this policy language a deny that
@@ -525,23 +527,78 @@ holds revision 1 with the v1 floor's digest, the refusal names the fix, `logosct
 A refusal is exit 1. logosd never creates a mark. `logosctl init` writes the file and its mark together;
 `logosctl trust reestablish --revision N` writes a mark from the current file when the owner names its
 revision (after the mark alone was lost, or `state/` was restored from a backup; a lost `state/` also
-lost the Runtime's store and needs a new session, §2). The trust file is read twice during start, and a change
-between the reads is refused.
+lost the Runtime's store and needs a new session, §2). It first applies everything a start applies before
+continuity (the schema and bound, the rules, key separation, the conversion), so the mark never names a
+revision logosd refuses; a file that fails is refused and no mark is written. The trust file is read twice
+during start, and a change between the reads is refused.
 
 **The development switch** (D27). `logosctl trust development on|off` writes the next revision with the
-switch set or cleared; `init --development` starts at revision 2 with it on, so revision 1 keeps the
-floor's content. With the switch on:
+switch set or cleared, and nothing when it is already so; `init --development` starts at revision 2 with it
+on, so revision 1 keeps the floor's content. With the switch on:
 
 - `policy: allow-all` is accepted;
 - `test_hooks` is accepted by a logosd built with test hooks (a test build). A packaged logosd has none
   and refuses the field whatever the switch says: "test_hooks: this logosd has no test hooks". The flake
   check `no-test-hooks` verifies no packaged output holds hook code;
+- development anchors (`development: true`) are in force, so packages they sign verify;
 - the deployment is **non-production**, and says so: a `NON-PRODUCTION` warning in the start log; every
   `logosctl` output, online and offline (`deployment: "non-production"` in JSON, a
   `NON-PRODUCTION deployment` line in text); every socket reply's `deployment`.
 
-The switch weakens nothing else. Continuity still applies (a rollback is refused with the switch on), and
-under capability-authority the system rules still deny, for example, `module stop logos_module_loader`.
+The switch weakens nothing else. Continuity still applies (a rollback is refused with the switch on), the
+other anchors and every rule of the file are unchanged, and under capability-authority the system rules still
+deny, for example, `module stop logos_module_loader`.
+
+### The trust commands
+
+`logosctl trust` administers the file offline, under the session lock (DECISIONS G397). Every change
+applies at the next start, when logosd reads the file again (BCP l.364): a removed anchor or name, or the
+switch turned off, is withdrawn from that start on, and nothing running is affected before it.
+
+| Command | What it does |
+|---|---|
+| `trust show` | the revision, the switch, the profile, the selections, the mark and what continuity would decide; each anchor with its kid (in hex, and as text when `--kid` would read that text back as the same kid), its names, its key, its development marker and whether the file puts it in force. The file is decoded without the rules, so a file logosd refuses is shown, with the reason; continuity is then "not reached", since a start applies the rules first |
+| `trust anchor add --kid KID --key HEX [--development] NAME…` | a new anchor authorizing the names. A kid already present is refused (`add-names` adds names to it) |
+| `trust anchor remove --kid KID` | removes the anchor: a withdrawal (PACKAGE MANAGER l.436-437). A kid that names no anchor is refused |
+| `trust anchor add-names --kid KID NAME…` | adds names; one added name is a new revision (PACKAGE MANAGER l.420) |
+| `trust anchor remove-names --kid KID NAME…` | removes names, all or nothing: a name the anchor does not authorize is refused, naming every such name, and none is removed; leaving the anchor none is refused (remove the anchor instead) |
+| `trust development on\|off` | the switch, and how many development anchors enter or leave force with it |
+| `trust reestablish --revision N` | the mark, as above |
+| `trust evidence-keys ls\|rotate` | the call-evidence keys (§9) |
+
+- `KID` is text, or `hex:` and hex digits, as `lcn-pkg sign --kid` takes it, so the operator passes the
+  value the producer signed with. `HEX` is the public key's 96 hex digits, or `@FILE` holding them alone
+  or as the `public key: <hex>` line `lcn-pkg keygen` prints; surrounding whitespace is ignored. A name is
+  taken as given, 1 to 128 bytes; the file keeps names and anchors in canonical order whatever order they
+  are given in.
+- **Every writer** reads the current file, makes its one change, and checks the result as a start would
+  (schema and bound, the rules, key separation against every evidence key of the session, the conversion),
+  so it never writes a file logosd refuses. The result is written as the next revision, in format v2, and
+  the command says "it applies at the next start". A Tier 4b v1 file becomes v2 with its first change,
+  without re-establishment.
+- **A command that adds or sets what is already so writes nothing**: names already present, the same
+  anchor added again, the switch set as it is. The command exits 0 and says "unchanged" (`"changed":
+  false` in JSON), so scripts can repeat it and no revision is spent on nothing.
+- **A command that withdraws what is not there is refused** (exit 1, nothing written): `anchor remove`
+  of a kid that names no anchor ("no anchor has kid HEX"), and `anchor remove-names` with a name the
+  anchor does not authorize. Names match byte for byte (PACKAGE MANAGER l.418-419), so a name in another
+  case or normalization form is not there. A mistyped withdrawal then fails instead of passing for one
+  while the key or name it meant stays in force. `add-names` and `remove-names` refuse a kid that names no
+  anchor too.
+- **A file logosd refuses** is refused by every writer, a change that changes nothing included, and the
+  refusal ends "correct trust.cbor by hand, then run a trust change or logosctl trust reestablish
+  --revision N". A selection written by hand is one such file: no command selects a catalog or provenance
+  profile, since none can be selected. A change that removes what is refused (for example, removing an
+  anchor whose key is an evidence key) is written.
+- JSON follows §7's envelope with `deployment` (DECISIONS G89). `trust show`'s result carries the file's
+  fields (`revision`, `development`, `signing` with `profile` and `anchors`, `catalog`, `provenance`; keys
+  and kids in hex), `file`, `mark`, `continuity` and, for a file logosd refuses, `refusal`, the reason a
+  start would give. Each anchor also carries `in_force`, what the file says (its switch and the anchor's
+  marker), not what a running logosd uses, which is the revision it started with; and `kid_text`, the kid
+  as text, only when it is printable ASCII and does not begin `hex:` (`--kid` would read such a text as hex
+  digits, another kid). A writer's result carries `revision` and `changed`, an anchor command's `kid`, and
+  `trust development`'s `development` and `development_anchors`, the number of anchors the file marks
+  `development`, whether or not anything changed.
 
 ## 7. The logosctl instance and its socket
 
@@ -738,8 +795,7 @@ so the wait for it ends with that outcome or the command's deadline (I97).
 
 ## 7a. The `lcn_call` instance and its socket
 
-`logosctl call` and `logosctl describe` (and, from Tier 5 step N-2c, `subscribe` and `events`) are not
-logosctl instance commands. They go to `lcn_call`, the CLI module: a consumer-only system instance,
+`logosctl call`, `describe`, `subscribe` and `events` are not logosctl instance commands. They go to `lcn_call`, the CLI module: a consumer-only system instance,
 `hosted_dynamic` in a Module Host of its own, that makes the calls through its own binding and routes
 and writes the result to the user's terminal itself (DECISIONS G343–G350; Tier 5 plan A3, design (f)).
 The shell is its launcher: it hands over its stdout, stderr and each `@FILE`, names the command, and waits
@@ -753,6 +809,8 @@ logosctl describe shapes_module
 logosctl call shapes_module reflect n=3 label=@label.txt
 logosctl call shapes_module reflect --request '{"n": 3, "label": "x"}' --text
 logosctl module wait shapes_module --state ready
+logosctl subscribe meter_module changed --count 3
+logosctl events --for 30s
 ```
 
 ### Composition and lifetime
@@ -950,9 +1008,10 @@ lcn.cli_refused = {
 - The launcher sends one `lcn.cli_message`: `protocol`, an optional `target` node (absent: `local`, this
   Runtime), `output` (`json` or `text`), `fds` naming each descriptor's role (`stdout`, `stderr`, then one
   `file` per `@FILE`), an optional `deadline_ms`, and the `command`: `call` (provider, method, `args` or
-  `json`), `describe` (provider), `subscribe` and `events` (N-2c), or `rc` (reserved for remote nodes,
-  refused). A provider is a module, an optional instance, and an optional `contract` root that selects
-  any of its exact contract views (primary, implemented interface or extended view; absent: primary).
+  `json`), `describe` (provider), `subscribe` and `events` (Streams, below), or `rc` (reserved for
+  remote nodes, refused). A provider is a module, an optional instance, and an optional `contract` root
+  that selects any of its exact contract views (primary, implemented interface or extended view;
+  absent: primary).
 - The descriptors travel as `SCM_RIGHTS` on the frame's first byte, at most 16. `lcn_call` makes them
   close-on-exec at once, closes every one it received when it refuses a frame, and closes them all when
   the command ends, before it answers, so a reader of a pipe sees its end.
@@ -966,10 +1025,13 @@ lcn.cli_refused = {
 ### Arguments and output (G349)
 
 - **Arguments** are named only (D26): `NAME=VALUE` for a scalar field of the request, `NAME=@FILE` (or
-  `@-` for stdin) for a text or byte string read from the passed descriptor (text must be UTF-8; at most 16
-  MiB), or `--request '{…}'` for the whole request as JSON (structured fields, unions, arrays). Values are
-  typed from the method's request rule: integers in decimal, `true`/`false`, text as given, byte strings
-  as hex (or raw from `@FILE`), a text-literal choice as its text. An unknown field, a structured field
+  `@-` for stdin) for one read from the passed descriptor, or `--request '{…}'` for the whole request as
+  JSON (structured fields, unions, arrays). Values are typed from the method's request rule: integers in
+  decimal, `true`/`false`, text as given, byte strings as hex, a text-literal choice as its text. From
+  `@FILE`, a text or byte string is the file's bytes as they are (text must be UTF-8), and any other kind
+  is the file's text less exactly one trailing newline (`echo 3 > n`); in a union each alternative reads
+  the file by its own rule, so `12` and a newline is refused for `uint32 / tstr` as ambiguous. A file is
+  read up to 16 MiB, or up to its field's `.size` bound and one byte more, and refused past either. An unknown field, a structured field
   given as `NAME=VALUE`, a value that a union's alternatives read differently, and a float are refused
   (exit 1) with the field's name and the request's fields. The value is checked against the request rule
   before it is sent; the provider's host checks it again.
@@ -977,10 +1039,21 @@ lcn.cli_refused = {
   envelope with the response rendered as G89 writes values, or the response in diagnostic notation. Text
   a provider supplied (an error message or detail) is labelled "(declared)" and has control characters
   replaced. Every output carries the `NON-PRODUCTION deployment` line when the switch is on.
-- **Marked methods** (a request or response with a marked field) are refused, naming the method: their
-  values would reach a terminal. Do not type a secret for one even so: a value typed on the command
-  line is also in the shell's history and in the process's arguments, whether or not it is refused
-  (and until step N-2d the launcher and `lcn_call` do not erase it either; CONFORMANCE.md).
+- **Marked methods** (a request or response with a marked field; G349's N-2d amendment, INTERFACE §1.4.1)
+  are called on the local node only. A marked request takes each field from a file, `NAME=@FILE` or
+  `NAME=@-`: a `NAME=VALUE` or `--request` for one is refused before anything is read (exit 1), since a
+  value on the command line is in the shell's history and in the process's arguments, which nothing
+  erases; do not type a secret there even so. A structured field of a marked request cannot be given
+  yet (there is no `--request @FILE`). A marked response is written to stdout only, as any response, and
+  never to a failure or the log. The launcher and `lcn_call` erase every copy they make of a marked
+  request or response, whatever the outcome: a refusal, a provider's failure, a cancel, a reader that
+  closed stdout. Their messages name the field and the request's fields, never a value: a type error
+  says the file does not read as the field's type, and a size error states the length. A marked method
+  is refused (exit 1) on another node (a remote path has no erasure promise, INTERFACE l.373) and by a
+  refc build of `lcn_call` (G277). `@-` on a terminal echoes what is typed, and the newline that ends it
+  is part of a text or byte value (use `printf %s`, or a file without one). Text a provider puts in its
+  own failure is its own and is shown "(declared)": a provider that quotes a secret there discloses it
+  (CONFORMANCE.md).
 - **`describe`** lists the provider's contract views (primary, interfaces, extended views) with their
   roots, the roots its module record carries, and the selected contract's methods (request fields and
   response rule) and events.
@@ -993,11 +1066,11 @@ lcn.cli_refused = {
 | Exit | Meaning |
 |---|---|
 | 0 | done |
-| 1 | refused before anything was called: usage, an unknown node, module, method or event, invalid arguments, a marked method, a refused frame |
+| 1 | refused before anything was called: usage, an unknown node, module, method or event, invalid arguments, a marked value on the command line, a marked method on another node, a refused frame |
 | 2 | no daemon, `lcn_call` not reachable or not started before `--timeout`, busy or closing past it, or **the outcome unknown**: a `TRANSPORT_ERROR`, `TIMEOUT` or a `CANCELLED` nobody asked for after the call was sent, or a lost `done`. The provider may have run the call. |
 | 4 | a Runtime Control failure: `NOT_AUTHORISED`, `NOT_READY`, an error arm, a continuation fault, with code and message |
 | 5 | the provider's error channel answered the call (`METHOD_NOT_FOUND`, `INVALID_PARAMS`, `MODULE_ERROR`): the code and the provider's declared text |
-| 6 | a stream `lcn_call` or its provider ended (N-2c) |
+| 6 | a stream `lcn_call` or the Runtime ended: the route, its session or the subscription ended, the terminal did not keep up, or `lcn_call` is stopping (Streams, below) |
 | 130 | interrupted |
 
 **One retry.** A call whose `prepare_call` failed (nothing was submitted), or that completed `NOT_READY`
@@ -1037,18 +1110,52 @@ prints the roots. Where the Runtime answers `NOT_AUTHORISED`, the launcher print
 Runtime's message; it guesses no reason. Every process of logosd's user can use `lcn_call` with all of
 these grants, as with the logosctl instance (§7): grant it what the session's user may call.
 
-### Streams (N-2c)
+### Streams (G349)
 
-A subscription stays on the route it was made on and ends with that route's session: the decision's
-validity, one hour by default ([AUTHORITY-POLICY.md](AUTHORITY-POLICY.md)). The stream then exits 6, "the
-route's session ended; run the command again". A renewal does not extend a session (R l.3337-3338).
+- **`subscribe MODULE EVENT [--count N] [--for DURATION] [--instance I] [--contract ROOT]`**: one event
+  the provider declares, named by its identifier (`meter.changed_event`), without its namespace
+  (`changed_event`), or without the `_event` suffix too (`changed`); an unknown or ambiguous name is
+  refused (1) with the provider's events. `lcn_call` establishes a route whose access names that event
+  only (`subscribe_events: [root]`), so the grant needs `establish-route` and `subscribe-event` on the
+  contract (Grants), then subscribes on it. A refused subscription writes nothing but the failure (4).
+  Each delivery also needs the provider's own `publish-event` on that contract (CA l.244-247), an
+  operator rule naming the provider's instance, as S1 does for the Capability Authority. Without it
+  every publication is skipped: the stream stays open and sees nothing.
+- **`events [NAME]... [--count N] [--for DURATION]`**: this Runtime's Runtime Control events, on
+  `lcn_call`'s own binding. NAME as above (`module_state_changed`,
+  `logos.runtime_control.module_state_changed_event`), at most 16; none names the events rule's three
+  (§5). Another Runtime Control event is `NOT_AUTHORISED` (4): S7 denies it, and a deny wins over any
+  operator rule.
+- **Output.** One line per event, written as it arrives: JSON `{"event": ID, "data": VALUE}`, VALUE as
+  G89 renders a response, or with `--text` `ID VALUE` in diagnostic notation. A stream that fails after
+  its events adds the failure: one envelope line on stdout in JSON, `logosctl: CODE: message` on stderr
+  in text.
+- **Its end.** `--count` events written, or `--for` elapsed (milliseconds, or a number with `ms`, `s`, `m`
+  or `h`; 1 ms to 49 days): 0. The launcher's EOF, at SIGINT or SIGTERM: 130. Exit 6, after the events it
+  had, when `lcn_call` or the Runtime ends it:
+  - "the route ended: the provider is not ready" (`NOT_READY`): the provider stopped, or `lcn_call`
+    is stopping and the Runtime ended its routes before `lcn_call` ended the stream itself;
+  - "the route's session ended; run the command again" (`NOT_AUTHORISED`): below;
+  - "the subscription ended: authority to receive the event ended" (`NOT_AUTHORISED`): the authority
+    no longer allows a delivery, such as after a revoked grant (T l.753; IF l.1472-1485);
+  - "the terminal did not keep up; the stream ended": below;
+  - "lcn_call is stopping; the stream ended": `module stop lcn_call`, or logosd's stop, for an `events`
+    stream, or a `subscribe` stream whose route had not ended yet.
+- **One route session.** A subscription stays on the route it was made on and ends with that route's
+  session: the decision's validity, one hour by default ([AUTHORITY-POLICY.md](AUTHORITY-POLICY.md)). A
+  renewal does not extend a session (R l.3337-3338).
+- **A terminal that does not keep up.** `lcn_call` copies each event into a queue of 1024 events or 16
+  MiB; when it is full, the stream ends (6) rather than lose events silently. The message goes to stderr
+  whatever the output (in JSON, its envelope), since stdout waits for the same reader; `lcn_call` waits
+  at most a second for room there.
 
 ### Limits
 
 | | |
 |---|---|
 | Workers | `cli.workers` (1–32, default 8): one-shot commands in service at once; one more is refused `busy` and retried until `--timeout` |
-| Streams | `cli.streams` (1–64, default 8): subscriptions and event streams |
+| Streams | `cli.streams` (1–64, default 8): subscriptions and event streams at once |
+| Stream queue | 1024 events or 16 MiB per stream; `events` names at most 16 |
 | Idle timeout | `cli.idle_timeout_ms` (100–600000, default 30 s): a connection without a complete request |
 | Route idle | `cli.route_idle_ms` (1000–86400000, default 10 min) |
 | Request frame | 1 MiB of argument text and 128 KiB for the rest; larger values as `@FILE` |
@@ -1066,7 +1173,7 @@ set`, `logosctl trust …`, or the owner's own edits, each applying at the next 
 - **Authentication** of that path is the operating system's: the files are the session owner's, mode
   0600 in 0700 directories, and logosd refuses a session others can access.
 - **What it authorizes**: everything logosd does. Whoever can write the session can change the policy,
-  the trust file and its switch, and the evidence key.
+  the trust file with its anchors and switch, and the evidence key.
 - An `issue` rule in the policy is protected input too. Under it a module may issue grants while the
   daemon runs (CA l.744), within what the rule allows; that is the only change of authority at run time.
 - **State transfers** are the same kind of input (decision 9): an entry in `state_transfers`, set with

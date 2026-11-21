@@ -40,6 +40,8 @@
 
 import std/[monotimes, os, strutils, times]
 import results
+import logos_sdk/base/wipe
+from logos_sdk/codegen/nimrt import wipeTyped
 import logos_sdk/iface/outcome
 import logos_sdk/kit/rc_types
 import ../daemon/[ctl_types, ctlwire]
@@ -362,6 +364,8 @@ proc launch*(l: Launch): Result[int, LaunchFailure] =
   ## [G344] Hands the command over and returns its exit code; a failure the
   ## launcher prints itself is an error.
   var msg = l.message
+  defer:
+    wipeTyped(msg) # [N-2d] the launcher's copy of the arguments
   var fds = @[l.stdoutFd, l.stderrFd]
   msg.fds = @[role(LcnCliFdRoleKind.Stdout), role(LcnCliFdRoleKind.Stderr)]
   for f in l.files:
@@ -377,10 +381,11 @@ proc launch*(l: Launch): Result[int, LaunchFailure] =
       # [G344; plan §3.3] What remains of the timeout after activation.
       msg.deadline_ms =
         Opt.some(uint32(min(int64(l.message.deadline_ms.get), int64(left(deadline)))))
-    let bytes = msg.encode.valueOr:
+    var bytes = msg.encodeWiped.valueOr:
       closeFd(fd)
       return err(failure(ExitRefused, error))
     let wrote = writeRequest(fd, bytes, fds, left(deadline))
+    wipe(bytes)
     let reply = readReply(
       fd,
       if wrote.isOk:

@@ -22,22 +22,28 @@
 ##   `accepted`, the command, the descriptors closed, then `done`. The
 ##   launcher's half-close cancels the command (130).
 ## - **Destroy.** Sets `closing`, unlinks the socket, shuts down the read side
-##   of every connection (its command sees the cancel), joins every thread,
-##   then releases every route handle and closes every route (IF l.3927).
+##   of every connection (its command sees the cancel; a stream ends with 6,
+##   since lcn_call ended it), joins every thread, then releases every route
+##   handle and closes every route (IF l.3927).
 
 {.push raises: [], gcsafe.}
 
 import std/[atomics, locks, monotimes, times]
 import results
 import logos_sdk/abi/types
-import logos_sdk/base/[perthread, testhooks]
+import logos_sdk/base/[perthread, testhooks, wipe]
 import logos_sdk/codegen/kitrt
+from logos_sdk/codegen/nimrt import wipeTyped
 import logos_sdk/iface/outcome
 from logos_sdk/kit/rcclient import checkBinding, `$`
 import ../runtime/bell
 import ../transport/io/[peercred, sock]
 import ../daemon/logging
-import ./[cli_types, commands, lcn_call_configuration_types, lcn_call_kit, routes, wire]
+import
+  ./[
+    cli_types, commands, lcn_call_configuration_types, lcn_call_kit, routes, streams,
+    wire,
+  ]
 
 when defined(posix):
   import std/posix except Stat
@@ -111,6 +117,7 @@ type
     oneShots, streaming: int ## commands in service, by kind
     active: ptr UncheckedArray[cint] ## per thread: its connection, or -1
     serving, closing: bool
+    stopping: Atomic[bool] ## set before the cancel `stop` gives every command
     acceptThread: Thread[ptr Server]
     reaperThread: Thread[ptr Server]
     reaperBell: Bell
@@ -200,10 +207,20 @@ proc serve(s: ptr Server, worker: int, c: Conn) =
   withLock s.lock:
     while not s.serving and not s.closing:
       wait(s.cond, s.lock)
-  let m = decodeMessage(req.get.bytes)
+  # [N-2d; SPEC INTERFACE l.361, l.385] The frame and the message may hold an
+  # argument's value, and which method is marked is known only later: both are
+  # wiped for every request, the frame once decoded, the message on every
+  # return.
+  var m = decodeMessage(req.get.bytes)
+  wipe(req.value.bytes)
+  var job = Job(fds: fds, cancelFd: c.fd)
+  if m.isOk:
+    job.msg = move m.value
+  defer:
+    wipeTyped(job.msg)
   let checked =
     if m.isOk:
-      checkMessage(m.get, fds.len)
+      checkMessage(job.msg, fds.len)
     else:
       Result[void, string].err(m.error)
   if checked.isErr:
@@ -214,8 +231,7 @@ proc serve(s: ptr Server, worker: int, c: Conn) =
     )
     s.reply(c.fd, refusedReply(LcnCliRefusedReasonChoiceKind.Protocol, checked.error))
     return
-  let msg = m.get
-  let stream = msg.isStream
+  let stream = job.msg.isStream
   case s.take(stream)
   of 1:
     closeAll(fds)
@@ -231,13 +247,13 @@ proc serve(s: ptr Server, worker: int, c: Conn) =
     closeAll(fds)
     s.give(stream)
     return
-  let d = commands.run(s.env, Job(msg: msg, fds: fds, cancelFd: c.fd))
+  let d = commands.run(s.env, job)
   closeAll(fds) # [G344] before `done`: a reader of a pipe sees its end
   s.give(stream)
   logInfo(
-    "lcn_call: " & d.what & " node " & targetOf(msg) & " from uid " & $c.uid & " pid " &
-      pidText(c.pid) & ": exit " & $d.exit & (if d.code.len > 0: " " & d.code
-    else: "")
+    "lcn_call: " & d.what & " node " & targetOf(job.msg) & " from uid " & $c.uid &
+      " pid " & pidText(c.pid) & ": exit " & $d.exit &
+      (if d.code.len > 0: " " & d.code else: "")
   )
   s.reply(c.fd, doneReply(d.exit))
 
@@ -397,6 +413,7 @@ proc freeServer(s: ptr Server) =
 
 proc stop(s: ptr Server) =
   ## Ends every thread the server started; see the module's doc.
+  s.stopping.store(true) # a stream reads it at the cancel below: exit 6, not 130
   withLock s.lock:
     s.closing = true
     for i in 0 ..< s.threads:
@@ -432,6 +449,14 @@ proc initModule(
   ## [G343, G344] The socket, the threads, then `serving`.
   checkBinding(init.services.runtimeControl).isOkOr:
     return fail("the Runtime Control binding: " & $error)
+  # [N-2c; IF l.1476-1477] The binding's one subscription-end registration,
+  # before any subscription; the hub outlives the context (`streams.nim`).
+  let hub = newHub(init.services.runtimeControl)
+  let reg = hub.register()
+  if int64(reg.code) != 0:
+    return fail(
+      "the Runtime Control binding's observe_subscription_end: code " & $int64(reg.code)
+    )
   let workers = int(config.workers)
   let streams = int(config.streams)
   if workers < 1 or workers > MaxWorkers:
@@ -458,8 +483,11 @@ proc initModule(
   s.env = Env(
     rc: init.services.runtimeControl,
     routes: newRouteTable(init.services.runtimeControl, int(config.route_idle_ms)),
+    hub: hub,
+    stopping: addr s.stopping,
     production: config.deployment.kind == LcnCallSettingsDeploymentChoiceKind.Production,
   )
+  s.env.routes.setEndHook(routeEnd, hub)
   s.listenFd = fd
   s.dev = dev
   s.ino = ino

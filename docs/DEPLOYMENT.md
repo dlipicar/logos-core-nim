@@ -48,8 +48,8 @@ CONFORMANCE and `conformance/`.
 | 4a | l.366 | local transport profile | Supported | — | `logos.local.unix-stream` | [§4](#4-transport) | BCP-0041 |
 | 4b | l.366 | remote transport profiles | None | Tier 5 | none enabled; no listener, no export, no enrollment | [§4](#4-transport) | BCP-0041 |
 | 5a | l.367 | call-evidence signing trust | Supported | — | one evidence key per session, bound to the Runtime, rotated offline | [§5](#5-trust-inputs) | BCP-0042 |
-| 5b | l.367 | package-signing trust | None | Tier 5 | the revisioned trust file exists and holds no anchors | [§5](#5-trust-inputs) | BCP-0042 |
-| 5c | l.367 | package-provenance and source-evidence requirements | None | Tier 5 | none selected | [§5](#5-trust-inputs) | BCP-0042 |
+| 5b | l.367 | package-signing trust | Supported | — | the package trust file: anchors with exact names under one revision, administered offline by `logosctl trust` | [§5](#5-trust-inputs) | BCP-0042 |
+| 5c | l.367 | package-provenance and source-evidence requirements | None | Tier 5 | none selected; a selection is refused until step 5-11 | [§5](#5-trust-inputs) | BCP-0042 |
 | 5d | l.367 | remote Runtime enrollment | None | Tier 5 | no enrollment trust | [§5](#5-trust-inputs) | BCP-0042 |
 | 6a | l.368 | Module Loader mappings; the `process` mechanism | Supported | — | `direct_static`, `direct_dynamic`, `hosted_dynamic` with placement `process`; the CLI module `lcn_call` hosted | [§6](#6-module-loader-mappings) | BCP-0043 |
 | 6b | l.368 | `sandbox` and `container` mechanisms | Not supported | — | not advertised; a request for one is `unsupported-strategy`; outside Tier 5 (D16) | [§6](#6-module-loader-mappings) | BCP-0043 |
@@ -76,7 +76,7 @@ CONFORMANCE and `conformance/`.
 | 19 | l.389-395 | activation: mechanism, admission, selection, presentation handoff, failure | Supported | — | the `logosctl` socket and its instance; the `lcn_call` socket and its instance, started through the first | [§17](#17-approval-and-activation) | BCP-0085, BCP-0086, BCP-0087, BCP-0088, BCP-0089 |
 | 20 | l.397 | deployment representations keep Core meaning | Supported | — | the ctl wire, the CLI wire and the CLI carry Core values unchanged | [§18](#18-deployment-representations) | BCP-0090 |
 | 21 | l.399-401 | state at rest, principals, secrets, backup, restore and rollback, retention and deletion | Supported | — | file modes only; no secret store; `state purge` is the deletion | [§19](#19-state-at-rest) | BCP-0091, BCP-0092 |
-| 22 | l.403-406 | non-production mechanisms: development trust anchors, relaxed debugging entitlements, Transport test hooks, unknown-artifact analysis | Supported | — | none of the four in a deployed logosd; what the trust file's development switch gates is announced everywhere | [§20](#20-non-production) | BCP-0103, BCP-0094, BCP-0095, BCP-0096 |
+| 22 | l.403-406 | non-production mechanisms: development trust anchors, relaxed debugging entitlements, Transport test hooks, unknown-artifact analysis | Supported | — | development anchors are in force only with the trust file's development switch on, and the other three are not in a deployed logosd; what the switch gates is announced everywhere | [§20](#20-non-production) | BCP-0103, BCP-0094, BCP-0095, BCP-0096 |
 | 23 | l.408-410 | fail closed, no weaker mechanism | Supported | — | every refusal below; no fallback anywhere | [§21](#21-failing-closed) | BCP-0049, BCP-0050 |
 
 ### Choices the other specifications assign to deployment
@@ -129,8 +129,10 @@ Items 1, 5b, 5c, 10b, 12b and 16a.
   provenance profile, no installation scope, no inventory and no shared package state. A module comes
   from daemon-config as an artifact path with its digest (§10); no package-backed creation exists.
 - **Does continued execution depend on current package-signing trust acceptance** (PM l.408)? **No.**
-  1. The trust file holds no package-signing anchors: only its revision and the development switch
-     ([DAEMON.md](DAEMON.md) §6; DECISIONS G299).
+  1. Nothing uses package-signing trust. The trust file holds anchors since Tier 5 step 5-3a
+     ([DAEMON.md](DAEMON.md) §6; DECISIONS G396), and logosd accepts them at each start, but no Package
+     Manager is deployed: no package is verified, installed or selected, and the accepted input logosd
+     keeps for the Package Manager (step 5-3b) is read by nothing.
   2. No instance has a signer or package fact, direct or hosted: the Runtime's registry, the only
      source of the facts the authority reads, records an instance's id and module name and no
      selection (§11). A policy rule naming a signer or package matches nothing, and no execution
@@ -148,13 +150,15 @@ Item 2. Each is a file of the session, owned by its user, mode 0600 in 0700 dire
 | Input | Representation | Written by | Validated | Replaced |
 |---|---|---|---|---|
 | daemon-config, the authority policy in it, module configuration values, `state_transfers` | one deterministic-CBOR `lcn.daemon_config` ([DAEMON.md](DAEMON.md) §3) | `logosctl init`, `daemon config set` | the five checks of DAEMON.md §3, at `set` and at every start | at the next start |
-| the trust file and its mark | `lcn.trust_file`, `lcn.trust_mark` (§6 there) | `init`, `trust development`, `trust reestablish` | revision continuity at start: rollback and changed contents refused | at the next start |
+| the package trust file and its mark | `lcn.package_trust` (a Tier 4b `lcn.trust_file` is still read), `lcn.trust_mark` (§6 there) | `init`, `trust anchor …`, `trust development`, `trust reestablish` | at every start, and by every writer before it writes: the schema and its 1 MiB bound, the rules (canonical order, exact names, nothing selected), key separation from the evidence keys; at start, revision continuity: rollback and changed contents refused | at the next start |
 | the evidence key and its binding | `lcn.ev_key_binding` (§6 there) | `init`, `trust evidence-keys rotate` | the binding names this Runtime (§3 check 4) | at the next start |
 
 **Revocation.** A grant's end, its expiry and a policy decision that no longer allows an execution or
 route take effect at once, while logosd runs (CA §8; [HOST-CONFIG.md](HOST-CONFIG.md), "Under
-`capability-authority`", Authority over time). A withdrawn development switch, a rotated evidence key
-and a changed policy take effect at the next start, since every input is read once.
+`capability-authority`", Authority over time). A withdrawn development switch, a removed trust anchor or
+package name, a rotated evidence key and a changed policy take effect at the next start, since every
+input is read once. A removal that names an anchor or package name the file does not hold withdraws
+nothing and is refused, so a mistyped revocation is reported, not taken for one (BCP l.364).
 
 ## 3. Authority policy
 
@@ -183,9 +187,14 @@ Items 5a–5d.
 - **Call-evidence signing** (5a): one evidence key per session, made by `logosctl init`, bound to the
   Runtime id and rotated offline (DECISIONS G149; [DAEMON.md](DAEMON.md) §9). A rotation applies at
   the next start; the retired key keeps its binding and loses its secret half.
-- **Package signing** (5b): the carrier exists, `<session>/trust.cbor` with its revision, its
-  continuity mark and the development switch (DECISIONS G299). It holds no anchors. Tier 5 adds them.
-- **Package provenance and source evidence** (5c): none selected. Tier 5.
+- **Package signing** (5b): the package trust file, `<session>/trust.cbor` (`lcn.package_trust`;
+  [DAEMON.md](DAEMON.md) §6; DECISIONS G396, G397): the baseline profile
+  `logos.package-signing.cose-sign1-slh-dsa-sha2-192s` and each anchor's kid, 48-byte key, exact package
+  names and development marker, all under one revision with its continuity mark. It is written offline
+  by `logosctl trust anchor …`, checked at every start and by every writer, and replaced at the next
+  start. No anchor may use a call-evidence key. No Package Manager reads it yet (§1).
+- **Package provenance and source evidence** (5c): none selected. The trust file's `provenance` section
+  is empty, and a file that selects a profile is refused until step 5-11 (DECISIONS G398). Tier 5.
 - **Remote Runtime enrollment** (5d): none. Tier 5.
 
 Each trust input has its own file and purpose (SEC l.521).
@@ -484,10 +493,11 @@ Item 21.
 ## 20. Non-production
 
 Item 22 (BCP l.403-406; DECISIONS D27, G299). BCP l.403 names four non-production mechanisms. A
-deployed logosd has none of them:
+production logosd has none of them in force:
 
-- **Development trust anchors:** the trust file holds no anchors (§5). When Tier 5 adds package-signing
-  anchors, a development one is accepted only with the switch below on (D27).
+- **Development trust anchors:** an anchor of the trust file marked `development` is in force only while
+  the switch below is on, and turning the switch off withdraws it at the next start (§5; DECISIONS G137).
+  With the switch off, which a production deployment has, none is in force.
 - **Relaxed debugging entitlements:** none exist.
 - **Transport test hooks** (TRANSPORT §8.5): hook code exists only in test builds (the `lcnTestHooks`
   define; the flake check `no-test-hooks` searches every packaged binary for its marker), and a hook
@@ -495,13 +505,14 @@ deployed logosd has none of them:
   "Test hooks").
 - **Unknown-artifact analysis:** none: an artifact is loaded only with its daemon-config digest.
 
-What the trust file's development switch gates are mechanisms of this implementation, held to the
-same rule: `policy: allow-all`, and `test_hooks` in a test build of logosd. The switch is protected
+What the trust file's development switch gates are held to the same rule: development anchors, and two
+mechanisms of this implementation, `policy: allow-all` and `test_hooks` in a test build of logosd. The
+switch is protected
 input, set offline with `logosctl trust development on`. With it on this deployment is
 **non-production**: logosd's start log warns `NON-PRODUCTION`, and every `logosctl` output and socket
 reply says so. The build mode enables nothing (BCP l.405): a packaged logosd has no test hooks and
 refuses `test_hooks`, and a test build selects one only with the switch on. The switch weakens nothing
-else (BCP l.406).
+else (BCP l.406): continuity, the other anchors and the trust file's rules apply as with it off.
 
 ## 21. Failing closed
 
@@ -521,10 +532,13 @@ The erasure claim and its five non-claims are in CONFORMANCE, "Properties not cl
 methods include a marked one is refused (RUNTIME l.1808; DECISIONS G277, G327).
 
 A module library logosd maps (`direct_dynamic`) or a Module Host loads may be built with either memory
-manager (DECISIONS G342; measured with the Runtime and the Module Host on macOS, Linux pending). Build
+manager (DECISIONS G342; measured with the Runtime and the Module Host on macOS and x86_64 Linux). Build
 it with `-d:noSignalHandler`, so that loading it leaves the process's signal handlers alone (G340; the
-kit warns without it), and link it with its kit's export list (G341). In a refc module written with
-today's kit, handlers on threads other than the loading one must not store GC'd values (DECISIONS I71).
+kit warns without it), and link it with its kit's export list (G341). A refc module whose handlers keep
+GC'd values in the instance must be generated with `lcn-gen kit --confined`, which runs each instance
+on a thread of its own (G335; measured in logosd too, both placements, `tests/test_logosd.nim`); in a
+refc module without it, handlers on threads other than the loading one must not store GC'd values
+(DECISIONS I71). The author's guide is [sdk/docs/MODULE-KIT.md](../sdk/docs/MODULE-KIT.md).
 
 ## 23. Diagnostics and logs
 
@@ -541,7 +555,7 @@ SECURITY §13 (l.517-533) lists defaults a production deployment should begin fr
 | Default | logosd |
 |---|---|
 | unverified dynamic code and unregistered static binding refused | a `direct_dynamic` or `hosted_dynamic` artifact is loaded only with its daemon-config digest; static bindings are logosd's two and the authority's |
-| trust configured separately by purpose | evidence key and trust file apart; no package or enrollment trust yet |
+| trust configured separately by purpose | evidence key and package trust file apart, and no anchor's key an evidence key; no enrollment trust yet |
 | direct loading only for trusted code | `init` writes `hosted_dynamic`; `direct_dynamic` is the operator's explicit choice (§8) |
 | third-party native code behind a process or application isolation profile | `process` only, not a sandbox (§8); no profile with stronger controls yet |
 | permissions denied unless allowed and enforceable | host-ambient only, enforced at admission; the policy decides (§7) |
@@ -550,7 +564,7 @@ SECURITY §13 (l.517-533) lists defaults a production deployment should begin fr
 | only what the consumer may see is exposed | the Runtime's visibility rules |
 | tickets, keys and credentials out of logs and messages | the logging rule (§23) |
 | a launch fails rather than weaken isolation | §16 |
-| cached results invalidated when their basis changes | grants and policy re-evaluated; trust read once per start |
+| cached results invalidated when their basis changes | grants and policy re-evaluated; the trust file, anchors included, read once per start |
 | development trust and test hooks explicit non-production configuration | §20 |
 
 ## 25. Credential Store

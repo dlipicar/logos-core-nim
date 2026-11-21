@@ -226,6 +226,27 @@ proc releaseLastFailure() {.nimcall, gcsafe, raises: [].} =
 proc okResult*(): LogosResult =
   LogosResult(code: CErrorCode(0))
 
+proc normalizedFailure*(f: InvocationFailure): InvocationFailure =
+  ## [SPEC INTERFACE §2.7, §5.1] `f` as a status carries it: the message
+  ## clipped to `MaxMessageBytes`; a failure that is not a valid status (code
+  ## OK, a NUL or invalid UTF-8 in the message, detail its code does not
+  ## allow) becomes MODULE_ERROR without diagnostics. The caller's `f` is the
+  ## caller's; the copy returned is the receiver's to zero (DECISIONS G276).
+  result = f
+  if result.message.isSome and result.message.get.len > MaxMessageBytes:
+    # Through a local: under refc, `f.message = Opt.some(clip(f.message.get))`
+    # resets the destination before the argument reads it (nim-lang/Nim#25993,
+    # fixed in 2.4.0, not in 2.2.14).
+    var clipped = clip(result.message.get)
+    wipe(result.message)
+    result.message = Opt.some(clipped)
+    wipe(clipped)
+  if checkFailure(result).isErr or (
+    result.message.isSome and '\0' in result.message.get
+  ):
+    wipe(result)
+    result = InvocationFailure(code: ecModule)
+
 proc failureResult*(f: InvocationFailure): LogosResult =
   ## [SPEC INTERFACE §2.7, §5.1, §5.2] The status of a failed call. Its message
   ## and detail live in this thread's storage until the next kit call on the
@@ -234,18 +255,7 @@ proc failureResult*(f: InvocationFailure): LogosResult =
   ## without diagnostics, as an ABI caller would treat it. [DECISIONS G276] A
   ## marked method's failure text may hold its payload: every copy made here
   ## is zeroed once written; the caller's `f` is the caller's.
-  var f = f
-  if f.message.isSome and f.message.get.len > MaxMessageBytes:
-    # Through a local: under refc, `f.message = Opt.some(clip(f.message.get))`
-    # resets the destination before the argument reads it (nim-lang/Nim#25993,
-    # fixed in 2.4.0, not in 2.2.14).
-    var clipped = clip(f.message.get)
-    wipe(f.message)
-    f.message = Opt.some(clipped)
-    wipe(clipped)
-  if checkFailure(f).isErr or (f.message.isSome and '\0' in f.message.get):
-    wipe(f)
-    f = InvocationFailure(code: ecModule)
+  var f = normalizedFailure(f)
   clearLastFailure()
   if not failureHooked:
     failureHooked = true
@@ -586,6 +596,19 @@ proc loadValidator*(
     acceptContractSet(primary, interfaces, supporting, AcceptOptions(system: system))
   doAssert s.isOk, "module kit: its schema set is not accepted: " & s.error
   validator(s.get)
+
+proc loadBindingValidator*(
+    module: string, interfaces, supporting: openArray[string], system: bool
+): ContractValidator =
+  ## [DECISIONS G339] The validator of an interface-only binding a kit was
+  ## generated from (INTERFACE l.2833-2835): no primary document, `interfaces`
+  ## as the implemented set. A failure means this library no longer accepts
+  ## them: regenerate the kit.
+  let b = acceptBinding(
+    module, Opt.none(string), interfaces, supporting, AcceptOptions(system: system)
+  )
+  doAssert b.isOk, "module kit: its binding is not accepted: " & b.error
+  validator(b.get)
 
 proc checkedRequest*(
     v: ContractValidator, bare: string, params: openArray[byte]

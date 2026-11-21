@@ -58,12 +58,12 @@ table (each unit with its reason: the workspace's `tier5-plans/step5-0-pkg-recou
 
 | Area | What | Units | Steps |
 |---|---|---|---|
-| A4 | Signing-trust continuity in use (PM §4.1-§4.3) | PKG 30 | 5-3a 4, 5-3b 16, 5-5 7, 5-8 2, 5-7a 1 (PKG-0435, the TLS key) |
+| A4 | Signing-trust continuity in use (PM §4.1-§4.3) | PKG 30 | 5-3a 5, 5-3b 15, 5-5 7, 5-8 2, 5-7a 1 (PKG-0435, the TLS key) |
 | A2 | Sources, the catalog document and the Storage role (PM §2, §4, §4.4, §6, §13) | PKG 13 | 5-3b 10, 5-6a 2, 5-8 1 |
 | A3 | Installation and installed state (PM §1, §5, §7-§8, §10, §14; §15's inspect, install, remove and update) | PKG 63; BCP-0033, BCP-0035 | 5-5 |
 | A1 | The `logos_package_manager` service: contract, queries, watch, progress (PM Abstract, §15-§15.2) | PKG 77 | 5-6a 28, 5-6b 49 |
 | B | Package-backed selection and the handoff's use (PM §4, §9, §11, §12; RUNTIME §9.3) | PKG 19; RUN 7 (RUN-0995 to RUN-0997, RUN-1000, RUN-1023 to RUN-1025) | 5-8 |
-| C | SLSA provenance (PM §4.5 and its §14 codes), droppable | PKG 75 | 5-11 |
+| C | SLSA provenance (PM §4.5 and its §14 codes), droppable | PKG 75 | 5-3a 2, 5-3b 1, 5-11 72 |
 | D | Nix realization profile (PM §2, §7.3, §8), droppable | PKG 31; BCP-0034 | 5-10 |
 | E1 | `logos.remote.tls-tcp` (TRANSPORT §8.4, §8.4.1) | TRN 36 | 5-2 |
 | E2 | `logos.remote.quic` (TRANSPORT §8.4.2), droppable | TRN 5; BCP-0032; RUN-0503 (counted in F) | 5-12 |
@@ -77,9 +77,11 @@ The 308 PKG units by step (`PKG-` omitted):
 
 | Step | Area | Units | Ids |
 |---|---|---|---|
-| 5-3a | A4 | 4 | 0418-0421 |
+| 5-3a | A4 | 5 | 0083, 0418-0421 |
+| 5-3a | C | 2 | 0166, 0169 |
 | 5-3b | A2 | 10 | 0019, 0021, 0069, 0114, 0115, 0353, 0449, 0472-0474 |
-| 5-3b | A4 | 16 | 0076, 0077, 0079, 0081-0083, 0085-0093, 0112 |
+| 5-3b | A4 | 15 | 0076, 0077, 0079, 0081, 0082, 0085-0093, 0112 |
+| 5-3b | C | 1 | 0167 |
 | 5-5 | A3 | 63 | 0011, 0012, 0172, 0177, 0178, 0181, 0182, 0189, 0190, 0192, 0204, 0219, 0222, 0271, 0274, 0291-0293, 0356, 0357, 0359-0363, 0389-0411, 0468-0471, 0487-0489, 0493, 0498-0500, 0534-0537 |
 | 5-5 | A4 | 7 | 0080, 0436-0441 |
 | 5-6a | A1 | 28 | 0003-0008, 0366-0380, 0388, 0519-0524 |
@@ -90,13 +92,15 @@ The 308 PKG units by step (`PKG-` omitted):
 | 5-8 | A2 | 1 | 0354 |
 | 5-8 | A4 | 2 | 0423, 0424 |
 | 5-10 | D | 31 | 0017, 0224-0252, 0273 |
-| 5-11 | C | 75 | 0118-0170, 0450-0467, 0515-0518 |
+| 5-11 | C | 72 | 0118-0165, 0168, 0170, 0450-0467, 0515-0518 |
 
 **Re-pin P7a (2026-11-19, I110):** PKG-0275 is stale (G156 settled), PKG-0365 (`_module`) now heads PM §4.3
 and is claimed with it. PKG-0273, which names only the realized output at 6cac8335, is deferred to 5-10, and
 PKG-0274, whose LGX half is the extraction check, to 5-5 (G362). App A's 38 rules are new units, copies of rules
 the sections state: ten are claimed and 28 are deferred by name with their twins, five to 5-5, two to 5-8 and 21 to 5-6a
-(G363). PKG-0568 is now deferred by name to 5-6b (G362). The count by step above is still that of 6a4dfa28.
+(G363). PKG-0568 is now deferred by name to 5-6b (G362). The count by step above is still that of 6a4dfa28, except
+that planning's rulings on step 5-3a's plan (2026-11-20, Q8, Q18, Q19) moved PKG-0083 from 5-3b to 5-3a,
+PKG-0166 and PKG-0169 from 5-11 to 5-3a, and PKG-0167 from 5-11 to 5-3b.
 
 A dropped area's units that bind without it stay and are claimed in their own steps: TRN-0352, PKG-0190,
 PKG-0166, PKG-0167, PKG-0169, the `nix` and `quic` refusals (plan A1). At the close (5-13) every unit
@@ -113,7 +117,7 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-2 | TS-04 | follow the text: one connection per route, one per consumer for control, a session reused only by the same route (TRANSPORT l.1274; RUNTIME l.1698) | decided (B9) |
 | 5-2 | G86, real Runtimes' TLS credentials | a P-256 key and a self-signed certificate as a direct anchor (G86 as re-decided; 5-2's G324) | decided (B2) |
 | 5-2, 5-7a | marked payloads on remote paths (G277; 5-2's G327) | `tls-tcp` and `quic` carry no marked payload (TRANSPORT l.1188-1189; RUNTIME l.1808, l.2939): re-pin P4d built the refusal (`runtime/remotemarked`), which 5-7a calls, and took 5-2d's opt-in `BORINGSSL_ZERO_RECORD_BUFFERS` off again; the carrier erases its own copies (G276) | decided 2026-11-17 (owner); settled by spec text at 6cac8335 (re-pin P4d) |
-| 5-3a | the package trust file and the remote trust input; provenance continuity | — | open (C2, C3) |
+| 5-3a | the package trust file; provenance continuity | the package trust file v2: anchors with exact names, the development marker and the catalog and provenance selections under one revision, a selection refused until a profile is built; administered offline by `logosctl trust` (G396 to G398) | decided (C2, C3); built in 5-3a-2 (I114) |
 | 5-3a | the `lcn.storage_fetch` contract has no readiness signal (G91, G136) | 5-3a adds one | built (5-3a-1, G395): `fetch_readiness` and `fetch_readiness_changed_event`; N-4 builds the phases |
 | 5-3b | NP-12 | no platform tag in the catalog document | open (C7) |
 | 5-3b | TF-07 (G166) | the plan's §6 wording; the answer to PM l.408 stays *no* | open (C5); recovery by re-install is PM l.1675 at 6cac8335 (PKG-0608, 5-5) |
@@ -124,6 +128,7 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-5 | the no-op install and update while the retained signer is not accepted (TF-07's second point); a D9 stop | fail with `signature-verification-failed` | decided (C6: fail); built at re-pin P7b, the update half in the resolver and the install half at resolution (G166) |
 | 5-6a | where the Package Manager runs | hosted in its own process, the engine's binding over TRANSPORT §8.1.2 | open (C1) |
 | 5-6b | package record observation | deny by default; the grant is protected deployment input | open (C4) |
+| 5-7a | the remote trust input: its own input and revision, apart from the package trust file | — | decided (C2) |
 | 5-7a | NF-06 (G81), the authority part | G81 (a) narrowed | decided (B5); compared with CA l.77-78 at 6cac8335 (re-pin P6a): the enrolled half of TXT-0359 (claimed for the half with no Runtime enrolled) and TXT-0360 (riding RUN-1125) are 5-7a's |
 | 5-7a | NA-04 (G255); TF-30 point 1 (G194) | kept | decided (B9) |
 | 5-7a | enrollment and trust-anchor changes (G87) | offline, under the session lock, at the next start | decided (B3) |
@@ -138,7 +143,7 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-4, 5-9 | the Windows readings: logosd's own user; the build key | one user is not a security boundary (G58's non-claim); keyed on the OS and `afunix.sys` builds (5-4's G332, G333) | decided 2026-11-17 (owner) |
 | 5-11 | NP-13 | provenance attests the assembled archive | open (E3) |
 | 5-13 | TF-43 (G310); the units still deferred | the member set of E1; E2's relabels | open (E1, E2, E3) |
-| N-2 | marked methods through the CLI | refused, naming the method (INTERFACE l.368-369); local-only support later (N-2d), non-local targets refused | decided 2026-11-17 (owner) |
+| N-2 | marked methods through the CLI | local targets only (INTERFACE l.368-369, l.373): a marked request from files or stdin, a marked response to stdout, every copy erased; non-local targets refused | decided 2026-11-17 (owner); built in N-2d (G349, I102) |
 
 Unanswered upstream and bearing on Tier 5: NP-12 to NP-14 (NP-11 is settled by text: PM l.964, l.1172, and
 NP-15 by PM l.1096-1101 at 6cac8335),
@@ -415,7 +420,6 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
 
   Claimed: BCP-0101, BCP-0102 and BCP-0103; BCP-0093 retired. TXT-0350 and TXT-0555 cleared by test. P9 closed, and with
   it the re-pin.
-
 - 2026-11-20, Tier 5 step 5-3a-1 (I114), the `lcn.storage_fetch` contract (G395; G91, G136, G140 amended):
   the interface document and its generated code and root in `logos_sdk/contracts/`; the reference fake
   `fetch_fake_module` and the conformance harness in the SDK's testing package; `sdk/docs/STORAGE-FETCH.md`.
@@ -430,6 +434,40 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   material (RUN-0174), so an asynchronous hosted consumer could not materialize (`test_hosted_routes`
   C-2b). No unit changes status: BCP-0085 (inspection) and BCP-0086 to BCP-0090 gain the CLI socket as
   evidence beside the logosctl socket's, and IFC-0942 the projected `describe`.
+
+- 2026-11-20, Tier 5 step N-1 (I101), the module kit's gaps on the node track (G335-G342), sub-parts 1 to
+  6: modules built with the other memory manager, export lists and the kit's signal rule (1); typed
+  consumer helpers (2); the thread-confined mode, so a refc module may keep GC'd state (3); the deferred
+  provider `_MODULE_async_api` and `invokeAsync` (4); interface-only provider kits and `--extends` (5);
+  the confined kit in logosd's two placements, the `kit-toolchains` check with storage's and delivery's
+  switch sets, and the author's guide `sdk/docs/MODULE-KIT.md` (6). IFC-0281 and IFC-0282 claimed for
+  confined modules (3), and twelve provider units for `_MODULE_async_api` (4): IFC-0743, 0746, 0748, 0750
+  to 0752, 0754, 0762, 0763, 0766, 0769 and 0779. IFC-0671 taken for Nim; IFC-0758 and IFC-0767 stay out
+  of scope. I71's refc limit now holds for kits without `--confined` only. The sanitizer pass over
+  N-1's suites is planning's to schedule.
+
+- 2026-11-20, Tier 5 step N-2c (I102), streams (G346, G349): `logosctl subscribe` and `events`, a bounded
+  queue per stream, ends reported by route handle and subscription identifier, exit 6 for a stream the
+  route, its session, the authority or `lcn_call` ends, or a terminal that does not keep up. Events go
+  from the provider's host to `lcn_call`'s. No unit changes status: RUN-1095 and TRN-0392 gain
+  end-to-end evidence in logosd (a revoked grant).
+
+- 2026-11-20, Tier 5 step 5-3a-2 (I114; G396, G397, G398), the package trust file:
+  - `<session>/trust.cbor` is `logos-core-nim.trust.v2`, closed: one revision covers the switch, the signing profile,
+    every anchor (kid, 48-byte key, exact names, development marker) and the catalog and provenance selections. Its
+    schema and rules are core's (`package/trustdoc`), so the Package Manager reads the same document in 5-3b. A Tier 4b
+    v1 file is still read.
+  - logosd applies the rules, key separation from every evidence key and the conversion at both reads of a start,
+    before continuity, so a refused file never moves the mark; a selected catalog or provenance profile is refused,
+    naming it (C3, C9). The accepted package-signing input is kept for 5-3b.
+  - `logosctl trust` gains `anchor add|remove|add-names|remove-names`; every writer checks its result as a start
+    would, writes revision + 1 (one added name included) and writes nothing for a change that changes nothing;
+    `trust show` shows the anchors and why a file is refused; `trust reestablish` refuses a file logosd would.
+  - `docs/DEPLOYMENT.md`: row 5b is Supported; §1's answer to PM l.408 stays *no* on new grounds; §2, §5 and §20 follow.
+    The inspection items for PKG-0422, BCP-0042, BCP-0074, BCP-0094 and BCP-0096 are re-read.
+
+  Claimed: PKG-0083, PKG-0166, PKG-0169 and PKG-0418 to PKG-0421 (seven units; planning's rulings moved PKG-0083 from
+  5-3b and PKG-0166 and PKG-0169 from 5-11). TXT-0463 cleared by test with PKG-0418. PKG-0167 goes to 5-3b.
 
 ## Tiers at f4f83471 (the original plan)
 

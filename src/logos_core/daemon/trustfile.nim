@@ -20,15 +20,19 @@
 ##
 ## logosd never creates a mark (P6-31): `logosctl init` writes the file and its
 ## mark together, and `logosctl trust reestablish --revision N` writes one
-## when the owner names the file's revision. Every change is offline, under
-## the session lock, and applies at the next start (BCP l.359).
+## when the owner names the file's revision and the file passes logosd's
+## checks. Every change is offline, under the session lock, and applies at the
+## next start (BCP l.359, l.364): `logosctl trust` builds the next file with
+## the pure edits below, and `commitTrust` writes it as revision + 1 only
+## when it changes something and passes logosd's checks (G397).
 
 {.push raises: [].}
 
-import std/os
+import std/[algorithm, os, sequtils, strutils]
 import results
 import logos_sdk/base/hex
 import logos_sdk/crypto/blake3
+from logos_sdk/cbor import cmpBytes
 import ../durable
 import ../package/trustdoc
 import ./[evkey, session, trust_types]
@@ -203,25 +207,194 @@ proc initTrust*(s: Session, development: bool): Result[TrustFileState, string] =
   ?writeMark(s, t)
   ok(t)
 
-proc setDevelopment*(s: Session, on: bool): Result[TrustFileState, string] =
-  ## [D27; G137] `logosctl trust development on|off`: the next revision with
-  ## the switch set, everything else kept. Turning it off is a withdrawal,
-  ## of the development anchors too.
-  let t = ?readTrust(s)
-  if t.file.revision == high(uint64):
-    return err("the trust file's revision cannot grow")
-  var f = t.file
-  f.revision = t.file.revision + 1
-  f.development = on
-  writeTrustFile(s, f)
+# The writers (G397) ------------------------------------------------------------------
 
-proc reestablish*(s: Session, revision: uint64): Result[TrustFileState, string] =
-  ## [S4b6-1, a Choice] `logosctl trust reestablish --revision N`: the mark
-  ## written from the current file when the owner names its revision.
+const CorrectByHand* =
+  "correct " & TrustName &
+  " by hand, then run a trust change or logosctl trust reestablish --revision N"
+  ## [G397; Q17] What a writer adds when the file it starts from is refused.
+
+type TrustChange* = object ## What a writer did.
+  state*: TrustFileState ## the file in force after it: written, or as it was
+  changed*: bool ## false: the change changed nothing and nothing was written
+
+func indexOfKid(f: LcnPackageTrust, kid: openArray[byte]): int =
+  for i, a in f.signing.anchors:
+    if a.kid == @kid:
+      return i
+  -1
+
+func checkKid(kid: openArray[byte]): Result[void, string] =
+  if kid.len notin 1 .. 128:
+    return err("a kid is 1 to 128 bytes, not " & $kid.len)
+  ok()
+
+func canonicalNames(names: openArray[string]): Result[seq[string], string] =
+  ## [G396] Each name once, in strictly ascending byte order; a name is 1 to
+  ## 128 bytes (PM l.242) and taken as given, never folded (PM l.418-419).
+  var r: seq[string]
+  for n in names:
+    if n.len notin 1 .. 128:
+      return err(
+        "the package name " & n.escape & " is " & $n.len &
+          " bytes; a package name is 1 to 128 bytes"
+      )
+    r.add(n)
+  r.sort(system.cmp[string])
+  r = deduplicate(r, isSorted = true)
+  ok(r)
+
+func absentKid(kid: openArray[byte]): string =
+  "no anchor has kid " & kid.toHex
+
+func unknownKid(kid: openArray[byte]): string =
+  absentKid(kid) & "; trust anchor add adds one"
+
+func withAnchor*(
+    f: LcnPackageTrust, a: LcnTrustAnchor
+): Result[LcnPackageTrust, string] =
+  ## [G397] `trust anchor add`: a new anchor, its names in canonical order,
+  ## at its place in kid order. A kid already present is refused (PKG-0107),
+  ## unless the anchor is the same one, which changes nothing.
+  ?checkKid(a.kid)
+  var a = a
+  a.packages = ?canonicalNames(a.packages)
+  if a.packages.len == 0:
+    return err("an anchor names at least one package (PM l.417)")
+  let i = f.indexOfKid(a.kid)
+  if i >= 0:
+    if f.signing.anchors[i] == a:
+      return ok(f)
+    return err(
+      "kid " & a.kid.toHex &
+        " is already an anchor; trust anchor add-names adds names to it, and a new key or marker needs trust anchor remove first"
+    )
+  var r = f
+  var at = 0
+  while at < r.signing.anchors.len and cmpBytes(r.signing.anchors[at].kid, a.kid) < 0:
+    inc at
+  r.signing.anchors.insert(a, at)
+  ok(r)
+
+func withoutAnchor*(
+    f: LcnPackageTrust, kid: openArray[byte]
+): Result[LcnPackageTrust, string] =
+  ## [G397; PM l.436-437] `trust anchor remove`: a withdrawal. A kid that
+  ## names no anchor is refused: withdrawing what is not there withdraws
+  ## nothing, and a mistyped kid must not pass for a withdrawal.
+  let i = f.indexOfKid(kid)
+  if i < 0:
+    return err(absentKid(kid))
+  var r = f
+  r.signing.anchors.delete(i)
+  ok(r)
+
+func withNames*(
+    f: LcnPackageTrust, kid: openArray[byte], names: openArray[string]
+): Result[LcnPackageTrust, string] =
+  ## [G397; PM l.420] `trust anchor add-names`: one added name is a change,
+  ## so a new revision. Names already present change nothing.
+  let i = f.indexOfKid(kid)
+  if i < 0:
+    return err(unknownKid(kid))
+  var r = f
+  r.signing.anchors[i].packages =
+    ?canonicalNames(r.signing.anchors[i].packages & @names)
+  ok(r)
+
+func withoutNames*(
+    f: LcnPackageTrust, kid: openArray[byte], names: openArray[string]
+): Result[LcnPackageTrust, string] =
+  ## [G397; PM l.417] `trust anchor remove-names`, all or nothing: a name
+  ## the anchor does not authorize, compared byte for byte (PM l.418-419), is
+  ## refused with every such name, and nothing is removed; leaving the anchor
+  ## no name is refused.
+  let i = f.indexOfKid(kid)
+  if i < 0:
+    return err(absentKid(kid))
+  var absent: seq[string]
+  for n in names:
+    if n notin f.signing.anchors[i].packages and n.escape notin absent:
+      absent.add(n.escape)
+  if absent.len > 0:
+    return err(
+      "kid " & kid.toHex & " authorizes no package named " & absent.join(", ") &
+        "; no name was removed"
+    )
+  var r = f
+  var kept: seq[string]
+  for n in r.signing.anchors[i].packages:
+    if n notin names:
+      kept.add(n)
+  if kept.len == 0:
+    return err(
+      "kid " & kid.toHex &
+        " would authorize no package name; trust anchor remove withdraws the anchor"
+    )
+  r.signing.anchors[i].packages = kept
+  ok(r)
+
+func withDevelopment*(f: LcnPackageTrust, on: bool): LcnPackageTrust =
+  ## [D27; G137] `trust development on|off`. Turning the switch off is a
+  ## withdrawal, of the development anchors too (PM l.409).
+  result = f
+  result.development = on
+
+proc validateTrust*(
+    f: LcnPackageTrust, evidenceKeys: openArray[seq[byte]]
+): Result[TrustInput, string] =
+  ## [G396; G397] What logosd's start applies to a file before continuity:
+  ## the schema and the 1 MiB bound, every rule of `checkTrust`, key
+  ## separation and the conversion. A writer applies it to what it writes, so
+  ## it never writes a file logosd refuses.
+  let bytes = ?f.encode
+  let d = ?decodeTrust(bytes)
+  ?checkTrust(d)
+  ?separateKeys(d, evidenceKeys)
+  acceptedSigning(d)
+
+proc commitTrust*(
+    s: Session, cur: TrustFileState, next: LcnPackageTrust, evidenceKeys: seq[seq[byte]]
+): Result[TrustChange, string] =
+  ## [G397; Q16, Q17] Every writer's last step, under the session lock: `next`
+  ## is `cur`'s file with one edit. Equal to it, nothing is written. Otherwise
+  ## it is written as revision + 1, always v2, if it passes `validateTrust`
+  ## against `evidenceKeys` (the session's, read when either file names an
+  ## anchor). A refusal that `cur` itself already earns, a hand-set selection
+  ## for one, says to correct the file by hand.
+  let now = validateTrust(cur.file, evidenceKeys)
+  proc refusal(e: string): string =
+    if now.isErr:
+      e & "; " & CorrectByHand
+    else:
+      e
+
+  if next == cur.file:
+    if now.isErr:
+      return err(refusal(now.error))
+    return ok(TrustChange(state: cur, changed: false))
+  if cur.file.revision == high(uint64):
+    return err("the trust file's revision cannot grow")
+  var f = next
+  f.revision = cur.file.revision + 1
+  discard validateTrust(f, evidenceKeys).valueOr:
+    return err(refusal(error))
+  let written = ?writeTrustFile(s, f)
+  ok(TrustChange(state: written, changed: true))
+
+proc reestablish*(
+    s: Session, revision: uint64, evidenceKeys: seq[seq[byte]]
+): Result[TrustFileState, string] =
+  ## [S4b6-1, a Choice; G397] `logosctl trust reestablish --revision N`: the
+  ## mark written from the current file when the owner names its revision and
+  ## the file passes `validateTrust`, so the mark never names a revision
+  ## logosd refuses.
   let t = ?readTrust(s)
   if revision != t.file.revision:
     return
       err("the trust file is at revision " & $t.file.revision & ", not " & $revision)
+  discard validateTrust(t.file, evidenceKeys).valueOr:
+    return err(error & "; no mark was written")
   ?writeMark(s, t)
   ok(t)
 

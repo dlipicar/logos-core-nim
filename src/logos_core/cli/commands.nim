@@ -14,10 +14,14 @@
 ##   provider extends (R l.90-91). The surface projected to it (`schemaResponse`) is
 ##   accepted again (`acceptSchemaResponse`): the set the arguments are typed
 ##   by, and the bytes `materialize_route` takes (IF l.3905).
-## - **Call.** The method by its bare or its qualified name. A marked request
-##   or response is refused before any route (IF l.368-369). The arguments are
+## - **Call.** The method by its bare or its qualified name. The arguments are
 ##   typed (`args.nim`), the value validated, and the call made through a
 ##   leased route (`routes.nim`) with the command's deadline.
+## - **Marked payloads (G349 N-2d; IF §1.4.1).** A method that marks its request
+##   or response is called on the local Runtime only (IF l.373), by a build
+##   that erases (orc, arc; G277), and a marked request only from files
+##   (`NAME=@FILE`, `NAME=@-`): each refusal comes before any file is read
+##   (IF l.368-369). `runCall` wipes every copy at its last use.
 ## - **Retry (G348; plan §3.5 step 8).** An ended handle is never leased (rule
 ##   1). A call is made once more, on a new route and within what remains of
 ##   the deadline, only when `prepare_call` failed with NOT_READY,
@@ -36,15 +40,19 @@
 
 {.push raises: [], gcsafe.}
 
-import std/[json, monotimes, strutils, times]
+import std/[algorithm, atomics, json, locks, monotimes, strutils, tables, times]
 import results
 import logos_sdk/cbor
 import logos_sdk/commitment
-import logos_sdk/base/hex
+import logos_sdk/base/[hex, wipe]
 import logos_sdk/hash/hashinput
 import logos_sdk/iface/[accept, provider, surface]
 import logos_sdk/kit/rc_types
-import ./[args, cli_types, present, routes, rpc, wire]
+import logos_sdk/abi/[checks, types]
+import logos_sdk/iface/outcome
+from ../authority/scopes import rcContractInfo
+import ../daemon/render
+import ./[args, cli_types, present, routes, rpc, streams, wire]
 
 when defined(posix):
   import std/posix
@@ -60,6 +68,8 @@ type
   Env* = object ## What every command shares; plain values, copied per worker.
     rc*: ptr LogosRuntimeControlBinding
     routes*: RouteTable
+    hub*: Hub ## the streams' (`streams.nim`)
+    stopping*: ptr Atomic[bool] ## the server's: lcn_call is stopping; nil: never
     production*: bool
 
   Job* = object ## One admitted request.
@@ -136,6 +146,9 @@ proc targetBinding(
     env: Env, name: string
 ): Result[ptr LogosRuntimeControlBinding, Stop] =
   ## [G347] The binding a node name stands for: `local` only, until 5-7a.
+  ## [G349 N-2d] A marked method is never called through another binding:
+  ## `runCall` refuses it unless the target is `local`, so 5-7a's node
+  ## bindings, and `hops.nextHop`, never see a marked payload.
   if not validNodeName(name):
     return err(refused("a node name is [a-z][a-z0-9_-], at most 63 bytes"))
   if name != LocalNode:
@@ -148,11 +161,29 @@ proc targetBinding(
 
 # Input -----------------------------------------------------------------------------------
 
-proc readAll(fd, cancelFd: cint, what: string): Result[seq[byte], Stop] =
-  ## A passed descriptor's bytes to its end, at most `MaxFileBytes`.
+proc grow(data: var seq[byte], need: int) =
+  ## [N-2d] Room for `need` bytes: new storage, the old zeroed, so no
+  ## reallocation leaves a copy of a file's bytes behind.
+  if data.capacity >= need:
+    return
+  var bigger = newSeqOfCap[byte](max(need, 2 * data.capacity))
+  bigger.add(data)
+  wipe(data)
+  data = move bigger
+
+proc readAll(
+    fd, cancelFd: cint, what: string, limit: int, data: var seq[byte]
+): Result[void, Stop] =
+  ## A passed descriptor's bytes to its end into `data`, at most `limit`: a
+  ## longer file is refused after `limit` bytes, the rest never read. [N-2d]
+  ## The bytes are read into `data`'s own storage, grown by `grow`; on every
+  ## error it is wiped.
   when defined(posix):
-    var data: seq[byte] = @[]
-    var buf = newSeq[byte](ReadChunk)
+    data = newSeqOfCap[byte](min(limit, ReadChunk))
+    template fail(s: Stop) =
+      wipe(data)
+      return err(s)
+
     while true:
       var p: array[2, TPollfd]
       p[0] = TPollfd(fd: fd, events: POLLIN)
@@ -161,37 +192,72 @@ proc readAll(fd, cancelFd: cint, what: string): Result[seq[byte], Stop] =
       if n < 0:
         if errno == EINTR:
           continue
-        return err(refused(what & ": poll: " & $strerror(errno)))
+        fail(refused(what & ": poll: " & $strerror(errno)))
       if cancelFd >= 0 and (p[1].revents and (POLLIN or POLLHUP or POLLERR)) != 0:
-        return err(cancelled())
-      let r = read(fd, addr buf[0], buf.len)
+        fail(cancelled())
+      let want = min(ReadChunk, limit - data.len)
+      if want <= 0:
+        # `limit` bytes are in; one more says the file is longer.
+        var one: byte
+        let r = read(fd, addr one, 1)
+        if r < 0 and (errno == EINTR or errno == EAGAIN or errno == EWOULDBLOCK):
+          continue
+        secureZero(addr one, 1)
+        if r == 0:
+          break
+        if r < 0:
+          fail(refused(what & ": " & $strerror(errno)))
+        if limit < MaxFileBytes:
+          fail(refused(what & " is longer than its field's " & $(limit - 1) & " bytes"))
+        fail(refused(what & " is larger than 16 MiB"))
+      let at = data.len
+      data.grow(at + want)
+      data.setLen(at + want)
+      let r = read(fd, addr data[at], want)
       if r < 0:
+        data.setLen(at)
         if errno == EINTR or errno == EAGAIN or errno == EWOULDBLOCK:
           continue
-        return err(refused(what & ": " & $strerror(errno)))
+        fail(refused(what & ": " & $strerror(errno)))
+      data.setLen(at + r)
       if r == 0:
         break
-      if data.len + r > MaxFileBytes:
-        return err(refused(what & " is larger than 16 MiB"))
-      data.add(buf.toOpenArray(0, r - 1))
-    ok(data)
+    ok()
   else:
     err(refused("@FILE is not supported on this platform"))
 
-proc argInputs(c: Ctx, args: seq[LcnCliArg]): Result[seq[ArgInput], Stop] =
+proc argInputs(
+    c: Ctx, sh: RequestShape, args: openArray[LcnCliArg], marked: bool
+): Result[seq[ArgInput], Stop] =
+  ## The arguments with each file's bytes read. [N-2d] For a `marked` request
+  ## a file is read up to its field's bound (`fileLimit`); on any error the
+  ## files read so far are wiped.
   var out0: seq[ArgInput] = @[]
+  template fail(s: Stop) =
+    wipeInputs(out0)
+    return err(s)
+
   for a in args:
     case a.kind
     of LcnCliArgKind.lcn_Cli_text_arg:
-      let t = a.arm_lcn_Cli_text_arg
-      out0.add(ArgInput(name: t.name, isFile: false, text: t.value))
+      out0.add(
+        ArgInput(
+          name: a.arm_lcn_Cli_text_arg.name,
+          isFile: false,
+          text: a.arm_lcn_Cli_text_arg.value,
+        )
+      )
     of LcnCliArgKind.lcn_Cli_file_arg:
       let f = a.arm_lcn_Cli_file_arg
       let i = int(f.fd)
       if i < 2 or i >= c.fds.len:
-        return err(refused(f.name & ": no such descriptor"))
-      let data = ?readAll(c.fds[i], c.cancelFd, f.name & "=@FILE")
-      out0.add(ArgInput(name: f.name, isFile: true, data: data))
+        fail(refused(f.name & ": no such descriptor"))
+      let limit = (if marked: sh.fileLimit(f.name, MaxFileBytes) else: MaxFileBytes)
+      var data: seq[byte]
+      let r = readAll(c.fds[i], c.cancelFd, f.name & "=@FILE", limit, data)
+      if r.isErr:
+        fail(r.error)
+      out0.add(ArgInput(name: f.name, isFile: true, data: move data))
   ok(out0)
 
 # The provider ----------------------------------------------------------------------------
@@ -352,8 +418,10 @@ func outputStop(e: SinkError): Stop =
     cancelled()
   of seClosed:
     Stop(exit: ExitOk, silent: true)
-  of seIo:
+  of seIo, seStalled: # seStalled: only a sink with `waitMs`, the overflow's notice
     Stop(exit: ExitUnreachable, silent: true)
+  of seAborted:
+    Stop(exit: ExitStreamEnded, silent: true) # a stream's queue overflowed
 
 # describe ------------------------------------------------------------------------------
 
@@ -581,8 +649,24 @@ proc callWithRetry(
       break
   ok(outcome)
 
+func markedInputRefusal(bare: string): Stop =
+  refused(
+    bare & "'s request is marked: give each field as NAME=@FILE or NAME=@- " &
+      "(a value on the command line is not erased; INTERFACE §1.4.1)"
+  )
+
 proc runCall(c: Ctx, cmd: LcnCliCallCommand): Result[void, Stop] =
   ## [G348, G349] One typed call through a leased route.
+  ##
+  ## [G349 N-2d; SPEC INTERFACE §1.4.1] A marked method is called only on the
+  ## local Runtime, in a build that erases (orc, arc), with every field of a
+  ## marked request from a file: each refusal comes before any file is read.
+  ## Every copy is wiped at its last use (IF l.361, l.364): the inputs, the
+  ## typed value and its encoding once encoded, the params once no retry can
+  ## need them (`prepare_call` keeps its own copy, IF l.1994), the response
+  ## once decoded, the value once written. lcn_call wipes them for every
+  ## call (IF l.385 allows it); only a marked response's output and a marked
+  ## request's typing differ.
   let p = ?c.provider(cmd.provider)
   let m = p.surface.methodNamed(cmd.`method`).valueOr:
     return err(
@@ -591,24 +675,47 @@ proc runCall(c: Ctx, cmd: LcnCliCallCommand): Result[void, Stop] =
           p.surface.methodNames
       )
     )
-  if m.sensitiveRequest or m.sensitiveResponse:
-    # [SPEC INTERFACE l.368-369; G349 Q2] No path for marked payloads here.
-    return err(
-      refused(m.bare & " carries marked payloads; this CLI does not handle them yet")
-    )
+  let marked = m.sensitiveRequest or m.sensitiveResponse
+  if marked:
+    when not ChannelsMove:
+      # [G277] A refc Module Host refuses the marked route only at
+      # materialization, after the inputs were read.
+      return err(
+        refused(
+          m.bare & " carries marked payloads, which this build of lcn_call " &
+            "does not erase (" & MarkedUnsupportedByHost & ")"
+        )
+      )
+    if c.target != LocalNode:
+      # [SPEC INTERFACE l.373; G347] `targetBinding` admits `local` only today;
+      # a remote node (5-7a) must not carry a marked payload either.
+      return err(
+        refused(
+          m.bare &
+            " carries marked payloads, which have no remote path (INTERFACE l.373)"
+        )
+      )
   let sh = requestShape(p.set, m).valueOr:
     return err(refused(error))
-  var value: CborValue
-  if cmd.json.isSome:
-    value = fromJson(sh, cmd.json.get).valueOr:
-      return err(refused(m.bare & ": " & error & "; fields: " & sh.fieldList))
-  else:
-    let inputs = ?c.argInputs(cmd.args.get(@[]))
-    value = fromArgs(sh, inputs).valueOr:
-      return err(refused(m.bare & ": " & error & "; fields: " & sh.fieldList))
-  checkRequest(sh, value).isOkOr:
-    return err(refused(error))
-  let params = encodeCbor(value)
+  if m.sensitiveRequest:
+    if cmd.json.isSome:
+      return err(markedInputRefusal(m.bare))
+    # A mistyped name can hold anything a user typed: these copies are wiped
+    # on every return (W-13c).
+    var names: seq[string] = @[]
+    defer:
+      for n in names.mitems:
+        wipe(n)
+    if cmd.args.isSome:
+      for a in cmd.args.get:
+        case a.kind
+        of LcnCliArgKind.lcn_Cli_text_arg:
+          return err(markedInputRefusal(m.bare))
+        of LcnCliArgKind.lcn_Cli_file_arg:
+          names.add(a.arm_lcn_Cli_file_arg.name)
+    checkMarkedNames(sh, names).isOkOr:
+      return
+        err(refused(m.bare & ": " & error & "; fields: " & sh.fieldList(marked = true)))
   let root = ?p.memberRoot(m.doc, m.name)
   let spec = RouteSpec(
     key: routeKey(c.target, p.address, p.selected, "methods", root),
@@ -617,12 +724,49 @@ proc runCall(c: Ctx, cmd: LcnCliCallCommand): Result[void, Stop] =
     access: LogosNSRuntimeControlRouteAccess(methods: Opt.some(@[@root])),
     schema: p.schema,
   )
-  let outcome = ?c.callWithRetry(spec, m.bare, params)
-  if outcome.cancelled:
+  var params: seq[byte]
+  # The marked scope has the validator wipe its own temporaries too.
+  markedScope(m.sensitiveRequest):
+    var value: CborValue
+    if cmd.json.isSome:
+      value = fromJson(sh, cmd.json.get).valueOr:
+        return err(refused(m.bare & ": " & error & "; fields: " & sh.fieldList))
+    else:
+      var inputs: seq[ArgInput] = @[]
+      if cmd.args.isSome:
+        inputs = ?c.argInputs(sh, cmd.args.get, m.sensitiveRequest)
+      let typed = fromArgs(sh, inputs, m.sensitiveRequest)
+      wipeInputs(inputs)
+      value = typed.valueOr:
+        return err(
+          refused(
+            m.bare & ": " & error & "; fields: " & sh.fieldList(m.sensitiveRequest)
+          )
+        )
+    checkRequest(sh, value, m.sensitiveRequest).isOkOr:
+      wipe(value)
+      return err(refused(error))
+    params = encodeCbor(value)
+    wipe(value)
+  var outcome = c.callWithRetry(spec, m.bare, params)
+  wipe(params)
+  if outcome.isErr:
+    return err(outcome.error)
+  if outcome.get.cancelled:
+    if outcome.get.ok:
+      wipe(outcome.value.response)
     return err(cancelled())
-  if not outcome.ok:
-    return err(classify(outcome))
-  let v = decodeCbor(outcome.response).valueOr:
+  if not outcome.get.ok:
+    return err(classify(outcome.get))
+  var v: CborValue
+  var decoded = false
+  markedScope(m.sensitiveResponse):
+    let d = decodeCbor(outcome.value.response)
+    wipe(outcome.value.response)
+    if d.isOk:
+      v = d.get
+      decoded = true
+  if not decoded:
     return err(
       Stop(
         exit: ExitProvider,
@@ -630,17 +774,323 @@ proc runCall(c: Ctx, cmd: LcnCliCallCommand): Result[void, Stop] =
         message: "the response is not Logos deterministic CBOR",
       )
     )
-  c.pres.doneValue(v).isOkOr:
+  let written =
+    if m.sensitiveResponse:
+      c.pres.doneMarked(v)
+    else:
+      c.pres.doneValue(v)
+  wipe(v)
+  written.isOkOr:
     return err(outputStop(error))
   ok()
+
+# subscribe and events ------------------------------------------------------------------
+
+const
+  OverflowNoticeMs = 1_000 ## [IMPL] the wait for room for the overflow's message
+  RcEventPrefix = "logos.runtime_control."
+  DefaultEvents* =
+    ["module_state_changed", "execution_state_changed", "inventory_changed"]
+    ## [G346] the events rule's three, `events`' default set (as compose's
+    ## `CliEvents`)
+
+func shortEvent(id, namespace: string): string =
+  ## [G349] An event's identifier without its namespace and `_event` suffix.
+  result = id
+  if result.startsWith(namespace & "."):
+    result = result[namespace.len + 1 .. ^1]
+  if result.endsWith("_event"):
+    result = result[0 ..< result.len - "_event".len]
+
+func eventsNamed(s: CallSurface, name: string): seq[SurfaceEvent] =
+  ## [G349] By identifier, or without the namespace, or without the `_event`
+  ## suffix too.
+  for e in s.events:
+    let noNs =
+      if e.id.startsWith(e.namespace & "."):
+        e.id[e.namespace.len + 1 .. ^1]
+      else:
+        e.id
+    if name == e.id or name == noNs or name == shortEvent(e.id, e.namespace):
+      result.add(e)
+
+func eventNames(s: CallSurface): string =
+  var names: seq[string] = @[]
+  for e in s.events:
+    names.add(shortEvent(e.id, e.namespace))
+  if names.len == 0:
+    "(none)"
+  else:
+    names.join(", ")
+
+proc limits(count, forMs: Opt[uint32]): Result[(Opt[int], Opt[int]), Stop] =
+  if count.isSome and count.get == 0:
+    return err(refused("--count is at least 1"))
+  if forMs.isSome and forMs.get == 0:
+    return err(refused("--for is at least 1 ms"))
+  ok(
+    (
+      count.map(
+        proc(x: uint32): int =
+          int(x)
+      ),
+      forMs.map(
+        proc(x: uint32): int =
+          int(x)
+      ),
+    )
+  )
+
+func codeName(c: CErrorCode): string =
+  let e = errorCode(int64(c))
+  if e.isSome:
+    $e.get
+  else:
+    $c
+
+func endStop(e: Ending): Stop =
+  ## [G349; plan §3.7] Why lcn_call ended the stream (exit 6).
+  let code = codeName(e.reason)
+  case e.kind
+  of ekOverflow:
+    Stop(
+      exit: ExitStreamEnded, message: "the terminal did not keep up; the stream ended"
+    )
+  of ekSubscription:
+    Stop(
+      exit: ExitStreamEnded,
+      code: code,
+      message:
+        if e.reason == CErrorCode(ord(ecNotAuthorised)):
+          "the subscription ended: authority to receive the event ended"
+        else:
+          "the subscription ended",
+    )
+  of ekRoute, ekNone:
+    Stop(
+      exit: ExitStreamEnded,
+      code: code,
+      message:
+        if e.reason == CErrorCode(ord(ecNotAuthorised)):
+          # [P5; R l.3337-3338] A stream lasts one route session.
+          "the route's session ended; run the command again"
+        elif e.reason == CErrorCode(ord(ecNotReady)):
+          "the route ended: the provider is not ready"
+        else:
+          "the route ended",
+    )
+
+proc interrupted(c: Ctx): Stop =
+  ## [G349; plan §3.7] A cancel: the launcher's EOF (130), or lcn_call
+  ## stopping, which ends the stream itself (6).
+  if c.env.stopping != nil and c.env.stopping[].load:
+    Stop(exit: ExitStreamEnded, message: "lcn_call is stopping; the stream ended")
+  else:
+    cancelled()
+
+proc pump(
+    c: Ctx, s: Stream, names: openArray[string], count, forMs: Opt[int]
+): Result[void, Stop] =
+  ## [G349; plan §3.7] Writes the stream's events, one line each, until
+  ## `count` events, `forMs`, the launcher's cancel, or the stream's end;
+  ## what was queued before an end is written first. An overflow stops a
+  ## write the terminal holds up (`abortFd`).
+  var p = c.pres
+  p.output.abortFd = s.abortFd
+  proc overflowed(p: Presenter): Result[void, Stop] =
+    # [IMPL] Said on stderr in either format, since stdout waits for the same
+    # reader; given up after a second if stderr is that reader too (`2>&1`).
+    let st = endStop(Ending(kind: ekOverflow))
+    var q = p
+    q.errors.waitMs = OverflowNoticeMs
+    q.output = q.errors
+    discard q.failed(st.code, st.message)
+    var quiet = st
+    quiet.silent = true
+    err(quiet)
+
+  p.streamStart().isOkOr:
+    return err(outputStop(error))
+  let started = getMonoTime()
+  var written = 0
+  while true:
+    for ev in s.take():
+      let v = decodeCbor(ev.data).valueOr:
+        return err(
+          Stop(
+            exit: ExitStreamEnded,
+            code: $ecModule,
+            message: "an event's data is not Logos deterministic CBOR",
+          )
+        )
+      let line = %*{"event": names[ev.name], "data": jsonOf(v)}
+      p.streamLine(line, names[ev.name] & " " & toDiag(v)).isOkOr:
+        if error == seAborted:
+          return p.overflowed()
+        if error == seCancelled:
+          return err(c.interrupted)
+        return err(outputStop(error))
+      inc written
+      if count.isSome and written >= count.get:
+        return ok()
+    let e = s.ending
+    if e.kind == ekOverflow:
+      return p.overflowed()
+    if e.kind != ekNone:
+      # Nothing is queued after an end; one more pass writes what came in
+      # between `take` and `ending`.
+      for ev in s.take():
+        let v = decodeCbor(ev.data).valueOr:
+          break
+        p.streamLine(
+          %*{"event": names[ev.name], "data": jsonOf(v)},
+          names[ev.name] & " " & toDiag(v),
+        ).isOkOr:
+          break
+        inc written
+        if count.isSome and written >= count.get:
+          return ok()
+      return err(endStop(e))
+    var timeout = -1
+    if forMs.isSome:
+      let left = forMs.get - int(inMilliseconds(getMonoTime() - started))
+      if left <= 0:
+        return ok()
+      timeout = left
+    if not s.wait(c.cancelFd, timeout):
+      return err(c.interrupted)
+
+proc subscribeFailure(r: LogosResult): Stop =
+  ## A `subscribe` that did not succeed.
+  let st = readStatus(r)
+  let f =
+    if st.isErr:
+      failureOf(st.error)
+    else:
+      failure(ecModule, "subscribe returned LOGOS_OK without a subscription")
+  rcStop(f)
+
+proc runSubscribe(c: Ctx, cmd: LcnCliSubscribeCommand): Result[void, Stop] =
+  ## [G348, G349; plan §3.7] One provider event as a stream, through a leased
+  ## route whose access names that event only; the stream lasts at most the
+  ## route's session (P5).
+  let (count, forMs) = ?limits(cmd.count, cmd.for_ms)
+  let p = ?c.provider(cmd.provider)
+  let found = p.surface.eventsNamed(cmd.event)
+  if found.len == 0:
+    return err(
+      refused(
+        p.module & " has no event " & cmd.event & "; its events: " & p.surface.eventNames
+      )
+    )
+  if found.len > 1:
+    var ids: seq[string] = @[]
+    for e in found:
+      ids.add(e.id)
+    return err(refused(cmd.event & " names more than one event: " & ids.join(", ")))
+  let e = found[0]
+  let root = ?p.memberRoot(e.doc, e.id)
+  let spec = RouteSpec(
+    key: routeKey(c.target, p.address, p.selected, "subscribe_events", root),
+    contract: p.selected,
+    provider: p.address,
+    access: LogosNSRuntimeControlRouteAccess(subscribe_events: Opt.some(@[@root])),
+    schema: p.schema,
+  )
+  let lease = c.env.routes.acquire(spec, Opt.none(int), c.cancelFd).valueOr:
+    return err(rcStop(error))
+  let s = c.env.hub.open(lease.handle, 1).valueOr:
+    c.env.routes.done(lease)
+    return err(Stop(exit: ExitUnreachable, message: error))
+  var r: LogosResult
+  withLock lease.lock[]:
+    r = lease.route.vtable.subscribe(
+      lease.route, cstring(e.id), handler(), s.userData(0), s.idSlot(0)
+    )
+  if int64(r.code) != 0:
+    s.settle(0, false)
+    c.env.hub.detach(s)
+    freeStream(s) # [IF l.1400] no handler was or will be invoked
+    if r.code in [CErrorCode(ord(ecNotReady)), CErrorCode(ord(ecTransport))]:
+      c.env.routes.drop(lease) # the next command establishes a new route
+    c.env.routes.done(lease)
+    return err(subscribeFailure(r))
+  if c.env.routes.ended(lease):
+    s.markEnded(ekRoute, CErrorCode(ord(ecNotReady)))
+  let res = c.pump(s, [e.id], count, forMs)
+  var u: LogosResult
+  withLock lease.lock[]:
+    u = lease.route.vtable.unsubscribe(lease.route, s.id(0))
+  c.env.hub.detach(s)
+  if int64(u.code) == 0:
+    freeStream(s)
+  else:
+    # [IF l.1436-1438] e.g. the route ended: valid until the handle's release.
+    c.env.routes.keepUntilRelease(lease, s, freeStream)
+  c.env.routes.done(lease)
+  res
+
+proc runEvents(c: Ctx, cmd: LcnCliEventsCommand): Result[void, Stop] =
+  ## [G346, G349; plan §3.7] The target's Runtime Control events as one
+  ## stream, subscribed on its binding; by default the events rule's three.
+  let (count, forMs) = ?limits(cmd.count, cmd.for_ms)
+  var wanted: seq[string] = @[]
+  for n in cmd.names.get(@DefaultEvents):
+    var bare = n
+    if bare.startsWith(RcEventPrefix):
+      bare = bare[RcEventPrefix.len .. ^1]
+    if bare.endsWith("_event"):
+      bare = bare[0 ..< bare.len - "_event".len]
+    if bare notin rcContractInfo().events:
+      var known: seq[string] = @[]
+      for k in rcContractInfo().events.keys:
+        known.add(k)
+      return err(
+        refused(
+          "no Runtime Control event " & n & "; its events: " & known.sorted.join(", ")
+        )
+      )
+    if bare notin wanted:
+      wanted.add(bare)
+  if wanted.len == 0 or wanted.len > MaxNames:
+    return err(refused("events takes 1 to " & $MaxNames & " names"))
+  var ids: seq[string] = @[]
+  for b in wanted:
+    ids.add(RcEventPrefix & b & "_event")
+  let s = c.env.hub.open(c.rc, ids.len).valueOr:
+    return err(Stop(exit: ExitUnreachable, message: error))
+  var made = 0
+  var res = Result[void, Stop].ok()
+  for i, id in ids:
+    let r =
+      c.rc.vtable.subscribe(c.rc, cstring(id), handler(), s.userData(i), s.idSlot(i))
+    if int64(r.code) != 0:
+      s.settle(i, false)
+      res = Result[void, Stop].err(subscribeFailure(r))
+      break
+    inc made
+  if res.isOk:
+    res = c.pump(s, ids, count, forMs)
+  var quiet = true
+  for i in 0 ..< made:
+    let u = c.rc.vtable.unsubscribe(c.rc, s.id(i))
+    if int64(u.code) != 0:
+      quiet = false
+  c.env.hub.detach(s)
+  if quiet:
+    freeStream(s)
+  # [IMPL; IF l.1436-1438] Otherwise a handler may still run until the
+  # binding's release, after `_MODULE_destroy`: the stream is never freed.
+  res
 
 # A request ---------------------------------------------------------------------------------
 
 func what(cmd: LcnCliCommand): string =
   case cmd.kind
   of LcnCliCommandKind.lcn_Cli_call_command:
-    let x = cmd.arm_lcn_Cli_call_command
-    "call " & x.provider.module & "." & x.`method`
+    # Fields, not a `let` copy of the command, which holds argument values.
+    "call " & cmd.arm_lcn_Cli_call_command.provider.module & "." &
+      cmd.arm_lcn_Cli_call_command.`method`
   of LcnCliCommandKind.lcn_Cli_describe_command:
     "describe " & cmd.arm_lcn_Cli_describe_command.provider.module
   of LcnCliCommandKind.lcn_Cli_subscribe_command:
@@ -689,9 +1139,10 @@ proc run*(env: Env, job: Job): Done =
       r = runCall(c, job.msg.command.arm_lcn_Cli_call_command)
     of LcnCliCommandKind.lcn_Cli_describe_command:
       r = runDescribe(c, job.msg.command.arm_lcn_Cli_describe_command.provider)
-    of LcnCliCommandKind.lcn_Cli_subscribe_command,
-        LcnCliCommandKind.lcn_Cli_events_command:
-      r = R.err(refused("streams come with Tier 5 step N-2c"))
+    of LcnCliCommandKind.lcn_Cli_subscribe_command:
+      r = runSubscribe(c, job.msg.command.arm_lcn_Cli_subscribe_command)
+    of LcnCliCommandKind.lcn_Cli_events_command:
+      r = runEvents(c, job.msg.command.arm_lcn_Cli_events_command)
     of LcnCliCommandKind.lcn_Cli_rc_command:
       r = R.err(refused("the rc op comes with remote Runtimes (Tier 5 step 5-7a)"))
   if r.isOk:
