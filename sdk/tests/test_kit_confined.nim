@@ -12,6 +12,8 @@ import std/[os, strutils, times]
 import unittest2
 from chronos import finished, value
 import logos_sdk/codegen/[callrt, confinedcalls, consumert]
+from logos_sdk/codegen/confinedrt import
+  packGate, unpackGate, gateNext, GateMaxGen, GateMaxSlots
 import logos_sdk/testing/kitruntime
 import logos_sdk/testing/fixtures/ledger_impl
 import
@@ -1656,3 +1658,124 @@ suite "confined kit: what runs while destroyModule runs (DECISIONS G437)":
     check lateCalls.load == 0
     when defined(gcOrc):
       check freed.load == freedBefore + 1
+
+# The post gate (DECISIONS G440) ---------------------------------------------------------
+#
+# A post that comes after `_MODULE_destroy` returned breaks the module's duty
+# (MODULE-KIT §3); these cases break it on purpose, and the gate must refuse it
+# instead of reaching the freed context.
+
+proc posterOf(ctx: ptr LogosModuleContext): pointer =
+  ## The instance's poster value, from `probe` 28.
+  cast[pointer](uint(parseBiggestUInt(probe(ctx, 28)[1].note)))
+
+suite "confined kit: the post gate (DECISIONS G440)":
+  setup:
+    resetRuntime()
+    resetFake()
+    resetDestroy()
+    refusedPoster.store(nil)
+
+  test "[IMPL-DECISION G440] the packing: never null, a round trip, the last generation retires its slot":
+    check packGate(0, 0) != nil
+    for slot in [0, 1, GateMaxSlots - 1]:
+      for gen in [0'u64, 1, GateMaxGen - 1, GateMaxGen]:
+        let p = packGate(slot, gen)
+        check p != nil
+        check unpackGate(p).slot == slot and unpackGate(p).gen == gen
+    # The largest value fills 64 bits exactly: no generation wraps into the slot.
+    check cast[uint64](packGate(GateMaxSlots - 1, GateMaxGen)) == high(uint64)
+    check unpackGate(nil).gen > GateMaxGen # null names no generation a slot is at
+    check gateNext(0).gen == 1 and not gateNext(0).retired
+    check gateNext(GateMaxGen - 1).gen == GateMaxGen and
+      not gateNext(GateMaxGen - 1).retired
+    check gateNext(GateMaxGen).gen == GateMaxGen + 1 and gateNext(GateMaxGen).retired
+
+  test "[IMPL-DECISION G440] post and lcn_kit_post after _MODULE_destroy returned are refused; fn never runs":
+    let ctx = openLedger()
+    let p = posterOf(ctx)
+    postFromNim(p)
+    check postFromC(p)
+    discard probe(ctx, 1) # queued after both callbacks
+    check posts.load == 2
+    check postThreads.load == 0
+    let freedBefore = freed.load
+    ledgerDestroy(ctx)
+    when defined(gcOrc):
+      check freed.load == freedBefore + 1 # the instance is gone
+    postFromNim(p)
+    check postFromC(p)
+    check posts.load == 2
+
+  test "[IMPL-DECISION G440] deliveries, end reports and a completion for handles destroyModule left unreleased are dropped through the gate":
+    let ctx = openLedger()
+    check probe(ctx, 10)[1].note == "subscribed"
+    check probe(ctx, 13, 1)[1].note == "submitted"
+    let freedBefore = freed.load
+    destroyMode.store(8)
+    ledgerDestroy(ctx)
+    check destroyNote() == "left"
+    when defined(gcOrc):
+      check freed.load == freedBefore + 1 # its handlers' user value is gone
+    check not fakeReleased.load # the module's duty, broken on purpose
+    check fakeCallReleases.load == 0
+    let h = leftRoute
+    check pendingTasks(h) == 0
+    let delivered = deliveries.load
+    deliver(1)
+    check deliveries.load == delivered + 1 # it reached the kit's subscription
+    check pendingTasks(h) == 0 # its task was dropped, and its count went with it
+    completeFake("late")
+    check ownerReleases.load == 1
+    endSubscription(ecModule)
+    check pendingTasks(h) == 0
+    endRoute(ecNotReady)
+    check pendingTasks(h) == 0
+    check lateCalls.load == 0 # no handler ran
+
+  test "[IMPL-DECISION G440] a poster an initModule gave away before it failed is refused":
+    var inp = ledgerInput(stateDir = "/refuse-poster")
+    var ctx: ptr LogosModuleContext
+    check ledgerInit(addr inp, addr ctx).code == CErrorCode(ord(ecModule))
+    check ctx == nil
+    let p = refusedPoster.load
+    check p != nil
+    postFromNim(p)
+    check postFromC(p)
+    check posts.load == 0
+
+  test "[IMPL-DECISION G440] a slot reused by the next context refuses the old poster; the new poster works":
+    let a = openLedger()
+    let pa = posterOf(a)
+    ledgerDestroy(a)
+    let b = openLedger()
+    let pb = posterOf(b)
+    check unpackGate(pb).slot == unpackGate(pa).slot # the last slot freed goes first
+    check unpackGate(pb).gen == unpackGate(pa).gen + 1
+    postFromNim(pa)
+    check postFromC(pa)
+    discard probe(b, 1)
+    check posts.load == 0
+    postFromNim(pb)
+    check postFromC(pb)
+    discard probe(b, 1)
+    check posts.load == 2
+    check postThreads.load == 0
+    ledgerDestroy(b)
+
+  test "[IMPL-DECISION G440] a foreign stream posting through destroy and on into the slot's next context: each post served or refused, none run after the return (20 cycles)":
+    var ctx = openLedger()
+    for i in 0 ..< 20:
+      check probe(ctx, 24)[1].note == "streaming"
+      check streamedAtLeast(1 + i mod 5)
+      destroyMode.store(9)
+      ledgerDestroy(ctx)
+      check destroyNote() == "streaming"
+      # The next context most likely takes the same slot, a generation on,
+      # while the stream still posts with the old value.
+      ctx = openLedger()
+      sleep(2)
+      check stopLeftStream() > 0
+      check lateCalls.load == 0
+      resetDestroy()
+    ledgerDestroy(ctx)

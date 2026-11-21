@@ -106,8 +106,10 @@ import std/[atomics, locks]
 import results
 import ../abi/[checks, types]
 import ../iface/outcome
-import ../base/wipe
+import ../base/[testhooks, wipe]
 import ./[handover, kitrt]
+
+testHooksMarker("consumert")
 from ./nimrt import wipeTyped
 
 export results, types, outcome, kitrt, handover
@@ -805,6 +807,14 @@ proc wrapRoute*(
   if r2.code != 0:
     return err(fail(h, r2, "observe_subscription_end"))
   ok(h)
+
+when defined(lcnTestHooks):
+  proc pendingTasks*(h: RouteHandle): int =
+    ## [DECISIONS G440] Test hook: the tasks queued for `h` and its
+    ## subscriptions that have neither run nor been dropped.
+    acquire(h.stateLock)
+    result = h.pending
+    release(h.stateLock)
 
 proc release*(h: RouteHandle): Result[void, InvocationFailure] =
   ## Releases the handle: waits for operations on other threads, then for

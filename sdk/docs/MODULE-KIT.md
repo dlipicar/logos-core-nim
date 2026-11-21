@@ -163,6 +163,11 @@ as the example's `totals` table does. **A refc module whose handlers keep GC'd s
   has never seen included: a C or Rust library's own threads. C code linked into the library calls
   `lcn_kit_post(poster, fn, payload)` instead. Stop posting before `destroyModule` returns: a callback
   still queued then is dropped.
+- A post after `_MODULE_destroy` returned is refused, and so is a delivery or completion for a route
+  handle, subscription or prepared call the module left unreleased (G440). That gate keeps the
+  Runtime's memory safe; it is not permission. A refused callback never runs and its payload stays
+  yours, and a thread still posting after destroy is residual work: stop or join every thread that
+  holds the poster, and release every handle, before `destroyModule` returns.
 - At destroy, `destroyModule` runs on the module thread, the events the module published are
   delivered, and both of the kit's threads are joined before `_MODULE_destroy` returns.
 - `destroyModule` may be `async` and await what the module started: a callback a foreign thread posts

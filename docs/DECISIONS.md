@@ -7365,6 +7365,68 @@ their history.
   each cycle leaks one (Linux) or two (macOS).
 - **Status:** built 2026-11-21 (Tier 5 step N-1e, part B).
 
+### G440 — A post gate that outlives a confined kit's context
+- **Kind:** IMPL · **Specs:** INTERFACE l.2100 (residual work); planning's ruling; TIER5-PLAN N-1; plan
+  `tier5-plans/stepN-1e-plan.md` §D (Fable's checks G1-G8, `tier5-plans/fable-checks/stepN-1e-plan.md`
+  §7).
+- **Found.** A confined kit's poster, `lcn_kit_post`'s `void *` and its consumer dispatcher's
+  `context` were the context's own address. A post that came after `_MODULE_destroy` returned (a
+  foreign thread the module never stopped, a route handle, subscription or prepared call it never
+  released, whose binding still delivers) took a lock in freed memory: in a direct placement,
+  logosd's.
+- **Decision.** Every such post goes through a gate whose memory is never freed; a late one is
+  refused. A refused post is a much smaller failure than a use after free. The same rule Fable gave
+  N-3's glue: whatever a late caller checks lives in memory that is never freed.
+  - **One pointer-sized value (G1).** The poster, `lcn_kit_post`'s argument and the dispatcher's
+    `context` are one value packing a slot of the gate's table (the low 20 bits: about a million
+    contexts alive at once) and that slot's generation (the high 44, stored as generation + 1), so it
+    is never null: null still means a plain kit, and `post` dies on it. Our targets are 64-bit
+    (`static: doAssert`); a 32-bit target would need its own layout. `ModuleServices` keeps the value
+    (`gate`), so `poster(s)` and the dispatcher read no context memory, even on a copy of the services
+    that outlived destroy; `onItsModuleThread(d)` compares it with the calling module thread's own
+    context's.
+  - **The table never moves (G2).** A static directory of chunk pointers, 1,024 slots a chunk, chunk 0
+    in static storage; another chunk is allocated with the C allocator only when one library has more
+    instances alive at once, published with an atomic store and never freed. Zeroed memory is an empty
+    table, so nothing needs module initialization. Each kit library has its own table.
+  - **A slot** holds a lock, its generation and the live context (nil when none). Free slots are on a
+    list under a table lock (an atomic flag), taken only to hand out and take back a slot and never
+    held with a slot lock (G3).
+  - **Lifetime (G3).** `confinedInit` takes a slot right after the context's locks, before either
+    thread starts, since `initModule` may give its poster away at once; no slot is an init failure.
+    `freeContext` clears the slot first, under its lock alone, and moves its generation on, so destroy
+    (after both threads are joined) and each of `confinedInit`'s failure paths retire it. A slot whose
+    generation would pass the maximum is retired, never reused, which closes ABA.
+  - **Lock order:** the slot's lock, then the context's, in `post`, `lcn_kit_post` and the consumer
+    dispatcher's `postTask`; the slot's lock is held until the context's is released, so the context
+    cannot be freed between the check and its use. It cannot deadlock destroy (G4): firing the signal
+    does not wait, and destroy takes the slot's lock only after both threads are joined.
+  - **Refusals.** A stale generation or a cleared slot is refused. A refused `post` frees its node and
+    never calls `fn`; the payload stays the caller's. A refused `postTask` runs its task with drop, as
+    a post after the last drain already did, and in both refusals only after releasing the slot's lock
+    (G5): the task takes the consumer runtime's locks and may free its owner. That is safe after
+    destroy: the owner is kept by its pending count, and the dispatcher record is a value copied into
+    each handle, so the context was the only thing that pointed into freed memory.
+  - **Every platform.** Only the kit's own locks and C memory, so Windows runs the same code.
+  - **The cost:** one more lock per post.
+  - **Not a licence (G8).** The gate protects the Runtime's memory. A thread that still posts after
+    destroy is residual work (l.2100), and the guide keeps the module's duty to stop posting and
+    release its handles before `destroyModule` returns (MODULE-KIT §3).
+- **Tests:** `sdk/tests/test_kit_confined.nim` "the post gate", in process, each breaking the module's
+  duty on purpose: the packing (never null, a round trip, the largest value fills 64 bits, the last
+  generation retires its slot, through `gateNext` with forced generations); `post` and `lcn_kit_post`
+  from a foreign C thread after `_MODULE_destroy` returned (refused, `fn` never runs); deliveries, a
+  subscription end, a route end and a completion for a handle, subscription and prepared call
+  `destroyModule` left unreleased (destroy mode 8; each dropped, the handle's pending count back to 0
+  through the consumert test hook `pendingTasks`, no handler runs); the poster an `initModule` gave
+  away before it failed (refused); a slot reused by the next context (a generation on; the old poster
+  refused, the new one served); and a foreign stream that posts through destroy and on into the
+  slot's next context, 20 cycles (destroy mode 9; no callback after the return). The fixture's
+  handlers count a call after the return in `lateCalls`. The last case was run once by hand under
+  AddressSanitizer and once under ThreadSanitizer before the merge; CI's sanitizer groups run the
+  suite.
+- **Status:** built 2026-11-21 (Tier 5 step N-1e, part D).
+
 ### G317 — The reverse mapper's input set
 - **Kind:** IMPL (gaps Q1, Q4; reading Q6) · **Specs:** INTERFACE §3 · **Plan:** `tier5-plans/step5-1-reverse-mapper.md` §4.1. Section and Q numbers below are the plan's; `l.` cites are INTERFACE.
 - **Decision.** Plan §3.2 and §3.3. `<stdbool.h>`, `<stddef.h>` and `<stdint.h>` are the only angle includes, the ones `logos_types.h` includes (IF l.3432-3434). `"logos_types.h"` is the only fixed include and is optional (Q6: l.2335, l.2217-2219, l.2640); redeclaring a fixed common type is rejected. An include cycle is rejected, which is stricter than l.2297. A file-level include guard may enclose declarations and the fixed and standard includes, never a contract-header include, a check or a document guard (l.2325). Comments-document remarks 1 (`65d614be`)
@@ -7732,6 +7794,7 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G398 | catalog and provenance selections in the package trust file | FREE (C3, C9) | 9 |
 | G437 | what runs while a confined kit's `destroyModule` runs | IMPL | 12 |
 | G438 | closing a confined kit's module-thread dispatcher, and what destroy left | IMPL | 12 |
+| G440 | a post gate that outlives a confined kit's context | IMPL | 12 |
 
 ---
 

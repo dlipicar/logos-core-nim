@@ -55,6 +55,9 @@
 ## module thread's dispatcher and never unregisters it; 26 does the same and
 ## closes it without unregistering it; 27 names the chronos the library was
 ## built with (`main line` once it has `closeThreadDispatcher`, else `4.4.1`).
+## For G440's post gate, `probe` 28 answers this instance's poster value in
+## decimal, and an `initModule` given the state directory `/refuse-poster`
+## keeps its poster in `refusedPoster`, then fails.
 ##
 ## `destroyModule` is `async` [DECISIONS G437], and awaits only when the test
 ## set `destroyMode` before the destroy; every other destroy returns without
@@ -152,13 +155,21 @@ var
     ## `publishAsync`; 4 nothing, after two foreign threads posted 10 callbacks
     ## each; 5 as 1, 300 ms later, then reads what its handlers saw; 6 until a
     ## `wait` 12 handler finished; 7 as 1, 100 ms later. Each wait is bounded by
-    ## 5 s. Every mode then stops `probe` 24's stream.
+    ## 5 s. Every mode then stops `probe` 24's stream. [DECISIONS G440] Two
+    ## modes break the module's duty on purpose: 8 leaves its wrapped route
+    ## handle, subscription and prepared call unreleased (in `leftRoute` and
+    ## `leftCall`), and 9 leaves `probe` 24's stream running (in `leftStream`,
+    ## for `stopLeftStream`).
   destroyStarted*: Atomic[bool] ## a `destroyModule` began
   destroyReturned*: Atomic[bool] ## a `destroyModule` returned
   streamed*: Atomic[int] ## stream callbacks that ran
   streamedDuring*: Atomic[int] ## of them, while `destroyModule` ran
   lateCalls*: Atomic[int] ## of them, after `destroyModule` returned
   residualDone*: Atomic[int] ## `wait` 12 handlers that finished
+  refusedPoster*: Atomic[pointer] ## the poster a failed `initModule` gave away
+  leftRoute*: RouteHandle ## destroy mode 8: the handle left unreleased
+  leftCall*: PreparedCall ## destroy mode 8: the call left unreleased
+  leftStream*: Atomic[pointer] ## destroy mode 9: the stream left running
   destroyNoteLen: Atomic[int]
   destroyNoteText: array[64, char]
     ## what the last `destroyModule` noted: plain memory, read on the test's thread
@@ -197,6 +208,11 @@ proc initModule(
   if init.stateDir == Opt.some("/refuse"): # refuse to start
     return Result[Ledger, InvocationFailure].err(
       failure(ecModule, "the state directory says no")
+    )
+  if init.stateDir == Opt.some("/refuse-poster"): # give the poster away, then fail
+    refusedPoster.store(cast[pointer](init.services.poster))
+    return Result[Ledger, InvocationFailure].err(
+      failure(ecModule, "the state directory says no, after the poster went")
     )
   try:
     await sleepAsync(1.milliseconds)
@@ -321,6 +337,17 @@ proc destroyModule(m: Ledger) {.async: (raises: []).} =
     note = "residual=" & $residualDone.load
   of 7:
     note = "woke=" & $(await m.awaitWake(100))
+  of 8:
+    {.cast(gcsafe).}:
+      leftRoute = m.route
+      leftCall = m.call
+    m.route = nil
+    m.call = PreparedCall()
+    note = "left"
+  of 9:
+    leftStream.store(m.stream)
+    m.stream = nil
+    note = "streaming"
   else:
     discard
   if not m.stream.isNil:
@@ -337,7 +364,31 @@ proc destroyModule(m: Ledger) {.async: (raises: []).} =
   setDestroyNote(note)
   destroyReturned.store(true)
 
+proc stopLeftStream*(): int =
+  ## [DECISIONS G440] Stops the stream destroy mode 9 left running: how many
+  ## posts it made, -1 when there was none.
+  let s = leftStream.exchange(nil)
+  if s.isNil:
+    -1
+  else:
+    int(foreignStreamStop(s))
+
+proc postFromNim*(poster: pointer) =
+  ## [DECISIONS G440] One `post` of a counted callback through `poster`.
+  post(Poster(poster), onPosted, nil)
+
+proc postFromC*(poster: pointer): bool =
+  ## [DECISIONS G440] One `lcn_kit_post` of a counted callback through
+  ## `poster`, from a foreign C thread this joins.
+  let later = foreignPostLater(poster, onPosted, nil, 0)
+  if later.isNil:
+    return false
+  foreignLaterJoin(later)
+  true
+
 proc ledgerOf(user: pointer): Ledger =
+  if destroyReturned.load:
+    lateCalls += 1 # [DECISIONS G440] a handler of an instance already gone
   let m = cast[Ledger](user)
   if not m.services.onItsModuleThread():
     inc m.offThread
@@ -582,6 +633,8 @@ proc `probe`(
     note = leaveRegistered(closeIt = true)
   of 27:
     note = (when declared(closeThreadDispatcher): "main line" else: "4.4.1")
+  of 28:
+    note = $cast[uint](cast[pointer](m.services.poster))
   else:
     discard
   ok(LedgerProbeResponse(value: request.value, thread: threadNumber(), note: note))
