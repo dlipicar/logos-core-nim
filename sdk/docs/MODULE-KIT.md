@@ -297,7 +297,8 @@ for confined mode, chronos 4.4.x (this repository locks 4.4.1; confined mode use
 4.4.0), built without `chronosStrictReentrancy`, which the kit refuses. The kit compiles with
 logos-storage-nim's switches (`-d:chronosHandleException`, `--styleCheck:error`, `--fieldChecks:on`
 with `ProveField` as an error, among others) and logos-delivery's (`--deepcopy:on`,
-`-d:nimOldCaseObjects`); the `kit-toolchains` flake check builds the test libraries with both sets.
+`-d:nimOldCaseObjects`); the `kit-toolchains-storage` and `kit-toolchains-delivery` flake checks
+build the test libraries with each set.
 
 **Getting the SDK.** Until the SDK is a nimble package of its own (the repository split's packaging
 step), put this repository's `sdk/src` on the Nim path (`--path:`, or a `nimble.paths` entry), with
