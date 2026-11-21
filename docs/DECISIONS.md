@@ -7299,6 +7299,12 @@ their history.
   teardown closed the selector and dropped the dispatcher, so every module thread leaked it:
   test_kit_mixed MX-1 counted 41 descriptors against 21 under either library's chronos. On the lock's
   chronos 4.4.1 it passes.
+  - **Linux:** confirmed by W2-P's `p7-toolchains` check on framework.lan (2026-11-21,
+    `tier5-plans/stepW2-P-spike.md` §2). Without this decision, MX-1 counted 24 descriptors against
+    14 under both libraries' chronos: one eventfd per dispatcher.
+  - **With W2-P's scratch copy of the fix**, these pass under both: test_kit_mixed (orc) 4/4,
+    test_kit_dylib (refc) 16/16, run.mixed (orc) 3/3, and test_kit_confined 39/39 under orc and refc.
+    Each kit's C named the library's chronos.
 - **Decision.** At teardown, after the kit's own signal is closed (so its registration never counts)
   and the dispatcher's callbacks are cleared, `confinedrt.closeDispatcher`:
   - counts the descriptors left: the open ones (`/proc/self/fd`, `/dev/fd`, else each below
