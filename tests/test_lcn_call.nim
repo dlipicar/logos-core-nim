@@ -383,76 +383,89 @@ when defined(posix):
 
     test "L-10: calls past a short decision validity, concurrent calls on one route, an idle close, and a call after the provider restarted":
       # [IMPL] A decision takes up to about 1.5 s on a loaded host (refc, or a
-      # load of 100), and its validity runs from it. With 8 s and a command
-      # every second, the next command renews the route before it ends; the
-      # idle close comes only after the calls stop. A refc build takes `Load`
+      # load of 100), and its validity runs from it. A refc build takes `Load`
       # times as long for a decision and a renewal.
       let validity = 8_000 * Slow * Load
-      # Unused for half the validity, the route closes: longer than the gap
-      # between two calls below, an eighth of it and a call.
+      # Unused for half the validity, the route closes; `callsUntil` keeps it
+      # in use until the case lets it close.
       let idle = validity div 2
       l = boot(
         newSession(
           Shape(validityMs: validity, routeIdleMs: idle, providers: @[MeterInstance])
         )
       )
-      check l.run(meterRead(7)).exit == 0
-      let first = l.cliRoutes
-      check first.len == 1
-      # [G348] Past the first decision's validity the route has been renewed
-      # onto a new handle: the calls go on, on the same route. The calls stop
-      # once both are seen, not at a fixed time.
       let began = getMonoTime()
-      let bound =
-        initDuration(milliseconds = 2 * validity) + initDuration(seconds = Patience)
-      var calls = 0
-      var renewed = first
-      while getMonoTime() - began < bound and (
-        calls < 3 or getMonoTime() - began < initDuration(milliseconds = validity) or
-        renewed.len != 1 or first.len != 1 or
-        renewed[0].decision_id == first[0].decision_id
-      )
-      :
-        let r = l.run(meterRead(7))
-        checkpoint r.said
-        check r.exit == 0
-        inc calls
-        renewed = l.cliRoutes
-        sleep(validity div 8)
-      checkpoint $calls & " calls in " & $inMilliseconds(getMonoTime() - began) & " ms"
-      check renewed.len == 1
-      if first.len == 1 and renewed.len == 1:
-        check renewed[0].route == first[0].route
-        check renewed[0].decision_id != first[0].decision_id
-      # Six workers call on the one route at once.
-      var threads: array[6, Thread[(ptr Live, int)]]
-      for i in 0 ..< threads.len:
-        concurrent[i].store(-1)
-        createThread(threads[i], reader, (addr l, i))
-      joinThreads(threads)
-      for i in 0 ..< threads.len:
-        check concurrent[i].load == 0
-      check l.cliRoutes.len == 1
-      # [G348, G350] Unused for `route_idle_ms`, lcn_call closes it.
-      let closing = getMonoTime() + initDuration(milliseconds = idle + Patience * 1000)
-      while l.cliRoutes.len > 0 and getMonoTime() < closing:
-        sleep(50)
-      check l.cliRoutes.len == 0
-      check l.state(CliInstance) == LogosNSRuntimeControlStateKind.Ready
       check l.run(meterRead(7)).exit == 0
-      let again = l.cliRoutes
-      check again.len == 1
-      if again.len == 1 and first.len == 1:
-        check again[0].route != first[0].route
-      # [G348; plan §3.5 step 8] After the provider restarted, the ended handle
-      # is not used (rule 1) or a NOT_READY completion is retried once (rule 2).
-      l.stop("meter_module", MeterInstance)
-      check l.reaches(MeterInstance, LogosNSRuntimeControlStateKind.Unloaded)
-      l.start("meter_module", MeterInstance)
-      check l.reaches(MeterInstance, LogosNSRuntimeControlStateKind.Ready)
-      let after = l.run(meterRead(7))
-      checkpoint after.said
-      check after.exit == 0
+      var cost = msSince(began)
+      let first = l.cliRoutes
+      check first.len == 1 and first[0].expires_at.isSome
+      if first.len == 1 and first[0].expires_at.isSome:
+        # Six workers call on the one route at once.
+        var threads: array[6, Thread[(ptr Live, int)]]
+        for i in 0 ..< threads.len:
+          concurrent[i].store(-1)
+          createThread(threads[i], reader, (addr l, i))
+        joinThreads(threads)
+        for i in 0 ..< threads.len:
+          check concurrent[i].load == 0
+        check l.cliRoutes.mapIt(it.route) == @[first[0].route]
+        # [G348] A command that leases the route with less than 5 s of its
+        # decision left (or a tenth of the validity, if that is more) renews it
+        # onto a new handle, before the decision ends. This one starts 4.5 s
+        # before the first decision ends: inside that, and early enough for the
+        # renewal, whatever a command costs on this build.
+        let ends = int64(first[0].expires_at.get)
+        l.callsUntil(ends - 4_500, idle, cost)
+        let renewing = l.run(meterRead(7))
+        checkpoint renewing.said
+        check renewing.exit == 0
+        let renewed = l.cliRoutes
+        check renewed.len == 1
+        if renewed.len == 1:
+          check renewed[0].route == first[0].route
+          check renewed[0].decision_id != first[0].decision_id
+        # Past the first decision's end the calls go on, on the same route.
+        l.callsUntil(ends + 500, idle, cost)
+        let past = l.run(meterRead(7))
+        checkpoint past.said
+        check past.exit == 0
+        check l.cliRoutes.mapIt(it.route) == @[first[0].route]
+        # [G348 R5] A command whose deadline outlasts what is left of the
+        # decision renews the route first, since a renewal does not extend a
+        # session. The idle close below then has the whole validity to come
+        # before the decision ends.
+        let long = l.run(meterRead(7), deadlineMs = Timeout)
+        checkpoint long.said
+        check long.exit == 0
+        let fresh = l.cliRoutes
+        check fresh.len == 1 and fresh[0].expires_at.isSome
+        if fresh.len == 1 and renewed.len == 1:
+          check fresh[0].route == first[0].route
+          check fresh[0].decision_id != renewed[0].decision_id
+        # [G348, G350] Unused for `route_idle_ms`, lcn_call closes it, before
+        # its decision ends.
+        let closing =
+          getMonoTime() + initDuration(milliseconds = idle + Patience * 1000)
+        while l.cliRoutes.len > 0 and getMonoTime() < closing:
+          sleep(50)
+        check l.cliRoutes.len == 0
+        if fresh.len == 1 and fresh[0].expires_at.isSome:
+          check nowWallMs() < int64(fresh[0].expires_at.get)
+        check l.state(CliInstance) == LogosNSRuntimeControlStateKind.Ready
+        check l.run(meterRead(7)).exit == 0
+        let again = l.cliRoutes
+        check again.len == 1
+        if again.len == 1 and first.len == 1:
+          check again[0].route != first[0].route
+        # [G348; plan §3.5 step 8] After the provider restarted, the ended handle
+        # is not used (rule 1) or a NOT_READY completion is retried once (rule 2).
+        l.stop("meter_module", MeterInstance)
+        check l.reaches(MeterInstance, LogosNSRuntimeControlStateKind.Unloaded)
+        l.start("meter_module", MeterInstance)
+        check l.reaches(MeterInstance, LogosNSRuntimeControlStateKind.Ready)
+        let after = l.run(meterRead(7))
+        checkpoint after.said
+        check after.exit == 0
 
     test "L-11: subscribe: --count and --for, the event's three name forms, text output, the launcher's EOF (130), a stalled reader (6), the provider stopping (6), lcn_call stopping (6) [IMPL-DECISION G349]":
       l = boot(

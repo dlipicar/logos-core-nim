@@ -547,9 +547,11 @@ proc run(
     timeoutMs = Timeout,
     credOf: CredFn = nil,
     files: seq[cint] = @[],
+    deadlineMs = 0,
 ): Ran =
   ## `files` are the `@FILE` descriptors, in the order `fileArg`'s `fd`
-  ## indexes them (2 is the first); `run` closes them.
+  ## indexes them (2 is the first); `run` closes them. `deadlineMs` > 0 is the
+  ## message's `deadline_ms`.
   let (op, ofd) = outFile(l.outDir)
   let (ep, efd) = outFile(l.outDir)
   var msg = LcnCliMessage(
@@ -562,6 +564,8 @@ proc run(
   )
   if target.len > 0:
     msg.target = Opt.some(target)
+  if deadlineMs > 0:
+    msg.deadline_ms = Opt.some(uint32(deadlineMs))
   let began = getMonoTime()
   let r = launch(
     Launch(
@@ -742,6 +746,30 @@ proc reader(arg: (ptr Live, int)) {.thread.} =
   let (lp, i) = arg
   concurrent[i].store(lp[].run(meterRead(30 + i)).exit)
   releasePerThread()
+
+proc nowWallMs(): int64 =
+  ## The wall clock in ms, as a route record's `expires_at` counts it.
+  let t = getTime()
+  t.toUnix * 1000 + int64(t.nanosecond div 1_000_000)
+
+proc callsUntil(l: Live, until: int64, idleMs: int, cost: var int64) =
+  ## [IMPL] Commands keep `l`'s meter route in use until the wall clock reaches
+  ## `until` (ms), then return. Each gap is a third of `idleMs`; the last is
+  ## cut so the next command can start at `until`, leaving room for `cost`, the
+  ## longest command so far. So no gap reaches `idleMs` while a command costs
+  ## less than two thirds of it, and one that costs no more than `cost` ends
+  ## before `until`.
+  while true:
+    let left = until - nowWallMs()
+    if left <= idleMs div 3 + cost:
+      sleep(int(max(left, 0)))
+      return
+    sleep(idleMs div 3)
+    let began = getMonoTime()
+    let r = l.run(meterRead(7))
+    checkpoint r.said
+    check r.exit == 0
+    cost = max(cost, msSince(began))
 
 proc otherUid(fd: cint): Result[Peer, string] {.nimcall, gcsafe, raises: [].} =
   let p = ?peerOf(fd)
