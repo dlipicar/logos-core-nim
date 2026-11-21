@@ -677,6 +677,24 @@
             python3 ${./tools/lint/layers.py} --config ${./tools/lint/layers.toml}
             touch $out
           '';
+          # The suites a change can reach (tools/affected_suites.py, wave 2's merge rule 1): its
+          # planted cases, and on this tree the suites the rule names for genfixtures.nim,
+          # DAEMON.md and commitment/choice.nim.
+          affected-suites =
+            let
+              tool = lib.fileset.toSource {
+                root = ./tools;
+                fileset = lib.fileset.unions [
+                  ./tools/affected_suites.py
+                  ./tools/lint/layers.py
+                ];
+              };
+            in
+            s.pkgs.runCommand "affected-suites" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
+              cd ${s.nimSources}
+              python3 -I ${tool}/affected_suites.py --self-test --root .
+              touch $out
+            '';
         }
         // lib.optionalAttrs s.pkgs.stdenv.hostPlatform.isLinux (
           let

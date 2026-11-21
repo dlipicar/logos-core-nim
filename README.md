@@ -224,6 +224,15 @@ nix build -L --keep-going .#ciGroups.asan
 nix build -L --keep-going .#ciShards.asan-1
 ```
 
+The suites a change can reach, from its merge base to the merged tree: imports followed
+transitively, test support modules included, and the documents, contracts, fixtures and kit
+sources the suites name by path (`--why` prints how each suite is reached, `--variant orc` the
+flake checks):
+
+```bash
+python3 -I tools/affected_suites.py "$(git merge-base master HEAD)" HEAD
+```
+
 ```bash
 nix develop
 ```

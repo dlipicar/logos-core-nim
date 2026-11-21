@@ -3,6 +3,7 @@
  "run": 44888184613,
  "commit": "0a459c9",
  "minutes": {
+  "affected-suites": 0.3,
   "kit-toolchains-delivery": 21.7,
   "kit-toolchains-storage": 35.5,
   "lint-layers": 0.1,
@@ -584,6 +585,7 @@
   "orc-release": 4.0
  },
  "estimated": {
+  "affected-suites": "new check; its self-test takes 6 s on the Mac",
   "kit-toolchains-delivery": "inside kit-toolchains, from its `kit-toolchains: <set>` line for this set to its install phase",
   "kit-toolchains-storage": "inside kit-toolchains, from its `kit-toolchains: <set>` line for this set to the next",
   "test_host_dylib-orc": "aarch64 5.8 x 1.46; cut at 1.5 on x86_64",
