@@ -146,6 +146,9 @@ const
     ## [IMPL] (DECISIONS G339, P1) events queued for the module thread's
     ## handlers, across the context's subscriptions
   RefusalNameCap = 256
+  UnwindMs = 2000
+    ## [IMPL] (DECISIONS G338) how long destroy waits for the cancelled handlers
+    ## of submitted invocations a Runtime did not drain
 
 # Statuses copied across threads ---------------------------------------------------
 
@@ -217,6 +220,7 @@ type
     finished: bool ## under the context's lock: completed, not yet released
     refs: int ## under the context's lock: the job's own, and a queued notice's
     inv: pointer ## module thread: the job's `InvocationObj` while its handler runs
+    unwound: bool ## module thread: destroy cancelled its handler (G338)
 
   PostFn* = proc(payload: pointer) {.cdecl, gcsafe, raises: [].}
     ## A callback `post` runs on the module thread.
@@ -744,11 +748,63 @@ proc initTask(job: ptr ConfinedJob) {.async: (raises: []).} =
     wipeError(r)
   finishJob(job, nil, outcome)
 
+proc cancelHandler(dj: ptr DeferredJob): bool =
+  ## [SPEC INTERFACE §2.9.2 l.2112; DECISIONS G338] Module thread: cancels the
+  ## future of the `async` handler `dj`'s invocation runs, if one is waiting.
+  ## The route awaits it behind `noCancel`, so only the handler sees it.
+  if dj.inv == nil:
+    return false
+  let inv {.cursor.} = cast[Invocation](dj.inv)
+  if inv.handler.isNil or inv.handler.finished():
+    return false
+  inv.handler.cancelSoon()
+  true
+
+proc unwindDeferred(ctx: ptr ConfinedObj) {.async: (raises: []).} =
+  ## [SPEC INTERFACE l.2100, l.2113-2117; DECISIONS G338] A second chance for a
+  ## Runtime that destroys with submitted invocations it did not drain
+  ## (against l.2114): each waiting `async` handler is cancelled, as
+  ## `request_cancel` would, and every outstanding invocation gets `UnwindMs`
+  ## to complete while the instance still lives. One whose handler was
+  ## cancelled here completes NOT_READY; one waiting for its scoped
+  ## publications keeps its outcome. What is still outstanding then is
+  ## completed at teardown, its task abandoned. An `await`, never a nested
+  ## poll: destroy may itself run inside a handler's nested loop.
+  var running: seq[ptr DeferredJob]
+  acquire(ctx.lock)
+  var dj = ctx.live
+  while dj != nil:
+    if dj.inv != nil:
+      running.add(dj)
+    dj = dj.next
+  release(ctx.lock)
+  for dj in running:
+    # Outside the lock: a cancellation may run the handler's callbacks. A job
+    # whose handler runs cannot complete before this thread turns again.
+    dj.unwound = true
+    discard dj.cancelHandler()
+  let deadline = Moment.now() + UnwindMs.milliseconds
+  while Moment.now() < deadline:
+    acquire(ctx.lock)
+    let outstanding = ctx.live != nil
+    release(ctx.lock)
+    if not outstanding:
+      break
+    try:
+      await sleepAsync(1.milliseconds)
+    except CancelledError:
+      break
+
 proc destroyTask(job: ptr ConfinedJob) {.async: (raises: []).} =
   let a = cast[ptr DestroyArgs](job.args)
   let ctx = job.ctx
+  # [DECISIONS G338] No new job reaches the instance (each answers NOT_READY);
+  # running handlers keep their own reference to it until it is disposed.
+  # `disposed` waits for the unwinding: it drops posted tasks, and a cancelled
+  # handler may await a completion that arrives as one.
   let instance = ctx.instance
   ctx.instance = nil
+  await unwindDeferred(ctx)
   ctx.disposed = true
   if instance != nil:
     let f = a.dispose(instance)
@@ -983,6 +1039,13 @@ proc deferredTask(dj: ptr DeferredJob) {.async: (raises: []).} =
       dj.route(ctx.instance, $i.`method`, i.paramsCbor, int(i.paramsCborLen), inv)
     )
     dj.inv = nil
+    if dj.unwound:
+      # [DECISIONS G338] Unwound by destroy's cancellation: whatever it
+      # answered goes, wiped, since it may be a marked response.
+      wipe(outcome)
+      outcome = Result[seq[byte], InvocationFailure].err(
+        failure(ecNotReady, "the module was destroyed")
+      )
   await drain(job)
   inv.job = nil
   completeDeferred(dj, outcome)
@@ -998,10 +1061,8 @@ proc runCancel(task: ptr TaskNode, drop: bool) {.nimcall, gcsafe, raises: [].} =
   dj.cancelQueued = false
   let finished = dj.finished
   release(ctx.lock)
-  if not drop and not finished and dj.inv != nil:
-    let inv {.cursor.} = cast[Invocation](dj.inv)
-    if not inv.handler.isNil and not inv.handler.finished():
-      inv.handler.cancelSoon()
+  if not drop and not finished:
+    discard dj.cancelHandler()
   dj.unref()
 
 proc launchInit(job: ptr ConfinedJob) =
@@ -1194,9 +1255,11 @@ proc teardown(ctx: ptr ConfinedObj) =
     of nkTask:
       let t = cast[ptr TaskNode](n)
       t.run(t, true)
-  # [DECISIONS G338] Submitted invocations whose tasks still wait (a Runtime
-  # that destroys before their release, against INTERFACE l.2114): completed
-  # NOT_READY and released here, once each; their tasks never resume.
+  # [DECISIONS G338] Submitted invocations still outstanding after destroy's
+  # unwinding (a Runtime that destroys before their release, against INTERFACE
+  # l.2114, and a handler that did not end when cancelled): completed NOT_READY
+  # and released here, once each. No task resumes after teardown: an abandoned
+  # one keeps its frames, which chronos pins while they wait (l.2116-2117).
   while true:
     acquire(ctx.lock)
     let dj = ctx.live

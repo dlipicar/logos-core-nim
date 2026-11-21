@@ -22,7 +22,8 @@
 ## cancelled; 9 sleeps `millis` and answers CANCELLED when its future is
 ## cancelled meanwhile (a submitted invocation's cancellation, G338); 10 calls
 ## `meter.read` of channel `value` with `invokeAsync` through the handle `probe`
-## 10 wrapped, with a deadline of `millis` when nonzero. `seal` (marked)
+## 10 wrapped, with a deadline of `millis` when nonzero; 11 sleeps `millis`
+## and ignores a cancellation (`noCancel`). `seal` (marked)
 ## returns its secret reversed and masked. Every response names its handler's
 ## thread. The kit also exports `_MODULE_async_api` (`--async-api`).
 ##
@@ -59,25 +60,33 @@ proc foreignPost(
   poster: pointer, fn: PostFn, threads, count: cint
 ): cint {.importc: "lcn_foreign_post", cdecl, gcsafe, raises: [].}
 
-type Ledger* = ref object
-  services*: ModuleServices
-  entries: Table[string, uint64]
-  keys: seq[string]
-  kept: Invocation
-  # As a consumer (G339): module thread only, GC'd values included.
-  route: RouteHandle
-  sub: Subscription
-  call: PreparedCall
-  seen: seq[uint64]
-  offThread: int
-  endNote, routeEndNote, doneNote, ruleNote: string
-  stateDir: string
-  refused: int ## `post` publications the kit refused
-  set: RouteSet ## from `probe` 18
-  routeId: string
+type
+  FreedMark = object
+    ## Counts its instance in `freed` when the instance's memory goes; a moved-from
+    ## mark is not live.
+    live: bool
+
+  Ledger* = ref object
+    mark: FreedMark
+    services*: ModuleServices
+    entries: Table[string, uint64]
+    keys: seq[string]
+    kept: Invocation
+    # As a consumer (G339): module thread only, GC'd values included.
+    route: RouteHandle
+    sub: Subscription
+    call: PreparedCall
+    seen: seq[uint64]
+    offThread: int
+    endNote, routeEndNote, doneNote, ruleNote: string
+    stateDir: string
+    refused: int ## `post` publications the kit refused
+    set: RouteSet ## from `probe` 18
+    routeId: string
 
 var
   destroyed*: Atomic[int] ## instances `destroyModule` has seen
+  freed*: Atomic[int] ## instances whose memory was freed
   posts*: Atomic[int] ## callbacks foreign threads posted that ran
   cancelledWaits*: Atomic[int] ## `wait` 9 handlers whose future was cancelled
   sleepingWaits*: Atomic[int] ## `wait` 9 handlers asleep now
@@ -85,6 +94,12 @@ var
   probeHook*: proc(m: Ledger, value: uint64): string {.nimcall, gcsafe, raises: [].}
     ## what `probe` 8 calls; the test sets it
   routeToWrap*: LogosRouteHandle ## what `probe` 10 wraps; the test sets it
+
+proc `=destroy`(m: FreedMark) =
+  if m.live:
+    freed += 1
+
+proc `=copy`(a: var FreedMark, b: FreedMark) {.error.}
 
 proc threadNumber(): uint64 =
   uint64(getThreadId())
@@ -101,7 +116,11 @@ proc initModule(
   except CancelledError:
     discard
   Result[Ledger, InvocationFailure].ok(
-    Ledger(services: init.services, stateDir: init.stateDir.get(""))
+    Ledger(
+      mark: FreedMark(live: true),
+      services: init.services,
+      stateDir: init.stateDir.get(""),
+    )
   )
 
 proc destroyModule(m: Ledger) =
@@ -425,6 +444,9 @@ proc `wait`(
         MeterReadRequest(channel: uint32(request.value)), uint64(request.millis)
       )
       note = (if r.isOk: "ok:" & r.unsafeGet.label else: $r.unsafeError.code)
+  of 11:
+    await noCancel(sleepAsync(int(request.millis).milliseconds))
+    note = "slept"
   else:
     discard
   Result[LedgerWaitResponse, InvocationFailure].ok(
