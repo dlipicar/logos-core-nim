@@ -1,7 +1,8 @@
 ## TRANSPORT §8.2, §9.1; RUNTIME §2.3, §6.2; G58: the endpoints of
 ## `logos.local.unix-stream`.
 ##
-## `createEndpoint` makes `<base>/<8 hex>/logos_<module>.sock`: a fresh directory,
+## `createEndpoint` makes `<base>/<8 hex>/logos_<module>.sock`, the module's name
+## shortened when the path would not fit `sun_path` (G58 amended): a fresh directory,
 ## mode 0700 and owned by the effective uid whatever the umask; a socket bound
 ## there without ever following, removing or replacing an existing object; mode
 ## 0600; listening before any handoff. The Runtime keeps its own listener and
@@ -23,7 +24,7 @@ export results
 type
   EndpointErrorKind* = enum
     eeBase ## the base directory is unsafe or missing
-    eeTooLong ## the path does not fit `sun_path`: the placement fails (G58)
+    eeTooLong ## not even the shortest socket name fits `sun_path` (G58)
     eeExists ## an object already exists at the path; it is left untouched
     eeCreate ## a system call failed
     eeInvalid ## validation failed: the endpoint is not the one created
@@ -42,7 +43,7 @@ type
   Endpoint* = object
     dir*: EndpointDir
     path*: string ## the socket path the descriptor carries
-    sockName*: string ## `logos_<module>.sock`
+    sockName*: string ## `logos_<module>.sock`, fitted (`fittedSocketName`)
     listener*: cint ## the Runtime's own copy, kept until removal
     dev*, ino*: uint64 ## the socket object's identity
 
@@ -58,6 +59,25 @@ func fail(k: EndpointErrorKind, msg: string): EndpointError =
 func socketName*(moduleName: string): string =
   ## [G58] The socket's file name for a flat runtime module name.
   SockPrefix & moduleName & SockSuffix
+
+func shortestSocketPath*(base: string): string =
+  ## [G58 amended 2026-11-21; IMPL] The shortest path an endpoint under `base`
+  ## can have, `<base>/<8 hex>/logos_.sock`: a base whose shortest path does
+  ## not fit `sun_path` can place no endpoint.
+  base & "/12345678/" & socketName("")
+
+func fittedSocketName*(dirPath, moduleName: string, max: int): Opt[string] =
+  ## [G58 amended 2026-11-21; SPEC RUNTIME l.296-297; IMPL] The socket's name in
+  ## the per-instance directory `dirPath`: `logos_<module>.sock` when the path
+  ## and its NUL fit `max` bytes, otherwise `logos_<p>.sock` with `p` the
+  ## longest prefix of the name that fits (a module name is ASCII,
+  ## `[a-z][a-z0-9_]*`, RUNTIME l.284). The directory holds this one socket, so
+  ## a prefix names nothing else, and the path, not the name, is what tickets
+  ## carry. None when not even `logos_.sock` fits.
+  let room = max - 1 - dirPath.len - 1 - SockPrefix.len - SockSuffix.len
+  if room < 0:
+    return Opt.none(string)
+  Opt.some(socketName(moduleName[0 ..< min(room, moduleName.len)]))
 
 when unixStream:
   proc stat(fd: cint): Result[StatInfo, cint] =
@@ -83,7 +103,17 @@ when unixStream:
 
   proc checkBase(base: string): Result[void, EndpointError] =
     ## [IMPL] The base is a real directory (not a symbolic link) that only this
-    ## uid can write to, or root's sticky directory such as `/tmp`.
+    ## uid can write to, or root's sticky directory such as `/tmp`, and it
+    ## leaves `sun_path` room for the shortest endpoint (G58 amended).
+    let shortest = shortestSocketPath(base)
+    if not fitsSunPath(shortest):
+      return err(
+        fail(
+          eeTooLong,
+          shortest & " does not fit sun_path (" & $(sunPathMax() - 1) &
+            " bytes): the base leaves no room for an endpoint",
+        )
+      )
     let st = lstat(base).valueOr:
       return err(fail(eeBase, base & ": " & errText(error)))
     if not st.isDir:
@@ -200,21 +230,24 @@ proc validateEndpoint*(ep: Endpoint): Result[void, EndpointError] {.gcsafe.}
 proc bindEndpoint*(
     d: EndpointDir, moduleName: string, backlog = 128
 ): Result[Endpoint, EndpointError] =
-  ## [SPEC TRANSPORT §8.2] Binds and listens on `<dir>/logos_<module>.sock`.
-  ## Any object already at the path, a symbolic link included, makes `bind`
-  ## fail; it is never followed, removed or replaced (`eeExists`). A path that
-  ## does not fit `sun_path` is `eeTooLong` and nothing is created (G58).
+  ## [SPEC TRANSPORT §8.2] Binds and listens on `<dir>/logos_<module>.sock`,
+  ## the module's name shortened to fit `sun_path` (`fittedSocketName`; G58
+  ## amended). Any object already at the path, a symbolic link included, makes
+  ## `bind` fail; it is never followed, removed or replaced (`eeExists`). A
+  ## directory that leaves no room even for `logos_.sock` is `eeTooLong` and
+  ## nothing is created.
   when unixStream:
     if moduleName.len == 0 or '/' in moduleName or '\0' in moduleName:
       return err(fail(eeCreate, "not a flat module name: " & moduleName))
-    let name = socketName(moduleName)
-    let path = d.path & "/" & name
-    if not fitsSunPath(path):
+    let name = fittedSocketName(d.path, moduleName, int(sunPathMax())).valueOr:
       return err(
         fail(
-          eeTooLong, path & " does not fit sun_path (" & $(sunPathMax() - 1) & " bytes)"
+          eeTooLong,
+          d.path & "/" & socketName(moduleName) & " does not fit sun_path (" &
+            $(sunPathMax() - 1) & " bytes), shortened or not",
         )
       )
+    let path = d.path & "/" & name
     # Darwin's bind follows a dangling symbolic link and creates the socket at
     # its target; Linux refuses. So anything at the path, looked up without
     # following, is refused first. Only this uid can write in the fresh 0700

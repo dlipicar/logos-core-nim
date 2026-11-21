@@ -341,8 +341,9 @@ when defined(posix):
       # [IMPL] A decision takes up to about 1.5 s on a loaded host (refc, or a
       # load of 100), and its validity runs from it. With 8 s and a command
       # every second, the next command renews the route before it ends; the
-      # idle close comes only after the calls stop.
-      let validity = 8_000 * Slow
+      # idle close comes only after the calls stop. A refc build takes `Load`
+      # times as long for a decision and a renewal.
+      let validity = 8_000 * Slow * Load
       let idle = validity
       l = boot(newSession(Shape(validityMs: validity, routeIdleMs: idle)))
       check l.run(meterRead(7)).exit == 0
@@ -586,7 +587,7 @@ when defined(posix):
       check "module_state_changed" in unknown.env{"message"}.getStr
 
     test "L-13: a route ended while its call is in flight: exit 2, the outcome unknown, no retry; the provider saw one call":
-      l = boot(newSession())
+      l = boot(newSession(Shape(stopDeadlineMs: StopDeadlineMs)))
       check l.run(meterRead(7)).exit == 0
       # Channel 23 waits for `open` alone: the stop ends at its deadline, and
       # the provider's host with it, while the call is admitted and running.

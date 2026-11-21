@@ -134,8 +134,9 @@ when unixStream:
     ok(s)
 
   proc fitsSunPath*(path: string): bool =
-    ## [SPEC RUNTIME §2.3; G58] The path and its NUL fit `sun_path`; a path that
-    ## does not is never shortened or substituted.
+    ## [SPEC RUNTIME §2.3; G58] The path and its NUL fit `sun_path`. This never
+    ## shortens or substitutes a path; an endpoint's socket name is fitted
+    ## before it is bound (`endpoint.fittedSocketName`, G58 amended).
     path.len > 0 and path.len + 1 <= int(sunPathMax())
 
   proc errText*(code: cint): string =

@@ -34,14 +34,29 @@ let liveTree = kitTreeOf(currentSourcePath().parentDir.parentDir / "test_lcn_cal
   ## [kitbuild] the tests directory's tree, as a suite there would use
 
 const
-  Patience = 60 * Slow ## seconds a bounding wait allows
-  Timeout = 30_000 * Slow ## a command's, and a client's, wait, ms
-  IdleMs = min(60_000 * Slow, 600_000)
+  Load = when compileOption("mm", "refc"): 4 else: 1
+    ## [IMPL] `Slow` for a refc build of the whole stack. CI's refc jobs run
+    ## the heaviest refc suites side by side: there test_lcn_call took 1207 s
+    ## (x86_64) and 936 s (arm64) against 245 s under orc-release (run
+    ## 44888184613), and its waits ran out; on the Mac refc takes 1.3 times
+    ## orc's time. Like `Slow`, it multiplies only bounds, never a deadline a
+    ## case is about. A shutdown takes 0.5 to 1.3 s on a loaded Mac.
+  Patience = 60 * Slow * Load ## seconds a bounding wait allows
+  Timeout = 30_000 * Slow * Load ## a command's, and a client's, wait, ms
+  IdleMs = min(60_000 * Slow * Load, 600_000)
     ## `ctl.idle_timeout_ms` and `cli.idle_timeout_ms` where no case is about
     ## them (test_ctl_module's reason)
   StopDeadlineMs = 5_000 * Slow
-    ## `stop_deadline_ms` and `shutdown_grace_ms`: L-13's provider ignores
-    ## its cancellation, so its stop ends at this deadline
+    ## L-13's `stop_deadline_ms`: its provider ignores its cancellation, so
+    ## its stop ends at this deadline
+  StopBoundMs = Patience * 1000
+    ## every other session's `stop_deadline_ms`, and every session's
+    ## `shutdown_grace_ms`: a bound, since a stop past it is a cleanup timeout
+    ## and the shutdown's result MODULE_ERROR (CI's refc and MSan runs went
+    ## past 5 s and 15 s)
+  HelloMs = Timeout
+    ## `transport.hello_timeout_ms`: a hosted provider's Hello asks the
+    ## Runtime about the ticket over the carrier (test_hosted_routes' `roomy`)
   SanitizerEnv =
     ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
   MeterInstance = "meter-1"
@@ -218,6 +233,7 @@ type Shape = object ## What a case changes in the session.
   meterGrant: bool
     ## the meter's `subscribe-event` is not in its rule: `lcn_call` issues it
     ## itself (L-11), with the authority's methods granted
+  stopDeadlineMs: int = StopBoundMs ## `stop_deadline_ms`
 
 var sessions = 0
 
@@ -231,8 +247,9 @@ proc newSession(shape = Shape()): Session =
   var dc = defaultDaemonConfig("assigned-by-init")
   dc.runtime.module_host = Opt.some(hostExe)
   dc.runtime.module_host_env = Opt.some(@SanitizerEnv)
-  dc.runtime.stop_deadline_ms = Opt.some(uint32(StopDeadlineMs))
-  dc.runtime.shutdown_grace_ms = Opt.some(uint32(StopDeadlineMs))
+  dc.runtime.stop_deadline_ms = Opt.some(uint32(shape.stopDeadlineMs))
+  dc.runtime.shutdown_grace_ms = Opt.some(uint32(StopBoundMs))
+  dc.transport = Opt.some(LcnAppTransport(hello_timeout_ms: Opt.some(uint32(HelloMs))))
   dc.modules = Opt.some(
     @[
       hosted(MeterInstance, "meter_module", meterRoot, meterLib, MeterState),
@@ -395,8 +412,17 @@ proc finish(l: var Live) =
   if not l.up:
     return
   l.up = false
+  let began = getMonoTime()
   discard runtimeRequestShutdown(l.d.rt)
-  check int64(runtimeWaitForShutdown(l.d.rt).code) == 0
+  let down = runtimeWaitForShutdown(l.d.rt)
+  let tookMs = inMilliseconds(getMonoTime() - began)
+  if int64(down.code) != 0:
+    # What overran, in a log that has nothing else to say it.
+    checkpoint(
+      "the shutdown took " & $tookMs & " ms: " &
+        (if down.message.isNil: "" else: $down.message)
+    )
+  check int64(down.code) == 0
   check destroyRuntime(l.d).isOk
   l.d.release()
   l.lock.release()

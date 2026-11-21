@@ -347,11 +347,45 @@ suite "trnio.endpoint: endpoint placement and validation (TRANSPORT §8.2, G58)"
     discard unlink(cstring(ep.path))
     discard rmdir(cstring(ep.dir.path))
 
-  test "[G58] a path that does not fit sun_path fails and leaves nothing":
-    let before = entries(base)
-    let r = createEndpoint(base, repeat('m', 100))
+  test "[G58] a socket name that does not fit sun_path is shortened, down to logos_.sock [IMPL]":
+    # [G58 amended 2026-11-21; RUNTIME l.284, l.296-297] A 64-byte module name
+    # is legal, and the concrete pathname is the implementation's.
+    let max = int(sunPathMax())
+    let dir = "/" & repeat('d', 40)
+    let room = max - 1 - dir.len - 1 - "logos_.sock".len
+    check fittedSocketName(dir, repeat('m', room), max) ==
+      Opt.some("logos_" & repeat('m', room) & ".sock")
+    check fittedSocketName(dir, repeat('m', room + 1), max) ==
+      Opt.some("logos_" & repeat('m', room) & ".sock")
+    check fittedSocketName(dir, "storage_module", max) ==
+      Opt.some("logos_storage_module.sock")
+    # `<full>/logos_.sock` and its NUL are exactly `max` bytes.
+    let full = "/" & repeat('d', max - 3 - "logos_.sock".len)
+    check (full & "/logos_.sock").len + 1 == max
+    check fittedSocketName(full, "m", max) == Opt.some("logos_.sock")
+    check fittedSocketName(full & "d", "m", max).isNone
+    # A long name: bound, listening and valid at the longest path that fits.
+    let ep = createEndpoint(base, repeat('m', 100)).expect("an endpoint")
+    check ep.path.len + 1 == max
+    check ep.sockName.startsWith("logos_mmm") and ep.sockName.endsWith(".sock")
+    check statOf(ep.path).isSocket
+    check validateEndpoint(ep).isOk
+    check removeEndpoint(ep).isOk
+
+  test "[G58] a base that leaves no room for logos_.sock fails and leaves nothing":
+    let top = base / "deep"
+    var deep = top
+    while true:
+      createDir(deep)
+      doAssert chmod(cstring(deep), 0o700) == 0
+      if shortestSocketPath(deep).len + 1 > int(sunPathMax()):
+        break
+      deep = deep / repeat('d', 32)
+    let before = entries(deep)
+    let r = createEndpoint(deep, "m")
     check r.error.kind == eeTooLong
-    check entries(base) == before
+    check entries(deep) == before
+    removeDir(top)
 
   test "removal removes only the endpoint's own objects":
     let ep = newEndpoint()
