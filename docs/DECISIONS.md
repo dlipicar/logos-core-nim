@@ -6886,9 +6886,15 @@ their history.
       `GC_ref`, released only when the awaited future finishes), so the frames, the instance they
       hold and the request they decoded stay for the life of the process. That is the conforming
       outcome for work that cannot quiesce (l.2116-2117).
-    - Before this, every such task was abandoned. LeakSanitizer reported it on arm64: 3322 bytes,
-      `[IFC-0769]`. A handler whose await ended between destroy's return and teardown also resumed
-      after `destroyModule`.
+    - Before this, every such task was abandoned. LeakSanitizer reported it from `[IFC-0769]` on
+      both Linux architectures, 3322 bytes in 35 indirect allocations (CI run 44888184613; the
+      x86_64 job ran on to its time limit and showed as cancelled), and again on framework.lan
+      (x86_64) over 109f4d8. A handler whose await ended between destroy's return and teardown
+      also resumed after `destroyModule`.
+    - With this, `test_kit_confined` under ASan reports no leak on framework.lan. Run there with
+      the `noCancel` case not skipped, LeakSanitizer reports 3258 bytes in 35 indirect
+      allocations, all from that case's `wait` 11: the residue above, and why that case skips
+      under ASan.
     - Now a handler that honours the cancellation resumes only to unwind it, before
       `destroyModule`. No task resumes after teardown, but one may still resume before it in two
       cases this does not cover: the inner job of an inline re-entry, and synchronous entries still
