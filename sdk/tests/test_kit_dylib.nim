@@ -1040,28 +1040,47 @@ suite "ifc.kit: a kit fixture built from an installed SDK (DECISIONS G435) [IMPL
     # host's search paths, which here are the repository's sdk/src, as the host's must be.
     # Every file it read is the copy's, its compiler's (the first configuration file is the
     # compiler's `config/nim.cfg`) or under one of the host's search paths.
-    let repo = getCurrentDir() & "/"
-    let info = parseJson(
-      readFile(lib.parentDir / "nimcache-kifake" / (lib.extractFilename & ".json"))
-    )
+    # The build's record of what it read is the one JSON file in its nimcache. Nim names it after
+    # the output file with its extension replaced, and kitbuild's output differs by platform:
+    # `libkifake.dylib.tmp-<pid>`, moved into place, on POSIX (so `libkifake.dylib.json`), and
+    # `kifake.dll` itself on Windows (so `kifake.json`).
+    var records: seq[string]
+    for record in walkFiles(lib.parentDir / "nimcache-kifake" / "*.json"):
+      records.add record
+    checkpoint $records
+    require records.len == 1
+    let info = parseJson(readFile(records[0]))
+    # The record's paths are native: `\` on Windows, where case does not tell paths apart either.
+    proc norm(path: string): string =
+      result = normalizedPath(path)
+      when defined(windows):
+        result = result.toLowerAscii
+
+    proc under(path, root: string): bool =
+      norm(path).startsWith(norm(root) & DirSep)
+
+    let repo = getCurrentDir()
     var configs: seq[string]
     for config in info["configFiles"]:
       configs.add(config.getStr)
     checkpoint $configs
+    var copyConfig = false
     for config in configs:
-      check not config.startsWith(repo)
-    check installed / "logos_sdk" / "testing" / "config.nims" in configs
+      check not config.under(repo)
+      if norm(config) == norm(installed / "logos_sdk" / "testing" / "config.nims"):
+        copyConfig = true
+    check copyConfig
     require configs.len > 0
-    var roots = @[installed & "/", configs[0].parentDir.parentDir & "/"]
+    var roots = @[installed, configs[0].parentDir.parentDir]
     for path in querySettingSeq(searchPaths):
-      roots.add(path & "/")
+      roots.add(path)
     var read, elsewhere = 0
     for entry in info["depfiles"]:
       let path = entry[0].getStr
       inc read
       var known = false
       for root in roots:
-        if path.startsWith(root):
+        if path.under(root):
           known = true
       if not known:
         checkpoint "read from elsewhere: " & path
