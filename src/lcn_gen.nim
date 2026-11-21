@@ -21,8 +21,8 @@ Usage:
   lcn-gen nim-common [--out:DIR] [--import-prefix:P]
   lcn-gen nim [--out:DIR] [--import-prefix:P] [--system] [--module:NAME] PRIMARY.cddl
               [--interface:FILE]... [--supporting:FILE]...
-  lcn-gen kit [--out:DIR] [--import-prefix:P] [--system] [--confined] PRIMARY.cddl
-              [--interface:FILE]... [--supporting:FILE]...
+  lcn-gen kit [--out:DIR] [--import-prefix:P] [--system] [--confined [--async-api]]
+              PRIMARY.cddl [--interface:FILE]... [--supporting:FILE]...
               [--configuration:FILE --configuration-root:NAME
                [--live-reconfiguration]]
   lcn-gen calls [--out:DIR] [--import-prefix:P] [--system] PRIMARY.cddl
@@ -86,6 +86,9 @@ cddl         reads exactly the C headers named, without a preprocessor, and
 --confined         kit: each context runs on its own module thread, which runs
                    chronos; handlers may be async (DECISIONS G335-G337). Build
                    the library with --import:logos_sdk/base/hostsignals
+--async-api        kit, with --confined, of a provider: also export
+                   _MODULE_async_api, the deferred provider surface (INTERFACE
+                   §2.9.2; DECISIONS G338)
 
 Limits (INTERFACE §2.1): no identifier-length limit; identifiers are never
 truncated, hashed or aliased. Input is bounded by the INTERFACE §5.3 schema
@@ -210,6 +213,7 @@ proc main(): int =
     configuration, configurationRoot = ""
     live = false
     confined = false
+    asyncApi = false
   for kind, key, val in getopt():
     case kind
     of cmdArgument:
@@ -247,6 +251,8 @@ proc main(): int =
         live = true
       of "confined":
         confined = true
+      of "async-api":
+        asyncApi = true
       of "help", "h":
         echo usage
         return 0
@@ -258,6 +264,8 @@ proc main(): int =
     return fail("--configuration options apply to kit only\n" & usage)
   if confined and command != "kit":
     return fail("--confined applies to kit only\n" & usage)
+  if asyncApi and not confined:
+    return fail("--async-api needs kit --confined\n" & usage)
   if (configuration.len > 0) != (configurationRoot.len > 0) or
       (live and configuration.len == 0):
     return fail(
@@ -345,7 +353,8 @@ proc main(): int =
       let module = nimModule(set, NimOptions(importPrefix: prefix), opts.system).valueOr:
         return fail(error)
       if command == "kit":
-        var kopts = KitOptions(importPrefix: prefix, confined: confined)
+        var kopts =
+          KitOptions(importPrefix: prefix, confined: confined, asyncApi: asyncApi)
         var configTypes = ""
         if configuration.len > 0:
           let text =

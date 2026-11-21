@@ -596,7 +596,7 @@ are 5-9's.
 
 ### What Tier 5 step N-1 changes
 
-The module kit (DECISIONS I101; G339 to G342). Sub-part 2 adds lcn-gen's consumer helpers (G339): a
+The module kit (DECISIONS I101; G335 to G342). Sub-part 2 adds lcn-gen's consumer helpers (G339): a
 generated `<stem>_calls.nim` has, over a wrapped route handle, a typed `subscribe` per event and
 `invoke` and `prepareInvoke` per method, and `logos_sdk/kit/routes` gives a module instance its
 routes and typed Runtime Control subscriptions. IFC-0671, the permission for a generated typed
@@ -619,6 +619,21 @@ and through the Runtime and a Module Host with the module built with the other m
 call of its own while the callee calls back is a route-call cycle, outside these units; the guide says
 so. The consumer helpers' callbacks run on the module thread through the handle's dispatcher (G339),
 with no change to what the Runtime sees.
+
+Sub-part 4 adds the deferred provider (`lcn-gen kit --confined --async-api`; G338): the kit exports
+`_MODULE_async_api`, whose `submit` queues the invocation for the module thread and returns, whose
+`request_cancel` cancels an async handler's future, and whose job completes once and releases once,
+the response or the failure's diagnostics in one block its owner frees on any thread; and
+`invokeAsync`, a route call as a future on the module thread. **Twelve provider units are claimed**
+(they were out of scope as requirements on providers that export `_MODULE_async_api`): IFC-0743,
+0746, 0748, 0750 to 0752, 0754, 0762, 0763, 0766, 0769 and IFC-0779, whose reason ("a requirement on
+calling modules") was wrong, since l.2136 binds the provider. IFC-0753, claimed for the Runtime's own
+adapter, gains the generated provider's tests. IFC-0758 and IFC-0767 stay out of scope, relabelled
+"the author's backend": the kit cancels the handler's future, and backend work behind it is the
+author's. Evidence: `sdk/tests/test_kit_confined.nim` (in process, orc, refc and orc-release),
+`sdk/tests/test_kit_dylib.nim` (a confined library through its three surfaces) and
+`tests/test_kit_mixed.nim` MX-4 (through the Runtime, `direct_dynamic` and hosted). Nothing changes
+on the Runtime's or the Module Host's side, which already served deferred providers (I78).
 
 ### What Tier 5 step N-2b changes
 
