@@ -19,8 +19,12 @@
 ## 3 awaits `publishAsync`; 4 keeps its `Invocation`; 5 fails; 6 reads the
 ## caller through the plain API (NOT_READY in an async task); 7 awaits a
 ## publication in its invocation's scope; 8 reads whether its invocation is
-## cancelled. `seal` (marked) returns its secret reversed and masked. Every
-## response names its handler's thread.
+## cancelled; 9 sleeps `millis` and answers CANCELLED when its future is
+## cancelled meanwhile (a submitted invocation's cancellation, G338); 10 calls
+## `meter.read` of channel `value` with `invokeAsync` through the handle `probe`
+## 10 wrapped, with a deadline of `millis` when nonzero. `seal` (marked)
+## returns its secret reversed and masked. Every response names its handler's
+## thread. The kit also exports `_MODULE_async_api` (`--async-api`).
 ##
 ## As a consumer (DECISIONS G339), `probe` by channel: 10 wraps the route
 ## handle the test put in `routeToWrap` with the kit's dispatcher and
@@ -41,7 +45,8 @@
 ## route end seen meanwhile; 21 publishes `ledger.posted_event` (key `timer`)
 ## from a chronos timer `value` ms later; 22 reads `posts`, `postThreads` and
 ## how many of this instance's `post` publications the kit refused (its queue
-## full).
+## full); 23 reads how many `wait` 9 handlers of the library saw cancelled and
+## how many sleep now (`<cancelled> <sleeping>`).
 
 {.used.} # imported by the tests for the C symbols it exports
 import std/[atomics, os, strutils, tables]
@@ -74,6 +79,8 @@ type Ledger* = ref object
 var
   destroyed*: Atomic[int] ## instances `destroyModule` has seen
   posts*: Atomic[int] ## callbacks foreign threads posted that ran
+  cancelledWaits*: Atomic[int] ## `wait` 9 handlers whose future was cancelled
+  sleepingWaits*: Atomic[int] ## `wait` 9 handlers asleep now
   postThreads*: Atomic[int] ## how many of them did not run on a module thread
   probeHook*: proc(m: Ledger, value: uint64): string {.nimcall, gcsafe, raises: [].}
     ## what `probe` 8 calls; the test sets it
@@ -355,6 +362,8 @@ proc `probe`(
     note = "later"
   of 22:
     note = $posts.load & " " & $postThreads.load & " " & $m.refused
+  of 23:
+    note = $cancelledWaits.load & " " & $sleepingWaits.load
   else:
     discard
   ok(LedgerProbeResponse(value: request.value, thread: threadNumber(), note: note))
@@ -396,6 +405,26 @@ proc `wait`(
     )
   of 8:
     note = if inv.isCancelled(): "cancelled" else: "live"
+  of 9:
+    sleepingWaits += 1
+    try:
+      await sleepAsync(int(request.millis).milliseconds)
+      sleepingWaits -= 1
+    except CancelledError:
+      sleepingWaits -= 1
+      cancelledWaits += 1
+      return Result[LedgerWaitResponse, InvocationFailure].err(
+        failure(ecCancelled, "wait 9 was cancelled")
+      )
+    note = "slept"
+  of 10:
+    if m.route.isNil:
+      note = "no route"
+    else:
+      let r = await m.route.invokeAsync(
+        MeterReadRequest(channel: uint32(request.value)), uint64(request.millis)
+      )
+      note = (if r.isOk: "ok:" & r.unsafeGet.label else: $r.unsafeError.code)
   else:
     discard
   Result[LedgerWaitResponse, InvocationFailure].ok(

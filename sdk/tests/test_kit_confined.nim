@@ -1,17 +1,23 @@
-## lcn-gen's thread-confined module kit [IMPL] (DECISIONS G335-G337), in
+## lcn-gen's thread-confined module kit [IMPL] (DECISIONS G335-G339), in
 ## process: the ledger fixture (`testing/fixtures/ledger_impl.nim`) is called
 ## through its exported C symbols, as an ABI caller makes the calls, and every
 ## entry that uses the instance runs on the context's module thread. The
 ## Runtime stand-in here gives each caller an identity of its own and lets the
 ## publish callbacks re-enter the module, as a direct subscriber does
-## (INTERFACE l.1918-1928, IFC-0281/0282).
+## (INTERFACE l.1918-1928, IFC-0281/0282). Its deferred provider surface
+## (`_MODULE_async_api`, G338) is driven with provider invocations the test
+## builds in fixed storage, as a Runtime does.
 
-import std/[os, strutils]
+import std/[os, strutils, times]
 import unittest2
-import logos_sdk/codegen/callrt
+from chronos import finished, value
+import logos_sdk/codegen/[callrt, confinedcalls, consumert]
 import logos_sdk/testing/kitruntime
 import logos_sdk/testing/fixtures/ledger_impl
-import logos_sdk/testing/generated/[ledger_module_types, meter_module_types]
+import
+  logos_sdk/testing/generated/
+    [ledger_module_types, meter_module_types, meter_module_calls]
+import ./support/fakeprovider
 
 # The exported symbols, as an ABI caller declares them -------------------------------
 
@@ -60,6 +66,10 @@ proc ledgerWait(
   outValue: ptr uint64,
 ): LogosResult {.
   importc: "logos_ledger_module_CALL_ledger_Wait", cdecl, gcsafe, raises: []
+.}
+
+proc ledgerAsyncApi(): ptr LogosAsyncProviderApi {.
+  importc: "logos_ledger_module_MODULE_async_api", cdecl, gcsafe, raises: []
 .}
 
 proc ledgerSeal(
@@ -456,6 +466,9 @@ var
   fakeUnsubscribesInside: Atomic[int] ## made from inside a delivery
   fakeCompleteInSubmit: Atomic[bool]
   fakeCallReleases: Atomic[int]
+  fakeCancels: Atomic[int]
+  fakeCancelCompletes: Atomic[bool] ## `cancel` completes the call CANCELLED
+  fakeTimeout: Atomic[int] ## the latest prepared call's deadline, 0 for none
   ownerReleases: Atomic[int]
   ownerReleaseThread: Atomic[uint64]
   delivering {.threadvar.}: bool
@@ -534,7 +547,17 @@ proc fakeSubmitOp(call: ptr LogosAsyncCall) {.cdecl, gcsafe, raises: [].} =
     completeFake("inline")
 
 proc fakeCancelOp(call: ptr LogosAsyncCall) {.cdecl, gcsafe, raises: [].} =
-  discard
+  fakeCancels += 1
+  if fakeCancelCompletes.load:
+    {.cast(gcsafe).}:
+      let cb = fakeCallbacks
+    cb.complete(
+      cb.userData,
+      LogosResult(code: CErrorCode(ord(ecCancelled))),
+      nil,
+      0,
+      LogosResponseOwner(),
+    )
 
 proc fakeCallReleaseOp(call: ptr LogosAsyncCall) {.cdecl, gcsafe, raises: [].} =
   fakeCallReleases += 1
@@ -559,6 +582,12 @@ proc fakePrepareOp(
   {.cast(gcsafe).}:
     fakeCallbacks = callbacks[]
     outCall[] = LogosAsyncCall(vtable: addr fakeCallVtable, state: addr fakeState)
+  fakeTimeout.store(
+    if options.hasTimeout:
+      int(options.timeoutMs)
+    else:
+      0
+  )
   LogosResult()
 
 proc fakeObserveEndOp(
@@ -601,6 +630,9 @@ proc resetFake() =
   fakeUnsubscribesInside.store(0)
   fakeCompleteInSubmit.store(false)
   fakeCallReleases.store(0)
+  fakeCancels.store(0)
+  fakeCancelCompletes.store(false)
+  fakeTimeout.store(0)
   ownerReleases.store(0)
   routeToWrap = LogosRouteHandle(vtable: addr fakeVtable, state: addr fakeState)
 
@@ -666,6 +698,67 @@ proc deliverInsideHook(
 
 proc report(ctx: ptr LogosModuleContext): string =
   probe(ctx, 14)[1].note
+
+# Provider invocations the test builds (DECISIONS G338) -------------------------------
+#
+# `support/fakeprovider`: the context's `publish` is the stand-in's, and each
+# completion notes how many scoped publications were seen by then.
+
+proc scopedSeen(): int =
+  {.cast(gcsafe).}:
+    withLock seenLock:
+      for i in 0 ..< seenLen:
+        if seen[i].scoped:
+          inc result
+
+fakePublish = whoPublish
+completionProbe = scopedSeen
+
+proc submit(ctx: ptr LogosModuleContext, fi: ptr FakeInvocation) {.gcsafe.} =
+  submit(ledgerAsyncApi(), ctx, fi)
+
+proc cancel(ctx: ptr LogosModuleContext, fi: ptr FakeInvocation) {.gcsafe.} =
+  cancel(ledgerAsyncApi(), ctx, fi)
+
+proc deferred(
+    ctx: ptr LogosModuleContext,
+    i: int,
+    bare: string,
+    params: openArray[byte],
+    id = "deferred",
+): ptr FakeInvocation =
+  ## One submitted invocation, once it was completed and released.
+  result = prepareFake(i, bare, params, id)
+  submit(ctx, result)
+  doAssert result.settledIn(), "the invocation was not released"
+
+var apiSeen: Atomic[pointer]
+
+proc apiReader(i: int) {.thread.} =
+  apiSeen.store(ledgerAsyncApi())
+
+proc ownerClearer(fi: ptr FakeInvocation) {.thread.} =
+  clearFake(fi)
+
+proc canceller(t: int) {.thread.} =
+  ## Cancels the invocations `k` with `k mod 4 == t` at once, from its thread.
+  {.cast(gcsafe).}:
+    for k in countup(t, 63, 4):
+      if k mod 2 == 0:
+        cancel(shared, addr fakes[k])
+      if k mod 3 == 0:
+        sleep(1)
+
+proc submitter(t: int) {.thread.} =
+  ## Submits the invocations `k` with `k mod 4 == t`, then dispatches.
+  {.cast(gcsafe).}:
+    activeContext = addr ctxB
+    for k in countup(t, 63, 4):
+      submit(shared, addr fakes[k])
+      if k mod 5 == 0:
+        if probe(shared, 1)[1].note != "caller-b":
+          workerFailures += 1
+    activeContext = nil
 
 # Tests --------------------------------------------------------------------------------
 
@@ -1101,3 +1194,274 @@ suite "confined kit: consumer helpers on the module thread (DECISIONS G339)":
     ledgerDestroy(ctx)
     check fakeReleased.load
     check fakeCallReleases.load == 1
+
+suite "confined kit: the deferred provider (DECISIONS G338)":
+  setup:
+    resetRuntime()
+    resetFake()
+
+  test "[IFC-0743] [IFC-0746] the getter is context-free and returns one valid descriptor, the same from every thread":
+    let api = ledgerAsyncApi()
+    check checkAsyncProviderApi(api).isOk
+    check api.abiVersion == AsyncProviderAbiVersion
+    check api.structSize == csize_t(sizeof(LogosAsyncProviderApi))
+    check not api.submit.isNil
+    check not api.requestCancel.isNil
+    var t: Thread[int]
+    createThread(t, apiReader, 0)
+    joinThread(t)
+    check apiSeen.load == cast[pointer](api)
+    let ctx = openLedger()
+    check ledgerAsyncApi() == api
+    ledgerDestroy(ctx)
+    check ledgerAsyncApi() == api
+
+  test "[IFC-0748] [IFC-0749] [IFC-0751] a submitted invocation answers what _MODULE_dispatch answers, with its own context":
+    let ctx = openLedger()
+    activeContext = addr ctxA
+    let cases = [
+      ("probe", request(LedgerProbeRequest(channel: 1, value: 3))),
+      ("probe", request(LedgerProbeRequest(channel: 3))),
+      ("post", request(LedgerPostRequest(key: "k", amount: 0))),
+      ("wait", request(LedgerWaitRequest(channel: 1, millis: 2, value: 9))),
+      ("wait", request(LedgerWaitRequest(channel: 5))),
+      ("seal", request(LedgerSealRequest(secret: @[1'u8, 2, 3]))),
+      ("nosuch", request(LedgerProbeRequest(channel: 1))),
+      ("probe", diag("{\"channel\": \"one\", \"value\": 0}")),
+    ]
+    for i, (bare, params) in cases:
+      let d = call(ledgerDispatch, ledgerFree, ctx, bare, params)
+      # What `current` says on the submitting thread is not the invocation's.
+      activeContext = addr ctxB
+      let fi = deferred(ctx, i, bare, params, id = "caller-a")
+      activeContext = addr ctxA
+      checkpoint(bare & " " & $i)
+      check same(fi.status, d.status)
+      check fi.responseOf == d.response
+      check fi.exactlyOnce
+      check fi.unchanged
+      clearFake(fi)
+    check fakes[0].completeThread == probe(ctx, 1)[1].thread
+    ledgerDestroy(ctx)
+
+  test "[IFC-0750] [IFC-0766] submit and request_cancel return while the module thread is busy; a job cancelled before it ran answers CANCELLED without its handler":
+    shared = openLedger()
+    probeHook = holdHook
+    gate.store(true)
+    gateEntered.store(false)
+    var t: Thread[int]
+    createThread(t, holder, 0)
+    while not gateEntered.load:
+      sleep(1)
+    let fi =
+      prepareFake(0, "wait", request(LedgerWaitRequest(channel: 9, millis: 20_000)))
+    let started = epochTime()
+    submit(shared, fi)
+    cancel(shared, fi)
+    check epochTime() - started < 1.0
+    check fi.completes.load == 0
+    gate.store(false)
+    joinThread(t)
+    check fi.settledIn()
+    check epochTime() - started < 10.0
+    check fi.status.error.code == ecCancelled
+    check fi.message == "cancelled before its handler ran"
+    check fi.exactlyOnce
+    clearFake(fi)
+    ledgerDestroy(shared)
+    shared = nil
+
+  test "[IMPL-DECISION G338] [IFC-0753] a cancellation reaches an async handler's future while it awaits; the handler decides the outcome":
+    let ctx = openLedger()
+    let a =
+      prepareFake(0, "wait", request(LedgerWaitRequest(channel: 9, millis: 20_000)))
+    let b =
+      prepareFake(1, "wait", request(LedgerWaitRequest(channel: 1, millis: 20_000)))
+    let started = epochTime()
+    submit(ctx, a)
+    submit(ctx, b)
+    discard probe(ctx, 1) # both handlers are asleep once this returns
+    check a.completes.load == 0
+    check b.completes.load == 0
+    cancel(ctx, a)
+    cancel(ctx, b)
+    check a.settledIn()
+    check b.settledIn()
+    check epochTime() - started < 10.0
+    # wait 9 answers CANCELLED; wait 1 swallows the cancellation and answers.
+    check a.status.error.code == ecCancelled
+    check a.message == "wait 9 was cancelled"
+    check b.status.isOk
+    check LedgerWaitResponse.decode(b.responseOf).get.note == "deferred"
+    check a.exactlyOnce
+    check b.exactlyOnce
+    clearFake(a)
+    clearFake(b)
+    # A context already cancelled when the job starts: CANCELLED, no handler.
+    let c = prepareFake(2, "probe", request(LedgerProbeRequest(channel: 4)))
+    c.cancelled.store(true)
+    submit(ctx, c)
+    check c.settledIn()
+    check c.status.error.code == ecCancelled
+    check c.message == "cancelled before its handler ran"
+    clearFake(c)
+    ledgerDestroy(ctx)
+
+  test "[IFC-0762] [IFC-0763] [IFC-0753] request_cancel after the release returns harmlessly; hooks race 64 completions from 4 threads":
+    let ctx = openLedger()
+    let done = deferred(ctx, 70, "probe", request(LedgerProbeRequest(channel: 1)))
+    ledgerAsyncApi().requestCancel(ctx, addr done.inv)
+    discard probe(ctx, 1)
+    check done.exactlyOnce
+    clearFake(done)
+    shared = ctx
+    workerFailures.store(0)
+    for k in 0 ..< 64:
+      discard prepareFake(
+        k, "wait", request(LedgerWaitRequest(channel: 9, millis: uint32(k mod 4)))
+      )
+    var subs, cans: array[4, Thread[int]]
+    for t in 0 ..< 4:
+      createThread(subs[t], submitter, t)
+      createThread(cans[t], canceller, t)
+    for t in 0 ..< 4:
+      joinThread(subs[t])
+      joinThread(cans[t])
+    var ok, cancelledCount = 0
+    for k in 0 ..< 64:
+      let fi = addr fakes[k]
+      check fi.settledIn()
+      check fi.exactlyOnce
+      let st = fi.status
+      if st.isOk:
+        inc ok
+      else:
+        check st.error.code == ecCancelled
+        check k mod 2 == 0
+        inc cancelledCount
+      clearFake(fi)
+    check ok + cancelledCount == 64
+    check ok >= 32
+    check workerFailures.load == 0
+    shared = nil
+    ledgerDestroy(ctx)
+
+  test "[IFC-0753] [IFC-0754] the completion's regions stay readable and unchanged until its owner is cleared, on another thread":
+    let ctx = openLedger()
+    let good =
+      deferred(ctx, 0, "wait", request(LedgerWaitRequest(channel: 1, millis: 1)))
+    let bad = deferred(ctx, 1, "probe", request(LedgerProbeRequest(channel: 3)))
+    check good.status.isOk
+    check bad.status.error.code == ecModule
+    check bad.message == "probe 3 fails"
+    check not good.owner.release.isNil
+    check not bad.owner.release.isNil
+    for i in 0 ..< 20:
+      check post(ctx, "churn")[0] == ecOk
+      discard wait(ctx, 1, millis = 1)
+    check good.unchanged
+    check bad.unchanged
+    var t: array[2, Thread[ptr FakeInvocation]]
+    createThread(t[0], ownerClearer, good)
+    createThread(t[1], ownerClearer, bad)
+    joinThread(t[0])
+    joinThread(t[1])
+    ledgerDestroy(ctx)
+
+  test "[IFC-0752] [IFC-0779] after its release the invocation is not used: its Invocation refuses, its context and borrowed request are not touched":
+    let ctx = openLedger()
+    let fi = deferred(ctx, 0, "wait", request(LedgerWaitRequest(channel: 4)))
+    check LedgerWaitResponse.decode(fi.responseOf).get.note == "kept"
+    for b in fi.params.mitems:
+      b = 0xFF
+    for c in fi.methodName.mitems:
+      c = 'x'
+    fi.context.vtable = nil
+    activeContext = addr ctxA
+    check probe(ctx, 6)[1].note == $ecNotReady
+    discard wait(ctx, 1, millis = 1)
+    check fi.exactlyOnce
+    clearFake(fi)
+    ledgerDestroy(ctx)
+
+  test "[IMPL-DECISION G338] scoped publications of a submitted invocation, plain and async, are answered before its completion, while a subscriber re-enters":
+    let ctx = openLedger()
+    publishDelay.store(20)
+    reenterModule.store(ctx)
+    let p = deferred(ctx, 0, "probe", request(LedgerProbeRequest(channel: 2, value: 5)))
+    check p.status.isOk
+    check LedgerProbeResponse.decode(p.responseOf).get.note == "ok"
+    check p.atCompletion == 1
+    let w = deferred(ctx, 1, "wait", request(LedgerWaitRequest(channel: 2, value: 6)))
+    check w.status.isOk
+    check w.atCompletion == 2
+    let w7 = deferred(ctx, 2, "wait", request(LedgerWaitRequest(channel: 7, value: 7)))
+    check LedgerWaitResponse.decode(w7.responseOf).get.note == "ok"
+    check w7.atCompletion == 3
+    check seenKeys("scoped") == @["scoped", "unawaited", "scoped-async"]
+    let module = LedgerProbeResponse.decode(p.responseOf).get.thread
+    for th in seenThreads("scoped"):
+      check th != module
+    check reentries.load == 3
+    check reentryFailures.load == 0
+    for fi in [p, w, w7]:
+      check fi.exactlyOnce
+      clearFake(fi)
+    reenterModule.store(nil)
+    ledgerDestroy(ctx)
+
+  test "[IFC-0769] [IMPL-DECISION G338] destroy with a submitted invocation outstanding completes it NOT_READY once and releases it":
+    let ctx = openLedger()
+    let fi =
+      prepareFake(0, "wait", request(LedgerWaitRequest(channel: 1, millis: 20_000)))
+    submit(ctx, fi)
+    discard probe(ctx, 1) # its handler is asleep
+    let started = epochTime()
+    ledgerDestroy(ctx)
+    check epochTime() - started < 10.0
+    check fi.exactlyOnce
+    check fi.status.error.code == ecNotReady
+    clearFake(fi)
+
+  test "[IMPL-DECISION G338] invokeAsync through a wrapped handle: completion, deadline, and the awaiting handler's cancellation":
+    let ctx = openLedger()
+    check probe(ctx, 10)[1].note == "subscribed"
+    let a = prepareFake(
+      0, "wait", request(LedgerWaitRequest(channel: 10, millis: 250, value: 4))
+    )
+    submit(ctx, a)
+    discard probe(ctx, 1) # the handler awaits its call, prepared and submitted
+    check fakeTimeout.load == 250
+    check a.completes.load == 0
+    completeFake("ch4")
+    check a.settledIn()
+    check LedgerWaitResponse.decode(a.responseOf).get.note == "ok:ch4"
+    check ownerReleases.load == 1
+    discard probe(ctx, 1)
+    check fakeCallReleases.load == 1 # released once its completion returned
+    let b = prepareFake(1, "wait", request(LedgerWaitRequest(channel: 10, value: 5)))
+    submit(ctx, b)
+    discard probe(ctx, 1)
+    check fakeTimeout.load == 0
+    fakeCancelCompletes.store(true)
+    cancel(ctx, b)
+    check b.settledIn()
+    check fakeCancels.load == 1
+    check LedgerWaitResponse.decode(b.responseOf).get.note == $ecCancelled
+    discard probe(ctx, 1)
+    check fakeCallReleases.load == 2
+    for fi in [a, b]:
+      check fi.exactlyOnce
+      clearFake(fi)
+    check ctx.report.endsWith(" off=0")
+    ledgerDestroy(ctx)
+
+  test "[IMPL-DECISION G338] invokeAsync off a module thread, or through a handle no confined kit wrapped, answers NOT_READY at once":
+    let h =
+      wrapRoute(LogosRouteHandle(vtable: addr fakeVtable, state: addr fakeState)).get
+    let f = h.invokeAsync(MeterReadRequest(channel: 1))
+    check f.finished()
+    check f.value.isErr
+    check f.value.error.code == ecNotReady
+    check fakeTimeout.load == 0
+    discard h.release()
