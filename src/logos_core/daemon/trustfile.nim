@@ -244,8 +244,11 @@ func canonicalNames(names: openArray[string]): Result[seq[string], string] =
   r = deduplicate(r, isSorted = true)
   ok(r)
 
+func absentKid(kid: openArray[byte]): string =
+  "no anchor has kid " & kid.toHex
+
 func unknownKid(kid: openArray[byte]): string =
-  "no anchor has kid " & kid.toHex & "; trust anchor add adds one"
+  absentKid(kid) & "; trust anchor add adds one"
 
 func withAnchor*(
     f: LcnPackageTrust, a: LcnTrustAnchor
@@ -273,13 +276,18 @@ func withAnchor*(
   r.signing.anchors.insert(a, at)
   ok(r)
 
-func withoutAnchor*(f: LcnPackageTrust, kid: openArray[byte]): LcnPackageTrust =
-  ## [G397; PM l.436-437] `trust anchor remove`: a withdrawal. An absent kid
-  ## changes nothing.
-  result = f
+func withoutAnchor*(
+    f: LcnPackageTrust, kid: openArray[byte]
+): Result[LcnPackageTrust, string] =
+  ## [G397; PM l.436-437] `trust anchor remove`: a withdrawal. A kid that
+  ## names no anchor is refused: withdrawing what is not there withdraws
+  ## nothing, and a mistyped kid must not pass for a withdrawal.
   let i = f.indexOfKid(kid)
-  if i >= 0:
-    result.signing.anchors.delete(i)
+  if i < 0:
+    return err(absentKid(kid))
+  var r = f
+  r.signing.anchors.delete(i)
+  ok(r)
 
 func withNames*(
     f: LcnPackageTrust, kid: openArray[byte], names: openArray[string]
@@ -297,11 +305,22 @@ func withNames*(
 func withoutNames*(
     f: LcnPackageTrust, kid: openArray[byte], names: openArray[string]
 ): Result[LcnPackageTrust, string] =
-  ## [G397; PM l.417] `trust anchor remove-names`. An absent name changes
-  ## nothing; leaving the anchor no name is refused.
+  ## [G397; PM l.417] `trust anchor remove-names`, all or nothing: a name
+  ## the anchor does not authorize, compared byte for byte (PM l.418-419), is
+  ## refused with every such name, and nothing is removed; leaving the anchor
+  ## no name is refused.
   let i = f.indexOfKid(kid)
   if i < 0:
-    return err(unknownKid(kid))
+    return err(absentKid(kid))
+  var absent: seq[string]
+  for n in names:
+    if n notin f.signing.anchors[i].packages and n.escape notin absent:
+      absent.add(n.escape)
+  if absent.len > 0:
+    return err(
+      "kid " & kid.toHex & " authorizes no package named " & absent.join(", ") &
+        "; no name was removed"
+    )
   var r = f
   var kept: seq[string]
   for n in r.signing.anchors[i].packages:

@@ -774,12 +774,10 @@ when defined(posix):
       # One added name is a new revision (PM l.420).
       r = wrote("anchor", "add-names", "--kid", "org", "logos.wallet")
       check r{"revision"}.getInt == 4 and r{"changed"}.getBool
-      # A change that changes nothing writes nothing.
+      # A change that adds or sets what is already so writes nothing.
       let before = digestOfFile(c.s.trustPath)
       for args in [
         @["anchor", "add-names", "--kid", "org", "logos.wallet"],
-        @["anchor", "remove-names", "--kid", "org", "logos.chat"],
-        @["anchor", "remove", "--kid", "none"],
         @[
           "anchor", "add", "--kid", "org", "--key", key, "logos.storage", "logos.wallet"
         ],
@@ -789,10 +787,10 @@ when defined(posix):
         r = wrote(args)
         check r{"revision"}.getInt == 4 and not r{"changed"}.getBool
       check digestOfFile(c.s.trustPath) == before
-      check "unchanged at trust revision 4" in
+      check "unchanged at trust revision 4: nothing was written" in
         c.ctl("trust", "development", "off").stdout
-      check "unchanged at trust revision 4: no anchor has kid 6e6f6e65; nothing was written" in
-        c.ctl("trust", "anchor", "remove", "--kid", "none").stdout
+      # The anchors the file marks development, changed or not.
+      check wrote("development", "off"){"development_anchors"}.getInt == 1
       let on = c.ctl("trust", "development", "on")
       check on.code == 0
       check "trust revision 5: development switch on, 1 development anchor enters force" in
@@ -824,7 +822,7 @@ when defined(posix):
       check anchors[1]["packages"] == %["logos.storage", "logos.wallet"]
       check anchors[1]["public_key"].getStr == key
       check sj["result"]["provenance"] == newJObject()
-      check not sj["result"].hasKey("refused")
+      check not sj["result"].hasKey("refusal")
       # Off again: the development anchor leaves force.
       check "1 development anchor leaves force" in
         c.ctl("trust", "development", "off").stdout
@@ -863,10 +861,18 @@ when defined(posix):
           @["anchor", "remove-names", "--kid", "org", "logos.storage"],
           "trust anchor remove withdraws the anchor",
         ),
+        # A withdrawal of what is not there is refused.
+        (@["anchor", "remove", "--kid", "none"], "no anchor has kid 6e6f6e65"),
+        (
+          @["anchor", "remove-names", "--kid", "org", "logos.chat"],
+          "kid 6f7267 authorizes no package named \"logos.chat\"; no name was removed",
+        ),
       ]:
         checkpoint(args.join(" "))
         let r = c.ctl(@["trust"] & args)
         check r.code == 1 and says in r.stderr
+      check "trust anchor add adds one" notin
+        c.ctl("trust", "anchor", "remove", "--kid", "none").stderr
       check digestOfFile(c.s.trustPath) == before
       # A provenance profile selected by hand, at the next revision.
       var f = readTrust(c.s).expect("the file").file
@@ -878,9 +884,14 @@ when defined(posix):
       check shown.code == 0
       check "selects \"logos.package-provenance.slsa-v1.2\"" in shown.stdout
       check "supports no provenance profile" in shown.stdout
+      # The rules refuse the file before continuity, so continuity is not reached.
+      check "not reached: a start refuses the file before continuity" in shown.stdout
+      check "accepted at the next start" notin shown.stdout
       let (sc, sj) = c.ctlJson("trust", "show")
       check sc == 0
-      check "supports no provenance profile" in sj["result"]["refused"].getStr
+      check "supports no provenance profile" in sj["result"]["refusal"].getStr
+      check not sj["result"].hasKey("refused")
+      check sj["result"]["continuity"].getStr.startsWith("not reached")
       check sj["result"]["provenance"]["selected"].getStr ==
         "logos.package-provenance.slsa-v1.2"
       for args in [
@@ -903,6 +914,30 @@ when defined(posix):
       check waitExit(d, ReadyMs) == 1
       check "supports no provenance profile" in d.errText
       check readMark(c.s).expect("the mark").get == mark
+
+    test "[IMPL-DECISION G397] trust show gives a kid's text only when --kid would read it back as that kid: a kid whose text begins hex: is shown in hex only":
+      let c = newCase()
+      check c.initDefault().code == 0
+      let key = repeat("ab", 48)
+      # The kid is the six bytes of the text "hex:ab", given in hex.
+      check c.ctl(
+        "trust", "anchor", "add", "--kid", "hex:6865783a6162", "--key", key,
+        "logos.chat",
+      ).code == 0
+      check c.ctl(
+        "trust", "anchor", "add", "--kid", "org", "--key", key, "logos.storage"
+      ).code == 0
+      let (sc, sj) = c.ctlJson("trust", "show")
+      check sc == 0
+      let anchors = sj["result"]["signing"]["anchors"]
+      check anchors.len == 2
+      check anchors[0]["kid"].getStr == "6865783a6162"
+      check not anchors[0].hasKey("kid_text")
+      check anchors[1]["kid_text"].getStr == "org"
+      check "hex:ab" notin c.ctl("trust", "show").stdout
+      # Its text passed back to --kid names another kid, the one byte 0xab.
+      let r = c.ctl("trust", "anchor", "remove", "--kid", "hex:ab")
+      check r.code == 1 and "no anchor has kid ab" in r.stderr
 
     test "[IMPL-DECISION G192] a session whose state store was lost does not start again under its Runtime id (exit 1; RUNTIME l.2630-2632)":
       let c = newCase()

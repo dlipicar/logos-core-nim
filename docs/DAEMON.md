@@ -557,11 +557,11 @@ switch turned off, is withdrawn from that start on, and nothing running is affec
 
 | Command | What it does |
 |---|---|
-| `trust show` | the revision, the switch, the profile, the selections, the mark and what continuity would decide; each anchor with its kid (in hex, and as text when printable ASCII), its names, its key, its development marker and whether it is in force. The file is decoded without the rules, so a file logosd refuses is shown, with the reason |
+| `trust show` | the revision, the switch, the profile, the selections, the mark and what continuity would decide; each anchor with its kid (in hex, and as text when `--kid` would read that text back as the same kid), its names, its key, its development marker and whether the file puts it in force. The file is decoded without the rules, so a file logosd refuses is shown, with the reason; continuity is then "not reached", since a start applies the rules first |
 | `trust anchor add --kid KID --key HEX [--development] NAME…` | a new anchor authorizing the names. A kid already present is refused (`add-names` adds names to it) |
-| `trust anchor remove --kid KID` | removes the anchor: a withdrawal (PACKAGE MANAGER l.436-437) |
+| `trust anchor remove --kid KID` | removes the anchor: a withdrawal (PACKAGE MANAGER l.436-437). A kid that names no anchor is refused |
 | `trust anchor add-names --kid KID NAME…` | adds names; one added name is a new revision (PACKAGE MANAGER l.420) |
-| `trust anchor remove-names --kid KID NAME…` | removes names; leaving the anchor none is refused (remove the anchor instead) |
+| `trust anchor remove-names --kid KID NAME…` | removes names, all or nothing: a name the anchor does not authorize is refused, naming every such name, and none is removed; leaving the anchor none is refused (remove the anchor instead) |
 | `trust development on\|off` | the switch, and how many development anchors enter or leave force with it |
 | `trust reestablish --revision N` | the mark, as above |
 | `trust evidence-keys ls\|rotate` | the call-evidence keys (§9) |
@@ -576,9 +576,15 @@ switch turned off, is withdrawn from that start on, and nothing running is affec
   so it never writes a file logosd refuses. The result is written as the next revision, in format v2, and
   the command says "it applies at the next start". A Tier 4b v1 file becomes v2 with its first change,
   without re-establishment.
-- **A change that changes nothing writes nothing**: names already present, an absent name or anchor
-  removed, the same anchor added again, the switch set as it is. The command exits 0 and says "unchanged"
-  (`"changed": false` in JSON), so scripts can repeat it and no revision is spent on nothing.
+- **A command that adds or sets what is already so writes nothing**: names already present, the same
+  anchor added again, the switch set as it is. The command exits 0 and says "unchanged" (`"changed":
+  false` in JSON), so scripts can repeat it and no revision is spent on nothing.
+- **A command that withdraws what is not there is refused** (exit 1, nothing written): `anchor remove`
+  of a kid that names no anchor ("no anchor has kid HEX"), and `anchor remove-names` with a name the
+  anchor does not authorize. Names match byte for byte (PACKAGE MANAGER l.418-419), so a name in another
+  case or normalization form is not there. A mistyped withdrawal then fails instead of passing for one
+  while the key or name it meant stays in force. `add-names` and `remove-names` refuse a kid that names no
+  anchor too.
 - **A file logosd refuses** is refused by every writer, a change that changes nothing included, and the
   refusal ends "correct trust.cbor by hand, then run a trust change or logosctl trust reestablish
   --revision N". A selection written by hand is one such file: no command selects a catalog or provenance
@@ -586,9 +592,13 @@ switch turned off, is withdrawn from that start on, and nothing running is affec
   anchor whose key is an evidence key) is written.
 - JSON follows §7's envelope with `deployment` (DECISIONS G89). `trust show`'s result carries the file's
   fields (`revision`, `development`, `signing` with `profile` and `anchors`, `catalog`, `provenance`; keys
-  and kids in hex, `kid_text`, `in_force`), `file`, `mark`, `continuity` and, for a file logosd refuses,
-  `refused`. A writer's carries `revision` and `changed`, an anchor command's `kid`, and
-  `trust development`'s `development` and `development_anchors`.
+  and kids in hex), `file`, `mark`, `continuity` and, for a file logosd refuses, `refusal`, the reason a
+  start would give. Each anchor also carries `in_force`, what the file says (its switch and the anchor's
+  marker), not what a running logosd uses, which is the revision it started with; and `kid_text`, the kid
+  as text, only when it is printable ASCII and does not begin `hex:` (`--kid` would read such a text as hex
+  digits, another kid). A writer's result carries `revision` and `changed`, an anchor command's `kid`, and
+  `trust development`'s `development` and `development_anchors`, the number of anchors the file marks
+  `development`, whether or not anything changed.
 
 ## 7. The logosctl instance and its socket
 
