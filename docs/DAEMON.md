@@ -298,6 +298,13 @@ inputs through it: `work_dir`, `state_root`, `store_dir` and `endpoint_dir` from
 Runtime id, the instances of §4, the merged policy of §5, and the permission settings of §5. `routing`,
 `transport`, `state_transfers` and `call_audit.call_records`/`evidence` pass through unchanged.
 
+`endpoint_dir` is always `<session>/run/ep`; the daemon configuration has no field for it. Since an endpoint
+needs `<endpoint_dir>/<8 hex>/logos_.sock` to fit `sun_path` (DECISIONS G58, amended 2026-11-21), the session
+directory's path may be at most **75 bytes on macOS and 79 on Linux**; a longer one fails the start (exit 2)
+with "the endpoint directory: … does not fit sun_path …: the base leaves no room for an endpoint" (§2). Before
+the amendment the tightest limit was the control socket's, 85 and 89 bytes. The check is the Runtime's at
+open, not logosd's at assembly.
+
 ## 4. Composition and bootstrap
 
 | Instance | Module | Implementation | State assignment |
