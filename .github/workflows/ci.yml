@@ -278,7 +278,7 @@ jobs:
       # [DECISIONS G436] Nimble checks none of nimble.lock's checksums (draft #191). Each install
       # nimble.paths names must carry the lock's before anything in this job compiles against
       # them: the task below runs the same check first, but the peer check compiles directly.
-      - name: The installs are the ones nimble.lock records
+      - name: Each install carries the checksum nimble.lock records
         run: nix develop -c nim r --hints:off tools/check_installs.nim
 
       - name: nimble ${{ matrix.task }}

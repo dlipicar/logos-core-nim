@@ -1,9 +1,11 @@
 ## Run by `checkInstalls` in logos_core.nimble (first in every `nimble test*` task and in
 ## `build_runtime_lib`, and before `nimble build` in a checkout with `nimbledeps/`), and as its own
 ## step after `nimble setup` in CI and in `tools/ci/windows.ps1` [IMPL] (DECISIONS G436): each install
-## `nimble.paths` names must be the one `nimble.lock` records. Nimble 0.26.2 checks no checksum of
-## the lock (draft #191), so without this a changed or foreign install would run the suites. Run
-## from the repository's root; exits 1 with one line per finding.
+## `nimble.paths` names must carry the checksum `nimble.lock` records. Nimble 0.26.2 checks no
+## checksum of the lock (draft #191), so without this an install made from other content, a renamed
+## one or one left from before the lock moved would run the suites. It checks for mismatches, not
+## tampering: an install edited in place keeps its name and passes. Run from the repository's root;
+## exits 1 with one line per finding.
 ##
 ## It imports only the standard library and the SDK's helper, both from this tree: it is compiled
 ## from the installs it judges, so a third-party import would be built from them.
@@ -19,7 +21,7 @@ const developLinks: seq[string] = @[]
 proc main(): int =
   let findings = installMismatches(getCurrentDir(), developLinks)
   if findings.len == 0:
-    echo "check_installs: every install nimble.paths names is the one nimble.lock records"
+    echo "check_installs: every install nimble.paths names carries the checksum nimble.lock records"
     return 0
   stderr.writeLine(
     "check_installs: the installs do not match nimble.lock (DECISIONS G436):"

@@ -7791,31 +7791,43 @@ their history.
   the `nimbledeps/` the suites use.
 - **What the lock does not pin.** Nimble 0.26.2 compares none of a lock's checksums with what it installs
   or finds installed: it takes an install by name, version and revision (draft #191). So
-  `tools/check_installs.nim` checks, through `logos_sdk/testing/lockcheck`, and exits 1 with one line per
-  finding unless:
-  - the lock records a SHA-1 checksum for every package but `nim` (also `lint-packaging`'s
-    `lock-complete`);
-  - each such package has exactly one `pkgs2/<name>-<version>-<sha1>` directory in `nimble.paths`, whose
-    suffix is the lock's `checksums.sha1` (Nimble names the directory after the checksum it computed at
-    install, and reads it back from the name ever after);
-  - its version is the lock's where that is a plain version (a `#commit` entry installs under the
-    package's declared version);
-  - `nimble.paths` names no install the lock lacks, and no other directory but the project's own
-    `srcDir` (which Nimble lists too) and the listed develop links: a local source is a finding.
+  `tools/check_installs.nim` checks for mismatches, through `logos_sdk/testing/lockcheck`.
+  - **What it promises:** each install the compiler will use, as Nimble chose it, carries the checksum the
+    lock records, or the run stops before anything compiles. That covers an install made from other
+    content, a renamed directory, a lock moved without a new setup, and two installs of one version
+    where Nimble takes the wrong one (draft #189).
+  - **What it does not promise:** evidence against tampering. An edit inside a directory that keeps its
+    name passes (*What an equal suffix shows*, below).
+  - It exits 1 with one line per finding unless:
+    - the lock records a SHA-1 checksum for every package but `nim` (also `lint-packaging`'s
+      `lock-complete`);
+    - each such package has exactly one `pkgs2/<name>-<version>-<sha1>` directory in `nimble.paths`,
+      whose suffix is the lock's `checksums.sha1` (Nimble names the directory after the checksum it
+      computed at install, and reads it back from the name ever after);
+    - its version is the lock's where that is a plain version (a `#commit` entry installs under the
+      package's declared version);
+    - `nimble.paths` names no install the lock lacks, and no other directory but the project's own
+      `srcDir` (which Nimble lists too) and the listed develop links: a local source is a finding.
   - **Where it runs.** `checkInstalls` in `logos_core.nimble`:
     - first in every `nimble test*` task and in `build_runtime_lib`;
     - before `nimble build`, from a `before build` hook, in a checkout with `nimbledeps/`. Nimble also
       runs that hook when a dependent installs `logos_core`, in its `buildtemp/` copy of the package,
-      which leaves `nimbledeps/` out (Nimble 0.26.2 `install.nim:236-300`), so it is skipped there; a
-      toy package with the same guard showed both cases;
+      which leaves `nimbledeps/` out, so it is skipped there; a toy package with the same guard showed
+      both cases. That is the right behaviour: the dependent's lock governs that install, not core's.
+      Nimble takes the root's lock, ignores a dependency's, and builds core's programs in `buildtemp/`
+      against the dependent's installs (Nimble 0.26.2 `install.nim:225`, `:236-300`; the hook runs from
+      `build.nim:86`), so the check that applies is the dependent's own, over its own lock. The
+      daemon's nimble file gets the same check at the extraction (plan §3.1);
     - as a step of its own right after `nimble setup` in CI's `nimble` job and in `windows.ps1 setup`,
       so a suite the job compiles directly is covered too;
     - inside a task it sees the installs Nimble's own solve picked: before a task runs, Nimble solves
       again and rewrites an existing `nimble.paths` (`nimble.nim:2690-2702`), so an edited file is
-      undone;
-    - not covered: a suite a developer compiles by hand, `regen`, and `nimble build` on global
-      dependencies. Deployed outputs come from Nix, never from Nimble, and the Nix checks run
-      `test_lockcheck` too, with the real lock in their sources.
+      undone. Outside a task it reads the file as it stands: CI's step reads what `setup -l` just
+      wrote, and a run by hand reads whatever is there;
+    - not covered: `nimble build` in a checkout on global dependencies, which has no `nimbledeps/` (its
+      test tasks, unguarded, still check); a suite a developer compiles by hand; and `regen`. Deployed
+      outputs come from Nix, never from Nimble, and the Nix checks run `test_lockcheck` too, with the
+      real lock in their sources.
   - **Setup not run.** No `nimble.paths`, or install directories that are gone, is one finding that says
     to run `nimble setup`: never a crash or an empty pass. A mismatch says it too, for a `nimble.paths`
     left from before the lock moved.
@@ -7827,7 +7839,7 @@ their history.
     lock's names and bytes when the directory was made. CI is the strong case: no cache and a fresh
     fetch, so the suffix is computed in that job. On a developer's machine it is as old as the
     directory. It does not show:
-    - a later edit to an installed file;
+    - a later edit to an installed file: a directory edited in place keeps its name, and passes;
     - a directory copied in, or left from before, under the right name: the name travels with the
       content, and in lock mode Nimble uses an existing directory rather than replacing it;
     - untracked files in the tree installed from, as a reused clone can hold;
@@ -7836,8 +7848,10 @@ their history.
   - **Line endings.** The checksum is over the bytes checked out. Nimble turns `core.autocrlf` off in
     each clone, but a fetch by revision leaves `core.eol` native, so a package whose `.gitattributes`
     marks files as text would get CRLF on Windows and another checksum. The eight locked revisions hold
-    no `.gitattributes` at any depth. `windows.ps1 setup` sets both for Nimble's git alone
-    (`GIT_CONFIG_*`).
+    no `.gitattributes` at any depth. `windows.ps1` sets both for every git its steps start
+    (`GIT_CONFIG_*`), leaving the machine's git configuration alone, so a later Nimble command that
+    fetches checks out the same bytes as setup. A file whose attribute forces CRLF is CRLF on every
+    system, so its checksum is the same everywhere.
   - **The checker** imports only the standard library and the helper, both from this tree: it is built
     from the installs it judges.
   - **Not elsewhere.** Not a lint: Nix's sandbox has no Nimble installs. Not a core suite: Nix writes its

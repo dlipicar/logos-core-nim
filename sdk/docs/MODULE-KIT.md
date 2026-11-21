@@ -350,10 +350,11 @@ other's checksum, without a word; `bin/lcn-gen` links the one installed last. Ni
 checksum for any package (Nimble 0.26.2; core's DECISIONS G436). So install each SDK revision into a
 fresh Nimble directory, record the core commit it came from, and have a suite check that every
 directory `nimble.paths` names, `logos_sdk`'s among them, ends in the checksum the lock records for
-it. `logos_sdk/testing/lockcheck`'s `installMismatches` does that from the project's root; pass the
-names of any packages you take from a develop link, written in the suite itself rather than read from
-the environment. The same suite checks that `nimbledeps/bin/lcn-gen` resolves into the directory
-`nimble.paths` names for `logos_sdk`: the link follows the last install, not the lock.
+it. That is a check for mismatches, not against tampering: an install edited in place keeps its name
+and passes. `logos_sdk/testing/lockcheck`'s `installMismatches` does that from the project's root;
+pass the names of any packages you take from a develop link, written in the suite itself rather than
+read from the environment. The same suite checks that `nimbledeps/bin/lcn-gen` resolves into the
+directory `nimble.paths` names for `logos_sdk`: the link follows the last install, not the lock.
 
 **The generated-code check.** A module repository that commits its generated files compares them with a
 fresh generation by the installed SDK's `lcn-gen`, which Nimble builds at install with the module

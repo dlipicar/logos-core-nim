@@ -1,12 +1,16 @@
-## Whether the packages Nimble installed are the ones a lock records [IMPL] (DECISIONS G436).
+## Whether each install Nimble chose carries the checksum a lock records [IMPL] (DECISIONS G436):
+## a check for mismatches, not evidence against tampering.
 ##
 ## Nimble 0.26.2 never compares a lock's checksums with what it installs: it takes an install by
 ## name, version and revision (draft #191). Nimble names the directory it installs a package into
 ## `<name>-<version>-<sha1>`, after the checksum it computed over the package's tracked files at
 ## install, and `nimble.paths` names those directories. So comparing each one's suffix with the
-## lock's `checksums.sha1` shows whether every install was made from the content the lock records.
+## lock's `checksums.sha1` shows whether every install was made from content with the lock's
+## checksum: one made from other content, a renamed directory, a lock moved since setup and a second
+## install of one version all show.
 ##
-## What the suffix does not show: an edit to an installed file after the install; a directory
+## What the suffix does not show: an edit to an installed file after the install, since the
+## directory keeps its name and passes; a directory
 ## copied in, or left from before, under the right name; untracked files in the tree it was
 ## installed from; and a package's git submodules, which Nimble's checksum leaves out.
 ##

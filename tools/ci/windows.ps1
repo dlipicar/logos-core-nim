@@ -52,6 +52,18 @@ if ($ToolDir -eq '') {
 }
 $ToolDir = [IO.Path]::GetFullPath($ToolDir)
 
+# [DECISIONS G436] A package's checksum is over the bytes Nimble checks out. Nimble turns
+# core.autocrlf off in each clone, but a fetch by revision leaves core.eol native, so a package whose
+# .gitattributes marks files as text would check out with CRLF here and carry another checksum than
+# the lock's. These hold for every git a step starts (GIT_CONFIG_*, git 2.31 or later), so a Nimble
+# command after `setup -l` that fetches checks out the same bytes; the machine's git configuration is
+# left alone, and the variables are put back as they were when the script ends.
+$GitConfig = [ordered]@{
+  GIT_CONFIG_COUNT = '2'
+  GIT_CONFIG_KEY_0 = 'core.autocrlf'; GIT_CONFIG_VALUE_0 = 'false'
+  GIT_CONFIG_KEY_1 = 'core.eol'; GIT_CONFIG_VALUE_1 = 'lf'
+}
+
 function Invoke-Native([string]$What, [scriptblock]$Block) {
   & $Block
   if ($LASTEXITCODE -ne 0) { throw "$What failed with exit code $LASTEXITCODE" }
@@ -154,22 +166,7 @@ function Step-Setup {
   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
   Invoke-WebRequest -UseBasicParsing -OutFile $list `
     -Uri 'https://raw.githubusercontent.com/nim-lang/packages/master/packages.json'
-  # [DECISIONS G436] A package's checksum is over the bytes Nimble checks out. Nimble turns
-  # core.autocrlf off in each clone, but a fetch by revision leaves core.eol native, so a package
-  # whose .gitattributes marks files as text would check out with CRLF here and carry another
-  # checksum than the lock's. These hold for Nimble's git only (GIT_CONFIG_*, git 2.31 or later),
-  # not for the machine's git configuration.
-  $gitConfig = [ordered]@{
-    GIT_CONFIG_COUNT = '2'
-    GIT_CONFIG_KEY_0 = 'core.autocrlf'; GIT_CONFIG_VALUE_0 = 'false'
-    GIT_CONFIG_KEY_1 = 'core.eol'; GIT_CONFIG_VALUE_1 = 'lf'
-  }
-  foreach ($name in $gitConfig.Keys) { Set-Item "Env:$name" $gitConfig[$name] }
-  try {
-    Invoke-Native 'nimble setup -l' { nimble --useSystemNim -y setup -l }
-  } finally {
-    foreach ($name in $gitConfig.Keys) { Remove-Item -ErrorAction SilentlyContinue "Env:$name" }
-  }
+  Invoke-Native 'nimble setup -l' { nimble --useSystemNim -y setup -l }
   Get-Content (Join-Path $Repo 'nimble.paths')
   # Nimble checks none of nimble.lock's checksums (draft #191); `test` runs this again first.
   Invoke-Native 'check_installs' { nim r --hints:off tools/check_installs.nim }
@@ -282,9 +279,21 @@ function Step-Probe {
   if ($winRc -ne 0 -or $loopRc -ne 0) { exit 1 }
 }
 
-switch ($Step) {
-  'toolchain' { Step-Toolchain }
-  'setup' { Step-Setup }
-  'test' { Step-Test }
-  'probe' { Step-Probe }
+$savedGitConfig = @{}
+foreach ($name in $GitConfig.Keys) {
+  $savedGitConfig[$name] = [Environment]::GetEnvironmentVariable($name)
+  Set-Item "Env:$name" $GitConfig[$name]
+}
+try {
+  switch ($Step) {
+    'toolchain' { Step-Toolchain }
+    'setup' { Step-Setup }
+    'test' { Step-Test }
+    'probe' { Step-Probe }
+  }
+} finally {
+  foreach ($name in $GitConfig.Keys) {
+    if ($null -eq $savedGitConfig[$name]) { Remove-Item -ErrorAction SilentlyContinue "Env:$name" }
+    else { Set-Item "Env:$name" $savedGitConfig[$name] }
+  }
 }
