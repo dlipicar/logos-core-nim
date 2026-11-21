@@ -207,23 +207,34 @@ proc runDelivery(f: seq[byte]) =
       discard bindingSubEnd.report(LogosSubscriptionId(e.sub), ErrorCode(e.code))
     return
   let d = m.arm_lcn_Carrier_rc_delivery
-  var s: ptr LocalSub
+  # [IMPL] The record is read only under `subLock`, and the handler's end
+  # takes it once more before `rc_delivered`. The Runtime answers an
+  # unsubscribe only after that, so `rcUnsubscribeOp`, which unlinks and frees
+  # the record under the lock, comes after the handler in this process too;
+  # without the lock nothing here orders the two (TSan, N-2's CI fixes).
+  var handler: LogosEventHandler = nil
+  var userData: pointer = nil
   withLock subLock:
-    s = findLocal(d.local)
+    var s = findLocal(d.local)
     while s != nil and not s.ready and not s.failed:
       wait(subCond, subLock)
-  if s != nil and s.ready:
+    if s != nil and s.ready:
+      handler = s.handler
+      userData = s.userData
+  if handler != nil:
     currentDelivery = d.local
-    s.handler(
+    handler(
       cstring(d.name),
       (
         if d.data.len == 0: nil
         else: cast[ptr UncheckedArray[uint8]](unsafeAddr d.data[0])
       ),
       csize_t(d.data.len),
-      s.userData,
+      userData,
     )
     currentDelivery = 0
+    withLock subLock:
+      discard
   send(toMessage(LcnCarrierRcDelivered(local: d.local, seq: d.seq)))
 
 # Prepared calls --------------------------------------------------------------------------
