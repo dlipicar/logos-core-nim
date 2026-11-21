@@ -718,6 +718,16 @@
             # ledger), the node's pairing. [IMPL] One check per set, so CI can build them in
             # parallel: as one check they took 57 minutes on x86_64 (run 44888184613), 35.5 for
             # storage's set and 21.7 for delivery's.
+            kitSuites = ''
+              nim c -r --mm:refc --outdir:build sdk/tests/test_kit_dylib.nim
+              nim c -r --mm:orc --outdir:build tests/test_hosted_routes.nim 'run.mixed:*::*'
+              nim c -r --mm:orc --outdir:build tests/test_kit_mixed.nim
+            '';
+            # logos-storage-nim 4fe02344's switches (`config.nims`; `-d:chronosHandleException`
+            # changes how `async` procs compile).
+            storageSwitches = "--threads:on --tlsEmulation:off --opt:speed --excessiveStackTrace:on -d:metrics -d:nimTypeNames --styleCheck:usages --styleCheck:error --fieldChecks:on --warningAsError:ProveField:on --legacy:procParamTypeBackendAliases -d:withoutPCRE -d:nimOldCaseObjects -d:chronosHandleException -d:release";
+            # logos-delivery d20ee361's library set (`config.nims`, `library/config.nims`).
+            deliverySwitches = "--threads:on --deepcopy:on -d:nimOldCaseObjects -d:nimTypeNames -d:metrics";
             kitToolchains =
               set: switches:
               s.nimDerivation {
@@ -727,19 +737,154 @@
                   runHook preBuild
                   export LCN_KIT_SWITCHES=${lib.escapeShellArg switches}
                   echo "kit-toolchains-${set}: $LCN_KIT_SWITCHES"
-                  nim c -r --mm:refc --outdir:build sdk/tests/test_kit_dylib.nim
-                  nim c -r --mm:orc --outdir:build tests/test_hosted_routes.nim 'run.mixed:*::*'
-                  nim c -r --mm:orc --outdir:build tests/test_kit_mixed.nim
+                  ${kitSuites}
                   runHook postBuild
                 '';
               };
+            # [DECISIONS G439] The same suites with the kit libraries built against a library's own
+            # chronos, and the stew, bearssl or httputils it locks at another revision than core's:
+            # the commits W2-P fetched under the owner's D-4 (tier5-plans/stepW2-P-downloads.md),
+            # from logos-storage-nim 4fe02344's and logos-delivery d20ee361's locks. `kept` is what
+            # the library locks at core's own revision; evaluation fails when core's lock moves it,
+            # since the variant would then need a fetch for it.
+            kitSource =
+              repo: pkg: rev: hash:
+              s.pkgs.fetchFromGitHub {
+                owner = "status-im";
+                inherit repo rev hash;
+                # The revision in the store path, so the kits' generated C names it.
+                name = "${pkg}-${builtins.substring 0 8 rev}";
+              };
+            kitVariants = [
+              {
+                set = "storage";
+                rev = "2d81a762";
+                switches = storageSwitches;
+                swapped = {
+                  chronos = kitSource "nim-chronos" "chronos" "2d81a7625d74269581ba24c8bc40b69fccf27d47" "sha256-Lg125xjVtfhtnSDRvrn2QRSOnqoA58MYNcZv0TjPuK8=";
+                  stew = kitSource "nim-stew" "stew" "85c6e3131f44bee0f4b9884754599be0d95aefb7" "sha256-g6zG0VEUwukTHXD6vyWgJtp4WwWY3z6akoDkGu2tk+g=";
+                  bearssl = kitSource "nim-bearssl" "bearssl" "38a5622be728fb083f6fe55c124502995b2f4e3d" "sha256-sB5YN158rDkcOaSgpeVT5Rly2etp1gP+/bMSZG4xZl0=";
+                };
+                kept.httputils = "7d771ca337bd3bf563f6834569d2a06085ac21f1";
+              }
+              {
+                set = "delivery";
+                rev = "0de7b335";
+                switches = deliverySwitches;
+                swapped = {
+                  chronos = kitSource "nim-chronos" "chronos" "0de7b335d0ad5557ad5ba71a4b7662f7b201750e" "sha256-FVQ1gf6/pRr7A06yL37ru7YRDUWDToaeV/gQhwKtSrw=";
+                  stew = kitSource "nim-stew" "stew" "6a930214323f48d879015a1d2d68db6ace3446fb" "sha256-viiUZTlz3PNPgxccu1iIfBpwwEYmhEQ9iU7DajS7z6A=";
+                  httputils = kitSource "nim-http-utils" "httputils" "97eafdb8852c52beeedcf49e1c8d16e4b559d331" "sha256-gDc60IW7/DaEGgO72Mpmv+X/utZ3reyr9Xw5UQKaZCU=";
+                };
+                kept.bearssl = "b6c9a38964a574f6bc51f69efaf8fb2fedea905e";
+              }
+            ];
+            lockedRevision = pkg: (lib.importJSON ./nimble.lock).packages.${pkg}.vcsRevision;
+            # A `--path` in `LCN_KIT_SWITCHES` loses to `nimble.paths`, so the swap is the define
+            # `lcnKitVariant`, which only kit compiles get (through `LCN_KIT_SWITCHES`), read by this
+            # check's own copy of `config.nims`: the repository's never names it
+            # (`kit-toolchains-isolated`). The copy's paths file replaces the swapped packages'
+            # entries and adds none in front of them, so no module of core's copy can fill a gap in
+            # the library's (Fable, fable-checks/stepW2-P-plan.md §8). Asserted (Fable,
+            # fable-checks/stepN-1e-plan.md §8): a host compile of each suite has the same whole
+            # configuration under this `config.nims` as under the repository's, without the define;
+            # each kit build's own record (`-d:nimBetterRun`: every file it read) names the
+            # variant's chronos and no file of a swapped package of core's; the kits' generated C
+            # names the variant's chronos and never core's.
+            kitToolchainsVariant =
+              v:
+              let
+                name = "kit-toolchains-${v.set}-${v.rev}";
+                moved = lib.filterAttrs (pkg: rev: lockedRevision pkg != rev) v.kept;
+                hostSuites = [
+                  "--mm:refc sdk/tests/test_kit_dylib.nim"
+                  "--mm:orc tests/test_hosted_routes.nim"
+                  "--mm:orc tests/test_kit_mixed.nim"
+                ];
+              in
+              assert lib.assertMsg (moved == { })
+                "${name}: core's lock moved ${lib.concatStringsSep ", " (builtins.attrNames moved)}, which ${v.set} locks at core's old revision: the variant needs a fetch for it";
+              s.nimDerivation {
+                inherit name;
+                src = s.nimSources;
+                buildPhase = ''
+                  runHook preBuild
+                  fail() { echo "${name}: $*" >&2; exit 1; }
+                  # The variant's paths: each swapped package's entry replaced, exactly once.
+                  cp nimble.paths nimble-kit-variant.paths
+                  ${lib.concatStrings (
+                    lib.mapAttrsToList (pkg: src: ''
+                      n=$(grep -c "^--path:\".*/pkgs2/${pkg}-[^\"]*\"$" nimble-kit-variant.paths || true)
+                      [ "$n" = 1 ] || fail "nimble.paths has $n entries for ${pkg}"
+                      sed -i "s#^--path:\".*/pkgs2/${pkg}-[^\"]*\"\$#--path:\"${src}\"#" nimble-kit-variant.paths
+                    '') v.swapped
+                  )}
+                  # The define's branch, in this copy of config.nims only.
+                  block='when withDir(thisDir(), system.fileExists("nimble.paths")):'
+                  [ "$(grep -cxF "$block" config.nims)" = 1 ] || fail "config.nims's Nimble block changed"
+                  cp config.nims config.nims.orig
+                  sed -i "s/^when withDir(/when defined(lcnKitVariant):\n  include \"nimble-kit-variant.paths\"\nelif withDir(/" config.nims
+                  cp config.nims config.nims.variant
+                  grep -qx '  include "nimble-kit-variant.paths"' config.nims || fail "config.nims not patched"
+                  # A host compile of each suite: the same configuration under either config.nims.
+                  ${lib.concatMapStrings (h: ''
+                    nim dump --hints:off ${h} > host.dump 2>&1 || fail "nim dump ${h}: $(cat host.dump)"
+                    ! grep -qx lcnKitVariant host.dump || fail "the host of ${h} has lcnKitVariant"
+                    cp config.nims.orig config.nims
+                    nim dump --hints:off ${h} > host.orig.dump 2>&1 || fail "nim dump ${h}: $(cat host.orig.dump)"
+                    cp config.nims.variant config.nims
+                    cmp host.dump host.orig.dump || fail "the variant changed the host configuration of ${h}"
+                  '') hostSuites}
+                  export LCN_KIT_SWITCHES=${lib.escapeShellArg "${v.switches} -d:lcnKitVariant -d:nimBetterRun"}
+                  echo "${name}: $LCN_KIT_SWITCHES"
+                  ${kitSuites}
+                  # What each kit build read.
+                  records=$(ls build/kit-dylib/*/nimcache-*/*.json) || fail "no kit build record"
+                  ! grep -l '"depfiles": \[\]' $records || fail "a kit build recorded no files"
+                  grep -l "${v.swapped.chronos}/" $records > /dev/null || fail "no kit read ${v.swapped.chronos}"
+                  ${lib.concatStrings (
+                    lib.mapAttrsToList (pkg: src: ''
+                      ! grep -l "/pkgs2/${pkg}-" $records || fail "a kit read core's ${pkg}"
+                    '') v.swapped
+                  )}
+                  # The kits' generated C names the variant's chronos and never core's.
+                  grep -rqs --include='*.c' "${v.swapped.chronos}/" build/kit-dylib || fail "no kit's C names ${v.swapped.chronos}"
+                  ! grep -rls --include='*.c' "/pkgs2/chronos-" build/kit-dylib || fail "a kit's C names core's chronos"
+                  runHook postBuild
+                '';
+              };
+            kitChecksFor =
+              variants:
+              {
+                kit-toolchains-storage = kitToolchains "storage" storageSwitches;
+                kit-toolchains-delivery = kitToolchains "delivery" deliverySwitches;
+              }
+              // lib.listToAttrs (
+                map (v: lib.nameValuePair "kit-toolchains-${v.set}-${v.rev}" (kitToolchainsVariant v)) variants
+              );
+            kitChecks = kitChecksFor kitVariants;
           in
-          {
-            # logos-storage-nim 4fe02344's switches (`config.nims`; `-d:chronosHandleException`
-            # changes how `async` procs compile).
-            kit-toolchains-storage = kitToolchains "storage" "--threads:on --tlsEmulation:off --opt:speed --excessiveStackTrace:on -d:metrics -d:nimTypeNames --styleCheck:usages --styleCheck:error --fieldChecks:on --warningAsError:ProveField:on --legacy:procParamTypeBackendAliases -d:withoutPCRE -d:nimOldCaseObjects -d:chronosHandleException -d:release";
-            # logos-delivery d20ee361's library set (`config.nims`, `library/config.nims`).
-            kit-toolchains-delivery = kitToolchains "delivery" "--threads:on --deepcopy:on -d:nimOldCaseObjects -d:nimTypeNames -d:metrics";
+          kitChecks
+          // {
+            # [DECISIONS G439] Only the variant checks see the variant. The other kit checks'
+            # derivations are those made without it (compared in this one check, so evaluating any
+            # other does not make them twice: a guard against later wiring), and no source every
+            # other check builds from names the define.
+            kit-toolchains-isolated =
+              let
+                bare = kitChecksFor [ ];
+              in
+              assert lib.assertMsg (lib.all (n: kitChecks.${n}.drvPath == bare.${n}.drvPath) (
+                builtins.attrNames bare
+              )) "kit-toolchains-isolated: a kit check's derivation changes with the chronos variants";
+              s.pkgs.runCommand "kit-toolchains-isolated" { } ''
+                if grep -rl --include='*.nim' --include='*.nims' --include='*.nimble' --include='*.cfg' \
+                  --include='*.paths' lcnKitVariant ${s.nimSources}; then
+                  echo "kit-toolchains-isolated: a source names lcnKitVariant" >&2
+                  exit 1
+                fi
+                touch $out
+              '';
           }
         )
       );

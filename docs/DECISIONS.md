@@ -7166,10 +7166,15 @@ their history.
   reason: inline re-entry polls the dispatcher inside a `poll`, which chronos tolerates only while
   `chronosStrictReentrancy` is off (`config.nim:113`), and a later chronos may turn it on;
   `confinedrt` refuses to compile under it. The libraries' own chronos commits (storage `2d81a762`,
-  delivery `0de7b335`, both declaring 4.4.0) are for the packaging step or N-4 to check (plan P7).
+  delivery `0de7b335`, both declaring 4.4.0) are tested by two more checks (G439).
   The guide states the build line and the floor (`sdk/docs/MODULE-KIT.md` §8).
+- **Amended (N-1e, G439):** **`kit-toolchains-storage-2d81a762`** and
+  **`kit-toolchains-delivery-0de7b335`** run the same suites with the kit libraries built against each
+  library's own chronos, and the stew, bearssl or httputils it locks at another revision than core;
+  `kit-toolchains-isolated` keeps that to those two checks.
 - **Status:** export lists and the Mac toolchain probe built 2026-11-16 (I101, N-1 sub-part 1);
-  `kit-toolchains` and the chronos range 2026-11-20 (sub-part 6), the check split per set 2026-11-21. The packaging is the split's.
+  `kit-toolchains` and the chronos range 2026-11-20 (sub-part 6), the check split per set 2026-11-21,
+  the chronos variants 2026-11-21 (N-1e, G439). The packaging is the split's.
 
 ### G342 — Modules built with the other memory manager
 - **Kind:** Choice [IMPL] · **Specs:** INTERFACE §2.6-§2.8; TIER5-PLAN §7 A7.
@@ -7365,6 +7370,74 @@ their history.
   16 KiB orc-release). It is the regression check for the wake-up descriptor: without this decision
   each cycle leaks one (Linux) or two (macOS).
 - **Status:** built 2026-11-21 (Tier 5 step N-1e, part B).
+
+### G439 — A chronos variant in `kit-toolchains`: the kits under the libraries' own chronos
+- **Kind:** IMPL · **Specs:** none (a test of G341's range); TIER5-PLAN N-1; plan
+  `tier5-plans/stepN-1e-plan.md` §C (W2-P's P7 recipe; Fable, `tier5-plans/fable-checks/stepW2-P-plan.md`
+  §8 and `tier5-plans/fable-checks/stepN-1e-plan.md` §8); amends G341.
+- **Found** (W2-P, P7). `kit-toolchains` tested switch sets only, always over the lock's chronos 4.4.1.
+  logos-storage-nim pins chronos `2d81a762` and logos-delivery `0de7b335`, both on chronos's main line
+  after v4.4.0, where each POSIX dispatcher owns a wake-up descriptor (G438). A `--path` in
+  `LCN_KIT_SWITCHES` loses to `nimble.paths`, so W2-P's first try compiled 4.4.1 without an error.
+- **Decision.** Two more Linux checks beside the per-set ones, one per library revision:
+  `kit-toolchains-storage-2d81a762` and `kit-toolchains-delivery-0de7b335`. Each runs its set's suites
+  (`test_kit_dylib` under refc, `run.mixed` and `test_kit_mixed` under orc) with the kit libraries built
+  against the library's chronos and the packages it locks at another revision than core: storage's stew
+  `85c6e313` (0.5.3) and bearssl `38a5622b` (0.2.15); delivery's stew `6a930214` (0.6.3) and httputils
+  `97eafdb8` (0.6.0). Core's lock supplies the rest. The host programs keep 4.4.1, as in a node whose
+  Runtime is built from core's lock and whose module libraries are built from their own.
+  - **The sources** are fixed-output fetches of the commits W2-P fetched under the owner's D-4
+    (`tier5-plans/stepW2-P-downloads.md`), each named `<package>-<rev8>` so the kits' generated C names
+    the revision. Their hashes match W2-P's checkouts on framework.lan (2026-11-21).
+  - **What each library keeps at core's revision:** storage's httputils (0.5.1 `7d771ca3`) and
+    delivery's bearssl (0.2.13 `b6c9a389`); results (0.5.1 `df8113dd`) is the same in all three locks.
+    Each variant names its kept packages' revisions, and evaluation fails if core's lock moves one: the
+    variant would then test a library's chronos beside a package that library does not use, and needs a
+    fetch. Storage locks unittest2 0.2.6 where core locks 0.3.0; the variant keeps core's, which no kit
+    source imports, so it is in no kit library.
+  - **The swap** is the define `lcnKitVariant`, which only kit compiles get (in `LCN_KIT_SWITCHES`). It is
+    read by the check's own copy of `config.nims`; the repository's copy is untouched. The copy's paths
+    file is `nimble.paths` with each swapped package's entry replaced, never added in front. So no
+    module of core's copy can fill a gap in the library's (Fable, `stepW2-P-plan.md` §8).
+  - **Asserted in each check:**
+    - **The host.** Each suite's host compile (`nim dump` of its own project file, so its directory's
+      `config.nims` is in the chain) has the same search paths, lazy paths and defined symbols under the
+      check's `config.nims` as under the repository's, and no `lcnKitVariant`.
+    - **The kits.** Every kit build is made with `-d:nimBetterRun`, so its nimcache record lists every
+      file it read. Every record lists some files; some kit read the variant's chronos; no kit read a
+      file of a swapped package from core's set. The property asserted is "removed", not "shadowed".
+      These records are used instead of a separate `nim dump`, which would have to repeat kitbuild's
+      arguments exactly (Fable, `stepN-1e-plan.md` §8).
+    - **The generated C.** The kits' C names the variant's chronos and never core's.
+    - Absence is asserted only for the swapped packages; the kept ones are the library's own.
+  - **`kit-toolchains-isolated`** guards the rest. No source that every other check builds from names
+    `lcnKitVariant`. The per-set checks' derivations are those made without the variants; that holds by
+    construction and guards against later wiring. It is compared in this one check, so evaluating any
+    other check does not instantiate them twice.
+  - **The 200-cycle case** (G438) runs in `test_kit_dylib` under both variants, and under 4.4.1 in the
+    ordinary checks. It requires descriptors and threads back to the warm-up's and resident memory grown
+    by under 1 MiB.
+- **The plan's two sentences, corrected** (Fable, `stepN-1e-plan.md` §8.2). Part C's first bullet gives
+  each variant its library's stew, bearssl and httputils; that holds only because the package each
+  library keeps is at core's revision. The dump bullet names four of core's packages that may not
+  appear; for each library it is three.
+- **By hand before the first merge** (the plan's fallback, kept as a record). On the Mac, 2026-11-21,
+  at b570078 (parts A, B and D), W2-P's recipe was run over W2-P's checkouts: a define-selected paths
+  file in a temporary `config.nims`. Under storage's set with chronos `2d81a762` and under delivery's
+  with `0de7b335`, the results were:
+  - MX-1 to MX-4 (`test_kit_mixed`, orc) pass.
+  - `test_kit_dylib` passes 20 of 20 under refc and orc. That includes G438's leftover cases and the
+    200-cycle case; resident memory grew by 0 KiB under refc and 16 KiB under orc.
+  - Every kit build's record listed its files. 9 of the 23 read the variant's chronos and stew; the
+    others read no chronos at all. None read chronos, stew or the third swapped package from core's
+    set, and none read bearssl or httputils.
+  - The three suites' host dumps were the same under either `config.nims`.
+
+  framework.lan runs the two checks themselves before the merge.
+- **Not covered:** W2-P.2's G435 changes how kitbuild passes paths (`hostPathArgs`, only for a tree
+  that sets none). This tree sets them, so the variant is unaffected; it is checked again once W2-P.2
+  lands.
+- **Status:** built 2026-11-21 (Tier 5 step N-1e, part C).
 
 ### G440 — A post gate that outlives a confined kit's context
 - **Kind:** IMPL · **Specs:** INTERFACE l.2100 (residual work); planning's ruling; TIER5-PLAN N-1; plan
@@ -7795,6 +7868,7 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G398 | catalog and provenance selections in the package trust file | FREE (C3, C9) | 9 |
 | G437 | what runs while a confined kit's `destroyModule` runs | IMPL | 12 |
 | G438 | closing a confined kit's module-thread dispatcher, and what destroy left | IMPL | 12 |
+| G439 | a chronos variant in `kit-toolchains`: the kits under the libraries' own chronos | IMPL | 12 |
 | G440 | a post gate that outlives a confined kit's context | IMPL | 12 |
 
 ---

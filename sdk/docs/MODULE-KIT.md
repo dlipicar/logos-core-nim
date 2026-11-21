@@ -298,7 +298,9 @@ for confined mode, chronos 4.4.x (this repository locks 4.4.1; confined mode use
 logos-storage-nim's switches (`-d:chronosHandleException`, `--styleCheck:error`, `--fieldChecks:on`
 with `ProveField` as an error, among others) and logos-delivery's (`--deepcopy:on`,
 `-d:nimOldCaseObjects`); the `kit-toolchains-storage` and `kit-toolchains-delivery` flake checks
-build the test libraries with each set.
+build the test libraries with each set. Two more, `kit-toolchains-storage-2d81a762` and
+`kit-toolchains-delivery-0de7b335`, build them against each library's own chronos (the main line
+after 4.4.0) and the stew, bearssl or httputils it locks, beside a host on 4.4.1 (G439).
 
 **Getting the SDK.** Until the SDK is a nimble package of its own (the repository split's packaging
 step), put this repository's `sdk/src` on the Nim path (`--path:`, or a `nimble.paths` entry), with
