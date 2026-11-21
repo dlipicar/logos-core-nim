@@ -1181,7 +1181,11 @@ when defined(posix):
 
       let first = c.streaming("sub1")
       check posix.kill(first.pid, SIGINT) == 0
-      check waitExit(first, StopMs) == 130
+      let firstExit = waitExit(first, StopMs)
+      checkpoint("sub1 exit " & $firstExit & ": " & first.outText & first.errText)
+      if firstExit != 130:
+        checkpoint("logosd: " & d.errText)
+      check firstExit == 130
       check first.errText == ""
       let after = c.lcn("call", "meter_module", "read", "channel=7")
       checkpoint after.stdout & after.stderr
@@ -1190,7 +1194,9 @@ when defined(posix):
       # lcn_call stopping, or the meter's route ending first.
       let second = c.streaming("sub2")
       check d.stopped == 0
-      check waitExit(second, StopMs) == 6
+      let secondExit = waitExit(second, StopMs)
+      checkpoint("sub2 exit " & $secondExit)
+      check secondExit == 6
       checkpoint second.outText & second.errText
       check "\"status\":\"error\"" in second.outText
       check not entryExists(c.cliSocket)

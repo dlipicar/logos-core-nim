@@ -1796,6 +1796,10 @@ else:
     2
 
 when isMainModule:
-  quit(main())
+  # [IMPL] Not `quit`: it saturates at `high(int8)` on POSIX (Nim's system.nim),
+  # so 130 would leave as 127. exit(3) keeps the low 8 bits and still runs the
+  # exit procedures and flushes stdio.
+  proc cExit(code: cint) {.importc: "exit", header: "<stdlib.h>", noreturn.}
+  cExit(cint(main()))
 
 {.pop.}
