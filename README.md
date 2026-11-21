@@ -126,14 +126,17 @@ Decisions the specs leave open are recorded in [docs/DECISIONS.md](docs/DECISION
 
 Dependencies are declared once, in `logos_core.nimble` and `nimble.lock`. Both paths below use them.
 
-With Nimble (Nim 2.2.14 and nimble ≥ 0.20 on `PATH`):
+With Nimble (Nim 2.2.14 and Nimble 0.26.2 or later on `PATH`; the dev shell has both). Every
+Nimble command passes `--useSystemNim`, so Nimble uses the Nim on `PATH` and never installs or locks
+one; that Nim must be `logos_core.nimble`'s pin (DECISIONS G436). Remove any `nim-*` tree that
+Nimble 0.20.1 left in `nimbledeps/pkgs2/`: a command without the flag would compile with it instead.
 
 ```bash
-nimble setup -l
+nimble --useSystemNim setup -l
 ```
 
 ```bash
-nimble test && nimble test_refc
+nimble --useSystemNim test && nimble --useSystemNim test_refc
 ```
 
 Under the sanitizers (DECISIONS I77): AddressSanitizer with UndefinedBehaviorSanitizer,
@@ -141,7 +144,7 @@ ThreadSanitizer, and on Linux with clang MemorySanitizer. On macOS they build wi
 toolchain; on Linux `nix flake check` runs all three:
 
 ```bash
-nimble test_asan && nimble test_tsan
+nimble --useSystemNim test_asan && nimble --useSystemNim test_tsan
 ```
 
 A `?` inside a half-built constructor leaks under ORC on Nim 2.2.14 (I77). The flake's
@@ -159,9 +162,7 @@ loses the branch's value undestroyed under ORC (I92, nim-lang/Nim#26725). The fl
 python3 tools/lint/firstwrite.py src tests
 ```
 
-Core's programs (`lcn-pkg`, `logos-module-host`, and `logosd` and `logosctl` on POSIX hosts) build
-with `--useSystemNim`. On macOS, nimble 0.20.1 crashes without it while looking up the Nim that
-`nimble.lock` names; on Linux the flag changes nothing:
+Core's programs (`lcn-pkg`, `logos-module-host`, and `logosd` and `logosctl` on POSIX hosts):
 
 ```bash
 nimble build --useSystemNim
@@ -262,15 +263,15 @@ The generated Nim modules (`sdk/src/logos_sdk/codegen/common_types.nim`,
 `sdk/src/logos_sdk/testing/generated/`, `sdk/tests/generated/`, `tests/generated/`) are committed, and a test fails when they are stale. To rewrite them:
 
 ```bash
-nimble regen
+nimble --useSystemNim regen
 ```
 
-After changing a requirement in `logos_core.nimble`, regenerate the lock from scratch. With nimble
-0.20.1, `nimble lock` over an existing lock empties its package list or crashes. Locking runs each
-dependency's `.nimble` script, so we lock on a separate Linux host (DECISIONS I35).
+After changing a requirement in `logos_core.nimble`, regenerate the lock from scratch, as CI's
+check does. The lock has no `nim` entry (G436). Locking runs each dependency's `.nimble` script, so
+we lock on a separate Linux host (DECISIONS I35).
 
 ```bash
-rm nimble.lock && nimble -y lock
+rm nimble.lock && nimble --useSystemNim -y lock
 ```
 
 Then:
@@ -291,7 +292,7 @@ are in [docs/HOST-CONFIG.md](docs/HOST-CONFIG.md). To build the library and `log
 `build/lib/`:
 
 ```bash
-nimble build_runtime_lib
+nimble --useSystemNim build_runtime_lib
 ```
 
 ## Running logosd

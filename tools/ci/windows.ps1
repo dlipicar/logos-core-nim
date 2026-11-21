@@ -127,17 +127,34 @@ function Show-Toolchain {
   if ($gcc -ne $want) { throw "gcc on PATH is $gcc, not $want" }
 }
 
+# [DECISIONS G436] Nimble never compares the compiler with `requires "nim == ..."`, and with
+# --useSystemNim it takes the Nim on PATH, so each Nimble step checks that Nim against the one pin,
+# logos_core.nimble's, before it runs. On Windows nothing else does: $NimVersion must equal that pin
+# too (lint-packaging's nim-windows).
+function Assert-NimPin {
+  $pin = Select-String -Path (Join-Path $Repo 'logos_core.nimble') -Pattern '^requires "nim == ([0-9.]+)"' |
+    Select-Object -First 1
+  if (-not $pin) { throw 'logos_core.nimble has no exact nim requirement' }
+  $want = $pin.Matches[0].Groups[1].Value
+  $have = (& nim --version | Select-Object -First 1)
+  if ($have -notmatch "^Nim Compiler Version $([regex]::Escape($want)) ") {
+    throw "the Nim on PATH is '$have', not logos_core.nimble's $want"
+  }
+  Write-Host "Nim on PATH matches the pin: $have"
+}
+
 function Step-Setup {
   Use-Toolchain
   Set-Location $Repo
-  # As the nimble job: the package list is fetched here and handed to nimble, which then only
-  # resolves the lock file. Local deps (`-l`) keep everything under nimbledeps\.
+  Assert-NimPin
+  # The package list is fetched here and handed to nimble, which then only resolves the lock file.
+  # Local deps (`-l`) keep everything under nimbledeps\.
   New-Item -ItemType Directory -Force (Join-Path $Repo 'nimbledeps') | Out-Null
   $list = Join-Path $Repo 'nimbledeps\packages_official.json'
   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
   Invoke-WebRequest -UseBasicParsing -OutFile $list `
     -Uri 'https://raw.githubusercontent.com/nim-lang/packages/master/packages.json'
-  Invoke-Native 'nimble setup -l' { nimble -y setup -l }
+  Invoke-Native 'nimble setup -l' { nimble --useSystemNim -y setup -l }
   Get-Content (Join-Path $Repo 'nimble.paths')
 }
 
@@ -145,7 +162,8 @@ function Step-Test {
   Use-Toolchain
   Set-Location $Repo
   Write-Host "LCN_SHARD=$env:LCN_SHARD"
-  Invoke-Native 'nimble test' { nimble test }
+  Assert-NimPin
+  Invoke-Native 'nimble test' { nimble --useSystemNim test }
 }
 
 # --- probe -----------------------------------------------------------------------------------

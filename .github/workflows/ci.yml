@@ -35,6 +35,10 @@ on:
         description: Run only the windows job (a trial of the Windows leg)
         type: boolean
         default: false
+      nimble_only:
+        description: Run only the jobs on the Nimble path, `nimble` and `windows` (a trial, G436)
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -42,7 +46,7 @@ concurrency:
 
 jobs:
   nix:
-    if: ${{ !inputs.windows_only }}
+    if: ${{ !inputs.windows_only && !inputs.nimble_only }}
     name: nix (${{ matrix.os }}, ${{ matrix.group }}${{ (matrix.os != 'macos-latest' && format(' {0}/{1}', matrix.shard, (matrix.group == 'msan' && 5) || ((matrix.group == 'orc-spec' || matrix.group == 'asan' || matrix.group == 'tsan') && 4) || (matrix.group == 'refc' && 3) || 2)) || (matrix.group == 'orc-spec' && format(' {0}/2', matrix.shard)) || '' }})
     # ATTIC_TOKEN_PUBLIC only exists in the public-cache environment.
     environment: ${{ github.ref == 'refs/heads/master' && 'public-cache' || '' }}
@@ -243,32 +247,35 @@ jobs:
             echo "NIX_CONFIG=substituters = https://cache.nixos.org/" >> "$GITHUB_ENV"
           fi
 
-      # nimble 0.20.1 from the dev shell segfaults on macOS when it downloads the package list
-      # itself (reproduced locally; Linux is unaffected), so the runner's curl fetches it: into
-      # ~/.nimble for `nimble lock`, and into nimbledeps/ for the local-deps steps below.
-      - name: Fetch the Nimble package list
+      # [DECISIONS G436] The dev shell's Nimble is 0.26.2 (nix/nimble.nix), which fetches the package
+      # list itself. Every command passes --useSystemNim, so Nimble neither installs nor locks a
+      # Nim, and Nimble never compares the Nim on the path with `requires "nim == ..."`: this step
+      # does, against logos_core.nimble's pin, before the first Nimble command.
+      - name: The Nim on the path is logos_core.nimble's pin
         run: |
-          curl -sfL --retry 3 -o "$RUNNER_TEMP/packages_official.json" \
-            https://raw.githubusercontent.com/nim-lang/packages/master/packages.json
-          mkdir -p ~/.nimble
-          cp "$RUNNER_TEMP/packages_official.json" ~/.nimble/
+          pin=$(sed -n 's/^requires "nim == \([0-9.]*\)".*/\1/p' logos_core.nimble)
+          have=$(nix develop -c nim --version | head -1)
+          echo "pin: $pin; on the path: $have"
+          case "$have" in
+            "Nim Compiler Version $pin "*) ;;
+            *) echo "::error::the Nim on the path is not logos_core.nimble's $pin"; exit 1 ;;
+          esac
 
-      # Regenerated from scratch and before `nimble setup`: nimble 0.20.1 empties an existing lock
-      # when run over it, and crashed when local deps were already installed. Once per OS.
+      # Regenerated from scratch, as the lock is made, and compared byte for byte. Once per OS.
+      # No cache of ~/.nimble: a runner starts empty, so nothing an earlier run fetched or
+      # installed decides this run's lock or packages.
       - name: nimble.lock matches logos_core.nimble
         if: matrix.task == 'test' && matrix.shard == 1
         run: |
           mv nimble.lock "$RUNNER_TEMP/nimble.lock"
-          nix develop -c nimble -y lock
+          nix develop -c nimble --useSystemNim -y lock
           diff -u "$RUNNER_TEMP/nimble.lock" nimble.lock
 
       # Nix only supplies nim and nimble here; Nimble resolves and fetches the dependencies.
       - name: nimble setup and ${{ matrix.task }}
         run: |
-          mkdir -p nimbledeps
-          cp "$RUNNER_TEMP/packages_official.json" nimbledeps/
-          nix develop -c nimble setup -l
-          nix develop -c nimble "$TASK"
+          nix develop -c nimble --useSystemNim setup -l
+          nix develop -c nimble --useSystemNim "$TASK"
 
       # G129: the caller's peer check against a listener another OS user created (TRANSPORT §8.2,
       # TRN-0190). It needs a throwaway user and passwordless sudo to it, so it runs only here;

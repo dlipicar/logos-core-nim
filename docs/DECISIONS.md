@@ -7754,6 +7754,48 @@ their history.
   does not travel with it, so a dependent's build line carries the switches the library needs.
 - **Status:** built in W2-P.2 (I120).
 
+### G436 — Nimble 0.26.2, the lock, and the Nim pin
+- **Kind:** Choice [IMPL] · **Plan:** `tier5-plans/stepW2-P-plan.md` §3.4 (blockers 2 and 7; the spike's
+  §1, §3, §3.7, §11).
+- **Nimble.** `nix/nimble.nix` builds Nimble 0.26.2 from the Nim tree's own `nim/dist/nimble`, so it costs
+  no download, and the overlay puts it in place of nixpkgs' 0.20.1 for the dev shell and the android
+  shell. Its install check fails when a Nim update brings another Nimble. Both nimble files stop a Nimble
+  older than 0.26. 0.20.1 emptied or crashed on a lock made over an existing one, and crashed on macOS
+  without `--useSystemNim`.
+- **`--useSystemNim` on every Nimble command** in CI, `tools/ci/windows.ps1`, the README and the module
+  guide, which `lint-packaging` checks. Nimble then neither installs nor locks a Nim.
+- **The lock has no `nim` entry.** Such an entry needs a network read of `nim-lang/Nim` when CI checks the
+  lock. A failed read writes an empty revision and exits 0. Its checksum is taken over the local Nim, so
+  ours (`d57c3c6a`, from Nix on the Mac and on Linux alike) differs from storage's (`860024ec`) for the
+  same 2.2.14. The lock is regenerated from scratch with 0.26.2 and the flag: the same eight packages,
+  revisions and checksums, with `nim` in each dependency list. On the Mac, on framework.lan and in this
+  step's no-network rerun it came out byte for byte the same.
+- **The Nim pin has one home,** `logos_core.nimble`'s `requires "nim == …"`.
+  - Nix asserts that its Nim has that version.
+  - `lint-packaging` requires the pin to be exact, `windows.ps1`'s `$NimVersion` to equal it, and the
+    SDK's range to hold it.
+  - Nimble never compares the Nim on the path with the requirement, so the `nimble` job and
+    `windows.ps1`'s `setup` and `test` compare `nim --version` with the pin before their first Nimble
+    command.
+- **Nix's lock reader** takes only git entries with a URL and a revision. It refuses, naming the entry and
+  the fix:
+  - a `nim` entry;
+  - an empty `url`, which a `file://` requirement writes;
+  - an empty `vcsRevision`, which a failed remote read writes;
+  - a non-empty task table: no `taskRequires`.
+- **CI** keeps no cache of `~/.nimble`, so a runner starts empty. 0.26.2 fetches the package list itself,
+  so the workaround for 0.20.1's segfault goes. The lock check regenerates the lock from scratch and
+  compares it byte for byte. `workflow_dispatch` gains `nimble_only`, which runs only the `nimble` and
+  `windows` jobs.
+- **A check that must fetch nothing, or show that a package stands alone,** runs with `HOME`,
+  `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` in a fresh directory outside every checkout. Nim reads every
+  `config.nims` above a source, and Nimble's `buildtemp/` guard holds only when nothing above `HOME`
+  configures Nim.
+- **Fetches.** An owner-approved fetch opens the guard for the named revisions at depth 1 only. Otherwise
+  clones are pre-seeded and Nimble runs offline. `releases.json` (`nim-lang.org`) stays refused locally,
+  and CI's cold runners read it on every run (a few KB).
+- **Status:** built in W2-P.1 (I120).
+
 ## 13. Implementation defaults chosen without a separate question
 
 These were set while writing the plan, are not spec matters, and can be vetoed at any time:
@@ -8016,6 +8058,7 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G433 | the packages inside this repository | Choice | 12 |
 | G434 | how our packages require each other | Choice | 12 |
 | G435 | what each package installs, and kit builds outside this repository | Choice | 12 |
+| G436 | Nimble 0.26.2, the lock, and the Nim pin | Choice | 12 |
 | G437 | what runs while a confined kit's `destroyModule` runs | IMPL | 12 |
 | G438 | closing a confined kit's module-thread dispatcher, and what destroy left | IMPL | 12 |
 | G439 | a chronos variant in `kit-toolchains`: the kits under the libraries' own chronos | IMPL | 12 |
