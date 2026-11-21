@@ -5,7 +5,10 @@
  "minutes": {
   "affected-suites": 0.3,
   "kit-toolchains-delivery": 21.7,
+  "kit-toolchains-delivery-0de7b335": 22.3,
+  "kit-toolchains-isolated": 0.0,
   "kit-toolchains-storage": 35.5,
+  "kit-toolchains-storage-2d81a762": 36.5,
   "lint-layers": 0.1,
   "logosd-smoke": 0.1,
   "no-test-hooks": 0.2,
@@ -577,7 +580,7 @@
   "test_wipe_routes-tsan": 14.4
  },
  "groupMeans": {
-  "orc-spec": 5.7,
+  "orc-spec": 6.0,
   "asan": 10.1,
   "tsan": 6.9,
   "msan": 10.9,
@@ -587,7 +590,10 @@
  "estimated": {
   "affected-suites": "new check; its self-test takes 6 s on the Mac",
   "kit-toolchains-delivery": "inside kit-toolchains, from its `kit-toolchains: <set>` line for this set to its install phase",
+  "kit-toolchains-delivery-0de7b335": "new check (G439); kit-toolchains-delivery's 21.7 x 193/188, the variant's and the per-set check's seconds on framework.lan (b982527, 2026-11-21)",
+  "kit-toolchains-isolated": "new check (G439); 1 s on framework.lan",
   "kit-toolchains-storage": "inside kit-toolchains, from its `kit-toolchains: <set>` line for this set to the next",
+  "kit-toolchains-storage-2d81a762": "new check (G439); kit-toolchains-storage's 35.5 x 184/179, the variant's and the per-set check's seconds on framework.lan (b982527, 2026-11-21)",
   "test_host_dylib-orc": "aarch64 5.8 x 1.46; cut at 1.5 on x86_64",
   "test_lcn_call-asan": "aarch64 39.7 x 1.36; cut at 79.8 on x86_64",
   "test_lcn_call-msan": "cut on x86_64: a lower bound",
