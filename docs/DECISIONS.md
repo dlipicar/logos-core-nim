@@ -7681,6 +7681,79 @@ their history.
 - **Decision.** §3.1 (Q4, re-cited by planning, P2, and its ruling (a) of 2026-11-20, which replaces P2's "S7's deny once S4 is applied"): no self-exit, an [IMPL] choice on R l.1735 (a self-stop would cancel the retained intent) and R l.3123 (routes close after `cli.route_idle_ms`); `stop_module` answering on acceptance (R l.3554-3556) removed the old reason. It rests on S7's execution deny of stop: in authority mode a `stop_module` needs an execution stop decision for the requester (`engine.nim`, the `aaStop` request), which S7 refuses `lcn_call` whatever an operator rule allows. Under the development switch nothing is denied to any module, and `lcn_call`'s code has no lifecycle call. `module stop lcn_call` stays allowed
 - **Status.** Built in N-2b: S7's execution deny and `cli.route_idle_ms`; `test_daemon_config`, `test_lcn_call` L-1, L-10.
 
+### G433 — The packages inside this repository
+- **Kind:** Choice [IMPL] · **Plan:** `tier5-plans/stepW2-P-plan.md` §3.1 (the repository split's
+  packaging step, W2-P.2; rulings 3 and 4 and blocker 4).
+- **Decision.** `sdk/logos_sdk.nimble` makes `sdk/` the package `logos_sdk`, version `0.1.0`. Its
+  requirements are ranges, a subset of what core pins (G341): `nim >= 2.2.14 & < 2.3.0`,
+  `results >= 0.5.0 & < 0.6.0`, `chronos >= 4.4.0 & < 4.5.0`. No unittest2: nothing under `sdk/src`
+  imports it, and a dependent whose tests use it requires it itself (chronos brings it anyway). `lcn-gen`
+  is the SDK's program: `src/lcn_gen.nim` moved to `sdk/src/lcn_gen.nim`, and `lcn-gen --version` prints
+  the SDK's version, read from `logos_sdk.nimble` when lcn-gen is compiled (beside `src/` in this
+  repository and in Nimble's build at install, so there is no third home). Core's `logos_core.nimble` moves
+  to `0.1.0` with it and drops `lcn_gen` from its programs; that line is core's version's one home: the
+  flake reads both versions from the nimble files, and the daemon's fallback is `0.1.0-dev`. The SDK's file
+  carries the Nimble 0.26 guard; core's gets it with G436. From the extraction on, a version line changes
+  only together with a signed tag. Nix's lock reader (`nix/nimble-deps.nix`) refuses a lock with a `nim`
+  entry, as `lint-packaging` does: our locks are made with `--useSystemNim`, which writes none (G436 records
+  that rule with Nimble 0.26.2). Today's lock has none, so no evaluation changes.
+- **Status:** built in W2-P.2 (I120).
+
+### G434 — How our packages require each other
+- **Kind:** Choice [IMPL] · **Plan:** `tier5-plans/stepW2-P-plan.md` §3.2, §3.6 (the spike's §3.3, §3.5,
+  §10, §12).
+- **Inside this repository core does not require the SDK.** A `file://./sdk` requirement resolves once,
+  but its lock entry has an empty URL, so the next `nimble lock` fails and `nimble setup` crashes, and its
+  checksum moves with every `sdk/` edit. Core's exact pins already hold every SDK requirement, so
+  `lint-packaging` checks instead that each version `nimble.lock` holds for a package the SDK names lies
+  in the SDK's range, that core's `nim` pin does, and that every locked package `sdk/src` imports is one
+  the SDK requires.
+- **Never by commit, never by `file://`,** and before the extraction never by URL: no nimble file of ours
+  requires one of our packages that way, and the lint refuses it.
+- **A module repository** requires `logos_sdk >= 0.1.0 & < 0.2.0` by name. Nimble meets it with an install
+  into the module repository's Nimble directory, from a committed tree in a copy with no `origin` (from a
+  checkout with one, Nimble locks the repository's root and a fresh setup installs `logos_core` in the SDK's
+  place), in the order install, lock, setup; or with a develop link, which builds but cannot be locked.
+  **One SDK revision per Nimble directory:** with two installs of one version, `setup` and `lock` take the
+  one the filesystem lists first, `setup` keeps it even over a lock that names the other's checksum, and
+  `bin/lcn-gen` links the one installed last (Nimble 0.26.2 `packageinfo.nim:341-353`). So a module
+  repository installs each SDK revision into a fresh Nimble directory, records the commit, and tests that
+  the directory `nimble.paths` names for `logos_sdk` carries the lock's checksum. Until the extraction
+  every SDK revision is `0.1.0`, so `lcn-gen --version` cannot tell two apart; that test does.
+- **Addresses** (the owner's question 6, plan §3.6): `lint-packaging` matches the account followed by a
+  slash, in every spelling, and allows an address of ours only where §3.6 does, in its one spelling;
+  `flake.lock` and this record are exempt. The extraction keeps the old names unused and re-tags each
+  repository after its address commit.
+- **Status:** built in W2-P.2 (I120); `sdk/docs/MODULE-KIT.md` §9 says it for a module's author.
+
+### G435 — What each package installs, and kit builds outside this repository
+- **Kind:** Choice [IMPL] · **Plan:** `tier5-plans/stepW2-P-plan.md` §3.3 (blockers 1, 5 and 8).
+- **Install lists per package.** Each nimble file lists the extensions and files its package installs;
+  the SDK installs its C sources, contracts, export lists, `testing/config.nims` and
+  `logos_sdk/testing/testroute` (moved from `sdk/tests/support/`). `lint-packaging` checks that every
+  file under a package's `srcDir` is one its list installs, by Nimble 0.26.2's whitelist rules, which
+  ignore `skipDirs`. `logos_core/schemas.coreSchemaDir` names core's schema directory in a checkout and
+  installed alike, so a dependent that generates from core's schemas, as the daemon does, never names a
+  path into core's tree.
+- **Test data relative to the package.** `testdirs` gives the fixtures and their generated files as
+  directories under its own, wherever the package is, and the SDK repository's own test data as paths
+  from the repository's root; its `repoDir` goes. `KitTree` is exported, so a dependent's tests build
+  kits from a tree of their own.
+- **Search paths for a kit library or program built from another tree** (`kitbuild.hostPathArgs`, also
+  used by core's `childbuild`). If a configuration file Nim reads for the source sets search paths
+  (`--path`, `-p`, `--nimblePath`, `switch("path", …)`, `nimble.paths`, in any spelling Nim accepts:
+  case, underscores, one or two dashes, `:` or `=`), nothing is passed, and the build takes its paths from
+  there, as today; a failed build then names that file. Otherwise the host's search paths are passed in
+  the host's order (back to front, since each `--path` goes to the front), its compiler's library
+  directories dropped only when `LCN_KIT_NIM` names another compiler. The test is "a file that sets search
+  paths", not "any configuration file": the installed SDK's `testing/config.nims` sits above its fixtures
+  and only defines `lcnTestHooks`. `test_kit_dylib`'s installed-package case builds from a copy outside
+  this repository and checks, under `-d:nimBetterRun`, that every file the build read is under the copy,
+  the compiler's tree or a host search path.
+- **Build switches a package cannot set** stay the guide's §8 build line: a library's own `config.nims`
+  does not travel with it, so a dependent's build line carries the switches the library needs.
+- **Status:** built in W2-P.2 (I120).
+
 ## 13. Implementation defaults chosen without a separate question
 
 These were set while writing the plan, are not spec matters, and can be vetoed at any time:
@@ -7940,6 +8013,9 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G396 | the package trust file v2 | FREE | 9 |
 | G397 | `logosctl trust` for the package trust file, and key separation | FREE | 9 |
 | G398 | catalog and provenance selections in the package trust file | FREE (C3, C9) | 9 |
+| G433 | the packages inside this repository | Choice | 12 |
+| G434 | how our packages require each other | Choice | 12 |
+| G435 | what each package installs, and kit builds outside this repository | Choice | 12 |
 | G437 | what runs while a confined kit's `destroyModule` runs | IMPL | 12 |
 | G438 | closing a confined kit's module-thread dispatcher, and what destroy left | IMPL | 12 |
 | G439 | a chronos variant in `kit-toolchains`: the kits under the libraries' own chronos | IMPL | 12 |
