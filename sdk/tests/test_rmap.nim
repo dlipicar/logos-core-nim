@@ -16,7 +16,8 @@ import logos_sdk/hash/hashinput
 import logos_sdk/cbor
 import ./support/ccompile, logos_sdk/testing/specdata
 from ./support/genfixtures import nimFixtures, rcPrimary, rcSupporting
-from logos_sdk/iface/cmap import CMappingRevision
+from logos_sdk/testing/fixturegen import fixtureBinding
+from logos_sdk/iface/cmap import CMappingRevision, CSchemaSet
 
 const outDir = "build/rmap"
 
@@ -808,19 +809,12 @@ proc boundHeader(
     checkpoint b.error
   (b.get, contractHeader(b.get.cSchemaSet).get)
 
-proc roundTrip(
-    primary: string,
-    ifaces: openArray[string] = [],
-    supp: openArray[string] = [],
-    system = false,
+proc roundTripped(
+    cs: CSchemaSet, want: seq[Digest], subject: string, system: bool
 ): bool =
-  ## [SPEC INTERFACE §3.8] S -> C -> S′: the same roots and binding, and `H′`
-  ## equal to the header S generated.
-  let s = acceptContractSet(primary, ifaces, supp, AcceptOptions(system: system))
-  if s.isErr:
-    checkpoint s.error
-    return false
-  let cs = s.get.cSchemaSet
+  ## [SPEC INTERFACE §3.8] S -> C -> S′ for the C form `cs` of S, whose
+  ## documents' roots are `want`: the same roots and binding, and `H′` equal to
+  ## the header S generated.
   let h = contractHeader(cs).get
   var o = RmapOptions(system: system)
   # [SPEC INTERFACE §3.2 l.2245] The subject is input: S's module, else its
@@ -828,18 +822,45 @@ proc roundTrip(
   if cs.module.isSome:
     o.module = cs.module.get
   else:
-    o.subject = s.get.primary.model.namespace
+    o.subject = subject
   let r = reconstruct(one(h), o)
   if r.isErr:
     checkpoint $r.error
     checkpoint h
     return false
-  let want =
-    @[s.get.primary.root] & s.get.interfaces.mapIt(it.root) &
-    s.get.supporting.mapIt(it.root)
   result = r.get.roots == want and r.get.module == cs.module and r.get.header == h
   if not result:
     checkpoint "H:\n" & h & "\nH′:\n" & r.get.header
+
+proc roundTrip(
+    primary: string,
+    ifaces: openArray[string] = [],
+    supp: openArray[string] = [],
+    system = false,
+): bool =
+  ## [SPEC INTERFACE §3.8] S -> C -> S′ for the set a primary document heads.
+  let s = acceptContractSet(primary, ifaces, supp, AcceptOptions(system: system))
+  if s.isErr:
+    checkpoint s.error
+    return false
+  roundTripped(
+    s.get.cSchemaSet,
+    @[s.get.primary.root] & s.get.interfaces.mapIt(it.root) &
+      s.get.supporting.mapIt(it.root),
+    s.get.primary.model.namespace,
+    system,
+  )
+
+proc roundTrip(b: ModuleBinding, system = false): bool =
+  ## [SPEC INTERFACE §3.8] [DECISIONS G339] S -> C -> S′ for an explicit module
+  ## binding, with or without a primary document; its module name is the
+  ## subject. Its earlier contracts (§2.6 `extends`) are no part of the C form.
+  var want: seq[Digest]
+  if b.primary.isSome:
+    want.add(b.primary.get.root)
+  want.add(b.interfaces.mapIt(it.root))
+  want.add(b.supporting.mapIt(it.root))
+  roundTripped(b.cSchemaSet, want, "", system)
 
 proc compilesFiles(
     name: string, files: openArray[(string, string)], main: string
@@ -1960,7 +1981,7 @@ suite "ifc.c-reverse: round trips (INTERFACE §3.8, §3.9; G158)":
           text
       )
 
-  test "T7.1 [IFC-0356] [IFC-0357] [IFC-0368] [IFC-0381] [IFC-0389] [IFC-0393] [IMPL-DECISION G158] S -> C -> S′ over the Runtime Control contract and the SDK's generated fixtures":
+  test "T7.1 [IFC-0356] [IFC-0357] [IFC-0368] [IFC-0381] [IFC-0389] [IFC-0393] [IMPL-DECISION G158] [IMPL-DECISION G339] S -> C -> S′ over the Runtime Control contract and the SDK's generated fixtures":
     when deviceTarget:
       skip()
     else:
@@ -1971,12 +1992,29 @@ suite "ifc.c-reverse: round trips (INTERFACE §3.8, §3.9; G158)":
       check roundTrip(readFile(rcPrimary), [], texts(rcSupporting), true)
       var seen: seq[string]
       for f in nimFixtures:
-        if f.primary notin seen:
+        if f.primary.len == 0:
+          # [DECISIONS G339] an interface-only binding: S is the binding's
+          # interfaces and supporting schemas, under its module name
+          let key = "binding " & f.binding
+          if key notin seen:
+            seen.add(key)
+            checkpoint key
+            let b = fixtureBinding(f)
+            if b.isErr:
+              checkpoint b.error
+            check b.isOk and roundTrip(b.get[0], f.system)
+        elif f.primary notin seen:
           seen.add(f.primary)
           checkpoint f.primary
           check roundTrip(
             readFile(f.primary), texts(f.interfaces), texts(f.supporting), f.system
           )
+        # an earlier contract a binding extends (INTERFACE §2.6), on its own
+        for e in f.extends:
+          if e notin seen:
+            seen.add(e)
+            checkpoint e
+            check roundTrip(readFile(e))
         if f.configuration.len > 0 and f.configuration notin seen:
           seen.add(f.configuration)
           checkpoint f.configuration

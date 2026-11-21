@@ -6869,6 +6869,45 @@ their history.
   - **Destroy.** The Runtime drains invocations before destroy (l.2114). For one that does not, the
     teardown completes each queued and each outstanding invocation NOT_READY "the module was destroyed",
     once. The drain never needs `_MODULE_destroy`: the module thread runs on its own (l.2115).
+  - **Amended 2026-11-21 (stepN-1c, CI run 44888184613; Fable's review):** with a conforming Runtime
+    nothing changes. The drain never needs `_MODULE_destroy` (l.2115), and the Runtime's own drain
+    tests still assert that its cancellation came before destroy.
+    - For a Runtime that destroys with submitted invocations outstanding, `_MODULE_destroy` now stops
+      that residual work (l.2100) before the author's `destroyModule`. First every new job answers
+      NOT_READY (the instance is detached; `disposed`, which drops posted tasks, is set only after).
+      Then each waiting `async` handler's future is cancelled as `request_cancel` would, and the kit
+      awaits up to 2 s (`UnwindMs`, fixed) for the outstanding invocations while the instance still
+      lives. The wait is an `await`, never a nested poll, since destroy may run inside a handler's
+      nested loop.
+    - A handler destroy cancelled completes NOT_READY whatever it answers, its outcome wiped. One
+      waiting for its scoped publications completes with its own outcome.
+    - What is still outstanding (a handler that ignores the cancellation) is completed NOT_READY at
+      teardown and its task abandoned. chronos pins a waiting async frame (`futureContinue`'s
+      `GC_ref`, released only when the awaited future finishes), so the frames, the instance they
+      hold and the request they decoded stay for the life of the process. That is the conforming
+      outcome for work that cannot quiesce (l.2116-2117).
+    - Before this, every such task was abandoned. LeakSanitizer reported it from `[IFC-0769]` on
+      both Linux architectures, 3322 bytes in 35 indirect allocations (CI run 44888184613; the
+      x86_64 job ran on to its time limit and showed as cancelled), and again on framework.lan
+      (x86_64) over 109f4d8. A handler whose await ended between destroy's return and teardown
+      also resumed after `destroyModule`.
+    - With this, `test_kit_confined` under ASan reports no leak on framework.lan. Run there with
+      the `noCancel` case not skipped, LeakSanitizer reports 3258 bytes in 35 indirect
+      allocations, all from that case's `wait` 11: the residue above, and why that case skips
+      under ASan.
+    - Now a handler that honours the cancellation resumes only to unwind it, before
+      `destroyModule`. No task resumes after teardown, but one may still resume before it in two
+      cases this does not cover: the inner job of an inline re-entry, and synchronous entries still
+      running. The inner job is a `ConfinedJob`, not in the outstanding list, so nothing cancels it;
+      destroy then waits for it without a bound, and its handlers run after `destroyModule`, as
+      before.
+    - Not done: `isCancelled` answering true for plain handlers once destroy has begun (optional).
+    - Not checked: whether a generated route wipes a marked decoded request and response on the
+      cancellation path, now destroy's usual way out (a W-case).
+    - Tests in `test_kit_confined`. `[IFC-0769]` asserts that the destroyed instance is freed (orc).
+      A new case, a handler under `noCancel`, asserts NOT_READY once, destroy returning after the
+      bound, and the instance kept. It does not run under ASan, which would report the residue. The
+      ledger fixture's instance counts its frees (`freed`), and `wait` 11 sleeps under `noCancel`.
 - **`invokeAsync`** (`codegen/confinedcalls`, behind the `logos_sdk/confined` facade): a typed call
   through a handle the kit wrapped (G339), as a chronos future of its outcome, on its module thread;
   any other use answers NOT_READY at once. A generic over the generated `prepareInvoke`, it submits at
@@ -6886,12 +6925,12 @@ their history.
   clean up and answer, or let it pass and the kit answers CANCELLED. Use `invokeAsync` in confined
   mode rather than a blocking `invoke`. `--async-api` lets a long delayed Response run without holding
   a host call slot (G100).
-- **Tests:** `sdk/tests/test_kit_confined.nim` "the deferred provider" (11 cases, orc, refc and
+- **Tests:** `sdk/tests/test_kit_confined.nim` "the deferred provider" (12 cases, orc, refc and
   orc-release): the descriptor from every thread; one answer through `submit` and `_MODULE_dispatch`;
   `submit` and `request_cancel` while the module thread is busy; a cancellation an async handler
   observes; hooks racing 64 completions from 4 threads; the owner's regions until cleared on another
   thread; no use after the release; scoped publications with a re-entering subscriber; destroy with an
-  invocation outstanding; `invokeAsync`'s completion, deadline and cancellation, and its NOT_READY off
+  invocation outstanding, cancelled and unwound or abandoned after the bound (2026-11-21); `invokeAsync`'s completion, deadline and cancellation, and its NOT_READY off
   the module thread. `sdk/tests/test_kit_dylib.nim`: the confined sensor library's typed, dispatch and
   deferred surfaces give one answer, the implemented interface's method included; its export list.
   `tests/test_kit_mixed.nim` MX-4: prepared calls to the ledger's deferred surface through the Runtime,
