@@ -6,9 +6,10 @@
 ## configuration whose schema is the tuner fixture's (`tuner.config`) and whose default is one
 ## tuner value. Its variants are `linux-x86_64` and `darwin-aarch64`; `beta_module` has its
 ## artifact in the darwin variant only, so on linux it is not selected. The declared schema
-## commitment is recomputed from the schema text unless a test sets it.
+## commitment is recomputed from the schema text unless a test sets it. `withFiles` adds data
+## artifacts to one variant, for the store's extraction cases (5-5-2).
 
-import std/[algorithm, sequtils]
+import std/[algorithm, sequtils, strutils]
 import logos_sdk/pins as sdk_pins
 import logos_sdk/testing/tunerconfig
 import ./pmfixture
@@ -199,6 +200,27 @@ proc modulePackage*(
     manifest: cborMap(entries),
     files: @[("linux-x86_64", linuxFiles), ("darwin-aarch64", darwinFiles)],
   )
+
+proc withFiles*(
+    p: ModulePackage, variant: string, files: openArray[(string, seq[byte])]
+): ModulePackage =
+  ## `p` with `files` added to `variant` as `data` artifacts `extra-<n>`, `n` zero-padded so
+  ## that they follow the module's own in id order, as a manifest lists them.
+  result = p
+  for e in result.manifest.entries.mitems:
+    if e.key.getText == Opt.some("variants"):
+      for v in e.value.items.mitems:
+        if v.lookup("id").get.getText == Opt.some(variant):
+          for f in v.entries.mitems:
+            if f.key.getText == Opt.some("artifacts"):
+              for i, (path, data) in files:
+                f.value.items.add(
+                  artifactValue("extra-" & align($i, 5, '0'), "data", path, data)
+                )
+  for f in result.files.mitems:
+    if f[0] == variant:
+      for x in files:
+        f[1].add(x)
 
 proc decoded*(p: ModulePackage): Manifest =
   decodeManifest(encodeCbor(p.manifest)).get

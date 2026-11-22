@@ -29,3 +29,13 @@ reason = "A permission not taken (PM l.457, PKG-0085) and a deployment duty met 
 [[item]]
 ids = ["PKG-0089"]
 reason = "A conditional duty whose condition never arises (PM l.467). The trust input cannot require revocation, a minimum accepted version or fresh external-anchor evidence: the package trust file (lcn.package_trust, src/logos_core/package/trustdoc.cddl) is closed and has no such field, and a catalog or provenance selection is refused (G398, G404; tests [PKG-0086] and [PKG-0090] in tests/test_pm_input.nim). The only active requirement is the package's own signature under the accepted anchors, checked on every use, cached or not (G403; tests [PKG-0077] in tests/test_pm_vcache.nim). docs/PACKAGE-MANAGER.md §6 states it."
+
+# pm-install-root-not-shared (step 5-5-2, DECISIONS G444, I121; waits on the owner's Q5)
+[[item]]
+ids = ["PKG-0488"]
+reason = "A conditional duty whose condition never arises (PM l.931): no installed record depends on shared artifact storage. Each record's artifacts are its own files, in its own random directory below the instance's installation root, <state_dir>/install/r/<rid>/a/ (src/logos_core/pm/store.nim; DECISIONS G444), and no setting of daemon-config or the protected input names another root or a shared store. A second store on the same root is refused by the root's lock, so the instance does not start (test [PKG-0487] in tests/test_pm_store.nim). docs/DEPLOYMENT.md §1 documents the scope. The answer is choice (a) of the owner's Q5 (plan tier5-plans/step5-5-plan.md §14), which is not yet answered; under (b) this item is redone."
+
+# pm-resource-access (step 5-5-2, DECISIONS G444, C8 / G93, I121)
+[[item]]
+ids = ["PKG-0498"]
+reason = "A documentation requirement (PM l.1183), answered in docs/DEPLOYMENT.md §1, 'Resource access': a module reaches its packaged resources and data only through its schema-typed configuration; local_path is the Loader's installation location and no module is told of it. The Runtime handoff the Package Manager builds (src/logos_core/pm/handoff.nim, buildHandoff; DECISIONS G451) carries the implementation artifact's local_path and hash and the configuration declaration's schema and default values, and no package root, artifact id or path table (PM l.1185; tests [PKG-0340] and [PKG-0342] in tests/test_pm_records.nim). A library shipped beside a module is installed and bound to its verified bytes (test [PKG-0293] in tests/test_pm_store.nim) and is not loaded by the Loader (C8, G93)."

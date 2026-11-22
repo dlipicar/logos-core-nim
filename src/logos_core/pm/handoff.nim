@@ -19,6 +19,8 @@
 ##   `implements`, `extends`, `requires` and `requested_permissions` copied as signed (PKG-0347,
 ##   G391), and the configuration declaration (PKG-0342 to 0344). It is refused while the retained
 ##   signer is not accepted by active trust (PKG-0341, PKG-0080).
+## - **`admissionHandoffs`** is every selected module's handoff without the trust check, for the
+##   admission bound (G452), whose sizes do not depend on trust.
 ## - **Messages** (PKG-0360) name only the identity, the module and artifact ids and the cause.
 ##   What a read reported, which may hold a path, goes to `detail`, for the operator's log only.
 
@@ -197,53 +199,20 @@ const CopiedFields =
   ["primary_contract", "implements", "extends", "requires", "requested_permissions"]
   ## [SPEC PM §12 l.1434-1435] carried exactly as signed, when the declaration has them
 
-proc buildHandoff*(
-    r: InstalledRecord,
-    base: string,
-    m: Manifest,
-    commitment: ManifestCommitment,
-    module: string,
-    trust: TrustInput,
-    read: ArtifactReader,
+proc construct(
+    r: InstalledRecord, base: string, d: ModuleDeclaration, read: ArtifactReader
 ): Result[CborValue, HandoffError] =
-  ## [SPEC PM §12] The `runtime_handoff` of `module` in record `r`, whose artifacts are under
-  ## `base`, from its signed manifest `m` with `commitment`, under the active `trust`.
-  r.matchesManifest(m, commitment).isOkOr:
-    return err(
-      refusal(
-        hrStateDamaged,
-        "the record of " & $r.identity & " is not its signed manifest's",
-        error,
-      )
-    )
-  var at = -1
-  for i, d in r.modules:
-    if d.module == module:
-      at = i
-  if at < 0:
-    return err(
-      refusal(
-        hrNotSelected,
-        "module " & module & " is not a selected module of " & $r.identity,
-      )
-    )
-  let d = r.modules[at]
-  # [PKG-0341, PKG-0080] Never emitted while the retained signer is not accepted.
-  if not trust.accepts(r.signer, r.identity.package):
-    return err(
-      refusal(
-        hrSignerNotAccepted,
-        "the retained signer of " & $r.identity &
-          " is not accepted by active signing trust",
-      )
-    )
+  ## The `runtime_handoff` of the selected declaration `d` of `r`, whose artifacts are under
+  ## `base`. `r` matches its signed manifest.
   var impl = -1
   for i, a in r.artifacts:
     if a.id == d.artifact:
       impl = i
   if impl < 0:
     return err(
-      refusal(hrStateDamaged, "module " & module & " has no artifact in " & $r.identity)
+      refusal(
+        hrStateDamaged, "module " & d.module & " has no artifact in " & $r.identity
+      )
     )
   let a = r.artifacts[impl]
   var entries = @[
@@ -276,10 +245,73 @@ proc buildHandoff*(
     let decl = resolveConfiguration(c, schema, default).valueOr:
       return err(
         refusal(
-          hrConfiguration, "module " & module & " of " & $r.identity & ": " & error
+          hrConfiguration, "module " & d.module & " of " & $r.identity & ": " & error
         )
       )
     entries.add((cbor("configuration"), decl.toCbor))
   ok(CborValue(kind: ckMap, entries: entries))
+
+proc matched(
+    r: InstalledRecord, m: Manifest, commitment: ManifestCommitment
+): Result[void, HandoffError] =
+  r.matchesManifest(m, commitment).isOkOr:
+    return err(
+      refusal(
+        hrStateDamaged,
+        "the record of " & $r.identity & " is not its signed manifest's",
+        error,
+      )
+    )
+  ok()
+
+proc buildHandoff*(
+    r: InstalledRecord,
+    base: string,
+    m: Manifest,
+    commitment: ManifestCommitment,
+    module: string,
+    trust: TrustInput,
+    read: ArtifactReader,
+): Result[CborValue, HandoffError] =
+  ## [SPEC PM §12] The `runtime_handoff` of `module` in record `r`, whose artifacts are under
+  ## `base`, from its signed manifest `m` with `commitment`, under the active `trust`.
+  ?r.matched(m, commitment)
+  var at = -1
+  for i, d in r.modules:
+    if d.module == module:
+      at = i
+  if at < 0:
+    return err(
+      refusal(
+        hrNotSelected,
+        "module " & module & " is not a selected module of " & $r.identity,
+      )
+    )
+  # [PKG-0341, PKG-0080] Never emitted while the retained signer is not accepted.
+  if not trust.accepts(r.signer, r.identity.package):
+    return err(
+      refusal(
+        hrSignerNotAccepted,
+        "the retained signer of " & $r.identity &
+          " is not accepted by active signing trust",
+      )
+    )
+  r.construct(base, r.modules[at], read)
+
+proc admissionHandoffs*(
+    r: InstalledRecord,
+    base: string,
+    m: Manifest,
+    commitment: ManifestCommitment,
+    read: ArtifactReader,
+): Result[seq[(string, Result[CborValue, HandoffError])], HandoffError] =
+  ## [SPEC PM §5 l.824-830; G452] Each selected module's handoff as `buildHandoff` gives it
+  ## under a trust input that accepts the retained signer, or why it cannot be built, for the
+  ## admission bound: its size does not depend on trust.
+  ?r.matched(m, commitment)
+  var handoffs: seq[(string, Result[CborValue, HandoffError])]
+  for d in r.modules:
+    handoffs.add((d.module, r.construct(base, d, read)))
+  ok(handoffs)
 
 {.pop.}

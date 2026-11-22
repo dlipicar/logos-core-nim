@@ -527,6 +527,20 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   Claimed: PKG-0060, PKG-0172, PKG-0177, PKG-0178, PKG-0291, PKG-0337, PKG-0339 to PKG-0344, PKG-0348, PKG-0356,
   PKG-0357, PKG-0359 to PKG-0362, PKG-0438, PKG-0468, PKG-0469, and App A's PKG-0618 to PKG-0620, PKG-0624 and
   PKG-0628. 27 units; PKG-0338, PKG-0347 and PKG-0351 are built and stay deferred to 5-8. PKG 306/306.
+- 2026-11-22, Tier 5 step 5-5-2 (I121; G444, the rest of G445, G446's writing half), the installed-state
+  store and extraction, a synchronous library that 5-5-3's worker and 5-5-4's operations call:
+  - `pm/store.nim`: the root `<state_dir>/install/` with its lock and path-rule probe, staging, the commit
+    (one `writeAtomic` of the index after `syncfs` on Linux ext4 from 5.8, or a `fsync` of each file and
+    directory elsewhere), the start, deferred retirement and the retained hash.
+  - `pm/extract.nim`: descriptor-relative writes, no link followed, 0400 files in 0700 directories; reads below
+    a record the same way.
+  - `LgxPackage.signature` keeps the verified `manifest.cose`; `handoff.admissionHandoffs` gives the admission
+    bound each module's handoff. `durable.nim` is unchanged.
+  - Suite `test_pm_store` (POSIX only; Windows skips it).
+
+  Claimed: PKG-0181, PKG-0182, PKG-0204, PKG-0219, PKG-0274, PKG-0292, PKG-0293 (with TXT-0472), PKG-0471,
+  PKG-0487, PKG-0489, PKG-0499, PKG-0500, PKG-0610 and PKG-0611 by test; PKG-0488 and PKG-0498 by inspection.
+  16 units. PKG-0487 to PKG-0489 rest on the owner's Q5, recommended (a) and not yet answered. PKG 322/322.
 
 ## Tiers at f4f83471 (the original plan)
 

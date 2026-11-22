@@ -59,17 +59,29 @@ proc envelopeBytes*(resultValue: CborValue): Result[int, string] =
     return err($error)
   ok(bytes.len)
 
+when defined(lcnTestHooks):
+  var admissionLimitForTests*: int
+    ## A test's lower bound in place of `AdmissionLimit` (0: none), so that a small record can
+    ## stand at the edge: the start's check after its paths change (step 5-5-2, PKG-0471).
+
+func limit(): int =
+  when defined(lcnTestHooks):
+    {.cast(noSideEffect).}:
+      if admissionLimitForTests > 0:
+        return admissionLimitForTests
+  AdmissionLimit
+
 proc fits(
     v: CborValue, what: AdmittedResult, module = ""
 ): Result[void, AdmissionFault] =
   let n = envelopeBytes(v).valueOr:
     return err(AdmissionFault(result: what, module: module, reason: error))
-  if n > AdmissionLimit:
+  if n > limit():
     return err(
       AdmissionFault(
         result: what,
         module: module,
-        reason: "a body of " & $n & " bytes, over " & $AdmissionLimit,
+        reason: "a body of " & $n & " bytes, over " & $limit(),
       )
     )
   ok()

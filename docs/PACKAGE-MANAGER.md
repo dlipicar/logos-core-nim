@@ -4,8 +4,8 @@ What this implementation chooses where PACKAGE MANAGER leaves the choice to it: 
 document, how it is acquired and refreshed, catalog policy (PKG-0472, PM l.834-835), the Storage
 bindings and retrieval, and how trust is applied when a package is inspected. Each choice keeps the
 verification of PM §4.1 to §4.4 (PKG-0473): nothing here replaces a package's own signature, adds
-trust or claims freshness. The decisions are DECISIONS G399 to G406 and, for installation, G445 and
-G450 to G452; the code is `src/logos_core/pm/`.
+trust or claims freshness. The decisions are DECISIONS G399 to G406 and, for installation, G444 to
+G446 and G450 to G452; the code is `src/logos_core/pm/`.
 
 Tier 5 step 5-3b builds the engine (5-3b-1) and the module that hosts it (5-3b-2). Step 5-5 builds
 installation: 5-5-1 the installed records, the responses, the handoff's construction and the admission
@@ -296,6 +296,55 @@ This implementation applies the mandatory package-signature and artifact-verific
   commits, and `{rid, generation, package, version}` per record, sorted by package name bytes, then
   version text bytes, each identity and each rid once. It is read within 64 MiB, at least 200,000
   records at the longest identities.
+
+### The root and the store (5-5-2; `pm/store.nim`)
+
+- **The root** is `<state_dir>/install/`, in the instance's own state directory (G444; its scope waits
+  on the owner's Q5, recommended (a)). `lock` is held for the store's life, so a second instance on the
+  same root does not start (PKG-0487). `index` is the committed set. `r/<rid>/` is one record:
+  `a/<path>`, the selected variant's files; `m/manifest.cbor` and `m/manifest.cose`, the signed bytes;
+  `m/record.<g>`. `spool/` is the running operations' (5-5-3). `rid` is 128 random bits, never reused.
+  Directories are 0700 and files 0400; nothing is made executable or rewritten.
+- **Path rules:** the host's, made case-insensitive when a probe in the root finds the filesystem
+  folds case (PKG-0489). Every path of the variant, and every directory prefix, is checked under them
+  before anything is written.
+- **Staging** writes a record's directory in full and syncs it while nothing names it: the paths and
+  the admission bound first, then the files (§9), the signed manifest and `m/record.1`. A signer
+  replacement writes `m/record.<g+1>` beside the committed one.
+- **The commit** is one `writeAtomic` of the index (PKG-0610). Before it, the staged files are on the
+  medium: on Linux from 5.8 on ext4, one `syncfs` on the `install/r/` descriptor held since the start;
+  elsewhere a plain `fsync` of each file and directory, ending at `r/`, and on Darwin the drive flush
+  is the index's own `F_FULLFSYNC`. An identity is installed once (PKG-0182). A crash before the rename
+  leaves the old state, after it the new one (PKG-0611).
+- **The start:** the lock, the probe, then the index. No index and an empty `r/` is a fresh root; no
+  index while `r/` holds entries stops the start and deletes nothing. Each named record is loaded,
+  checked against its signed manifest and its admission bound at the current path (PKG-0471); a
+  failure stops the start and names the identity. Then what no record names is deleted.
+- **Retirement:** what a commit stops naming is deleted once no holder of an older snapshot that reads
+  files remains (`collect`); the worker that runs it, and the holders, are 5-5-3's and 5-5-4's.
+- **The retained hash** (`checkRetained`; PKG-0181, PKG-0293): each artifact file, opened below `a/`
+  with no link followed, against its signed digest. A packaged native library is one of them.
+- **A damaged record** fails every operation that reaches it with `artifact-integrity-failed`; the
+  repair is to remove its dependents and it, then install them again (DEPLOYMENT §19).
+
+## 9. Extraction
+
+Part 5-5-2 builds the writing; the spool (Q2) is 5-5-3's and the reader's ranges (Q4) 5-5-2b's (G446).
+
+- **Descriptor-relative** (`pm/extract.nim`; PKG-0204, PKG-0274): the record directory is made with
+  `mkdirat` under the `install/r/` descriptor; each directory below it with `mkdirat` and opened
+  `O_DIRECTORY | O_NOFOLLOW` relative to its parent; each file created `O_EXCL | O_NOFOLLOW`, 0400, and
+  written in 1 MiB chunks. No link is followed, nothing outside the record's directory is named, and the
+  destination stays within the root by construction.
+- **An existing name or a planted link** fails: `artifact-integrity-failed`, "escaped their
+  realization root". A write that fails for room or I/O is `package-unavailable` (PM l.1094). Either
+  way the directory is deleted, at once or at the next start.
+- **What is written** is the selected variant's declared artifacts, every regular file of it (l.963):
+  no other variant, nothing executed, built or scripted (PKG-0499). Nothing names the directory until
+  the commit (PKG-0219, PKG-0292).
+- **The stop flag** is checked between chunks and between files.
+- **Reads below a record** (the retained hash, the handoff's schema and default) open each component
+  with `O_NOFOLLOW` and require a regular file at the end.
 
 ## 12. Responses, messages and the admission bound
 

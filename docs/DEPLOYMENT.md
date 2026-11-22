@@ -115,8 +115,10 @@ over the lines the revision changed: it added IF l.1473 and PM l.1727, the Crede
 
 The Package Manager's catalogs (PM l.834) and its bindings' retrieval and locators (PM l.854-857) are
 documented in [PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) §3 and §4, with the locator encodings in
-`sdk/docs/STORAGE-FETCH.md` §5. Its other documentation duties (l.931 installation scope, l.1183
-resource access, l.1727 the storage failure model, l.1731 retention) come with later steps of Tier 5. The Credential
+`sdk/docs/STORAGE-FETCH.md` §5. Its duties of l.931 (installation scope), l.1183 (resource access) and
+l.1727 (the storage failure model) are answered in [§1](#1-package-manager) and [§19](#19-state-at-rest) for
+the store step 5-5-2 builds; they become rows of this table with step 5-5-4, when installation runs. l.1731
+(retention) comes with a later step of Tier 5. The Credential
 Store's (CS l.319, l.370, l.476) belong to a Credential Store, which it does not have either (§25).
 The other hits of the search are duties of a specification, a record or a message (for example HASH
 l.35, R l.3265, T l.564), not choices of a deployment.
@@ -135,6 +137,35 @@ Items 1, 5b, 5c, 10b, 12b and 16a.
   package: there is no package-backed creation, installation scope, inventory or shared package state.
   A module still comes from daemon-config as an artifact path with its digest (§10). `lcn-pkg`, the
   LGX parser and the resolver are also tools (DECISIONS I49, I69).
+- **The installation root** (PM l.924-934; DECISIONS G444). Step 5-5-2 builds it and step 5-5-4's
+  operations use it, so until then no root exists. Its scope is choice (a) of the owner's question Q5,
+  not yet answered; this text stands until the answer.
+  - **Place and scope:** `install/` in the Package Manager instance's own state directory
+    (`state/modules/<assignment>/install/`, [§9](#9-directories-and-state)). The inventory is the service
+    instance's (PM l.927): one per Package Manager instance, and two instances never share one, since
+    each has its own state assignment. No setting names another root or a shared store, so there is no
+    shared mutable installation state and no shared artifact storage (l.929-931). A second writer on the
+    same root is refused by the root's lock (`install/lock`), and that instance does not start.
+  - **Layout:** `index`, the committed set; `r/<rid>/`, one installed record in a directory of 128 random
+    bits (`a/` the selected variant's files, `m/` the signed manifest, its signature and the record);
+    `spool/`, the archives of running operations; `lock`. Directories are 0700 and files 0400, and
+    nothing in it is made executable.
+  - **Path-comparison rules** (l.924): those of the filesystem holding the root, found at each start, not
+    from the operating system's name alone (l.932). They are case-insensitive on Darwin, and on Linux
+    when a probe in the root finds that the filesystem folds case (a casefold directory, vfat, exFAT).
+    LGX paths are NFC, so no normalization differs. A selected variant whose paths or directory prefixes
+    collide under these rules is refused before anything is written. The root is built for POSIX
+    systems (Linux and Darwin), as the hosted Package Manager is.
+  - **Inside the root** (l.933-934): every entry is created relative to a directory the extraction opened,
+    never following a link, so no destination can leave the root; an existing name or a planted link
+    fails the installation with `artifact-integrity-failed`.
+- **Resource access** (PM l.1180-1185; DECISIONS G93, G444). A module reaches its packaged resources and
+  data only through its schema-typed configuration: a deployment that wants a module to read a file
+  gives its location in that module's configuration. `local_path` is the Loader's installation location,
+  not a path a module is told of, and the Runtime handoff gives no package root and no artifact table. A
+  module is one self-contained library: the system linker uses no search path of ours, and a library
+  shipped beside a module is installed and bound to its verified bytes ([§19](#19-state-at-rest)) but not
+  loaded.
 - **The baseline only** (G404). The Package Manager applies the package-signature and
   artifact-verification baseline (PM §4.1, §4.3, §4.4) and selects no catalog or provenance profile: it
   provides no authenticated catalog ordering, freshness or external anchoring, and claims no package
@@ -305,8 +336,10 @@ Item 9.
   written before each realization attempt's initialization and removed when it returns, at release
   and at retirement. A state transfer by `copy` skips them; a backup of the state directory does
   not, so it may hold the input while an attempt runs ([HOST-CONFIG.md](HOST-CONFIG.md)). The Package
-  Manager's own state is `catalog.kept`, the last catalog it accepted, under its state assignment
-  ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) §3).
+  Manager's own state is `catalog.kept`, the last catalog it accepted, and `install/`, its installation
+  root ([§1](#1-package-manager)), both under its state assignment ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md)
+  §3, §8). `install/` is reserved in the Package Manager's state directory; nothing else writes in it,
+  and its own start deletes what its index does not name (DECISIONS G445).
 - **Retention.** Retiring an instance keeps its state directory ("retired; its state directory is
   kept"). Nothing removes it but `logosctl state purge` (§19).
 - **Cleanup.** At start the Runtime removes the `+transfer-…` and `+purge-…` names an interrupted
@@ -543,6 +576,31 @@ Item 21.
   authorized deletion is `logosctl state purge`, offline; `logosctl state list` shows what is kept and
   where it came from ([DAEMON.md](DAEMON.md) §11). Physical erasure from storage media, snapshots or
   backups is not claimed (BCP l.401).
+- **The storage failure model** (PM l.1725-1728; DECISIONS G445). A write is complete when it is synced
+  and renamed into place, and a crash leaves either the old state or the new one. For the installation
+  root ([§1](#1-package-manager)), an installed-state mutation is complete when its new `install/index`
+  is in place:
+  1. the new record's directory is written in full while nothing names it, and synced: on Linux from
+     5.8 on ext4, one `syncfs` of the root's filesystem through a descriptor held since the start;
+     elsewhere, a `fsync` of each file and each directory;
+  2. the new index is written to a temporary file, synced (on Darwin with `F_FULLFSYNC`, which also
+     flushes the drive's cache for every file synced before it) and renamed over the old one, and the
+     directory holding it is synced.
+
+  A crash before the rename leaves the old installed state; after it, the new one. The next start
+  exposes only what the index names and deletes the rest. Where a filesystem refuses `F_FULLFSYNC`
+  (some network and external filesystems), a commit is as durable as `fsync` makes it: the data has
+  reached the drive, which may still lose its cache on power loss. Under `syncfs`, a write error
+  anywhere on the same filesystem since the last commit, another module's included, fails the commit:
+  that is the safe direction, and the installation can be tried again.
+- **Verified-byte binding** (PM l.1176, l.1185): installed bytes stay while their record is named; the
+  files are 0400 in 0700 directories, nothing in the Package Manager rewrites one, and a replacement is
+  always a new directory. A process of the same user can still change them. Each use hashes a record's
+  artifacts again, and the Loader hashes its own copy, so a change is caught, not prevented.
+- **Repair of a changed record:** once an installed file no longer matches its signed digest, every
+  operation that reaches the record fails `artifact-integrity-failed` and changes nothing, an install
+  of the same package included. The repair is to remove the packages that depend on it, then the package
+  itself, then install them again.
 
 ## 20. Non-production
 

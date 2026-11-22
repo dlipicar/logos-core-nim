@@ -47,10 +47,13 @@ default = "deferred:tier-5"
 
 [units]
 # Stay deferred past the re-pin to 6cac8335; work item 5-5 owns them (spec/repin-pending.toml [deferred]).
+# §15's durable commit and the restart after a crash (PKG-0610, PKG-0611) are claimed by step 5-5-2, the
+# store (DECISIONS G445; tests/test_pm_store.nim); the signer replacement's operation (PKG-0608, PKG-0609)
+# is 5-5-4's.
 "PKG-0608" = "deferred:tier-5"
 "PKG-0609" = "deferred:tier-5"
-"PKG-0610" = "deferred:tier-5"
-"PKG-0611" = "deferred:tier-5"
+"PKG-0610" = "claimed"
+"PKG-0611" = "claimed"
 # App A (re-pin P7a, G363): the appendix repeats each contract rule of the sections in one block, and a
 # copy takes its twin's status. The claim is of the schema text only: the App A test compares all 38 rules
 # with the section excerpts, so a copy is claimed where its twin's rule is built.
@@ -164,22 +167,22 @@ default = "deferred:tier-5"
 "PKG-0167" = "claimed"
 # §5: the identity, the installed record and the source (PKG-0172, PKG-0177, PKG-0178) and the
 # admission bound's check (PKG-0468, PKG-0469) are claimed through "§5" by step 5-5-1 (DECISIONS
-# G445, G452; tests/test_pm_records.nim). Retention and one commitment per identity are the store's
-# (5-5-2); the bound's failure and its keeping at start are the operations' and the store's.
-"PKG-0181" = "deferred:tier-5"
-"PKG-0182" = "deferred:tier-5"
+# G445, G452; tests/test_pm_records.nim). Retention (PKG-0181), one commitment per identity
+# (PKG-0182) and the bound kept at start (PKG-0471) are claimed through "§5" by step 5-5-2, the store
+# (G445; tests/test_pm_store.nim). The bound's failure before an operation writes (PKG-0470) is 5-5-4's.
 "PKG-0470" = "deferred:tier-5"
-"PKG-0471" = "deferred:tier-5"
-# §7.1: installation and extraction; Runtime and Module Loader execution.
+# §7.1: installation and extraction; Runtime and Module Loader execution. The destination checked inside
+# the root (PKG-0204) and the selected artifacts extracted before any use (PKG-0219) are claimed through
+# "§7.1" by step 5-5-2 (DECISIONS G446; tests/test_pm_store.nim); nothing executed from an archive
+# (PKG-0192) is 5-5-3's, with the spool.
 "PKG-0192" = "deferred:tier-5"
-"PKG-0204" = "deferred:tier-5"
-"PKG-0219" = "deferred:tier-5"
 # PKG-0220 (only a verified private copy is mapped) is the realizer's staging,
 # tested with C-08 (I88): claimed with §7.1.
-# §7.1: shared installation state and the deployment profile's documentation.
-"PKG-0487" = "deferred:tier-5"
-"PKG-0488" = "deferred:tier-5"
-"PKG-0489" = "deferred:tier-5"
+# §7.1: shared installation state and the deployment profile's documentation. Step 5-5-2 claims through
+# "§7.1" the refused shared root (PKG-0487) and the documented root and path rules (PKG-0489), tested in
+# tests/test_pm_store.nim, and shared artifact storage (PKG-0488), which does not arise (an inspection
+# item). All three rest on the owner's Q5, recommended (a) and not yet answered (DECISIONS G444). The
+# platform profile (PKG-0493) is 5-5-4's.
 "PKG-0493" = "deferred:tier-5"
 # §8: materialization through a source profile.
 "PKG-0271" = "deferred:tier-5"
@@ -187,14 +190,22 @@ default = "deferred:tier-5"
 # item 5-10). A resolved location outside the variant directory is checked when an
 # extracted path is installed (PM l.933, l.1503), so work item 5-5 owns PKG-0274 and
 # 5-10 extends it to the Nix output. In LGX a bad path is invalid-package first
-# (PKG-0587) and a missing file is PKG-0588 (DECISIONS G362).
+# (PKG-0587) and a missing file is PKG-0588 (DECISIONS G362). Step 5-5-2 claims PKG-0274 through "§8":
+# descriptor-relative extraction refuses a planted link (G446; tests/test_pm_store.nim).
 "PKG-0273" = "deferred:tier-5"
-"PKG-0274" = "deferred:tier-5"
 # §10: keeping an installed path bound to its verified bytes is installation's;
 # work item 5-5 owns it (DECISIONS G362, carrying TXT-0472). The installed artifact record
-# (PKG-0291) is claimed by step 5-5-1 (G445).
+# (PKG-0291) is claimed by step 5-5-1 (G445). Step 5-5-2 claims no code run from a remote Storage
+# object (PKG-0292: a local_path is a file of the record's own directory, named once committed), the
+# binding and its retained hash (PKG-0293, with TXT-0472), resources never executed (PKG-0499) and no
+# rewrite of a committed file (PKG-0500), tested in tests/test_pm_store.nim (G444, G445), and the
+# documented resource-access convention (PKG-0498), an inspection item.
 "PKG-0291" = "claimed"
-"PKG-0293" = "deferred:tier-5"
+"PKG-0292" = "claimed"
+"PKG-0293" = "claimed"
+"PKG-0498" = "claimed"
+"PKG-0499" = "claimed"
+"PKG-0500" = "claimed"
 # §9: checking `implements` against a contract's own commitments (PKG-0287) and what the
 # Package Manager may treat as proof of a call surface (PKG-0289) belong to its inspection
 # and handoff (Tier 5, area 7). PKG-0288, the Runtime validating a selected provider

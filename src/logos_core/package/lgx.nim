@@ -68,6 +68,9 @@ type
 
   LgxPackage* = object
     verified*: VerifiedPackage
+    signature*: seq[byte]
+      ## `manifest.cose`'s bytes, as verified; the installed-state store keeps them with
+      ## `manifest.cbor` (step 5-5-2, G444)
     variant*: PackageVariant ## the selected variant
     artifacts*: seq[SelectedArtifact] ## the selected variant's, in manifest order
     modules*: seq[ModuleDeclaration]
@@ -849,7 +852,7 @@ proc openLgx*(
   checkInstallPaths(paths, pathRules).isOkOr:
     return err(invalid("variant " & v.id & ": " & error))
 
-  var pkg = LgxPackage(verified: verified, variant: v)
+  var pkg = LgxPackage(verified: verified, signature: manifestCose, variant: v)
   var total = 0'i64
   let content = files.getOrDefault(v.id)
   for art in v.artifacts:
