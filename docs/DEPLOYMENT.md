@@ -46,11 +46,11 @@ CONFORMANCE and `conformance/`.
 | 2 | l.364 | protected inputs: representations, provisioning, validation, replacement, revocation | Supported | — | owner-only session files, checked at start, replaced offline for the next start | [§2](#2-protected-inputs) | BCP-0074 |
 | 3 | l.365 | authority-policy format, administration, permissions of bootstrap and system instances | Supported | — | `authority-policy.v1` in daemon-config; system rules S1–S5, and S6–S8 with the CLI module; host-ambient for system instances | [§3](#3-authority-policy) | BCP-0075 |
 | 4a | l.366 | local transport profile | Supported | — | `logos.local.unix-stream` | [§4](#4-transport) | BCP-0041 |
-| 4b | l.366 | remote transport profiles | None | Tier 5 | none enabled; no listener, no export, no enrollment | [§4](#4-transport) | BCP-0041 |
+| 4b | l.366 | remote transport profiles | None | Tier 5 | none enabled; no listener, no export; the enrollment trust (5d) is not yet used | [§4](#4-transport) | BCP-0041 |
 | 5a | l.367 | call-evidence signing trust | Supported | — | one evidence key per session, bound to the Runtime, rotated offline | [§5](#5-trust-inputs) | BCP-0042 |
 | 5b | l.367 | package-signing trust | Supported | — | the package trust file: anchors with exact names under one revision, administered offline by `logosctl trust` | [§5](#5-trust-inputs) | BCP-0042 |
 | 5c | l.367 | package-provenance and source-evidence requirements | None | Tier 5 | none selected; a selection is refused until step 5-11 | [§5](#5-trust-inputs) | BCP-0042 |
-| 5d | l.367 | remote Runtime enrollment | None | Tier 5 | no enrollment trust | [§5](#5-trust-inputs) | BCP-0042 |
+| 5d | l.367 | remote Runtime enrollment | Supported | — | the remote trust input: anchors and enrollment records under one revision with its mark, administered offline by `logosctl remote trust`, applied at the next start | [§5](#5-trust-inputs) | BCP-0042 |
 | 6a | l.368 | Module Loader mappings; the `process` mechanism | Supported | — | `direct_static`, `direct_dynamic`, `hosted_dynamic` with placement `process`; the CLI module `lcn_call` hosted | [§6](#6-module-loader-mappings) | BCP-0043 |
 | 6b | l.368 | `sandbox` and `container` mechanisms | Not supported | — | not advertised; a request for one is `unsupported-strategy`; outside Tier 5 (D16) | [§6](#6-module-loader-mappings) | BCP-0043 |
 | 7 | l.369 | permission definitions, constraint mappings, enforcers | Supported | — | one definition, host-ambient, empty constraints, enforced by Runtime admission | [§7](#7-permission-definitions) | BCP-0044 |
@@ -152,13 +152,18 @@ Item 2. Each is a file of the session, owned by its user, mode 0600 in 0700 dire
 | daemon-config, the authority policy in it, module configuration values, `state_transfers` | one deterministic-CBOR `lcn.daemon_config` ([DAEMON.md](DAEMON.md) §3) | `logosctl init`, `daemon config set` | the five checks of DAEMON.md §3, at `set` and at every start | at the next start |
 | the package trust file and its mark | `lcn.package_trust` (a Tier 4b `lcn.trust_file` is still read), `lcn.trust_mark` (§6 there) | `init`, `trust anchor …`, `trust development`, `trust reestablish` | at every start, and by every writer before it writes: the schema and its 1 MiB bound, the rules (canonical order, exact names, nothing selected), key separation from the evidence keys; at start, revision continuity: rollback and changed contents refused | at the next start |
 | the evidence key and its binding | `lcn.ev_key_binding` (§6 there) | `init`, `trust evidence-keys rotate` | the binding names this Runtime (§3 check 4) | at the next start |
+| the remote trust input and its mark (with `remote.enabled`) | `lcn.remote_trust`, its records RUNTIME's `logos.runtime_enrollment` unchanged; `lcn.remote_trust_mark` (§6a there) | `remote trust init`, `reestablish`, `anchor …`, `enroll …`, `import` | at every start, and by every writer before it writes: the schema and its 16 MiB bound, the rules, the loader report; at start, revision continuity (rollback and changed contents refused) and the enrollment rules per key (a stale or omitted record refused) | at the next start |
+| the TLS credential (with `remote.enabled`) | `key.p8` (PKCS#8 P-256), `cert.der`, `peer.cbor` (§6b there) | `remote credential new`, `rotate` | at every start: present, the key the certificate's, the peer file naming both; a pending rotation taken up | at the next start (a rotation is a cutover) |
 
 **Revocation.** A grant's end, its expiry and a policy decision that no longer allows an execution or
 route take effect at once, while logosd runs (CA §8; [HOST-CONFIG.md](HOST-CONFIG.md), "Under
 `capability-authority`", Authority over time). A withdrawn development switch, a removed trust anchor or
 package name, a rotated evidence key and a changed policy take effect at the next start, since every
 input is read once. A removal that names an anchor or package name the file does not hold withdraws
-nothing and is refused, so a mistyped revocation is reported, not taken for one (BCP l.364).
+nothing and is refused, so a mistyped revocation is reported, not taken for one (BCP l.364). An
+enrollment's revocation (`remote trust enroll revoke`) and a withdrawn remote trust anchor apply at the
+next start too, by the restart that also ends every connection of that run (DECISIONS G87, G408); the
+command says so.
 
 ## 3. Authority policy
 
@@ -175,8 +180,9 @@ Items 4a and 4b.
 
 - **Local:** `logos.local.unix-stream`, the only local profile, with endpoints under `<session>/run/ep/`
   ([CONFORMANCE.md](CONFORMANCE.md), "Unix-stream endpoints and peer checks").
-- **Remote:** none enabled. logosd has no remote transport, no listener, no provider export and no
-  enrollment. The remote Runtime Control methods answer after authorization: the two lists an empty
+- **Remote:** none enabled. logosd has no remote transport, no listener and no provider export; the
+  remote trust input and the TLS credential exist with `remote.enabled` (§5), and nothing uses them
+  yet. The remote Runtime Control methods answer after authorization: the two lists an empty
   page, `set_provider_export` INVALID_PARAMS, enabling a listener MODULE_ERROR (DECISIONS G298;
   [DAEMON.md](DAEMON.md) §10). Expected to change in Tier 5.
 
@@ -195,7 +201,17 @@ Items 5a–5d.
   start. No anchor may use a call-evidence key. No Package Manager reads it yet (§1).
 - **Package provenance and source evidence** (5c): none selected. The trust file's `provenance` section
   is empty, and a file that selects a profile is refused until step 5-11 (DECISIONS G398). Tier 5.
-- **Remote Runtime enrollment** (5d): none. Tier 5.
+- **Remote Runtime enrollment** (5d): the remote trust input, `<session>/remote/trust.cbor`
+  (`lcn.remote_trust`; [DAEMON.md](DAEMON.md) §6a; DECISIONS G408): the complete remote trust-anchor set
+  and the enrollment records in RUNTIME's published schema, under one revision of its own with its own
+  continuity mark, apart from the package trust file. It is written offline by `logosctl remote trust`,
+  checked at every start with `remote.enabled` and by every writer, and replaced at the next start. Each
+  anchor is a direct anchor, a peer's own self-signed certificate (G324); the Runtime's own credential
+  is `logosctl remote credential`'s (§6b there; G409), its key apart from every other key.
+  **Interoperation** (TRANSPORT l.1245): this implementation accepts only direct anchors, so a peer of
+  another implementation must support the direct-anchor case to enroll this Runtime's certificate, and
+  must present a certificate DER-equal to an anchor this Runtime holds. Two Runtimes of this
+  implementation interoperate. No remote transport uses the input yet (§4).
 
 Each trust input has its own file and purpose (SEC l.521).
 

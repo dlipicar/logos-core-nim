@@ -128,7 +128,7 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-5 | the no-op install and update while the retained signer is not accepted (TF-07's second point); a D9 stop | fail with `signature-verification-failed` | decided (C6: fail); built at re-pin P7b, the update half in the resolver and the install half at resolution (G166) |
 | 5-6a | where the Package Manager runs | hosted in its own process, the engine's binding over TRANSPORT §8.1.2 | open (C1) |
 | 5-6b | package record observation | deny by default; the grant is protected deployment input | open (C4) |
-| 5-7a | the remote trust input: its own input and revision, apart from the package trust file | — | decided (C2) |
+| 5-7a | the remote trust input: its own input and revision, apart from the package trust file | — | decided (C2); built 2026-11-22 by 5-7a-1 (G408): `remote/trust.cbor` and its mark, `logosctl remote trust` |
 | 5-7a | NF-06 (G81), the authority part | G81 (a) narrowed | decided (B5); compared with CA l.77-78 at 6cac8335 (re-pin P6a): the enrolled half of TXT-0359 (claimed for the half with no Runtime enrolled) and TXT-0360 (riding RUN-1125) are 5-7a's |
 | 5-7a | NA-04 (G255); TF-30 point 1 (G194) | kept | decided (B9) |
 | 5-7a | enrollment and trust-anchor changes (G87) | offline, under the session lock, at the next start | decided (B3) |
@@ -468,6 +468,27 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
 
   Claimed: PKG-0083, PKG-0166, PKG-0169 and PKG-0418 to PKG-0421 (seven units; planning's rulings moved PKG-0083 from
   5-3b and PKG-0166 and PKG-0169 from 5-11). TXT-0463 cleared by test with PKG-0418. PKG-0167 goes to 5-3b.
+
+- 2026-11-22, Tier 5 step 5-7a-1 (I117; G407-G411; G264 amended; G86, G87, G194, G255 and G324 noted),
+  remote Runtimes' foundations, with no remote process yet:
+  - The Module Host binds itself to the pid its spawner names (`logos_sdk/base/parentwatch.nim`).
+  - The daemon configuration's `remote` section; with `remote.enabled` the Runtime id must be a
+    lowercase UUIDv4 (G407).
+  - The remote trust input `remote/trust.cbor` and its mark, RUNTIME's enrollment schema held unchanged,
+    G299's start table and the rules per key (two stricter than the text), the loader report,
+    `logosctl remote trust`, and the verifier's snapshot (G408). The carried 5-3a item is closed.
+  - The TLS credential and `logosctl remote credential new|show|rotate`, rotation as a cutover taken up
+    at the next start (G409).
+  - The remote control channel's CDDL, logosd's signing service, the relay to `logos_keyholder` with its
+    own checks, limit and count, and the test-only process copy (G410, G411). Handshakes signed all
+    three ways in `test_remote_tls`. logosd spawning the holder, and the remote processes, are 5-7a-2's.
+  - `libcrypto` is split from `libssl` (`transport/tls/p256.nim`), so logosd links no `SSL_` code
+    (lint `daemon-no-ssl`).
+  - `docs/REMOTE.md` (new), `docs/DAEMON.md` §2, §3, §6a, §6b, `docs/DEPLOYMENT.md` §2 and §5 (row 5d
+    Supported), `docs/HOST-CONFIG.md` (the host's argv).
+
+  Claimed: RUN-0493 to RUN-0500, RUN-0869, RUN-0928, RUN-0929, TRN-0217, TRN-0369 and PKG-0435 (14
+  units).
 
 ## Tiers at f4f83471 (the original plan)
 

@@ -58,6 +58,9 @@ marked field, as the library does (G277).
   trust.cbor               0600  lcn.package_trust (§6; absent: the compiled-in floor)
   keys/                    0700  evidence keys and their bindings (§9)
   remote/                  0700  with remote.enabled: trust.cbor, lcn.remote_trust (§6a)
+    credential/            0700  the TLS credential: key.p8 0600, cert.der, peer.cbor (§6b)
+    credential-next/       0700  a rotation not yet taken up (§6b)
+    keyholder.count        0600  the key holder's own count (§6b; key-holder mode)
   state/                   0700  trust-mark.cbor, remote-trust-mark.cbor, store/, modules/, evidence/
   work/                    0700  runtime.work_dir; never emptied (restart locks)
   run/                     0700  recreated at each start: logosctl.sock, lcn_call.sock, ep/
@@ -67,7 +70,8 @@ marked field, as the library does (G277).
   path component that is a link where a directory is expected.
 - `lock` is an advisory lock (`flock`). logosd holds it for its whole life. Every offline `logosctl`
   command that writes (`init`, `daemon config set`, `trust anchor …`, `trust development`,
-  `trust reestablish`, `trust evidence-keys rotate`, `remote trust …` except `show`, `state purge`), and
+  `trust reestablish`, `trust evidence-keys rotate`, `remote trust …` and `remote credential …` except
+  `show`, `state purge`), and
   `state list`, which reads the
   Runtime's store under the store's own lock, takes it, and is refused while logosd runs: "another logosd
   or an offline logosctl command holds this session" (exit 1). Other offline reads take no lock.
@@ -770,6 +774,64 @@ change applies at the next start of logosd (B3), and the command says so.
   `refusal`, `anchors` (`id`, `certificate_bytes`, `problems`), `enrollments` (`runtime`, `profile`,
   `revision`, `status`, and for an active one `anchor` and `keys`, in hex), `report` and `conflicts`. A
   writer's result carries `revision`, `changed`, `report` and `conflicts`.
+
+## 6b. The TLS credential
+
+With `remote.enabled`, logosd authenticates to other Runtimes with one long-term P-256 key and a
+self-signed certificate that each peer holds as a direct anchor (owner decision B2; DECISIONS G409,
+G324). Both are in `<session>/remote/credential/`:
+
+| File | What |
+|---|---|
+| `key.p8` | the private key, PKCS#8, mode 0600, never a link |
+| `cert.der` | the certificate: ecdsa-with-SHA256, signed by its own key; Key Usage critical digitalSignature; no Extended Key Usage; subject `CN=logos runtime <id>`, which no verifier uses; valid from 300 s before it was made |
+| `peer.cbor` | `lcn.remote_peer` (§6a): the anchor (its id the certificate's BLAKE3-256) and this Runtime's enrollment record naming it with the one key, for each peer to import |
+
+- **A start with `remote.enabled` and no credential is refused** (exit 1): "remote.enabled needs a TLS
+  credential: logosctl remote credential new makes one". A start logs the certificate's SHA-256, the
+  enrollment revision and who signs.
+- **The key is separate from every other key** (PKG-0435; CA l.1312): its own command, file and
+  algorithm. The call-evidence key loader refuses `key.p8` and the TLS loader refuses an evidence key,
+  by shape and by path.
+
+| Command | What it does |
+|---|---|
+| `remote credential new [--days N]` | the session's first credential, valid N days (default 3650, at most 36500), its record at revision 1. Refused when one exists |
+| `remote credential show` | the credential, a pending rotation, and the key holder's count, without the key |
+| `remote credential rotate [--days N]` | the next credential in `remote/credential-next/`, its record at the current revision + 1 with the new key alone. Refused while one is pending |
+
+- `new` and `rotate` hold the session lock and are refused while logosd runs. Each prints the
+  certificate's SHA-256, the anchor id, the key and the peer file to give each peer (`logosctl remote
+  trust import @peer.cbor` there).
+- **Rotation is a cutover** (G324 limit 1): an enrollment names one anchor and a direct anchor has one
+  key, so old and new keys cannot overlap. Each peer imports the new peer file; this node takes the
+  rotation up at its next start with `remote.enabled`. It renames `credential` to `credential-old`, then
+  `credential-next` to `credential`, and removes `credential-old`, overwriting its key first. A start
+  interrupted between or after the renames finishes them. Connections with a peer fail from the first of
+  the two restarts until both hold the new credential. REMOTE.md gives the order of steps.
+- JSON: `credential` (and `pending`) carry `runtime`, `revision`, `certificate_sha256`, `anchor_id`,
+  `spki`, `certificate` (hex), `not_before`, `not_after` (UTC) and `peer_file`; `show` adds
+  `key_holder` (`signed`, `refused`) once the holder has written its count.
+
+**Who signs** (`remote.signing`, §3; owner decision B1; G410). The TLS processes hold no key: each sends
+its handshake's CertificateVerify input over its control channel, and the answer is a signature or a
+refusal, which fails that handshake.
+
+| `remote.signing` | Who holds the key |
+|---|---|
+| absent or `logosd` | logosd's signing service, which loads `key.p8` at start |
+| `key-holder` | `logos_keyholder` (the program `remote.key_holder` names), which loads `key.p8` itself. logosd never opens it: it checks the credential at start without reading the key, and relays each request to the holder |
+| `process-copy` | each TLS process, sent the key at spawn; accepted only by a logosd built with `-d:logosTestSigning` (tests) |
+
+- Each request is checked where it is signed, and in key-holder mode by logosd too: a TLS 1.3
+  CertificateVerify input for the role logosd fixed for that process (a request names none), ECDSA
+  P-256 with SHA-256 only, at most 100 a second with bursts of 200 for each process at logosd and for
+  the holder as a whole [IMPL].
+- The key holder takes `--session=<dir> --parent=<logosd's pid>` and its channel as descriptor 3. It
+  binds itself to logosd first and exits once logosd is gone (its channel ends, or its parent changes).
+  It keeps its own count in `remote/keyholder.count` (two lines, `signed N` and `refused N`, carried
+  across its runs, written every 60 s while it changes and at its exit), which logosd neither writes nor
+  reads. logosd starts the holder from step 5-7a-2, with the remote processes.
 
 ## 7. The logosctl instance and its socket
 
