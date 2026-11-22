@@ -54,6 +54,13 @@ daemon_allowlist = [
 # Besides the test trees, what may import logos_sdk/testing.
 testing_importers = ["tools/regen_nim.nim"]
 
+# The Package Manager (DECISIONS G406): its sources, and the external packages their import
+# closure may reach, the set it reached when it was built (Tier 5 step 5-3b). Any other package
+# fails, so a storage library cannot arrive under a name nostorage.toml does not know. An entry
+# nothing reaches is stale.
+pm_roots = ["src/logos_core/pm/", "src/logos_core/package/"]
+pm_external_allowlist = ["results", "zlib"]
+
 [layers]
 sdk_base = ["sdk/src/logos_sdk/"]
 sdk_binding = [
