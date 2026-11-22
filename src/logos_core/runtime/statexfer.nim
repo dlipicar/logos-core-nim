@@ -12,7 +12,8 @@
 ## through this process (owner's F1). An assignment's characters are
 ## `[A-Za-z0-9._-]` and never `.` or `..` (`realizer.pathSafe`), so a
 ## directory never leaves `state_root`, and a name starting with `+` is never
-## an assignment's.
+## an assignment's. A `copy` skips the protected realization input's reserved
+## name and its temporary names at the top of the source (G400, `protinput`).
 ##
 ## Every proc is a plain system call checked by its return value, as in
 ## `durable.nim`, so none raises.
@@ -24,6 +25,7 @@ import results
 import ../durable
 import logos_sdk/base/wipe
 import logos_sdk/crypto/blake3
+from ./protinput import isProtectedInputName
 
 when defined(posix):
   import std/posix
@@ -204,6 +206,8 @@ when defined(posix):
     let ns = names(posix.dup(dfd)).valueOr:
       return err(failure(tfSystem, describe("cannot read directory", rel, error)))
     for n in ns:
+      if depth == 0 and isProtectedInputName(n):
+        continue # [G400] never copied, so never counted
       let path = join(rel, n)
       var s: Stat
       if fstatat(dfd, cstring(n), s, AT_SYMLINK_NOFOLLOW) != 0:
@@ -338,6 +342,10 @@ when defined(posix):
     let ns = names(posix.dup(sfd)).valueOr:
       return err(failure(tfSystem, describe("cannot read directory", rel, error)))
     for n in ns:
+      if rel.len == 0 and isProtectedInputName(n):
+        # [IMPL-DECISION G400] One instance's protected realization input is
+        # never copied into another's directory.
+        continue
       let path = join(rel, n)
       var s: Stat
       if fstatat(sfd, cstring(n), s, AT_SYMLINK_NOFOLLOW) != 0:

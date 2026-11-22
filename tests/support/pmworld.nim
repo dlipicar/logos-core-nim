@@ -67,14 +67,20 @@ proc newWorld*(
     trust = defaultTrust(),
     resolverLimits = MaxResolverLimits,
 ): World =
-  let input =
-    decodePmInput(pmValue(trust, doc, bindings, limits = limits).encode.get).get
+  let input = decodePmInput(
+    pmValue(
+      trust,
+      doc,
+      bindings,
+      limits = limits,
+      resolverLimits = limitsValue(resolverLimits),
+    ).encode.get
+  ).get
   let counter = KeyCounter()
   let keys: KeySource = proc(): string {.gcsafe, raises: [].} =
     inc counter.n
     "key-" & $counter.n
-  let (e, cmds) =
-    initEngine(input, kept, resolverLimits, keys, linuxHost, pathRules = PathRules())
+  let (e, cmds) = initEngine(input, kept, keys, linuxHost, pathRules = PathRules())
   result = World(e: e, keys: counter)
   result.emit(cmds)
 

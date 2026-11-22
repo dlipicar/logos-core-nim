@@ -20,6 +20,7 @@ lcn.app_config = {
   ? transport: lcn.app_transport,
   ? permissions: lcn.app_permissions,
   ? state_transfers: [* lcn.app_state_transfer],
+  ? protected_inputs: [* lcn.app_protected_input],
 }
 
 lcn.app_runtime = {
@@ -216,4 +217,17 @@ lcn.app_declaration = {
   ? requested_permissions: [* lcn.app_permission],
   ? persistent_state: true,
   ? configuration: lcn.app_configuration,
+}
+
+; The protected realization input of one instance (decision G400): protected
+; construction input (RUNTIME l.1600-1601) that only the embedding host sets.
+; At each realization attempt the Module Loader writes `input` to
+; `<state_dir>/.lcn-protected-input`, and removes it when initialization
+; returns, at release and at retirement (docs/HOST-CONFIG.md). The instance is
+; listed in `modules`, has a state_assignment, and has at most one entry. Not
+; for secrets: the file passes through a directory that backups and state
+; copies may read.
+lcn.app_protected_input = {
+  instance: lcn.app_instance_id,
+  input: bstr .size (1..16777216),
 }

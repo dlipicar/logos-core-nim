@@ -10,7 +10,7 @@ import logos_sdk/codegen/common_types
 export nimrt, common_types
 
 const
-  primaryDocument = "; The Package Manager\'s protected input (Tier 5 step 5-3b; DECISIONS G399,\x0A; G400; docs/PACKAGE-MANAGER.md \xC2\xA72). One Logos deterministic-CBOR value that\x0A; the embedding host writes (logosd\'s compose) and the hosted Package Manager\x0A; reads at initialization through the protected realization input, never\x0A; through configuration (CONFIGURATION l.58). Closed: an unknown field is\x0A; refused. The rules the schema cannot say are pm/input.nim\'s.\x0Alcn.pm_input = {\x0A  format: \"logos-core-nim.pm-input.v1\",\x0A  trust: bstr .size (1..1048576),   ; the session trust file\'s accepted bytes\x0A  storage: [* lcn.pm_binding],      ; at least one, by rule\x0A  catalog: lcn.pm_catalog_ref,\x0A  ? limits: lcn.pm_limits,\x0A}\x0A\x0A; One Storage binding: the name an LGX source\'s `storage` names\x0A; (PACKAGE MANAGER l.854-857), and the lcn.storage_fetch provider instance\x0A; that serves it. Names are unique, by rule.\x0Alcn.pm_binding = {\x0A  binding: tstr .size (1..128),\x0A  instance: tstr .size (1..128),\x0A}\x0A\x0A; The protected catalog (G401): the catalog document\'s binding, locator and\x0A; BLAKE3-256 digest. `storage` names one of the bindings, by rule.\x0Alcn.pm_catalog_ref = {\x0A  storage: tstr .size (1..128),\x0A  object: bstr .size (1..4096),\x0A  digest: bstr .size 32,\x0A}\x0A\x0A; The bounds, each checked by rule as written here; an absent one is its\x0A; default.\x0A; archive_bytes: 1..1073741824, default 1073741824 (1 GiB): one archive,\x0A;   held in memory while it is inspected.\x0A; catalog_bytes: 1..4194304, default 4194304 (4 MiB): the catalog document.\x0A; catalog_entries: 1..65536, default 65536.\x0A; cache_entries: 1..4096, default 256: the verification cache.\x0A; read_deadline_ms: 1..86400000, default 300000: one call, and the wait for\x0A;   `ready` after `not-ready` (G402).\x0Alcn.pm_limits = {\x0A  ? archive_bytes: uint64,\x0A  ? catalog_bytes: uint32,\x0A  ? catalog_entries: uint32,\x0A  ? cache_entries: uint16,\x0A  ? read_deadline_ms: uint32,\x0A}\x0A"
+  primaryDocument = "; The Package Manager\'s protected input (Tier 5 step 5-3b; DECISIONS G399,\x0A; G400; docs/PACKAGE-MANAGER.md \xC2\xA72). One Logos deterministic-CBOR value that\x0A; the embedding host writes (logosd\'s compose) and the hosted Package Manager\x0A; reads at initialization through the protected realization input, never\x0A; through configuration (CONFIGURATION l.58). Closed: an unknown field is\x0A; refused. The rules the schema cannot say are pm/input.nim\'s.\x0Alcn.pm_input = {\x0A  format: \"logos-core-nim.pm-input.v1\",\x0A  trust: bstr .size (1..1048576),   ; the session trust file\'s accepted bytes\x0A  storage: [* lcn.pm_binding],      ; at least one, by rule\x0A  catalog: lcn.pm_catalog_ref,\x0A  resolver_limits: lcn.pm_resolver_limits,\x0A  ? limits: lcn.pm_limits,\x0A}\x0A\x0A; One Storage binding: the name an LGX source\'s `storage` names\x0A; (PACKAGE MANAGER l.854-857), and the lcn.storage_fetch provider instance\x0A; that serves it. Names are unique, by rule.\x0Alcn.pm_binding = {\x0A  binding: tstr .size (1..128),\x0A  instance: tstr .size (1..128),\x0A}\x0A\x0A; The protected catalog (G401): the catalog document\'s binding, locator and\x0A; BLAKE3-256 digest. `storage` names one of the bindings, by rule.\x0Alcn.pm_catalog_ref = {\x0A  storage: tstr .size (1..128),\x0A  object: bstr .size (1..4096),\x0A  digest: bstr .size 32,\x0A}\x0A\x0A; The resolver limits (PACKAGE MANAGER l.1241-1254; G399 as ruled on\x0A; 2026-11-22): protected policy input, required, with all four keys; each a\x0A; positive integer no greater than its maximum (package/resolver.nim\'s\x0A; MaxResolverLimits, docs/CONFORMANCE.md). The Package Manager has no default:\x0A; the embedding host resolves them (logosd: the operator\'s values, or its\x0A; preset, docs/DAEMON.md). Not in `limits`, where an absent key is a default.\x0Alcn.pm_resolver_limits = {\x0A  partial_closure_names: uint64,\x0A  dependency_depth: uint64,\x0A  candidates_per_name: uint64,\x0A  assignment_attempts: uint64,\x0A}\x0A\x0A; The bounds, each checked by rule as written here; an absent one is its\x0A; default.\x0A; archive_bytes: 1..1073741824, default 1073741824 (1 GiB): one archive,\x0A;   held in memory while it is inspected.\x0A; catalog_bytes: 1..4194304, default 4194304 (4 MiB): the catalog document.\x0A; catalog_entries: 1..65536, default 65536.\x0A; cache_entries: 1..4096, default 256: the verification cache.\x0A; read_deadline_ms: 1..86400000, default 300000: one call, and the wait for\x0A;   `ready` after `not-ready` (G402).\x0Alcn.pm_limits = {\x0A  ? archive_bytes: uint64,\x0A  ? catalog_bytes: uint32,\x0A  ? catalog_entries: uint32,\x0A  ? cache_entries: uint16,\x0A  ? read_deadline_ms: uint32,\x0A}\x0A"
   interfaceDocuments: array[0, string] = []
   supportingDocuments: array[0, string] = []
 
@@ -44,6 +44,7 @@ type
     catalog*: LcnPmCatalogRef
     format*: string = "logos-core-nim.pm-input.v1"
     limits*: Opt[LcnPmLimits]
+    resolver_limits*: LcnPmResolverLimits
     storage*: seq[LcnPmBinding]
     trust*: seq[byte]
 
@@ -53,6 +54,12 @@ type
     catalog_bytes*: Opt[uint32]
     catalog_entries*: Opt[uint32]
     read_deadline_ms*: Opt[uint32]
+
+  LcnPmResolverLimits* = object
+    assignment_attempts*: uint64
+    candidates_per_name*: uint64
+    dependency_depth*: uint64
+    partial_closure_names*: uint64
 
 proc toCbor*(x: LcnPmBinding): CborValue
 proc fromChecked*(T: type LcnPmBinding, v: CborValue): LcnPmBinding
@@ -70,6 +77,10 @@ proc toCbor*(x: LcnPmLimits): CborValue
 proc fromChecked*(T: type LcnPmLimits, v: CborValue): LcnPmLimits
 proc stepEncLcnPmLimits*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnPmLimits*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnPmResolverLimits): CborValue
+proc fromChecked*(T: type LcnPmResolverLimits, v: CborValue): LcnPmResolverLimits
+proc stepEncLcnPmResolverLimits*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnPmResolverLimits*(w: var DecWork, v: CborValue, dst: pointer)
 
 proc stepEncLcnPmBinding*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   let x {.used.} = cast[ptr LcnPmBinding](src)
@@ -129,7 +140,7 @@ proc fromChecked*(T: type LcnPmCatalogRef, v: CborValue): LcnPmCatalogRef =
 
 proc stepEncLcnPmInput*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   let x {.used.} = cast[ptr LcnPmInput](src)
-  var n = 4
+  var n = 5
   if x.limits.isSome:
     inc n
   let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
@@ -145,11 +156,14 @@ proc stepEncLcnPmInput*(w: var EncWork, src: pointer, dst: ptr CborValue) =
     node.entries[k].key = cbor("limits")
     w.later(stepEncLcnPmLimits, addr x.limits.get, addr node.entries[k].value)
     inc k
+  node.entries[k].key = cbor("resolver_limits")
+  w.later(stepEncLcnPmResolverLimits, addr x.resolver_limits, addr node.entries[k].value)
+  inc k
   node.entries[k].key = cbor("storage")
-  let a3 = newCborArray(x.storage.len)
-  node.entries[k].value = a3
-  for i4 in 0 ..< x.storage.len:
-    w.later(stepEncLcnPmBinding, addr x.storage[i4], addr a3.items[i4])
+  let a4 = newCborArray(x.storage.len)
+  node.entries[k].value = a4
+  for i5 in 0 ..< x.storage.len:
+    w.later(stepEncLcnPmBinding, addr x.storage[i5], addr a4.items[i5])
   inc k
   node.entries[k].key = cbor("trust")
   node.entries[k].value = cbor(x.trust)
@@ -164,10 +178,12 @@ proc stepDecLcnPmInput*(w: var DecWork, v: CborValue, dst: pointer) =
   if f2.isSome:
     r.limits = Opt.some(default(LcnPmLimits))
     w.later(stepDecLcnPmLimits, f2.get, addr r.limits.get)
-  let f5 = v.lookup("storage").get
-  r.storage.setLen(f5.items.len)
-  for i6 in 0 ..< f5.items.len:
-    w.later(stepDecLcnPmBinding, f5.items[i6], addr r.storage[i6])
+  let f3 = v.lookup("resolver_limits").get
+  w.later(stepDecLcnPmResolverLimits, f3, addr r.resolver_limits)
+  let f6 = v.lookup("storage").get
+  r.storage.setLen(f6.items.len)
+  for i7 in 0 ..< f6.items.len:
+    w.later(stepDecLcnPmBinding, f6.items[i7], addr r.storage[i7])
   r.trust = v.lookup("trust").get.bytes
 
 proc toCbor*(x: LcnPmInput): CborValue =
@@ -218,21 +234,21 @@ proc stepEncLcnPmLimits*(w: var EncWork, src: pointer, dst: ptr CborValue) =
 proc stepDecLcnPmLimits*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnPmLimits](dst)
   r[] = LcnPmLimits()
-  let f7 = v.lookup("archive_bytes")
-  if f7.isSome:
-    r.archive_bytes = Opt.some(uint64(f7.get.uint))
-  let f8 = v.lookup("cache_entries")
+  let f8 = v.lookup("archive_bytes")
   if f8.isSome:
-    r.cache_entries = Opt.some(uint16(f8.get.uint))
-  let f9 = v.lookup("catalog_bytes")
+    r.archive_bytes = Opt.some(uint64(f8.get.uint))
+  let f9 = v.lookup("cache_entries")
   if f9.isSome:
-    r.catalog_bytes = Opt.some(uint32(f9.get.uint))
-  let f10 = v.lookup("catalog_entries")
+    r.cache_entries = Opt.some(uint16(f9.get.uint))
+  let f10 = v.lookup("catalog_bytes")
   if f10.isSome:
-    r.catalog_entries = Opt.some(uint32(f10.get.uint))
-  let f11 = v.lookup("read_deadline_ms")
+    r.catalog_bytes = Opt.some(uint32(f10.get.uint))
+  let f11 = v.lookup("catalog_entries")
   if f11.isSome:
-    r.read_deadline_ms = Opt.some(uint32(f11.get.uint))
+    r.catalog_entries = Opt.some(uint32(f11.get.uint))
+  let f12 = v.lookup("read_deadline_ms")
+  if f12.isSome:
+    r.read_deadline_ms = Opt.some(uint32(f12.get.uint))
 
 proc toCbor*(x: LcnPmLimits): CborValue =
   runEnc(stepEncLcnPmLimits, addr x)
@@ -240,6 +256,40 @@ proc toCbor*(x: LcnPmLimits): CborValue =
 proc fromChecked*(T: type LcnPmLimits, v: CborValue): LcnPmLimits =
   var r: LcnPmLimits
   runDec(stepDecLcnPmLimits, v, addr r)
+  r
+
+proc stepEncLcnPmResolverLimits*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnPmResolverLimits](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](4))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("assignment_attempts")
+  node.entries[k].value = cbor(uint64(x.assignment_attempts))
+  inc k
+  node.entries[k].key = cbor("candidates_per_name")
+  node.entries[k].value = cbor(uint64(x.candidates_per_name))
+  inc k
+  node.entries[k].key = cbor("dependency_depth")
+  node.entries[k].value = cbor(uint64(x.dependency_depth))
+  inc k
+  node.entries[k].key = cbor("partial_closure_names")
+  node.entries[k].value = cbor(uint64(x.partial_closure_names))
+  inc k
+
+proc stepDecLcnPmResolverLimits*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnPmResolverLimits](dst)
+  r[] = LcnPmResolverLimits()
+  r.assignment_attempts = uint64(v.lookup("assignment_attempts").get.uint)
+  r.candidates_per_name = uint64(v.lookup("candidates_per_name").get.uint)
+  r.dependency_depth = uint64(v.lookup("dependency_depth").get.uint)
+  r.partial_closure_names = uint64(v.lookup("partial_closure_names").get.uint)
+
+proc toCbor*(x: LcnPmResolverLimits): CborValue =
+  runEnc(stepEncLcnPmResolverLimits, addr x)
+
+proc fromChecked*(T: type LcnPmResolverLimits, v: CborValue): LcnPmResolverLimits =
+  var r: LcnPmResolverLimits
+  runDec(stepDecLcnPmResolverLimits, v, addr r)
   r
 
 proc fromCbor*(T: type LcnPmBinding, v: CborValue): Result[LcnPmBinding, string] =
@@ -296,4 +346,18 @@ proc encode*(x: LcnPmLimits): Result[seq[byte], string] =
 proc decode*(T: type LcnPmLimits, data: openArray[byte]): Result[LcnPmLimits, string] =
   ## One deterministic-CBOR `lcn.pm_limits` value.
   let v = ?generatedSchema().decodeChecked("lcn.pm_limits", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnPmResolverLimits, v: CborValue): Result[LcnPmResolverLimits, string] =
+  ## A value checked against `lcn.pm_resolver_limits`.
+  ?generatedSchema().check("lcn.pm_resolver_limits", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnPmResolverLimits): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.pm_resolver_limits`.
+  generatedSchema().encodeChecked("lcn.pm_resolver_limits", toCbor(x))
+
+proc decode*(T: type LcnPmResolverLimits, data: openArray[byte]): Result[LcnPmResolverLimits, string] =
+  ## One deterministic-CBOR `lcn.pm_resolver_limits` value.
+  let v = ?generatedSchema().decodeChecked("lcn.pm_resolver_limits", data)
   ok(fromChecked(T, v))

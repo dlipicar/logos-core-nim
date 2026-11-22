@@ -62,9 +62,12 @@
 ## exists), `quit-init <n>` (exit from
 ## module code), `quit-handler` (exit from the first event handler),
 ## `rc-destroy <method> <hex params>` (a Runtime Control call from
-## `_MODULE_destroy`, its result in `rc-destroy`). The four flags
-## (`block-destroy`, `block-handler`, `block-subend`, `quit-handler`) take
-## effect before every other command, wherever they are in the file.
+## `_MODULE_destroy`, its result in `rc-destroy`), `protected` (what the
+## protected realization input's file holds during `_MODULE_init`, DECISIONS
+## G400: `file <hex>`, `link`, `dir` or `absent`, appended to `protected`).
+## The four flags (`block-destroy`, `block-handler`, `block-subend`,
+## `quit-handler`) take effect before every other command, wherever they are
+## in the file.
 ## `_MODULE_apply_configuration` answers by what its input contains: `reject`
 ## (a failure status), `bad` (an invalid status), `block` (waits until
 ## `<state_dir>/go-apply` exists, then OK), `quit` (exits); anything else OK.
@@ -517,6 +520,21 @@ proc probeInit(
         else:
           3
       )
+    of "protected":
+      let path = p.dir / ".lcn-protected-input"
+      try:
+        case getFileInfo(path, followSymlink = false).kind
+        of pcFile:
+          var line = "file "
+          for c in readFile(path):
+            line.add(toHex(ord(c), 2).toLowerAscii)
+          p.note("protected", line)
+        of pcLinkToFile, pcLinkToDir:
+          p.note("protected", "link")
+        of pcDir:
+          p.note("protected", "dir")
+      except IOError, OSError:
+        p.note("protected", "absent")
     of "env":
       var names: seq[string]
       for k, _ in envPairs():

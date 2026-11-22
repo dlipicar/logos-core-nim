@@ -111,7 +111,9 @@ contract declares no `_sensitive`: package objects are public.
   is text the provider wrote: the consumer never parses it, and logs it only as foreign text, quoted, cut
   and attributed (BCP l.557-558; `logos_sdk/base/logtext`).
 - **Long calls.** A read that waits on the network is one Request and its delayed final Response
-  (TRANSPORT l.826-828); the caller chooses its own deadline. There is no job identifier and no session:
+  (TRANSPORT l.826-828); the caller chooses its own deadline. A provider documents the longest one call
+  can take at its defaults, and a consumer's per-call deadline sits above it (the Package Manager's
+  `read_deadline_ms`, 300 s by default; PACKAGE-MANAGER.md §4). There is no job identifier and no session:
   reads hold no state for a consumer and survive a lost route, the consumer continuing from its offset
   on the renewed route. Concurrent reads use one route handle each, or prepared calls submitted in turn
   (INTERFACE l.1935).
@@ -139,7 +141,7 @@ Package Manager; each provider documents what it means:
 | Provider | Encoding |
 |---|---|
 | storage_module | the binary manifest CID (G5); documented with Tier 5 steps 5-3b and N-4 |
-| `fetch_fake_module` (tests only) | `fetch-fake/<size>/<seed>` (§6) |
+| `fetch_fake_module` (tests only) | `fetch-fake/<size>/<seed>`, or `fetch-fake/state/<name>` for a file a test wrote (§6) |
 
 ## 6. The reference fake provider
 
@@ -147,7 +149,13 @@ Package Manager; each provider documents what it means:
 replaces it with storage_module. It has no configuration. A locator `fetch-fake/<size>/<seed>` (size in
 decimal, no leading zero) names `size` bytes of BLAKE3's extendable output over `seed`, so a test names
 any object without sending its bytes anywhere; a seed beginning `absent-` names an object it cannot
-obtain (`unavailable`); any other locator is `invalid-locator`. It starts `starting`, holding nothing.
+obtain (`unavailable`). A locator `fetch-fake/state/<name>` (Tier 5 step 5-3b) names the file
+`<state_dir>/objects/<name>`, which a test writes before the start, for content that must be exact, such
+as a catalog or a signed archive. The name has 1 to 64 bytes of `A-Z a-z 0-9 . _ -` and does not begin
+with `.`, so it never names a path outside `objects/`; one outside that bound is `invalid-locator`. A
+name with no regular file (a link, a directory, or nothing), or a fake without a state directory, is
+`unavailable`; the file is read at each call, so it must not change while the fake serves it. Any other
+locator is `invalid-locator`. It starts `starting`, holding nothing.
 
 Its own contract drives it, in every placement: `fetch_fake.set_readiness` moves it to a state (publishing
 the event when the state changes) and sets the locators it serves while not `ready`;

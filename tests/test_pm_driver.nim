@@ -10,7 +10,8 @@ import logos_sdk/pins
 import logos_sdk/base/hex
 import ../src/logos_core/pins as core_pins
 import ../src/logos_core/package/[errors, resolver]
-import ./support/[pmfixture, pmworld]
+import ../src/logos_core/daemon/config
+import ./support/[pmfixture, pmshapes, pmworld]
 
 # Synthetic catalogs -----------------------------------------------------------------
 
@@ -255,7 +256,11 @@ type Scene = object
   objects: Table[seq[byte], seq[byte]]
   calls: seq[Command]
 
-proc scene(entries: openArray[(CatalogEntry, seq[byte])], trust = orgTrust): Scene =
+proc scene(
+    entries: openArray[(CatalogEntry, seq[byte])],
+    trust = orgTrust,
+    resolverLimits = MaxResolverLimits,
+): Scene =
   ## The engine with `entries` as its kept, matching catalog and each archive
   ## (an empty one is absent) served under the entry's locator.
   var cat: seq[CatalogEntry]
@@ -265,7 +270,8 @@ proc scene(entries: openArray[(CatalogEntry, seq[byte])], trust = orgTrust): Sce
       result.objects[e.source.objectLocator] = archive
   let doc = catalogBytes(cat)
   result.objects[bytesOf("catalog")] = doc
-  result.w = newWorld(doc, kept = keptFor(doc), trust = trust)
+  result.w =
+    newWorld(doc, kept = keptFor(doc), trust = trust, resolverLimits = resolverLimits)
   result.w.emit(result.w.e.start())
   result.w.bringUp()
   result.w.serve(result.objects, result.calls)
@@ -306,6 +312,22 @@ suite "engine resolution over signed archives (G405)":
     check s.w.e.cache.counters.opened == 2
     check s.w.e.cache.counters.hits == 2
     check s.statted == @["app@1.0.0", "lib@1.0.0", "app@1.0.0", "lib@1.0.0"]
+
+  test "[ruling M5] [ruling S1] a resolver limit that ends an operation is named in the operator's log, with its value, and the caller's message shows no number":
+    for (lim, name) in [
+      (resolverLimits(1, 4095, 4096, 1_048_576).get, "partial_closure_names (1)"),
+      (resolverLimits(4096, 4095, 4096, 1).get, "assignment_attempts (1)"),
+    ]:
+      checkpoint name
+      var s = scene(
+        [(entryOf("app", "1.0.0"), app100), (entryOf("lib", "1.0.0"), lib100)],
+        resolverLimits = lim,
+      )
+      let r = s.resolveIn(root("app"))
+      let tripped = s.w.logs.filterIt("resolver limit" in it)
+      check r.isErr and r.error.code == pecDependencyUnavailable
+      check tripped == @["a root operation stopped at the resolver limit " & name]
+      check not r.error.msg.anyIt(it in {'0' .. '9'})
 
   test "unavailable material is package-unavailable, never ineligible":
     var s = scene([(entryOf("app", "1.0.0"), app100), (entryOf("lib", "1.0.0"), @[])])
@@ -400,3 +422,177 @@ suite "engine resolution over signed archives (G405)":
       b.get.packages.mapIt(($it.identity, it.commitment))
     check withP.calls.allIt(it.locator != bytesOf("lib.provenance"))
     check withP.statted == plain.statted
+
+# The measurement's shapes, by their counts -----------------------------------------
+
+type Counted = object
+  limit: string ## the limit that ends it; empty: none
+  ok: bool
+  names, depth, candidates, attempts, steps: int
+
+proc counted(s: Shape, limits: ResolverLimits): Counted =
+  let r = driveShape(s, limits)
+  Counted(
+    limit: r.counters.limit,
+    ok: r.outcome.isOk,
+    names: r.counters.names,
+    depth: r.counters.depth,
+    candidates: r.counters.mostConsidered,
+    attempts: r.counters.attempts,
+    steps: r.steps,
+  )
+
+func expect(
+    limit = "", ok = false, names, depth, candidates, attempts, steps: int
+): Counted =
+  Counted(
+    limit: limit,
+    ok: ok,
+    names: names,
+    depth: depth,
+    candidates: candidates,
+    attempts: attempts,
+    steps: steps,
+  )
+
+suite "the resolver measurement's shapes, by their counts (ruling M6; G443)":
+  # [ruling M6] CI asserts the counts, which are deterministic, and never a time; the times
+  # are `tools/pmbench.nim`'s, recorded in CONFORMANCE.md "Resolver limits". Each shape is the
+  # bench's (`support/pmshapes.nim`) at a size CI runs in milliseconds; the counts follow from
+  # the shape, as each comment says. A step is one resolver run: the root's, then one after
+  # each inspection.
+  let preset = resolverLimits(
+    PresetPartialClosureNames.int, PresetDependencyDepth.int,
+    PresetCandidatesPerName.int, PresetAssignmentAttempts.int,
+  ).get
+  let depthLimit = PresetDependencyDepth.int
+
+  proc limitsWith(
+      names = PresetPartialClosureNames.int,
+      depth = PresetDependencyDepth.int,
+      candidates = PresetCandidatesPerName.int,
+      attempts = PresetAssignmentAttempts.int,
+  ): ResolverLimits =
+    resolverLimits(names, depth, candidates, attempts).get
+
+  test "[IMPL-DECISION G443] a chain resolves to the preset's depth and no further":
+    # n names, one candidate each: n attempts, the last name at depth n - 1, n inspections.
+    let n = depthLimit + 1
+    check chain(n).counted(preset) ==
+      expect(
+        ok = true, names = n, depth = n - 1, candidates = 1, attempts = n, steps = n + 1
+      )
+    # One more name lies beyond the depth limit: it is never bound.
+    check chain(n + 1).counted(preset) ==
+      expect(
+        limit = "dependency_depth",
+        names = n,
+        depth = n - 1,
+        candidates = 1,
+        attempts = n,
+        steps = n + 1,
+      )
+
+  test "[IMPL-DECISION G443] a dense closure and a layered one, at the preset's depth":
+    # Each name of `dense` needs every later one, so the last is at depth n - 1, as in a chain.
+    let n = depthLimit + 1
+    check dense(n).counted(preset) ==
+      expect(
+        ok = true, names = n, depth = n - 1, candidates = 1, attempts = n, steps = n + 1
+      )
+    check dense(n + 1).counted(preset) ==
+      expect(
+        limit = "dependency_depth",
+        names = n,
+        depth = n - 1,
+        candidates = 1,
+        attempts = n,
+        steps = n + 1,
+      )
+    # `layered` with as many layers as the depth limit: the first layer holds the root and one
+    # more name, so its depth is the limit's; with one layer more, the last layer is beyond it.
+    check layered(n, depthLimit).counted(preset) ==
+      expect(
+        ok = true,
+        names = n,
+        depth = depthLimit,
+        candidates = 1,
+        attempts = n,
+        steps = n + 1,
+      )
+    check layered(n + 1, depthLimit + 1).counted(preset) ==
+      expect(
+        limit = "dependency_depth",
+        names = n,
+        depth = depthLimit,
+        candidates = 1,
+        attempts = n,
+        steps = n + 1,
+      )
+
+  test "[G399] a chain longer than `partial_closure_names` ends at that limit":
+    # The 9th name would make the partial closure 9 names: 8 bound, 9 inspected.
+    check chain(10).counted(limitsWith(names = 8)) ==
+      expect(
+        limit = "partial_closure_names",
+        names = 8,
+        depth = 7,
+        candidates = 1,
+        attempts = 8,
+        steps = 10,
+      )
+
+  test "[ruling M1] the wide shape tries every assignment of its k two-version names, and `assignment_attempts` ends it":
+    # The root, then each of the 2^k assignments of the `a` names one name at a time:
+    # 1 + 2 + ... + 2^k = 2^(k + 1) - 1 attempts; `b` is never bound, nor any of the `w` names
+    # that sort after it. Inspected: the root and both versions of each `a` name.
+    for k in [4, 6]:
+      check wide(50, k).counted(limitsWith(attempts = MaxResolverLimits.attempts)) ==
+        expect(
+          names = k + 1,
+          depth = 1,
+          candidates = 2,
+          attempts = (1 shl (k + 1)) - 1,
+          steps = 2 * k + 2,
+        )
+    check wide(50, 6).counted(limitsWith(attempts = 20)) ==
+      expect(
+        limit = "assignment_attempts",
+        names = 7,
+        depth = 1,
+        candidates = 2,
+        attempts = 20,
+        steps = 12,
+      )
+
+  test "[ruling 7.2] the hub binds each version of `y` over the whole core, and `candidates_per_name` ends it":
+    # The root, the n core names and `y`: n + 2 names; `y` needs `c0000`, so the last core name
+    # is at depth n + 1. Each of the v versions of `y` is one attempt and one inspection.
+    const n = 30
+    check hub(n, 1).counted(preset) ==
+      expect(
+        ok = true,
+        names = n + 2,
+        depth = n + 1,
+        candidates = 1,
+        attempts = n + 2,
+        steps = n + 3,
+      )
+    check hub(n, 4).counted(preset) ==
+      expect(
+        names = n + 2,
+        depth = n + 1,
+        candidates = 4,
+        attempts = n + 1 + 4,
+        steps = n + 2 + 4,
+      )
+    # With 6 versions of `y` and room for 4, the fifth candidate is the limit's.
+    check hub(4, 6).counted(limitsWith(candidates = 4)) ==
+      expect(
+        limit = "candidates_per_name",
+        names = 6,
+        depth = 5,
+        candidates = 4,
+        attempts = 9,
+        steps = 10,
+      )
