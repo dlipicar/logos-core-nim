@@ -23,11 +23,16 @@ type HostRun* = object
 const DefaultWaitMs* = 10_000
 
 proc startHost*(
-    program: string, env: seq[string] = @[], listener = cint(-1), lock = cint(-1)
+    program: string,
+    env: seq[string] = @[],
+    listener = cint(-1),
+    lock = cint(-1),
+    args = Opt.none(seq[string]),
 ): HostRun =
+  ## `args`: the host's arguments in place of `--parent=<this process>`.
   var fds: array[2, cint]
   doAssert socketPair(addr fds) == 0, "no socket pair"
-  let pid = spawnProcess(program, env, fds[1], listener, lock)
+  let pid = spawnProcess(program, env, fds[1], listener, lock, args)
   discard fdClose(fds[1])
   doAssert pid.isOk, "the host did not start: " & pid.error
   HostRun(pid: pid.get, fd: fds[0], reader: newCarrierReader())

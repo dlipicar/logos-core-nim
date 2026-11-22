@@ -3654,6 +3654,16 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   protocol. On Windows the configuration refuses `module_host` and the program is a stub that exits 2.
 - **Status:** decided and built 2026-11-14 (I91, part 4b-3.1a). `test_module_host`, `test_hosted`,
   `test_host`.
+- **Amended 2026-11-21 (Tier 5 step 5-7a-1, I117; Fable's check of the 5-7a plan, item 5):** `argv`
+  is the program name and `--parent=<pid>`, the pid of the process that spawned the host (both
+  spawns in `hostsup.nim`); still nothing about the instance. The host read `getppid()`, set
+  `PR_SET_PDEATHSIG` and read `getppid()` again, so a daemon that ended before the first read was
+  missed: the host had already been adopted, both reads named the adopter, and it ran on with a
+  signal that could never fire. Now the host sets the signal first (Linux) and then compares
+  `getppid()` with the pid it was given, on Linux and macOS (`logos_sdk/base/parentwatch.nim`, shared
+  with `logos_remote`, G411): a mismatch exits 70, and an `argv` with no valid `--parent` is "not
+  started by a Loader", exit 2. The host's watch on macOS stays its carrier. `test_module_host`
+  H-1, H-14, H-16-H-18.
 
 ### G265 — Module Host supervision
 - **Kind:** FREE · **Specs:** RUNTIME l.664-669, l.3818-3826 (the Runtime ends hosted work through

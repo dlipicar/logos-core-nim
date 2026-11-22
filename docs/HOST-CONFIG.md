@@ -1039,10 +1039,14 @@ ends it for the Module Loader; nothing restarts it (LOADER l.105). The packaged 
   descriptor 3 the private carrier to the Runtime (a socket pair the Runtime makes; DECISIONS G266);
   descriptor 4 a provider's listener (below); descriptor 5 the instance's restart lock (below); no
   other descriptor of the Runtime; a process group of its own; an empty signal mask, and SIGPIPE,
-  SIGTERM, SIGINT and SIGHUP at their default actions. `argv` is only the program's name: nothing
-  about the instance is in its command line or environment. On Linux it is killed when the
-  Runtime's supervision thread ends (`PR_SET_PDEATHSIG`). It runs as the Runtime's user: placement
-  `process` is a separate address space, not a sandbox (LOADER §3).
+  SIGTERM, SIGINT and SIGHUP at their default actions. `argv` is the program's name and
+  `--parent=<pid>`, the Runtime's process id: nothing about the instance is in its command line or
+  environment. Before anything else the host binds itself to that process (DECISIONS G264, amended
+  2026-11-21): on Linux it sets `PR_SET_PDEATHSIG`, so it is killed when the Runtime's supervision
+  thread ends, and then, on Linux and macOS, it checks that its parent is still that pid. A host whose
+  Runtime ended before that check has been adopted and exits 70; one started without a valid
+  `--parent` exits 2. It runs as the Runtime's user: placement `process` is a separate address
+  space, not a sandbox (LOADER §3).
 - **Supervision** (DECISIONS G265). One supervision thread per Runtime, started with the first host,
   watches every carrier and reaps each host it started (`waitpid` on its own pids, never on any
   child). After every end, an orderly one too, the host's whole process group is killed, and the
