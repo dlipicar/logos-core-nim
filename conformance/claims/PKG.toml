@@ -202,9 +202,9 @@ default = "deferred:tier-5"
 "PKG-0289" = "deferred:tier-5"
 # §6: the catalog document, its acquisition and refresh and catalog policy (PKG-0472,
 # PKG-0473) are claimed through "§6" by step 5-3b-1 (DECISIONS G401; docs/PACKAGE-MANAGER.md
-# §3). The bindings' retrieval API and locator encodings (PKG-0474) come with step 5-3b-2.
+# §3); the bindings' retrieval API and locator encodings (PKG-0474) by step 5-3b-2 (G402;
+# PACKAGE-MANAGER.md §4, sdk/docs/STORAGE-FETCH.md §5, DAEMON.md §3).
 # Presentation contracts belong to applications.
-"PKG-0474" = "deferred:tier-5"
 "PKG-0475" = "out-of-scope:a requirement on application catalog contracts"
 # §11: a permission package producers have. A permission's `reason` (PKG-0335): with
 # permission definitions built (Tier 4b step 4b-4, I93), no requested permission

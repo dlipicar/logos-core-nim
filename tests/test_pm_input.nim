@@ -4,6 +4,8 @@
 
 import std/strutils
 import unittest2
+import logos_sdk/cbor
+import ../src/logos_core/package/resolver
 import ./support/pmfixture
 
 proc encoded(v: LcnPmInput): seq[byte] =
@@ -206,3 +208,69 @@ suite "PM protected input refusals (G399, G404)":
   test "more than 16 MiB":
     let bytes = newSeq[byte](MaxPmInputBytes + 1)
     check bytes.refusal == "larger than 16 MiB"
+
+proc withoutKey(v: CborValue, key: string): CborValue =
+  ## `v`, a map, without `key`.
+  var kept: seq[CborEntry]
+  for (k, x) in v.entries:
+    if k.getText.get("") != key:
+      kept.add((k, x))
+  cborMap(kept)
+
+proc limitsBytes(limits: CborValue): seq[byte] =
+  ## The default input with `resolver_limits` replaced by `limits`.
+  let v = toCbor(pmValue(defaultTrust(), document()))
+  var e: seq[CborEntry]
+  for (k, x) in v.entries:
+    if k.getText.get("") == "resolver_limits":
+      e.add((k, limits))
+    else:
+      e.add((k, x))
+  encodeCbor(cborMap(e))
+
+suite "PM protected input: the resolver limits (G399, planning 2026-11-22)":
+  test "[G399] the input's resolver limits reach the engine as written":
+    let l = resolverLimits(7, 6, 5, 4).get
+    let r = decodePmInput(
+      pmValue(defaultTrust(), document(), resolverLimits = limitsValue(l)).encoded
+    )
+    check r.isOk
+    let x = r.get.resolverLimits
+    check x.names == 7
+    check x.depth == 6
+    check x.candidates == 5
+    check x.attempts == 4
+    let again = decodePmInput(r.get.toValue.encoded)
+    check again.isOk
+    check again.get.resolverLimits == x
+
+  test "[G399] an input without resolver_limits is refused, naming the field (PM l.1251)":
+    let v = toCbor(pmValue(defaultTrust(), document())).withoutKey("resolver_limits")
+    let why = encodeCbor(v).refusal
+    check "resolver_limits" in why
+
+  test "[G399] a set that omits a limit is refused, naming the limit":
+    for k in ResolverLimitKeys:
+      let full = toCbor(limitsValue(MaxResolverLimits))
+      let why = limitsBytes(full.withoutKey(k)).refusal
+      check "resolver_limits" in why
+      check k in why
+
+  test "[G399] a zero or above-maximum limit is refused by decodeResolverLimits":
+    var zero = limitsValue(MaxResolverLimits)
+    zero.dependency_depth = 0
+    let a = pmValue(defaultTrust(), document(), resolverLimits = zero).refusal
+    check a == "resolver_limits: resolver limit dependency_depth is not positive"
+    var high = limitsValue(MaxResolverLimits)
+    high.assignment_attempts = uint64(MaxResolverLimits.attempts) + 1
+    let b = pmValue(defaultTrust(), document(), resolverLimits = high).refusal
+    check b.startsWith("resolver_limits: resolver limit assignment_attempts is above")
+
+  test "[G399] an unknown key in resolver_limits is refused (the set is closed)":
+    let full = toCbor(limitsValue(MaxResolverLimits))
+    var e: seq[CborEntry]
+    for (k, x) in full.entries:
+      e.add((k, x))
+    e.add((cbor("zz_extra"), cbor(1)))
+    let why = limitsBytes(cborMap(e)).refusal
+    check why.len > 0

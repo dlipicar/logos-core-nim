@@ -1113,6 +1113,54 @@ suite "cap.evaluate: decisions":
     check e.evaluate("m-a", @[callM1()]).decisionOf.denialOf == DenialKind.Not_granted
     e.close()
 
+  test "[IMPL] a rule with `targets`, deny or allow, never matches a request without selectors: a list is decided whole (AUTHORITY-POLICY.md)":
+    # An untargeted allow of list_modules and a targeted deny of it. A list's
+    # request names no subject (DECISIONS I86), so the deny does not match it:
+    # the list is allowed with its scope as asked, no selector added, and the
+    # Runtime, which admits each record against the allowed scopes, shows
+    # every record, the deny's target's included (fable-checks/step5-3b-plan.md
+    # §7.3). A request that names the target is denied.
+    let listOnly = rcPattern(methods = decls(@[declName("list_modules")]))
+    var e = open(
+      policyBytes(
+        @[
+          allowRule(subject(modules = @["alpha"]), @[listOnly]),
+          denyRule(
+            subject(modules = @["alpha"]),
+            @[
+              rcPattern(
+                methods = decls(@[declName("list_modules")]),
+                targets = Opt.some(subject(instances = @["m-b"])),
+              )
+            ],
+            Opt.some(LcnApDenyCodeChoiceKind.Target_denied),
+          ),
+        ]
+      )
+    )
+    let listM = rcContractInfo().methods["list_modules"]
+    let whole = toScope(
+      RuntimeControlScope(
+        runtime: Rt, contract: rcContract(), methods: Opt.some(@[listM])
+      )
+    )
+    let d = e.evaluate("m-a", @[whole]).decisionOf
+    check d.allowed
+    check same(d.allowed_scopes.get, d.requested_scopes)
+    let naming = proc(instance: string): Scope =
+      toScope(
+        RuntimeControlScope(
+          runtime: Rt,
+          contract: rcContract(),
+          methods: Opt.some(@[listM]),
+          instances: Opt.some(@[instance]),
+        )
+      )
+    check e.evaluate("m-a", @[naming("m-b")]).decisionOf.denialOf ==
+      DenialKind.Target_denied
+    check e.evaluate("m-a", @[naming("m-a")]).decisionOf.allowed
+    e.close()
+
 # cap.permissions --------------------------------------------------------------------------
 
 proc startA(action = MeActionKind.Start): Scope =

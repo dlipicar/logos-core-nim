@@ -19,9 +19,13 @@ import logos_sdk/base/hex
 import logos_sdk/cbor
 import logos_sdk/crypto/blake3
 import ../package/trustdoc
+from ../package/resolver import
+  ResolverLimits, decodeResolverLimits, names, depth, candidates, attempts
 import ./input_types
 
-export results, trustdoc, input_types, blake3
+export
+  results, trustdoc, input_types, blake3, ResolverLimits, names, depth, candidates,
+  attempts
 
 const
   PmInputFormat* = "logos-core-nim.pm-input.v1"
@@ -66,6 +70,9 @@ type
     trust*: TrustInput
     bindings*: seq[PmBinding] ## in the input's order
     catalog*: PmCatalogRef
+    resolverLimits*: ResolverLimits
+      ## [SPEC PM §11 l.1241-1254] the resolver limits: required, the embedding
+      ## host's resolved values, never a default of the Package Manager's
     limits*: PmLimits
 
 func defaultLimits*(): PmLimits =
@@ -111,7 +118,7 @@ func limitsOf(l: Opt[LcnPmLimits]): Result[PmLimits, string] =
 proc checkedValue*(v: LcnPmInput): Result[PmInput, string] =
   ## [G399] The rules beyond the schema, in order: the format; at least one
   ## binding, with unique names; the catalog's binding is one of them; the
-  ## bounds; the trust bytes as the trust file, with every rule of
+  ## resolver limits; the bounds; the trust bytes as the trust file, with every rule of
   ## `trustdoc.checkTrust` (so a selected catalog or provenance profile refuses
   ## the input, G404).
   if v.format != PmInputFormat:
@@ -134,6 +141,11 @@ proc checkedValue*(v: LcnPmInput): Result[PmInput, string] =
   var digest: Blake3Digest
   for i in 0 ..< Blake3OutLen:
     digest[i] = v.catalog.digest[i]
+  # [SPEC PM §11 l.1251-1253] One decoder for the set: exactly the four keys,
+  # each positive and within its maximum. A refusal is a configuration
+  # failure that names the field, before any root operation (l.1510).
+  let resolver = decodeResolverLimits(toCbor(v.resolver_limits)).valueOr:
+    return err("resolver_limits: " & error)
   let limits = ?limitsOf(v.limits)
   let file = decodeTrust(v.trust).valueOr:
     return err("trust: " & error)
@@ -148,6 +160,7 @@ proc checkedValue*(v: LcnPmInput): Result[PmInput, string] =
       catalog: PmCatalogRef(
         storage: v.catalog.storage, locator: v.catalog.`object`, digest: digest
       ),
+      resolverLimits: resolver,
       limits: limits,
     )
   )
@@ -159,6 +172,17 @@ proc decodePmInput*(bytes: openArray[byte]): Result[PmInput, string] =
     return err("larger than 16 MiB")
   let v = decodeCbor(bytes).valueOr:
     return err("not deterministic CBOR: " & $error)
+  if v.kind == ckMap:
+    # [SPEC PM §11 l.1251] The resolver limits before the schema, by their own
+    # decoder, so an absent set or an omitted limit is refused by name.
+    var found = false
+    for (k, x) in v.entries:
+      if k.getText.get("") == "resolver_limits":
+        found = true
+        discard decodeResolverLimits(x).valueOr:
+          return err("resolver_limits: " & error)
+    if not found:
+      return err("resolver_limits is absent: the Package Manager has no default")
   let x = LcnPmInput.fromCbor(v).valueOr:
     return err("does not match lcn.pm_input: " & error)
   checkedValue(x)
@@ -181,6 +205,12 @@ func toValue*(i: PmInput): LcnPmInput =
       storage: i.catalog.storage,
       `object`: i.catalog.locator,
       digest: @(i.catalog.digest),
+    ),
+    resolver_limits: LcnPmResolverLimits(
+      partial_closure_names: uint64(i.resolverLimits.names),
+      dependency_depth: uint64(i.resolverLimits.depth),
+      candidates_per_name: uint64(i.resolverLimits.candidates),
+      assignment_attempts: uint64(i.resolverLimits.attempts),
     ),
     limits: Opt.some(
       LcnPmLimits(

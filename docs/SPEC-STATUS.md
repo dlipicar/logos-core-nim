@@ -486,6 +486,31 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   PKG-0079, PKG-0081, PKG-0082, PKG-0112, PKG-0167, PKG-0472 and PKG-0473. 25 units, PKG-0085, PKG-0089 and
   PKG-0449 by inspection. PKG-0474 waits for 5-3b-2; PKG-0080 stays with 5-5, its inspection half tagged here.
 
+- 2026-11-22, Tier 5 step 5-3b-2 (I116 closed; G399's daemon section, G400, G402's grants and hosted case, G405's
+  shell, G443; G140 and G361 amended), the Package Manager as a hosted module:
+  - The protected realization input (G400): `protected_inputs` in `app-config.v1`. At each realization attempt the
+    Module Loader writes an instance's input to `<state_dir>/.lcn-protected-input`, and removes it when
+    initialization returns, at release and at retirement (`runtime/protinput.nim`).
+  - logosd's `package_manager` section (G399): its checks, and the composed `lcn.pm_input`, the instance's only
+    protected input, with the trust file the start accepted. The resolver limits are the operator's, or logosd's
+    preset when the section has none (G443: 256, 32, 256, 1,024); the start line names which.
+  - S9 to S11 (G402; DAEMON.md §5): the Package Manager's routes to its Storage providers, the three calls, the
+    readiness event, and `list_modules`. S9's Runtime Control rule names no `targets`, so the Package Manager can
+    read every module record; a rule with `targets`, allow or deny, never matches a list (AUTHORITY-POLICY.md).
+  - `pm/shell.nim` runs the engine in a hosted module (G405); `pmtest_module` is the test module that wraps it.
+    The fake provider serves `fetch-fake/state/<name>` from its state directory (STORAGE-FETCH §5).
+  - The resolver limits (planning's rulings M1 to M6 and of 2026-11-22): `tests/support/pmshapes.nim` holds the
+    wide, dense, layered, chain and hub shapes, `tools/pmbench.nim` times them and `test_pm_driver` asserts their
+    counts; `docs/CONFORMANCE.md`, "Resolver limits", gives the measured cost at the preset and at the maxima, on
+    macOS and Linux, and DEPLOYMENT §12 what raising a limit costs. `bindCand` makes one cycle walk per bind (G361's
+    amendment), checked against the old walk on seeded catalogs. The cost fix is a step of its own after 5-3b,
+    gated before 5-5.
+  - Suites `test_protected_input`, `test_pm_hosted` and `test_logosd_pm`, and cases in `test_daemon_config`,
+    `test_loader`, `test_authority`, `test_resolver` and `test_pm_driver`.
+
+  Claimed: PKG-0474 (the bindings' retrieval API and locator encodings: PACKAGE-MANAGER.md §4, STORAGE-FETCH §5,
+  DAEMON.md §3), and PKG-0353's hosted half, under logosd. PKG 279/279.
+
 ## Tiers at f4f83471 (the original plan)
 
 | Tier | Area | Verdict |

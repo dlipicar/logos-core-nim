@@ -1,0 +1,57 @@
+; -- metadata --
+_module = "pmtest_module"
+
+; Input for tests/generated/pmtest_module_*: the Package Manager's shell
+; (src/logos_core/pm/shell.nim) hosted under a test name until 5-6a lifts the
+; refusal of a hosted `logos_` provider (Tier 5 step 5-3b, F5; DECISIONS G405).
+; Never shipped: 5-6a's `logos_package_manager` replaces it over the same
+; shell. Its probe answers what the shell holds (tests/kit/pmtest_impl.nim).
+
+pmtest.catalog = {
+  sequence: uint64,
+  digest: bstr .size 32,
+  entries: uint64,
+}
+
+pmtest.binding = {
+  name: tstr .size (1..64),
+  instance: tstr .size (1..128),
+  state: "idle" / "establishing" / "ready" / "renewing" / "backoff" / "stopped",
+  ? route: tstr .size (1..256),
+  ? readiness: "starting" / "ready" / "offline",
+  ; how many routes the shell established for the binding
+  established: uint64,
+}
+
+pmtest.status_request = {}
+
+; The catalog in use, if any; each binding's route and readiness; the root
+; operations still running.
+pmtest.status_response = {
+  ? catalog: pmtest.catalog,
+  bindings: [* pmtest.binding],
+  pending: uint64,
+}
+
+; One root operation for an exact version (PM §11): the driver's outcome.
+pmtest.resolve_request = {
+  name: tstr .size (1..256),
+  version: tstr .size (1..256),
+}
+
+pmtest.selected = {
+  package: tstr .size (1..256),
+  version: tstr .size (1..256),
+  schema_root: bstr .size 32,
+  installed: bool,
+}
+
+pmtest.counters = {
+  names: uint64,
+  depth: uint64,
+  attempts: uint64,
+}
+
+pmtest.resolve_response =
+  { packages: [* pmtest.selected], counters: pmtest.counters } /
+  { error: tstr .size (1..64), ? message: tstr .size (1..512) }

@@ -41,7 +41,7 @@
 ## logged once per start. With no catalog in use, an operation fails
 ## `package-unavailable`, never as if the catalog were empty (PM l.1308-1309).
 
-{.push raises: [].}
+{.push raises: [], gcsafe.}
 
 import std/[sets, strutils, tables]
 import results
@@ -204,7 +204,6 @@ type
 
   Engine* = object
     input*: PmInput
-    resolverLimits: ResolverLimits
     keys: KeySource
     catalog*: CatalogState
     cache*: VerificationCache
@@ -227,17 +226,17 @@ type
 proc initEngine*(
     input: PmInput,
     keptBytes: Opt[seq[byte]],
-    resolverLimits: ResolverLimits,
     keys: KeySource,
     platform = hostPlatform(),
     lgxLimits = DefaultLgxLimits,
     pathRules = hostPathRules(),
 ): (Engine, seq[Command]) =
   ## The engine at `_init`, before any I/O: the catalog state from the kept
-  ## file (`keptBytes`), and the log lines that start produced.
+  ## file (`keptBytes`), and the log lines that start produced. The resolver
+  ## limits are the input's (G399, planning's ruling of 2026-11-22): no caller
+  ## can pass values the input does not hold.
   var e = Engine(
     input: input,
-    resolverLimits: resolverLimits,
     keys: keys,
     cache:
       initVerificationCache(input.limits.cacheEntries, platform, lgxLimits, pathRules),
@@ -622,6 +621,15 @@ proc catalogDone(e: var Engine, step: FetchStep, cmds: var seq[Command]) =
 
 # Resolution -------------------------------------------------------------------------
 
+func limitValue(e: Engine, name: string): int =
+  ## The configured value of the resolver limit `name` (`ResolverCounters.limit`).
+  let l = e.input.resolverLimits
+  case name
+  of "partial_closure_names": l.names
+  of "dependency_depth": l.depth
+  of "candidates_per_name": l.candidates
+  else: l.attempts
+
 proc advanceRequest(e: var Engine, request: uint64, cmds: var seq[Command]) =
   let d = e.requests.getOrDefault(request)
   if d.isNil:
@@ -631,6 +639,14 @@ proc advanceRequest(e: var Engine, request: uint64, cmds: var seq[Command]) =
     case s.kind
     of dsDone:
       e.requests.del(request)
+      let tripped = d.counters.limit
+      if tripped.len > 0:
+        # [G399; ruling M5] The operator's log names the limit, with its value:
+        # the caller sees only `dependency-unavailable` (PM l.1501-1502, l.1514).
+        cmds.log(
+          "a root operation stopped at the resolver limit " & tripped & " (" &
+            $e.limitValue(tripped) & ")"
+        )
       cmds.add(Command(kind: cmReply, request: request, outcome: s.outcome))
       return
     of dsNeed:
@@ -717,7 +733,7 @@ proc resolve*(e: var Engine, request: uint64, root: RootReference): seq[Command]
     )
     return
   e.requests[request] =
-    initDriver(e.catalog.inUse.get.entries, e.input.trust, e.resolverLimits, root)
+    initDriver(e.catalog.inUse.get.entries, e.input.trust, e.input.resolverLimits, root)
   e.advanceRequest(request, result)
 
 proc onAnswer(e: var Engine, call: uint64, a: Answer, cmds: var seq[Command]) =

@@ -510,6 +510,9 @@ type
     initialSettings*: seq[InitialSettings]
       ## [SPEC RUNTIME l.2543; I93] with `permissions`: the protected initial
       ## settings of new instances; unused without it
+    protectedInputs*: seq[(string, seq[byte])]
+      ## [IMPL-DECISION G400] `protected_inputs`: each instance's protected
+      ## realization input, copied into the side table when the engine is made
     when defined(lcnTestHooks):
       loaderFaults*: LoaderFaultBox
         ## [D27 revised] a test's own fault box, armed before the open and
