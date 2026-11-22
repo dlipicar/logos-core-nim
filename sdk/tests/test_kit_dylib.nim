@@ -1051,8 +1051,15 @@ suite "ifc.kit: a kit fixture built from an installed SDK (DECISIONS G435) [IMPL
     require records.len == 1
     let info = parseJson(readFile(records[0]))
     # The record's paths are native: `\` on Windows, where case does not tell paths apart either.
+    # They are also resolved: under a TMPDIR through macOS's `/tmp` symlink, as the Nix shell on
+    # GitHub's macOS runner has (`/tmp/nix-shell.*`), the compiler records the copy as
+    # `/private/tmp/...`. So a path that exists is compared with its symlinks followed.
     proc norm(path: string): string =
-      result = normalizedPath(path)
+      result =
+        try:
+          expandFilename(path)
+        except OSError:
+          normalizedPath(path)
       when defined(windows):
         result = result.toLowerAscii
 
