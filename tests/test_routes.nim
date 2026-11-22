@@ -152,8 +152,8 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
     let broken = rcCall(rc, "get_self", [0xFF'u8])
     check broken.code == ecInvalidParams
     check rcCall(rc, "start_module", [0xA0'u8]).code == ecInvalidParams
-    # [K19 interim; G298] A remote method is checked and authorized like the
-    # others; without remote transport its list is an empty page.
+    # [G412] A remote method is checked and authorized like the others; with
+    # no record set its list is an empty page.
     let listeners = rcCall(rc, "list_remote_listeners", [0xA0'u8])
     check listeners.code == ecOk
     check LogosNSRuntimeControlListRemoteListenersResponse.decode(listeners.response).tryGet.listeners.len ==
@@ -315,9 +315,9 @@ suite "run.routes: Runtime Control binding (RUNTIME §9, §9.3; INTERFACE §5.2)
         )
       ).tryGet
 
-    # A matching address keeps the outcomes it had: a disabled listener is
-    # the default state, the export list is empty, an unknown provider is not
-    # disclosed.
+    # A matching address keeps the outcomes it had: a disabled listener is a
+    # record of any profile (G412), the export list is empty, an unknown
+    # provider is not disclosed.
     for a in [good, goodQuic]:
       check rcCall(rc, "set_remote_listener", setListener(a)).code == ecOk
       check rcCall(rc, "list_provider_exports", listExports(a)).code == ecOk

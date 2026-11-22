@@ -471,6 +471,14 @@ proc launch(h: ptr HostRuntime): LogosResult =
     terminationData: h.terminationData,
     callRecordSink: h.recordSink,
     callRecordSinkData: h.recordSinkData,
+    remote:
+      if c.remote.isSome:
+        # [G412] The records as the host configuration checked them.
+        Opt.some(
+          RemoteSetup(listeners: c.remote.get.listeners, exports: c.remote.get.exports)
+        )
+      else:
+        Opt.none(RemoteSetup),
   )
   if c.authority.isSome:
     # [I85; G47] The attribute source exists before the engine opens, since

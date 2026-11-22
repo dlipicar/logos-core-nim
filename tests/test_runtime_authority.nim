@@ -1579,22 +1579,22 @@ suite "run.authority: routed calls to the authority (CA l.88-91, l.579; S8b-1 in
     h.release()
     e.finish()
 
-# Remote listeners and exports (K19 interim; DECISIONS G298) ----------------------------
+# Remote listeners and exports (DECISIONS G412; G298 re-decided) ----------------------
 
-proc tlsAddress(): CborValue =
+proc tlsAddress(port = 443'u64): CborValue =
   cborMap(
     (cbor("transport"), cbor("tls-tcp")),
     (cbor("host"), cbor("listener.example")),
-    (cbor("port"), cbor(443'u64)),
+    (cbor("port"), cbor(port)),
   )
 
-proc listenerReq(enabled = true, control = false): seq[byte] =
+proc listenerReq(enabled = true, control = false, port = 443'u64): seq[byte] =
   encodeCbor(
     cborMap(
       (
         cbor("listener"),
         cborMap(
-          (cbor("address"), tlsAddress()),
+          (cbor("address"), tlsAddress(port)),
           (cbor("enabled"), cbor(enabled)),
           (cbor("runtime_control_enabled"), cbor(control)),
         ),
@@ -1602,7 +1602,9 @@ proc listenerReq(enabled = true, control = false): seq[byte] =
     )
   )
 
-proc exportReq(provider: string, runtime = Opt.none(string)): seq[byte] =
+proc exportReq(
+    provider: string, runtime = Opt.none(string), enabled = true, port = 443'u64
+): seq[byte] =
   var p = @[(cbor("provider"), cbor(provider))]
   if runtime.isSome:
     p.add((cbor("runtime_instance_id"), cbor(runtime.get)))
@@ -1611,15 +1613,29 @@ proc exportReq(provider: string, runtime = Opt.none(string)): seq[byte] =
       (
         cbor("export"),
         cborMap(
-          (cbor("listener"), tlsAddress()),
+          (cbor("listener"), tlsAddress(port)),
           (cbor("provider"), cborMap(p)),
-          (cbor("enabled"), cbor(true)),
+          (cbor("enabled"), cbor(enabled)),
         ),
       )
     )
   )
 
-suite "run.authority: remote listeners and exports without remote transport (K19 interim; G298)":
+proc listenersOf(
+    orch: ptr LogosRuntimeControlBinding, params = @[0xA0'u8]
+): LogosNSRuntimeControlListRemoteListenersResponse =
+  let r = rcCall(orch, "list_remote_listeners", params)
+  check r.code == ecOk
+  LogosNSRuntimeControlListRemoteListenersResponse.decode(r.response).tryGet
+
+proc exportsOf(
+    orch: ptr LogosRuntimeControlBinding, params = @[0xA0'u8]
+): LogosNSRuntimeControlListProviderExportsResponse =
+  let r = rcCall(orch, "list_provider_exports", params)
+  check r.code == ecOk
+  LogosNSRuntimeControlListProviderExportsResponse.decode(r.response).tryGet
+
+suite "run.authority: remote listener and export records without remote transport (G412; G298 re-decided)":
   test "[RUN-0346] [IMPL-DECISION G298] the four remote methods are authorized before anything else; a denied consumer is NOT_AUTHORISED (RUNTIME l.1626)":
     let (e, orch) = ready()
     let pid = e.view(Meter).tryGet.providerId
@@ -1650,38 +1666,35 @@ suite "run.authority: remote listeners and exports without remote transport (K19
       ecNotAuthorised
     e.finish()
 
-  test "[RUN-0346] [IMPL-DECISION G298] allowed: the lists are empty pages, a cursor is refused; set_provider_export is INVALID_PARAMS; enabling a listener is MODULE_ERROR, disabling one succeeds and keeps no record (RUNTIME l.2830, l.3372, l.3391, l.3431-3442)":
+  test "[RUN-0346] [RUN-0336] [RUN-0337] [RUN-0338] [RUN-0613] [RUN-0614] [IMPL-DECISION G412] allowed: no record at first; a disabled listener is kept, enabling one is MODULE_ERROR here; an export needs its listener's record, may be enabled while the listener is off, and is listed normalized (RUNTIME l.2723-2735, l.3289-3312, l.3412)":
     let (e, orch) = ready()
     setScript()
     let pid = e.view(Meter).tryGet.providerId
-    let listeners = rcCall(orch, "list_remote_listeners", [0xA0'u8])
-    check listeners.code == ecOk
-    let l =
-      LogosNSRuntimeControlListRemoteListenersResponse.decode(listeners.response).tryGet
-    check l.listeners.len == 0 and l.next_cursor.isNone
-    let exports = rcCall(orch, "list_provider_exports", [0xA0'u8])
-    check exports.code == ecOk
-    let x =
-      LogosNSRuntimeControlListProviderExportsResponse.decode(exports.response).tryGet
-    check x.exports.len == 0 and x.next_cursor.isNone
+    let rid = e.runtimeInstanceId()
+    check listenersOf(orch).listeners.len == 0
+    check exportsOf(orch).exports.len == 0
     let cursor = encodeCbor(cborMap((cbor("cursor"), cbor("c-1"))))
     for m in ["list_remote_listeners", "list_provider_exports"]:
       checkpoint m
       let r = rcCall(orch, m, cursor)
       check r.code == ecInvalidParams
       check r.detail.len == 0
+    # No listener record: an export is an invalid request (l.3309-3310).
     let ex = rcCall(orch, "set_provider_export", exportReq(pid))
     check ex.code == ecInvalidParams
-    check ex.detail.len == 0 # a semantic input error carries no detail (l.3440)
+    check ex.detail.len == 0 # a semantic input error carries no detail (l.3296-3298)
     let foreign =
       rcCall(orch, "set_provider_export", exportReq(pid, Opt.some("another-runtime")))
     check foreign.code == ecInvalidParams
+    # Enabling cannot be served without remote transport; the state is
+    # unchanged (l.3293): still no record.
     let li = rcCall(orch, "set_remote_listener", listenerReq())
     check li.code == ecModule
     check li.message == "remote transport is not supported by this Runtime"
     check li.detail.len == 0
-    # Disabling assigns the default state (U3: only enabling is refused): the
-    # requested record comes back, and none is kept.
+    check listenersOf(orch).listeners.len == 0
+    # A disabled listener is a record (G412): the requested one comes back and
+    # is listed; setting it again changes it in place.
     for control in [false, true]:
       checkpoint "runtime_control_enabled " & $control
       let off = rcCall(orch, "set_remote_listener", listenerReq(false, control))
@@ -1691,11 +1704,73 @@ suite "run.authority: remote listeners and exports without remote transport (K19
       check r.listener.runtime_control_enabled == control
       check r.listener.address.kind ==
         LogosNSRuntimeControlRemoteListenerAddressKind.logos_NS_runtime_control_Tls_tcp_runtime_address
-    let after = LogosNSRuntimeControlListRemoteListenersResponse.decode(
-      rcCall(orch, "list_remote_listeners", [0xA0'u8]).response
-    ).tryGet
-    check after.listeners.len == 0
-    check rcCall(orch, "set_provider_export", exportReq(pid)).code == ecInvalidParams
+      let after = listenersOf(orch).listeners
+      check after.len == 1
+      check after[0].runtime_control_enabled == control
+    # The export now names a record; it may be enabled while its listener is
+    # disabled (l.3311-3312). Its provider comes back with this Runtime.
+    let on = rcCall(orch, "set_provider_export", exportReq(pid))
+    check on.code == ecOk
+    let x = LogosNSRuntimeControlSetProviderExportResponse.decode(on.response).tryGet
+    check x.`export`.enabled
+    check x.`export`.provider.provider == pid
+    check x.`export`.provider.runtime_instance_id == Opt.some(rid)
+    check rcCall(orch, "set_provider_export", exportReq(pid, Opt.some(rid))).code == ecOk
+    let listed = exportsOf(orch).exports
+    check listed.len == 1
+    check listed[0].provider.runtime_instance_id == Opt.some(rid)
+    # The filters: the listener by its address, the provider normalized;
+    # another Runtime's provider matches nothing.
+    let byListener = encodeCbor(cborMap((cbor("listener"), tlsAddress())))
+    check exportsOf(orch, byListener).exports.len == 1
+    let otherListener = encodeCbor(cborMap((cbor("listener"), tlsAddress(444))))
+    check exportsOf(orch, otherListener).exports.len == 0
+    let byForeign = encodeCbor(
+      cborMap(
+        (
+          cbor("provider"),
+          cborMap(
+            (cbor("provider"), cbor(pid)),
+            (cbor("runtime_instance_id"), cbor("another")),
+          ),
+        )
+      )
+    )
+    check exportsOf(orch, byForeign).exports.len == 0
+    let off = rcCall(orch, "set_provider_export", exportReq(pid, enabled = false))
+    check off.code == ecOk
+    check not exportsOf(orch).exports[0].enabled
+    e.finish()
+
+  test "[RUN-0339] [RUN-0954] [IMPL-DECISION G412] listeners page in their address's deterministic-CBOR order, a continuation from one snapshot (RUNTIME l.3379-3392, l.3412)":
+    let (e, orch) = ready()
+    setScript()
+    for port in [9000'u64, 23, 443]:
+      check rcCall(orch, "set_remote_listener", listenerReq(false, false, port)).code ==
+        ecOk
+    let first = listenersOf(orch, encodeCbor(cborMap((cbor("limit"), cbor(2'u64)))))
+    check first.listeners.len == 2
+    check first.next_cursor.isSome
+    # 23 encodes in one byte, 443 and 9000 in a two-byte head (0x19).
+    check first.listeners[0].address.arm_logos_NS_runtime_control_Tls_tcp_runtime_address.port ==
+      23
+    check first.listeners[1].address.arm_logos_NS_runtime_control_Tls_tcp_runtime_address.port ==
+      443
+    # A record set after the snapshot does not join it.
+    check rcCall(orch, "set_remote_listener", listenerReq(false, false, 1)).code == ecOk
+    let next = listenersOf(
+      orch,
+      encodeCbor(
+        cborMap(
+          (cbor("limit"), cbor(2'u64)), (cbor("cursor"), cbor(first.next_cursor.get))
+        )
+      ),
+    )
+    check next.listeners.len == 1
+    check next.listeners[0].address.arm_logos_NS_runtime_control_Tls_tcp_runtime_address.port ==
+      9000
+    check next.next_cursor.isNone
+    check listenersOf(orch).listeners.len == 4
     e.finish()
 
   test "[RUN-0346] [IFC-0416] [RUN-1117] [RUN-1118] a malformed request is INVALID_PARAMS with its detail; set_remote_listener, naming no target, is authorized first (l.1827-1828)":

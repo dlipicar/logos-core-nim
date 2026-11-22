@@ -43,6 +43,7 @@ import logos_sdk/iface/[accept, outcome, payload, surface]
 import logos_sdk/kit/rc_arms
 import ../transport/boundary
 import ./[callside, events, plumbing, rcaddress]
+from ./remoterecords import NoRemoteTransport
 
 const RcNamespace = "logos.runtime_control."
 
@@ -771,6 +772,59 @@ proc stage(
     return err(failureOf(reply.error.get))
   ok(reply)
 
+const NotRecorded =
+  "disabled for this run; not recorded, so the next start applies the configuration: "
+  ## [G412; Q4] the MODULE_ERROR of a disable whose record could not be written
+
+proc remoteWork(
+    e: Engine, instance, attempt: string, rc: RcCall, phase1: Reply
+): Reply =
+  ## [G412; Q4] The work of a remote record change, on this thread under the
+  ## remote lock, in the order that leaves a failure in the cautious state.
+  ## A change that turns nothing on was committed by phase 1: its listener
+  ## process ends, then the fields it left off are recorded; a failed write
+  ## keeps the change for the run and fails the call. A change that turns
+  ## something on first removes the retained disable, then starts the
+  ## listener process and waits until it listens, then commits
+  ## (`rqRemoteCommit`); a failure leaves the record as it was, and a commit
+  ## refused after the start ends that process again.
+  let w = phase1.remote
+  let d = e.remote
+  if not w.pending:
+    if w.stop and d.stop != nil:
+      d.stop(d.data, w.key)
+    if w.persist and d.persist != nil:
+      let written = d.persist(d.data, w.key, w.provider, w.off, w.consumer)
+      if written.isErr:
+        let text = (if w.off.len > 0: NotRecorded else: "") & written.error
+        return
+          Reply(error: Opt.some(engineError(ecModule, text)), capture: phase1.capture)
+    return phase1
+  if w.persist and d.persist != nil:
+    let written = d.persist(d.data, w.key, w.provider, w.off, w.consumer)
+    if written.isErr:
+      return Reply(
+        error: Opt.some(engineError(ecModule, written.error)), capture: phase1.capture
+      )
+  if w.start:
+    if d.start == nil:
+      return Reply(
+        error: Opt.some(engineError(ecModule, NoRemoteTransport)),
+        capture: phase1.capture,
+      )
+    let started = d.start(d.data, w.key, w.host, w.port)
+    if started.isErr:
+      return Reply(error: Opt.some(started.error), capture: phase1.capture)
+  var reply = e.call(
+    Request(
+      kind: rqRemoteCommit, origin: moduleOrigin(instance), attempt: attempt, rc: rc
+    )
+  )
+  if reply.error.isSome and w.start and d.stop != nil:
+    d.stop(d.data, w.key)
+  reply.capture = phase1.capture
+  reply
+
 proc rcInvoke*(
     e: Engine, instance, attempt, bare: string, params: seq[byte]
 ): Result[seq[byte], InvocationFailure] =
@@ -797,9 +851,20 @@ proc rcInvoke*(
         return err(failureOf(pre.error.get))
     return err(error)
   let m = rc.m
+  # [G412] A remote record change holds the engine's remote lock from its
+  # phase 1 to its end, so its work on this thread never interleaves with
+  # another's.
+  let remoteSet = m in {rmSetRemoteListener, rmSetProviderExport}
+  if remoteSet:
+    acquire(e.remoteLock)
+  defer:
+    if remoteSet:
+      release(e.remoteLock)
   var reply = e.call(
     Request(kind: rqRc, origin: moduleOrigin(instance), attempt: attempt, rc: rc)
   )
+  if remoteSet and reply.error.isNone:
+    reply = e.remoteWork(instance, attempt, rc, reply)
   var held = reply.config # [I87] references this thread releases
   defer:
     held.release()

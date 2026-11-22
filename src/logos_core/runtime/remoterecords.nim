@@ -47,6 +47,10 @@ type
       ## the provider normalized: its Runtime always present (this one)
     listener*: seq[byte] ## its listener's key
     provider*: string ## the provider id
+    module*, instance*: string
+      ## the provider's module and instance when the record was set: the facts
+      ## its disclosure is judged by (RUNTIME l.3237-3238); empty for a
+      ## configuration record until its provider is known
     origin*: RecordOrigin
     consumer*: string
 
@@ -142,6 +146,8 @@ proc putExport*(
     r: LogosNSRuntimeControlProviderExportRecord,
     origin: RecordOrigin,
     consumer = "",
+    module = "",
+    instance = "",
 ) =
   var x = r
   x.provider = rr.normalized(r.provider)
@@ -150,6 +156,8 @@ proc putExport*(
     record: x,
     listener: key,
     provider: r.provider.provider,
+    module: module,
+    instance: instance,
     origin: origin,
     consumer: consumer,
   )

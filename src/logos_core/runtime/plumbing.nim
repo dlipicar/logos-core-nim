@@ -405,6 +405,66 @@ type
     ## must end to clean (RUNTIME l.3823): their instance ids. It must not
     ## call into the engine.
 
+  ExposureField* = enum
+    ## [G412; Q4] A field of a listener or export record Runtime Control can
+    ## turn off.
+    efEnabled = "enabled"
+    efRuntimeControl = "runtime_control_enabled"
+
+  RemoteStart* = proc(
+    data: pointer, key: seq[byte], host: string, port: uint16
+  ): Result[void, EngineError] {.nimcall, gcsafe, raises: [].}
+    ## [G411] Binds the listener address `key` names, starts its listener
+    ## process and returns once it listens: TRANSPORT_ERROR for a bind or
+    ## start failure (RUNTIME l.3299).
+
+  RemoteStop* = proc(data: pointer, key: seq[byte]) {.nimcall, gcsafe, raises: [].}
+    ## [G411] Ends the listener process at `key`, if one runs; returns at once.
+
+  RemotePersist* = proc(
+    data: pointer,
+    listener: seq[byte],
+    provider: string,
+    off: set[ExposureField],
+    consumer: string,
+  ): Result[void, string] {.nimcall, gcsafe, raises: [].}
+    ## [G412; Q4] Records, durably, the fields Runtime Control left off for
+    ## the listener `listener` (`provider` empty) or its export of
+    ## `provider`; `off` empty removes the entry. May block (fsync).
+
+  RemoteDriver* = object
+    ## [G411, G412] The engine's way to remote transport: the remote
+    ## supervisor (`remotesup.nim`) and logosd's exposure store. Each
+    ## procedure runs on the Runtime Control call's own thread, never on the
+    ## Runtime thread, with the engine's remote lock held.
+    data*: pointer
+    start*: RemoteStart ## nil: no remote transport here (G298)
+    stop*: RemoteStop
+    persist*: RemotePersist ## nil: nothing is recorded across a restart
+
+  RemoteSetup* = object
+    ## [G412] The deployment configuration's listener and export records,
+    ## checked as Runtime Control checks them (`host_config.checkRemote`), with
+    ## the retained disables applied (Q4), and the driver.
+    listeners*: seq[LogosNSRuntimeControlRemoteListenerRecord]
+    exports*: seq[LogosNSRuntimeControlProviderExportRecord]
+    driver*: RemoteDriver
+
+  RemoteWork* = object
+    ## [G412] rqRc phase 1 of `set_remote_listener` or `set_provider_export`:
+    ## what the call's thread does before (`pending`) or after the commit.
+    pending*: bool
+      ## a commit (rqRemoteCommit) follows the work; false: phase 1 committed
+    start*: bool ## pending: start the listener process at `key` first
+    stop*: bool ## phase 1 disabled the listener: end its process
+    key*: seq[byte] ## the listener address's deterministic-CBOR bytes
+    host*: string
+    port*: uint16
+    persist*: bool ## the driver records the fields left off (`off`)
+    provider*: string ## an export's provider id; empty: the listener
+    off*: set[ExposureField]
+    consumer*: string ## the consumer making the change, as an address text
+
   InitialSettings* = object
     ## [SPEC RUNTIME l.2543; G110; I93] Protected provisioning of a new
     ## instance's permission settings: the entry naming the instance, else
@@ -510,6 +570,9 @@ type
     initialSettings*: seq[InitialSettings]
       ## [SPEC RUNTIME l.2543; I93] with `permissions`: the protected initial
       ## settings of new instances; unused without it
+    remote*: Opt[RemoteSetup]
+      ## [G411, G412] the remote listener and export records and the driver;
+      ## none: no record at start and no remote transport
     when defined(lcnTestHooks):
       loaderFaults*: LoaderFaultBox
         ## [D27 revised] a test's own fault box, armed before the open and
@@ -598,6 +661,10 @@ type
       ## its Hello or failed
     rqHostedAdmit ## [plan §2.8] one operation through a hosted handle
     rqHostedClosed ## [plan §2.8] a hosted handle's connection ended
+    rqRemoteCommit
+      ## [G412] phase 3 of a `set_remote_listener` or `set_provider_export`
+      ## whose work (a listener started, a retained disable removed) the
+      ## call's thread did: the record committed if the call still may
     rqHostedReleased
       ## [plan §2.8] a hosted handle was released
       ## [I90] an event worker draining a transported subscription asks for
@@ -825,6 +892,7 @@ type
     uid*: uint32 ## [plan §2.8] rqMaterialize (hosted): the provider's expected peer uid
     module*: string ## [plan §2.8] rqMaterialize (hosted): the provider's module
     first*: ErrorCode ## [plan §2.8] rqHostedClosed: the handle's first terminal cause
+    remote*: RemoteWork ## [G412] rqRc: the work of a remote record change
 
   PublishTarget* = object
     ## [I90; plan §2.7] One transported subscriber connection of an ordinary
@@ -1158,6 +1226,11 @@ type
       ## [plan §2.3; G265] the `hostsup.HostSupervisor` when `moduleHost` is
       ## configured, else nil; made at open, closed after the Runtime thread
       ## ends its loop and before any worker is joined
+    remoteLock*: Lock
+      ## [G412] held by a `set_remote_listener` or `set_provider_export` call
+      ## from its phase 1 to its end, so their work never interleaves
+    remote*: RemoteDriver
+      ## [G411] `EngineConfig.remote`'s, written before any thread starts
     when defined(lcnTestHooks):
       faults*: LoaderFaultBox ## [D27 revised; plan §2.12] the injected faults
       ownFaults*: bool ## `faults` is the engine's own, freed with it
