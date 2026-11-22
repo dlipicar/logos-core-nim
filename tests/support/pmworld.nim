@@ -21,6 +21,9 @@ type
     kept*: seq[seq[byte]]
     replies*: seq[Command]
     keys*: KeyCounter
+    continues*: seq[uint64]
+      ## [G455] `cmContinue`s issued and not yet run, oldest first: each runs
+      ## as a later event (`turn`), as the shell's own `callSoon` runs it
 
 proc emit*(w: var World, cmds: seq[Command]) =
   for c in cmds:
@@ -31,11 +34,22 @@ proc emit*(w: var World, cmds: seq[Command]) =
       w.kept.add(c.kept)
     of cmReply:
       w.replies.add(c)
+    of cmContinue:
+      w.continues.add(c.operation)
     else:
       w.queue.add(c)
 
 proc handle*(w: var World, ev: Event) =
   w.emit(w.e.handle(ev))
+
+proc turn*(w: var World): bool =
+  ## [G455] Runs the oldest pending continue; false when none is pending.
+  if w.continues.len == 0:
+    return false
+  let op = w.continues[0]
+  w.continues.delete(0)
+  w.handle(continued(op))
+  true
 
 proc take*(w: var World, kinds: set[CommandKind]): Command =
   for i, c in w.queue:
@@ -66,6 +80,7 @@ proc newWorld*(
     limits = Opt.none(LcnPmLimits),
     trust = defaultTrust(),
     resolverLimits = MaxResolverLimits,
+    turnWork = ResolverTurnWork,
 ): World =
   let input = decodePmInput(
     pmValue(
@@ -80,7 +95,9 @@ proc newWorld*(
   let keys: KeySource = proc(): string {.gcsafe, raises: [].} =
     inc counter.n
     "key-" & $counter.n
-  let (e, cmds) = initEngine(input, kept, keys, linuxHost, pathRules = PathRules())
+  let (e, cmds) = initEngine(
+    input, kept, keys, linuxHost, pathRules = PathRules(), turnWork = turnWork
+  )
   result = World(e: e, keys: counter)
   result.emit(cmds)
 
@@ -96,8 +113,12 @@ proc bringUp*(w: var World, binding = "main", route = "route-1", ready = true) =
 proc serve*(
     w: var World, objects: Table[seq[byte], seq[byte]], calls: var seq[Command]
 ) =
-  ## Answers every call the engine makes, from `objects`, until none is left.
-  while w.has({cmStat, cmRead}):
+  ## Answers every call the engine makes, from `objects`, and runs every
+  ## continue, until neither is left.
+  while w.has({cmStat, cmRead}) or w.continues.len > 0:
+    if not w.has({cmStat, cmRead}):
+      discard w.turn()
+      continue
     let c = w.take({cmStat, cmRead})
     calls.add(c)
     let data = objects.getOrDefault(c.locator, @[])

@@ -751,8 +751,10 @@ module is a test build (`pmtest_module`), so a packaged deployment has none.
   real routes (`test_logosd_pm`, `test_pm_hosted`). PKG 279/279, with 307 units left for Tier 5.
 - **Limits of the claim.** The only `lcn.storage_fetch` provider is the test fake; the storage module is N-4's.
   A trust file change reaches the Package Manager only at the next start (BCP-0049). The resolver limits are
-  bounded, not cheap: at logosd's preset (G443) one package with a maximum-size manifest in the closure holds the
-  Package Manager's thread about a minute for one step; "Resolver limits" below gives the measured cost.
+  bounded, not cheap: at logosd's preset (G443) one package with a maximum-size manifest in the closure held the
+  Package Manager's thread about a minute for one step before 5-3c-1; "Resolver limits" below gives the measured
+  cost. Since 5-3c-1 and 5-3c-2 (G454, G455) the resolution's longest hold measured is under 11 ms at the preset
+  and at the maxima ("The resumable run"), and a large closure costs time in all, a turn at a time.
 
 ## Properties not claimed
 
@@ -1026,7 +1028,7 @@ What the figures say:
   result or counter changes. It comes before 5-5, or before the first step that lets a consumer other
   than the operator's tools start a root operation, whichever is first. Its first half, the
   incremental search, is built (5-3c-1, DECISIONS G454; below). The second, the run resumed and
-  sliced (G455), is 5-3c-2's.
+  sliced, is built too (5-3c-2, G455; "The resumable run" below).
 
 ### After the incremental search
 
@@ -1093,13 +1095,118 @@ What the figures say:
   the resolver reads them in place.
 - **Through the driver** at the preset, the longest step falls from 55.7 s to 78 ms (wide) and from
   659 ms to 39 ms (layered) on the Mac, and from 76.0 s to 87 ms and from 553 ms to 20 ms on Linux. The totals still count one rerun from the root after each inspection,
-  which 5-3c-2 removes (G455); its slicing is what bounds one turn at the maxima.
+  which 5-3c-2 removed (G455; "The resumable run" below); its slicing is what bounds one turn at the maxima.
 - **Memory** is of the same order as before. At dense 1,024 the resolver peaks at 511 MiB and the
   oracle at 534 MiB, of which 84 MiB is the input. At the maxima a dense closure of 4,096 names peaks
   at 7.4 GiB, of which 1.2 GiB is the input (Linux: 7.3 and 1.2 GiB). The rest, about 750 bytes for each of the 8.4 million
   edges, is held as before: each requirement in its dependent's candidate and in its name's list, the
   inspections and catalog picks it reads, and the closure's edges. The wide shape's 80,000 names cost
   45 MiB more than the oracle's, in the arrays kept for each numbered name.
+
+### The resumable run
+
+5-3c-2 (DECISIONS G455) makes a root operation's resolution one run that the driver holds for the
+operation's life. Nothing is rerun from the root: a step resumes the run, and the run stops where it
+needs an inspection or once its turn's work is spent (`ResolverTurnWork`, 32,768 units). Between two
+turns the module thread is free for route answers, timers, readiness events and other operations
+([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) §4). After the outcome the run's state is freed by turns of
+their own, the release. The rows are each shape through the driver (`tools/pmbench.nim --budget`),
+every inspection answered at once, each in its own process:
+- a turn is one step, the time one handler holds the module thread;
+- the steps are the turns that end with the work spent ("Turns"), one for each inspection, and the
+  outcome;
+- the figures are CPU time, orc with `-d:release`, on the two machines above, both shared with other
+  work while they ran (the Mac at a load average of 30 to 80), so one run's longest turn can catch
+  another process's interference;
+- work is the run's count of units (G454), the same on both machines and under any budget. It is
+  higher than in the tables above: since 5-3c-2 it also counts the setup over the catalog, each list's
+  growth, each candidate's manifest entries, a name's numbering and each level of a heap operation
+  (G455).
+
+**At logosd's preset** (256 / 32 / 256 / 1,024):
+
+| Shape | Ended by | Steps | Turns | Longest turn, Mac / Linux | Total, Mac / Linux | Work |
+|---|---|---|---|---|---|---|
+| chain, 33 names | resolved | 34 | 0 | 0.08 ms / 0.07 ms | 0.28 ms / 0.38 ms | 1,231 |
+| dense, 32 names | resolved | 33 | 0 | 0.06 ms / 0.07 ms | 0.56 ms / 0.47 ms | 8,515 |
+| layered, 256 names in 32 layers | resolved | 258 | 1 | 1.62 ms / 1.85 ms | 21.6 ms / 18.5 ms | 520,243 |
+| hub, 30 names, 256 versions of the last | no closure | 288 | 0 | 0.19 ms / 0.26 ms | 6.93 ms / 9.10 ms | 216,247 |
+| lift, 30 names, 256 versions of `y` | resolved | 288 | 0 | 0.21 ms / 0.26 ms | 3.08 ms / 4.38 ms | 138,895 |
+| wide, w = 80,000 | `assignment_attempts` | 71 | 40 | 4.23 ms / 5.57 ms | 34.5 ms / 43.2 ms | 1,727,707 |
+
+**At the maxima** (4,096 / 4,095 / 4,096 / 1,048,576), with `assignment_attempts` lowered where a row
+says. The last row is a catalog at its bound of 65,536 entries (`package_manager.limits`), most of
+them one name's versions:
+
+| Shape | Ended by | Turns | Longest turn, Mac / Linux | Total, Mac / Linux | Release: turns, longest, Mac / Linux | Work | Peak MiB, Mac / Linux |
+|---|---|---|---|---|---|---|---|
+| dense, 256 names | resolved | 2 | 1.46 ms / 2.11 ms | 22.5 ms / 23.8 ms | 6, 0.86 ms / 0.62 ms | 537,011 | 39 / 34 |
+| dense, 1,024 names | resolved | 57 | 1.80 ms / 2.16 ms | 351 ms / 294 ms | 81, 1.06 ms / 0.85 ms | 8,572,495 | 449 / 425 |
+| dense, 2,048 names | resolved | 235 | 4.46 ms / 2.31 ms | 1.50 s / 1.08 s | 320, 1.49 ms / 1.23 ms | 34,273,691 | 1,722 / 1,691 |
+| dense, 4,096 names | resolved | 941 | 10.7 ms / 3.38 ms | 6.37 s / 4.30 s | 1,271, 2.80 ms / 2.03 ms | 137,058,591 | 6,668 / 6,562 |
+| chain, 2,048 names | resolved | 1 | 1.33 ms / 2.42 ms | 12.5 ms / 19.6 ms | 2, 1.25 ms / 1.64 ms | 75,755 | 16 / 13 |
+| chain, 4,095 names | resolved | 2 | 2.90 ms / 2.42 ms | 26.0 ms / 19.7 ms | 3, 1.59 ms / 1.25 ms | 151,495 | 25 / 22 |
+| hub, 255 names, 4 versions | no closure | 7 | 1.09 ms / 0.99 ms | 23.4 ms / 25.5 ms | 2, 0.89 ms / 0.64 ms | 710,026 | 35 / 30 |
+| lift, 255 names, 4 versions | resolved | 1 | 1.78 ms / 2.08 ms | 23.2 ms / 24.0 ms | 6, 0.87 ms / 0.61 ms | 631,532 | 39 / 34 |
+| layered, 1,024 names in 64 layers | resolved | 55 | 1.69 ms / 2.01 ms | 360 ms / 291 ms | 77, 1.01 ms / 0.72 ms | 8,427,295 | 443 / 419 |
+| layered, 4,096 names in 64 layers | resolved | 1,255 | 5.25 ms / 3.45 ms | 6.04 s / 4.15 s | 1,063, 2.30 ms / 2.39 ms | 134,614,349 | 6,639 / 6,487 |
+| wide, w = 80,000, 1,000 attempts | `assignment_attempts` | 40 | 4.23 ms / 8.56 ms | 35.4 ms / 69.3 ms | 11, 2.08 ms / 1.78 ms | 1,726,715 | 131 / 130 |
+| wide, w = 80,000, 100,000 attempts | `assignment_attempts` | 161 | 4.25 ms / 8.64 ms | 202 ms / 191 ms | 11, 2.18 ms / 2.26 ms | 5,785,919 | 131 / 130 |
+| lift, 30 names, 65,500 versions of `y` (a catalog of 65,532 entries) | `candidates_per_name` | 34 | 4.11 ms / 4.54 ms | 77.0 ms / 52.6 ms | 7, 2.99 ms / 2.91 ms | 3,284,565 | 102 / 99 |
+
+**The turn budget:** the plan's 65,536 units against 32,768, for the shapes whose longest turn the
+budget decides:
+
+| Shape | Turns at 32,768 / 65,536 | Longest turn at 32,768, Mac / Linux | at 65,536, Mac / Linux | Longest release turn at 32,768 / 65,536, Mac |
+|---|---|---|---|---|
+| dense, 4,096 names | 941 / 469 | 10.7 ms / 3.38 ms | 9.91 ms / 5.54 ms | 2.80 ms / 5.88 ms |
+| layered, 4,096 names in 64 layers | 1,255 / 623 | 5.25 ms / 3.45 ms | 4.41 ms / 6.38 ms | 2.30 ms / 2.93 ms |
+| dense, 1,024 names | 57 / 27 | 1.80 ms / 2.16 ms | 4.97 ms / 4.78 ms | 1.06 ms / 1.82 ms |
+| dense, 2,048 names | 235 / 116 | 4.46 ms / 2.31 ms | 3.36 ms / 4.47 ms | 1.49 ms / 2.37 ms |
+| wide, w = 80,000 | 40 / 22 | 4.23 ms / 5.57 ms | 4.16 ms / 5.25 ms | 2.26 ms / 4.27 ms |
+| wide, w = 80,000, 100,000 attempts | 161 / 81 | 4.25 ms / 8.64 ms | 4.31 ms / 8.59 ms | 2.18 ms / 4.47 ms |
+| lift, 30 names, 65,500 versions of `y` (a catalog of 65,532 entries) | 34 / 17 | 4.11 ms / 4.54 ms | 5.14 ms / 5.28 ms | 2.99 ms / 5.25 ms |
+
+What the figures say:
+- **Nothing is rerun.** Through the driver at the preset each total is now one run's: 256 names in 32
+  layers take 21.6 ms instead of 3.96 s on the Mac (18.5 ms instead of 2.56 s on Linux), and the
+  wide shape 34.5 ms instead of 1.98 s (43.2 ms instead of 2.28 s).
+- **One turn holds the thread for a few milliseconds.** At 32,768 units the longest turn of every
+  shape, at the preset and at the maxima, is under 9 ms on Linux and under 6 ms on the Mac, but one:
+  dense 4,096 reached 10.7 ms on the loaded Mac, and 3.7 ms at the longest when run again alone (the
+  same work; most of its turns take about 2 ms). The longest on Linux, 8.6 ms, is the wide shape at
+  the maxima; the same shape at the preset, whose turns do nearly the same work, gave 5.6 ms, so the
+  figures of one run on either machine vary by more than the budget decides. The wide shape's root,
+  the build of one candidate from a maximum-size manifest of about 80,000 entries in one go, takes
+  about 3 ms on the Mac; it took 22 ms while the manifest was still copied (G455).
+- **What keeps turns even** is that work counts what takes time (G455): each list's growth, a
+  candidate's manifest entries, a name first numbered in a bind (with its bytes, as the setup counts
+  it) and each level of a heap operation. Counted as one unit each, the wide shape's 80,000 new names
+  and a heap holding them made turns of 10 to 16 ms at the same budget. A unit now costs about 15 to
+  50 ns in every shape that takes turns (dense 4,096: 137 million units in 6.4 s on the Mac, 4.3 s on
+  Linux).
+- **The budget:** at 65,536 the longest turns on Linux are up to twice as long (dense 4,096: 5.5 ms;
+  layered 4,096 in 64 layers: 6.4 ms) for half the turns, and the totals are the same. 32,768 keeps
+  most turns at 1 to 3 ms on both machines, which leaves room for a slower machine.
+- **A turn bounds the hold, not the resolution.** Dense 4,096 still takes 6.4 s of the thread in all
+  on the Mac (4.3 s on Linux), in 941 turns. The wide shape at the maximum `assignment_attempts`
+  (1,048,576) takes 1.8 s on the Mac in 1,344 turns, the longest 5.1 ms, measured rather than
+  extrapolated.
+- **The setup** (the names numbered, each name's versions and each identity's records put in order)
+  ran before the first turn, linear in the catalog: about 0.4 s at 65,536 entries and 20 ms at 4,096
+  on the Mac. It is now the run's first turns (G455): the catalog of 65,532 entries has no turn over
+  4.6 ms on either machine. What is left before the first turn is the driver's copy of the catalog,
+  2.7 ms at 65,532 entries on the Mac (2.6 ms on Linux), and at 4,096 entries under 1 ms on Linux
+  (0.4 to 2.5 ms on the loaded Mac).
+- **The release** frees what a run holds, a turn at a time: at dense 4,096, 1,271 turns, the longest
+  2.8 ms on the Mac (2.0 ms on Linux), and 0.69 s in all (0.27 s). Freed at once, that state held the
+  thread for seconds.
+- **Memory** is lower than after 5-3c-1, since a manifest's entries are no longer copied into the
+  catalog pick: 6.5 GiB at 4,096 dense or layered names on the Mac (6.3 to 6.4 GiB on Linux; 7.4 GiB
+  for one synchronous run after 5-3c-1), 131 MiB for the wide shape (198 MiB) and 102 MiB for the
+  catalog of 65,532 entries.
+- **CI asserts counts:** `test_pm_driver` gives each shape the same outcome, counters, work and
+  retrievals under budgets of 32,768, 1,000, 64, 17 and 1 units and under none (M6).
 
 ### The archive's inspection
 

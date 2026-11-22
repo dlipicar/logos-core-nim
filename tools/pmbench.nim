@@ -22,7 +22,12 @@
 ## answer) and BLAKE3 alone. Writing the file first keeps the archive's construction out of the
 ## inspecting process's peak memory.
 ##
-## Usage: pmbench [--sync new|oracle|input] <shape> <size> [k | v | L] [names depth candidates attempts]
+## Through the driver (5-3c-2, G455) the run is resumed turn by turn: a step ends at each inspection
+## and at each spent turn, so the longest step is the longest hold on the module thread. `--budget
+## <work>` sets the work of one turn (`ResolverTurnWork` by default; 0: no turns), and the steps line
+## gives the turns and the work counted. The release line times the turns that then free the run.
+##
+## Usage: pmbench [--budget <work>] [--sync new|oracle|input] <shape> <size> [k | v | L] [names depth candidates attempts]
 ##   pmbench wide 80000 20 4096 4095 4096 1000
 ##   pmbench dense 1024
 ##   pmbench chain 4096
@@ -164,6 +169,13 @@ proc main() =
     inspectFile(args[1])
     return
   var which = ""
+  var budget = ResolverTurnWork
+  if args.len >= 2 and args[0] == "--budget":
+    # [G455] the work of one turn; 0: none
+    budget = parseBiggestInt(args[1])
+    if budget <= 0:
+      budget = NoTurnBudget
+    args = args[2 .. ^1]
   if args.len >= 2 and args[0] == "--sync":
     which = args[1]
     if which notin ["new", "oracle", "input"]:
@@ -171,7 +183,7 @@ proc main() =
     args = args[2 .. ^1]
   if args.len < 2:
     quit(
-      "usage: pmbench [--sync new|oracle|input] <wide|dense|chain|hub|layered|lift> <size> [k | v | L] [names depth candidates attempts]\n" &
+      "usage: pmbench [--budget <work>] [--sync new|oracle|input] <wide|dense|chain|hub|layered|lift> <size> [k | v | L] [names depth candidates attempts]\n" &
         "       pmbench archive <MiB> <file> | pmbench inspect <file>",
       2,
     )
@@ -207,7 +219,7 @@ proc main() =
   if which.len > 0:
     sync(which, s, limits)
     return
-  let r = driveShape(s, limits)
+  let r = driveShape(s, limits, budget)
   let c = r.counters
   echo "  outcome=",
     (
@@ -233,7 +245,25 @@ proc main() =
     " longest_cpu_ms=",
     formatFloat(r.longestCpu * 1000.0, ffDecimal, 3),
     " total_cpu_ms=",
-    formatFloat(r.totalCpu * 1000.0, ffDecimal, 3)
+    formatFloat(r.totalCpu * 1000.0, ffDecimal, 3),
+    " turns=",
+    r.turns,
+    " work=",
+    r.work
+  echo "  setup_ms=",
+    r.setup.inMicroseconds.float / 1000.0,
+    " setup_cpu_ms=",
+    formatFloat(r.setupCpu * 1000.0, ffDecimal, 3)
+  echo "  release: turns=",
+    r.releases,
+    " longest_ms=",
+    r.longestRelease.inMicroseconds.float / 1000.0,
+    " total_ms=",
+    r.releaseTotal.inMicroseconds.float / 1000.0,
+    " longest_cpu_ms=",
+    formatFloat(r.longestReleaseCpu * 1000.0, ffDecimal, 3),
+    " total_cpu_ms=",
+    formatFloat(r.releaseTotalCpu * 1000.0, ffDecimal, 3)
 
 when isMainModule:
   main()

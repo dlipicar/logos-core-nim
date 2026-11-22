@@ -32,6 +32,13 @@
 ## - **Callbacks only queue an event**: the queue is drained by a task of its
 ##   own, since a handle may not be released from its own callbacks (INTERFACE
 ##   l.1485).
+## - **A resolution's next turn** (`cmContinue`, G455) gets a `callSoon` of its
+##   own, not a place in the queue: a drain runs until the queue is empty, so a
+##   queued continue would run in the same drain, turns back to back (Fable
+##   F2). One poll later, chronos has run I/O and timers first.
+## - **A cancelled operation** (its caller gave the future up) is cancelled in
+##   the engine (`cancel`, Fable F3): it takes no more turns, and its future
+##   ends cancelled.
 ## - **A replaced handle** is released once no call through it is
 ##   outstanding; its calls are cancelled first and end by their deadline in
 ##   any case. Its callbacks are ignored from then on.
@@ -122,10 +129,11 @@ proc say(s: Shell, text: string) =
 
 # The event queue ----------------------------------------------------------------------
 
-proc exec(s: Shell, c: Command)
+proc exec(s: Shell, c: var Command)
 
-proc run(s: Shell, cmds: seq[Command]) =
-  for c in cmds:
+proc run(s: Shell, cmds: sink seq[Command]) =
+  var cmds = cmds
+  for c in cmds.mitems:
     if s.closed:
       return
     s.exec(c)
@@ -445,7 +453,18 @@ proc timerTask(s: Shell, id: uint64, ms: uint32) {.async: (raises: []).} =
 
 # Commands -------------------------------------------------------------------------------
 
-proc exec(s: Shell, c: Command) =
+type Turn = ref object ## [G455] a resolution's next turn, for `callSoon`
+  shell: Shell
+  operation: uint64
+
+proc continueSoon(arg: pointer) {.gcsafe, raises: [].} =
+  let t = cast[Turn](arg)
+  if not t.shell.closed:
+    t.shell.run(t.shell.engine.handle(continued(t.operation)))
+  GC_unref(t)
+
+proc exec(s: Shell, c: var Command) =
+  ## `c`'s outcome, if it has one, is moved out: a closure can be large.
   case c.kind
   of cmEstablish:
     s.establishRoute(c.binding, c.instance, c.key)
@@ -466,9 +485,14 @@ proc exec(s: Shell, c: Command) =
   of cmReply:
     var f: Future[Result[Resolution, PackageError]].Raising([])
     if s.replies.pop(c.request, f):
-      f.complete(c.outcome)
+      f.complete(move c.outcome)
   of cmLog:
     s.say(c.text)
+  of cmContinue:
+    # [G455; Fable F2] One poll later, never in this drain.
+    let t = Turn(shell: s, operation: c.operation)
+    GC_ref(t)
+    callSoon(continueSoon, cast[pointer](t))
 
 # Start -----------------------------------------------------------------------------------
 
@@ -483,12 +507,14 @@ proc openShell*(
     log: ShellLog = stderrLog,
     platform = hostPlatform(),
     pathRules = hostPathRules(),
+    turnWork = ResolverTurnWork,
 ): Result[Shell, InvocationFailure] =
   ## [G405] The shell at `_MODULE_init`, on the module thread: the protected
   ## input read and checked, the kept catalog loaded, the engine made; it
   ## starts once `_MODULE_init` returned. A refusal is also logged: the
   ## Runtime records only `_MODULE_init`'s code, and the operator's log is
-  ## where the field it names is read ([IMPL]).
+  ## where the field it names is read ([IMPL]). `turnWork` is the work of one
+  ## resolution turn (G455): the constant, except in tests.
   template refuse(f: InvocationFailure): untyped =
     let failed = f
     log("package-manager: initialization failed: " & oneLine(failed.message.get("")))
@@ -513,10 +539,11 @@ proc openShell*(
     refuse(moduleError("the kept catalog could not be read: " & error))
   let routeSet = newRouteSet(init.services).valueOr:
     refuse(error)
-  let (e, notes) = initEngine(input, kept, freshKey, platform, pathRules = pathRules)
-  let s = Shell(engine: e, routeSet: routeSet, stateDir: dir, log: log)
-  for c in notes:
-    s.exec(c)
+  var (e, notes) = initEngine(
+    input, kept, freshKey, platform, pathRules = pathRules, turnWork = turnWork
+  )
+  let s = Shell(engine: move e, routeSet: routeSet, stateDir: dir, log: log)
+  s.run(move notes)
   GC_ref(s)
   callSoon(startSoon, cast[pointer](s))
   ok(s)
@@ -527,8 +554,8 @@ proc resolveRoot*(
     s: Shell, root: RootReference
 ): Future[Result[Resolution, PackageError]].Raising([]) =
   ## [G405] One root operation through the driver; completes with its outcome.
-  # A cancellation leaves it to the engine's answer: the operation is not
-  # abandoned midway.
+  ## [G455; Fable F3] Cancelled by its caller, it is cancelled in the engine,
+  ## so it takes no more turns, and the future ends cancelled.
   let f = Future[Result[Resolution, PackageError]].Raising([]).init(
       "pm resolve", {FutureFlag.OwnCancelSchedule}
     )
@@ -542,6 +569,11 @@ proc resolveRoot*(
   inc s.nextRequest
   let id = s.nextRequest
   s.replies[id] = f
+  f.cancelCallback = proc(arg: pointer) {.gcsafe, raises: [].} =
+    var held: Future[Result[Resolution, PackageError]].Raising([])
+    if s.replies.pop(id, held):
+      s.run(s.engine.cancel(id))
+      held.cancelAndSchedule()
   s.run(s.engine.resolve(id, root))
   f
 
@@ -575,7 +607,9 @@ proc closeShell*(s: Shell): Future[void] {.async: (raises: []).} =
   if s.closed:
     return
   s.closed = true
-  s.engine.stop()
+  # [G405] The engine names the operations still running; they are answered
+  # once the calls have ended.
+  var answers = s.engine.stop()
   s.events.clear()
   for _, t in s.timers:
     t.cancelSoon()
@@ -585,6 +619,12 @@ proc closeShell*(s: Shell): Future[void] {.async: (raises: []).} =
       f.cancelSoon()
   await within(s.tasks, CloseWait)
   s.tasks.setLen(0)
+  for c in answers.mitems:
+    if c.kind == cmReply:
+      var f: Future[Result[Resolution, PackageError]].Raising([])
+      if s.replies.pop(c.request, f):
+        f.complete(move c.outcome)
+  # None is left: every operation the shell holds a future for is the engine's.
   for _, f in s.replies:
     f.complete(
       Result[Resolution, PackageError].err(

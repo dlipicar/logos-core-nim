@@ -18,6 +18,15 @@
 ## trail of what each bind changed, a frame's versions tested as they come and
 ## a cycle walk pruned by depth. `tests/support/oracle_resolver.nim`, the search
 ## as 5-3b-2 built it, is the reference `test_resolver` compares it with.
+##
+## [IMPL-DECISION G455] The search is a resumable run (Tier 5 step 5-3c-2):
+## `startRun` makes it and `resume` runs one turn, which ends where the run
+## needs an inspection or a retained-bytes answer, where `ResolverTurnWork`
+## units of work are spent, or at the outcome. The caller supplies each answer
+## and resumes it; `release` then frees what it holds a turn at a time. The
+## synchronous `resolve` drives a run with no turn budget, answering each need
+## through the input's `inspect` and `retained`. The budget changes no outcome,
+## counter or retrieval (PM l.1279-1280).
 
 {.push raises: [].}
 
@@ -137,6 +146,26 @@ type
       ## `packages` is empty (PM l.1705)
     packages*: seq[SelectedPackage] ## the closure, in package-name byte order
     counters*: ResolverCounters
+
+  SuspensionKind* = enum
+    ## [IMPL-DECISION G455] Why a resumable run (`startRun`) handed control back.
+    suNeedSource ## inspect `source`, `supply` the inspection, then `resume`
+    suNeedRetained
+      ## check the retained bytes of the input's installed record `record`,
+      ## `supplyRetained` the answer, then `resume`
+    suTurn ## the turn's work is spent: `resume` in a later turn
+    suDone ## the operation's outcome: the run is over
+
+  Suspension* = object
+    case kind*: SuspensionKind
+    of suNeedSource:
+      source*: PackageSource
+    of suNeedRetained:
+      record*: int ## an index into the input's `installed`
+    of suTurn:
+      discard
+    of suDone:
+      outcome*: Result[Resolution, PackageError]
 
 # Limits ----------------------------------------------------------------------------
 
@@ -318,17 +347,26 @@ type
     trail: int ## where the depth changes of its propagation start on `trail`
     linked: bool ## it passed both checks: its edges are in `kids`
 
-  Resolver = object
+  Resolver {.acyclic.} = object
+    ## [IMPL-DECISION G455] Acyclic: it holds no reference back to its run or
+    ## its steps (rule I6), and what it holds of CBOR values are trees. So ORC
+    ## and refc never trace it for cycles: the dependency lists it holds would
+    ## make each collection cost their total, on the module thread.
     installed: seq[InstalledPackage]
     catalog: seq[CatalogEntry]
     limits: ResolverLimits
     trust: TrustInput
-    inspect: Inspector
-    retained: RetainedCheck
     installedAt: Table[(string, string), int]
     entries: Table[(string, string), seq[int]] ## by ascending source encoding
     inspected: Table[seq[byte], Inspection]
-    evals: Table[(string, string), Eval]
+      ## [IMPL-DECISION G455] the inspections supplied so far, by source encoding
+    retainedAnswers: Table[int, Result[void, string]]
+      ## the retained-bytes answers supplied so far, by installed record
+    evals: seq[Eval] ## the completed evaluations, read in place
+    evalAt: Table[(string, string), int] ## by identity, the index in `evals`
+    partial: Table[(string, string), (Eval, int)]
+      ## [Fable F4] an evaluation that waits for an inspection: what it has
+      ## found, and the index of the record it waits for
     # By name number (G454):
     ids: Table[string, NameId]
     names: seq[string]
@@ -360,6 +398,23 @@ type
     maxNames: int
     maxDepth: int
     tripped: string ## the limit that ended the run (`ResolverCounters.limit`)
+    # [IMPL-DECISION G455] The resumable run:
+    stack: seq[Frame] ## the search's frames, kept across suspensions
+    miss: Opt[Suspension]
+      ## what the search needs before it can go on: an inspection or a
+      ## retained-bytes answer not supplied yet
+    turnEnd: int64 ## the work count at which the turn is spent
+    bindOk: bool ## `bindSteps`' answer: both checks passed
+    settled: Opt[PackageError] ## `settleSteps`' answer: the depth limit's error
+    version: Opt[string] ## `versionSteps`' answer: the frame's next version
+    resolution: Resolution ## `closureSteps`' answer
+    ended: bool ## the run gave its outcome (rule I5)
+
+  RunSteps = iterator (): Suspension {.closure, gcsafe, raises: [].}
+    ## [IMPL-DECISION G455] A resumable run's steps (5-3c's plan §3.5, rules I1
+    ## to I6): made by a factory that captures what it needs once (I1), never
+    ## resumed after `suDone` (I5), and held by its driver, never by the
+    ## resolver (I6).
 
 func key(id: PackageIdentity): (string, string) =
   (id.package, id.version)
@@ -374,11 +429,23 @@ func contractKeys(cs: openArray[CborValue]): HashSet[seq[byte]] =
   for c in cs:
     result.incl(encodeCbor(c))
 
-proc idOf(r: var Resolver, name: string): NameId =
-  ## The name's number, given now if it has none.
-  result = r.ids.getOrDefault(name, -1)
-  if result >= 0:
-    return
+func full(l: int): bool =
+  ## Whether a list of `l` elements, grown by appends, is at its capacity:
+  ## Nim's are four, then each doubled up to 32,768, then each grown by half
+  ## (`resize` in Nim's `system/strs_v2.nim`, which sequences use too). A list
+  ## shortened and grown again is counted as if it were not: the count is the
+  ## same for the same inputs, which is what it needs.
+  if l < 4:
+    return false
+  if l <= 32_768:
+    return (l and (l - 1)) == 0
+  var c = 32_768
+  while c < l:
+    c = c div 2 + c
+  c == l
+
+proc newId(r: var Resolver, name: string): NameId =
+  ## Numbers `name`, which has no number yet.
   result = NameId(r.names.len)
   r.ids[name] = result
   r.names.add(name)
@@ -393,14 +460,27 @@ proc idOf(r: var Resolver, name: string): NameId =
   r.parentAt.add(0)
   r.changedAt.add(0)
 
+proc idOf(r: var Resolver, name: string): NameId =
+  ## The name's number, given now if it has none.
+  result = r.ids.getOrDefault(name, -1)
+  if result < 0:
+    result = r.newId(name)
+
 func before(r: Resolver, a, b: NameId): bool =
   r.names[a] < r.names[b]
 
 proc push(r: var Resolver, x: NameId) =
+  ## [IMPL-DECISION G455] A heap operation counts each level it moves through,
+  ## and the heap's growth: with the 80,000 names of a maximum-size manifest
+  ## on the heap, one push or pop counted as one unit made up to about 30
+  ## string comparisons.
   inc r.work
+  if full(r.unresolved.len):
+    r.work += int64(r.unresolved.len)
   r.unresolved.add(x)
   var i = r.unresolved.high
   while i > 0:
+    inc r.work
     let p = (i - 1) div 2
     if not r.before(r.unresolved[i], r.unresolved[p]):
       break
@@ -416,6 +496,7 @@ proc popTop(r: var Resolver) =
   r.unresolved[0] = last
   var i = 0
   while true:
+    inc r.work # [G455] a level, as `push`'s
     let l = 2 * i + 1
     if l >= n:
       break
@@ -437,137 +518,142 @@ proc nextUnresolved(r: var Resolver): Opt[NameId] =
     r.popTop()
   Opt.none(NameId)
 
-proc initResolver(input: ResolverInput): Resolver =
+proc initResolver(r: var Resolver, input: sink ResolverInput) =
+  ## The resolver over `input`, taken, not copied. [IMPL-DECISION G455] The
+  ## rest of G454's setup is the run's first steps (`setupSteps`).
   let l = input.limits
   doAssert l.names > 0 and l.depth > 0 and l.candidates > 0 and l.attempts > 0 and
     l.names <= MaxResolverLimits.names and l.depth <= MaxResolverLimits.depth and
     l.candidates <= MaxResolverLimits.candidates and
     l.attempts <= MaxResolverLimits.attempts,
     "resolver limits come from resolverLimits or decodeResolverLimits"
-  doAssert not input.retained.isNil, "the retained-bytes check is required"
-  var r = Resolver(
-    installed: input.installed,
-    catalog: input.catalog,
-    limits: input.limits,
-    trust: input.trust,
-    inspect: input.inspect,
-    retained: input.retained,
+  var input = input
+  r = Resolver(
+    installed: move input.installed,
+    catalog: move input.catalog,
+    limits: l,
+    trust: move input.trust,
+    turnEnd: high(int64),
   )
-  # [G454] The catalog's and the installed state's names, numbered in byte order.
-  var known: seq[string]
-  for p in r.installed:
-    known.add(p.identity.package)
-  for e in r.catalog:
-    known.add(e.identity.package)
-  known.sort()
-  for n in known.deduplicate(isSorted = true):
-    discard r.idOf(n)
-  r.buckets.setLen(input.limits.depth + 1)
-  var parsed: Table[string, SemVer]
-  proc note(r: var Resolver, id: PackageIdentity): bool =
-    let v = parseSemVer(id.version).valueOr:
-      return false
-    parsed[id.version] = v
-    let x = r.idOf(id.package)
-    if id.version notin r.versions[x]:
-      r.versions[x].add(id.version)
-    true
+  r.buckets.setLen(l.depth + 1)
 
-  for i, p in r.installed:
-    doAssert p.identity.key notin r.installedAt,
-      "an installed state holds " & $p.identity & " once"
-    if r.note(p.identity):
-      r.installedAt[p.identity.key] = i
-  var seen: HashSet[seq[byte]]
-  for i, e in r.catalog:
-    let dup = encodeCbor(e.toCbor)
-    if seen.containsOrIncl(dup) or not r.note(e.identity):
-      continue
-    r.entries.mgetOrPut(e.identity.key, @[]).add(i)
-  let encodings = r.catalog.mapIt(it.source.encoded)
-  for group in r.entries.mvalues:
-    group.sort(
-      proc(a, b: int): int =
-        cmpBytes(encodings[a], encodings[b])
-    )
-  for vs in r.versions.mitems:
-    vs.sort(
-      proc(a, b: string): int =
-        cmp(parsed.getOrDefault(b), parsed.getOrDefault(a))
-    )
-  r
+func pending(): PackageError =
+  ## [IMPL-DECISION G455] What a helper returns when the search needs something
+  ## not supplied yet (`miss` says what): the run suspends and calls it again,
+  ## so this error is never an outcome.
+  packageError(pecPackageUnavailable, "not supplied yet")
 
-proc inspectSource(r: var Resolver, s: PackageSource): Inspection =
+proc inspectSource(r: var Resolver, s: PackageSource): ptr Inspection =
+  ## [IMPL-DECISION G455] The supplied inspection of `s`, read in place: a
+  ## copy of one with a maximum-size manifest took milliseconds. Nil, with the
+  ## need noted, until one is supplied. Each source is asked for at the point
+  ## a synchronous run would inspect it, and once (`Inspector`). The caller
+  ## is done with it before anything is supplied.
   let k = s.encoded
-  if k notin r.inspected:
-    r.inspected[k] = r.inspect(s, r.trust)
-  r.inspected.getOrDefault(k)
+  r.inspected.withValue(k, v):
+    return v
+  r.miss = Opt.some(Suspension(kind: suNeedSource, source: s))
+  nil
+
+proc takeMiss(r: var Resolver): Suspension =
+  result = r.miss.get
+  r.miss = Opt.none(Suspension)
 
 func known(r: Resolver, id: PackageIdentity): bool =
   id.key in r.installedAt or id.key in r.entries
 
-proc evaluate(r: var Resolver, id: PackageIdentity): Result[Eval, PackageError] =
+proc evaluate(r: var Resolver, id: PackageIdentity): Result[int, PackageError] =
   ## [SPEC PM §11] Candidate eligibility for one exact identity: the installed
   ## record and every catalog record of it, in ascending source-record
   ## encoding. Every reason is kept, the installed record's first. Unavailable
   ## material and altered retained bytes fail the root operation; neither is
   ## ineligibility.
-  if id.key in r.evals:
-    return ok(r.evals.getOrDefault(id.key))
-  var e = Eval(installed: r.installedAt.getOrDefault(id.key, -1))
-  if e.installed >= 0:
-    let p = r.installed[e.installed]
-    if not p.commitment.supportsManifestSchema:
-      # [SPEC PM §11 l.1217-1218] Ineligible, and not an integrity failure:
-      # its retained bytes are not judged.
-      e.installedError = Opt.some(
-        packageError(
-          pecUnsupportedManifest,
-          "the installed " & $id &
-            " names a manifest schema this revision does not support",
-        )
-      )
-    else:
-      r.retained(p).isOkOr:
-        # [SPEC PM §11 l.1302-1303]
-        return
-          err(packageError(pecArtifactIntegrity, "the installed " & $id & ": " & error))
-      if not r.trust.accepts(p.signer, id.package):
-        # [SPEC PM §11 l.1292-1293] [IMPL-DECISION G166] A withdrawn signer.
+  ##
+  ## [IMPL-DECISION G455] A record not supplied yet returns `pending` with the
+  ## need noted, and the run calls this again once it is supplied. The
+  ## retained check is answered once per record, and what the walk has found
+  ## is kept with the index it stopped at (Fable F4), so each record is read
+  ## once. The evaluation is the index of the identity's in `evals`, read in
+  ## place.
+  let at = r.evalAt.getOrDefault(id.key, -1)
+  if at >= 0:
+    return ok(at)
+  var e: Eval
+  var next = 0
+  var held: (Eval, int)
+  if r.partial.pop(id.key, held):
+    e = move held[0]
+    next = held[1]
+  else:
+    e = Eval(installed: r.installedAt.getOrDefault(id.key, -1))
+    if e.installed >= 0:
+      let p = r.installed[e.installed]
+      if not p.commitment.supportsManifestSchema:
+        # [SPEC PM §11 l.1217-1218] Ineligible, and not an integrity failure:
+        # its retained bytes are not judged.
         e.installedError = Opt.some(
           packageError(
-            pecSignature,
-            "the retained signer of the installed " & $id &
-              " is not an accepted signer authorized for " & id.package,
-          )
-        )
-  for i in r.entries.getOrDefault(id.key):
-    let source = r.catalog[i].source
-    let x = r.inspectSource(source)
-    case x.kind
-    of ikUnavailable:
-      return err(packageError(pecPackageUnavailable, $id & ": " & x.reason))
-    of ikIneligible:
-      e.errors.add(x.error)
-    of ikEligible:
-      if x.identity != id:
-        # [SPEC PM §2, §6] The manifest wins over catalog location data.
-        e.errors.add(
-          packageError(
-            pecInvalidPackage, "the manifest declares " & $x.identity & ", not " & $id
+            pecUnsupportedManifest,
+            "the installed " & $id &
+              " names a manifest schema this revision does not support",
           )
         )
       else:
-        e.picks.add(
-          CatalogPick(
-            commitment: x.commitment,
-            source: source,
-            deps: x.dependencies,
-            provides: contractKeys(x.provides),
+        if e.installed notin r.retainedAnswers:
+          r.miss = Opt.some(Suspension(kind: suNeedRetained, record: e.installed))
+          return err(pending())
+        r.retainedAnswers.getOrDefault(e.installed).isOkOr:
+          # [SPEC PM §11 l.1302-1303]
+          return err(
+            packageError(pecArtifactIntegrity, "the installed " & $id & ": " & error)
+          )
+        if not r.trust.accepts(p.signer, id.package):
+          # [SPEC PM §11 l.1292-1293] [IMPL-DECISION G166] A withdrawn signer.
+          e.installedError = Opt.some(
+            packageError(
+              pecSignature,
+              "the retained signer of the installed " & $id &
+                " is not an accepted signer authorized for " & id.package,
+            )
+          )
+  let records = r.entries.getOrDefault(id.key)
+  while next < records.len:
+    let source = r.catalog[records[next]].source
+    let x = r.inspectSource(source)
+    if x.isNil:
+      r.partial[id.key] = (move e, next)
+      return err(pending())
+    inc next
+    case x[].kind
+    of ikUnavailable:
+      return err(packageError(pecPackageUnavailable, $id & ": " & x[].reason))
+    of ikIneligible:
+      e.errors.add(x[].error)
+    of ikEligible:
+      if x[].identity != id:
+        # [SPEC PM §2, §6] The manifest wins over catalog location data.
+        e.errors.add(
+          packageError(
+            pecInvalidPackage, "the manifest declares " & $x[].identity & ", not " & $id
           )
         )
-  r.evals[id.key] = e
-  ok(e)
+      else:
+        # [IMPL-DECISION G455] Its dependency entries are moved, not copied (a
+        # copy of a maximum-size manifest's took milliseconds). Nothing reads
+        # them again: an identity is evaluated once (`evalAt`), only the
+        # identity its manifest declares takes them, and a source root reads
+        # its manifest (`sourceRoot`) before anything is evaluated.
+        e.picks.add(
+          CatalogPick(
+            commitment: x[].commitment,
+            source: source,
+            deps: move x[].dependencies,
+            provides: contractKeys(x[].provides),
+          )
+        )
+  r.evals.add(move e)
+  r.evalAt[id.key] = r.evals.high
+  ok(r.evals.high)
 
 func firstError(e: Eval): Opt[PackageError] =
   ## [IMPL-DECISION I110] The first-error rule (TF-60 interim): the installed
@@ -590,6 +676,10 @@ func unsupportedOnly(e: Eval): bool =
     (e.installedError.isSome or e.errors.len > 0)
 
 func fresh(deps: seq[PackageDependency]): (seq[string], seq[Req]) =
+  # [IMPL-DECISION G455] Sized once: growing them took a third of the build of
+  # a maximum-size manifest's list.
+  result[0] = newSeqOfCap[string](deps.len)
+  result[1] = newSeqOfCap[Req](deps.len)
   for d in deps:
     result[0].add(d.package)
     result[1].add(
@@ -654,14 +744,14 @@ proc dependencyCandidate(
   ## selection and the installed-identity conflict check.
   let pins = r.pinsFor(x)
   let need = r.needed(x)
-  var allowed: seq[CatalogPick]
-  for p in e.picks:
+  var allowed: seq[int] ## indexes in `e.picks`, read in place
+  for i, p in e.picks:
     # [IMPL-DECISION I110] Pins apply per record (Q8): a pinned version the
     # catalog lists under another commitment is not a candidate.
     if pins.allows(p.commitment) and need.allIt(it in p.provides):
-      allowed.add(p)
-  for p in allowed:
-    if p.commitment != allowed[0].commitment:
+      allowed.add(i)
+  for i in allowed:
+    if e.picks[i].commitment != e.picks[allowed[0]].commitment:
       # [SPEC PM §11] [IMPL-DECISION G74] No protected catalog policy selects
       # one of several commitments.
       return err(
@@ -672,7 +762,7 @@ proc dependencyCandidate(
       )
   if e.installed >= 0:
     let p = r.installed[e.installed]
-    if allowed.len > 0 and allowed[0].commitment != p.commitment:
+    if allowed.len > 0 and e.picks[allowed[0]].commitment != p.commitment:
       # [SPEC PM §11 l.1296-1298] Compared with the installed record whether or
       # not it is eligible; not skipped and not resolved by backtracking.
       return err(
@@ -697,20 +787,21 @@ proc dependencyCandidate(
       # [IMPL-DECISION I110] B7: an eligible catalog record of the installed
       # commitment satisfies the identity; it stays installed, with its
       # recorded edges and its retained signer (replacing it is PKG-0608's).
-      c.provides = allowed[0].provides
+      c.provides = e.picks[allowed[0]].provides
       return ok(Opt.some(c))
     return ok(Opt.none(Cand))
   if allowed.len > 0:
-    let (names, deps) = fresh(allowed[0].deps)
+    let a = allowed[0]
+    let (names, deps) = fresh(e.picks[a].deps)
     return ok(
       Opt.some(
         Cand(
           identity: id,
-          commitment: allowed[0].commitment,
-          source: Opt.some(allowed[0].source),
+          commitment: e.picks[a].commitment,
+          source: Opt.some(e.picks[a].source),
           depNames: names,
           deps: deps,
-          provides: allowed[0].provides,
+          provides: e.picks[a].provides,
         )
       )
     )
@@ -731,19 +822,20 @@ proc rootCandidate(
         )
       )
   if e.picks.len > 0:
-    let c = e.picks[0]
-    let (names, deps) = fresh(c.deps)
+    # Read in place: a copy would copy its dependency list.
+    let (names, deps) = fresh(e.picks[0].deps)
     return ok(
       Opt.some(
         Cand(
           identity: id,
-          commitment: c.commitment,
+          commitment: e.picks[0].commitment,
           installed:
-            e.installed >= 0 and r.installed[e.installed].commitment == c.commitment,
-          source: Opt.some(c.source),
+            e.installed >= 0 and
+            r.installed[e.installed].commitment == e.picks[0].commitment,
+          source: Opt.some(e.picks[0].source),
           depNames: names,
           deps: deps,
-          provides: c.provides,
+          provides: e.picks[0].provides,
         )
       )
     )
@@ -764,64 +856,282 @@ proc rootCandidate(
     )
   ok(Opt.none(Cand))
 
-proc bindCand(r: var Resolver, x: NameId, c: Cand): bool =
-  ## Binds `c` and records its requirements. False when the partial closure is
-  ## then rejected: a bound package does not satisfy a new requirement (one
-  ## version per name, a pin, a contract), or an edge closes a cycle. Its
-  ## edges, depths and the depth limit are `settle`'s, after both checks pass.
-  # [IMPL-DECISION G454; Fable F1] Its depth, from its bound parents, before
-  # its own edges exist: 0 for the root, else one more than the deepest.
-  var d = 0'i32
-  if x != r.root:
-    for p in r.parents[x]:
-      inc r.work
-      d = max(d, r.depth[p] + 1)
-  var c = c
-  for n in c.depNames:
-    c.depIds.add(r.idOf(n))
-  r.depth[x] = d
-  r.cands[x] = c
-  r.bound[x] = true
-  inc r.boundCount
-  r.maxNames = max(r.maxNames, r.boundCount)
-  r.binds.add(Bind(id: x, trail: r.trail.len))
-  for i, n in c.depIds:
-    inc r.work
-    if r.reqs[n].len == 0:
-      r.push(n)
-    r.reqs[n].add(c.deps[i])
-    r.parents[n].add(x)
-  for i, n in c.depIds:
-    inc r.work
-    if r.bound[n] and not r.cands[n].meets(c.deps[i]):
-      return false
-  # Both checks only reject, so their order does not change the answer.
-  # [IMPL-DECISION G454] The cycle walk: whether a bound dependency reaches a
-  # bound name that requires `x`. Depths rise strictly along bound edges and
-  # `x`'s exceeds every parent's, so a name at its depth or deeper cannot lead
-  # to a parent: the walk skips it.
-  inc r.epoch
-  let e = r.epoch
-  for p in r.parents[x]:
-    inc r.work
-    r.parentAt[p] = e
-  r.walk.setLen(0)
-  for n in c.depIds:
-    if n == x:
-      return false # itself
-    if r.bound[n] and r.depth[n] < d and r.seenAt[n] != e:
-      r.seenAt[n] = e
-      r.walk.add(n)
-  while r.walk.len > 0:
-    let s = r.walk.pop()
-    if r.parentAt[s] == e:
-      return false
-    for k in r.kids[s]:
-      inc r.work
-      if r.depth[k] < d and r.seenAt[k] != e:
-        r.seenAt[k] = e
-        r.walk.add(k)
-  true
+template tick(r: ref Resolver) =
+  ## [IMPL-DECISION G455] One work unit (5-3c's plan §3.6). The turn is spent
+  ## when the count reaches `turnEnd`, and the run yields there. Only inside a
+  ## run's iterators; a helper that is not one counts with `inc r.work`, and the
+  ## next unit an iterator counts ends the turn.
+  inc r.work
+  if r.work >= r.turnEnd:
+    yield Suspension(kind: suTurn)
+
+template spendBy(r: ref Resolver, n: int) =
+  ## [IMPL-DECISION G455] `n` work units at once: what copying or freeing a
+  ## list of `n` elements costs.
+  r.work += int64(n)
+  if r.work >= r.turnEnd:
+    yield Suspension(kind: suTurn)
+
+template growing(r: ref Resolver, list: untyped) =
+  ## [IMPL-DECISION G455] Before an append: an append to a full list copies
+  ## it, so the copy is counted, its length. In a dense closure one bind
+  ## appends to thousands of names' lists that fill up together, and their
+  ## copies alone held the thread for 0.1 s at 4,096 names.
+  block:
+    let l = list.len
+    if full(l):
+      spendBy(r, l)
+
+func nameAt(r: Resolver, installed: int, k: int32): ptr string =
+  ## The package name of `k`, an installed record's index or, from
+  ## `installed` on, a catalog entry's. Read in place; neither list is resized
+  ## while the pointer is used.
+  if k < installed:
+    r.installed[k].identity.package.unsafeAddr
+  else:
+    r.catalog[k - installed].identity.package.unsafeAddr
+
+proc setupSteps(r: ref Resolver): RunSteps =
+  ## [G454] The setup: the catalog's and the installed state's names numbered
+  ## in byte order, each name's versions in descending SemVer precedence, and
+  ## each identity's catalog records in ascending source-record encoding, a
+  ## record that repeats kept once.
+  ##
+  ## [IMPL-DECISION G455] It is the run's first steps, counted and sliced as
+  ## the search is, since it is linear in the catalog: done at once before the
+  ## first turn, it held the module thread for about 0.4 s at the catalog's
+  ## 65,536 entries. An entry counts one unit and the bytes it hashes, parses
+  ## or encodes. What is not sliced is one sort: of the names (the catalog is
+  ## in canonical order, so it is a merge sort's linear case), of one name's
+  ## versions, or of one identity's records.
+  iterator body(): Suspension {.closure, gcsafe, raises: [].} =
+    let ni = r.installed.len
+    var known = newSeqOfCap[int32](ni + r.catalog.len)
+    var i = 0
+    while i < ni + r.catalog.len:
+      tick(r)
+      known.add(int32(i))
+      inc i
+    spendBy(r, known.len)
+    # By index: the names are not copied to be sorted.
+    known.sort(
+      proc(a, b: int32): int =
+        cmp(r[].nameAt(ni, a)[], r[].nameAt(ni, b)[])
+    )
+    i = 0
+    while i < known.len:
+      let name = r[].nameAt(ni, known[i])
+      spendBy(r, 1 + name[].len)
+      if r.names.len == 0 or r.names[^1] != name[]:
+        growing(r, r.names)
+        discard r[].idOf(name[])
+      inc i
+    known = @[]
+    # Each name's versions with their precedence, sorted once all are listed.
+    var parsed = newSeq[seq[SemVer]](r.names.len)
+    i = 0
+    while i < ni:
+      spendBy(
+        r, 1 + r.installed[i].identity.package.len + r.installed[i].identity.version.len
+      )
+      let k = r.installed[i].identity.key
+      doAssert k notin r.installedAt,
+        "an installed state holds " & $r.installed[i].identity & " once"
+      let v = parseSemVer(k[1])
+      if v.isOk:
+        let x = r[].idOf(k[0])
+        growing(r, r.versions[x])
+        r.versions[x].add(k[1])
+        parsed[x].add(v.get)
+        r.installedAt[k] = i
+      inc i
+    # [IMPL-DECISION G455] A version is listed with its identity's first
+    # record, which needs no set: an identity listed before has a group or an
+    # installed record. A record that repeats one is dropped when its group is
+    # sorted. An encoding of each record was one more pass over the catalog.
+    var groups: seq[(string, string)] ## identities with two records or more
+    i = 0
+    while i < r.catalog.len:
+      spendBy(
+        r, 1 + r.catalog[i].identity.package.len + r.catalog[i].identity.version.len
+      )
+      let k = r.catalog[i].identity.key
+      let v = parseSemVer(k[1])
+      inc i
+      if v.isErr:
+        continue
+      var first = false
+      r.entries.withValue(k, g):
+        g[].add(i - 1)
+        if g[].len == 2:
+          groups.add(k)
+      do:
+        first = true
+      if first:
+        r.entries[k] = @[i - 1]
+        if k notin r.installedAt:
+          let x = r[].idOf(k[0])
+          growing(r, r.versions[x])
+          r.versions[x].add(k[1])
+          parsed[x].add(v.get)
+    while groups.len > 0:
+      let k = groups[^1]
+      var g = r.entries.getOrDefault(k)
+      var keyed = newSeqOfCap[(seq[byte], int)](g.len)
+      var m = 0
+      while m < g.len:
+        let e = r.catalog[g[m]].source.encoded
+        spendBy(r, 1 + e.len)
+        keyed.add((e, g[m]))
+        inc m
+      # Stable: of records that repeat, the first is kept, as when a set
+      # dropped the later ones.
+      keyed.sort(
+        proc(a, b: (seq[byte], int)): int =
+          cmpBytes(a[0], b[0])
+      )
+      g.setLen(0)
+      m = 0
+      while m < keyed.len:
+        if m == 0 or keyed[m][0] != keyed[m - 1][0]:
+          g.add(keyed[m][1])
+        inc m
+      r.entries[k] = move g
+      groups.setLen(groups.len - 1)
+    var x = 0
+    while x < r.versions.len:
+      let n = r.versions[x].len
+      if n > 1:
+        var ordered = true
+        var t = 1
+        while t < n and ordered:
+          tick(r)
+          ordered = cmp(parsed[x][t - 1], parsed[x][t]) >= 0
+          inc t
+        if not ordered:
+          spendBy(r, n)
+          # The precedence of each is read from its pair, not looked up for
+          # each comparison: the lookups and their copies took 0.2 s for one
+          # name's 65,536 versions. Stable, as before. A catalog in use is in
+          # canonical order (G401), so its versions need no sort.
+          var keyed = newSeqOfCap[(SemVer, string)](n)
+          for j in 0 ..< n:
+            keyed.add((move parsed[x][j], move r.versions[x][j]))
+          keyed.sort(
+            proc(a, b: (SemVer, string)): int =
+              cmp(b[0], a[0])
+          )
+          for j in 0 ..< n:
+            parsed[x][j] = move keyed[j][0]
+            r.versions[x][j] = move keyed[j][1]
+      # Freed a few at a time: a version is three strings, and one name's
+      # 65,536 took 10 ms to free at once.
+      while parsed[x].len > 0:
+        tick(r)
+        parsed[x].setLen(parsed[x].len - 1)
+      inc x
+
+  body
+
+proc bindSteps(r: ref Resolver, x: NameId): RunSteps =
+  ## Binds `r.cands[x]`, which the caller put there, and records its
+  ## requirements. `r.bindOk` is false when the partial closure is then
+  ## rejected: a bound package does not satisfy a new requirement (one version
+  ## per name, a pin, a contract), or an edge closes a cycle. Its edges, depths
+  ## and the depth limit are `settleSteps`', after both checks pass.
+  ##
+  ## [IMPL-DECISION G455] Each loop goes by index over lists that nothing
+  ## writes while it runs (rule I2), and suspends where its turn is spent.
+  iterator body(): Suspension {.closure, gcsafe, raises: [].} =
+    r.bindOk = false
+    # [IMPL-DECISION G454; Fable F1] Its depth, from its bound parents, before
+    # its own edges exist: 0 for the root, else one more than the deepest.
+    var d = 0'i32
+    if x != r.root:
+      var i = 0
+      while i < r.parents[x].len:
+        tick(r)
+        d = max(d, r.depth[r.parents[x][i]] + 1)
+        inc i
+    block:
+      # [G455] Numbering its dependency names is reading its dependency entries.
+      var i = 0
+      while i < r.cands[x].depNames.len:
+        tick(r)
+        var n = r.ids.getOrDefault(r.cands[x].depNames[i], -1)
+        if n < 0:
+          # [IMPL-DECISION G455] A name first numbered here costs what the
+          # setup's numbering does: its bytes, and the growth of the lists
+          # kept for each name. Counted as one unit, the 80,000 new names of
+          # a maximum-size manifest made turns of 10 ms. A copy: numbering it
+          # grows `cands`, which holds this one.
+          let name = r.cands[x].depNames[i]
+          spendBy(r, name.len)
+          growing(r, r.names)
+          n = r[].newId(name)
+        growing(r, r.cands[x].depIds)
+        r.cands[x].depIds.add(n)
+        inc i
+    r.depth[x] = d
+    r.bound[x] = true
+    inc r.boundCount
+    r.maxNames = max(r.maxNames, r.boundCount)
+    r.binds.add(Bind(id: x, trail: r.trail.len))
+    block:
+      var i = 0
+      while i < r.cands[x].depIds.len:
+        tick(r)
+        let n = r.cands[x].depIds[i]
+        if r.reqs[n].len == 0:
+          r[].push(n)
+        growing(r, r.reqs[n])
+        growing(r, r.parents[n])
+        r.reqs[n].add(r.cands[x].deps[i])
+        r.parents[n].add(x)
+        inc i
+    block:
+      var i = 0
+      while i < r.cands[x].depIds.len:
+        tick(r)
+        let n = r.cands[x].depIds[i]
+        if r.bound[n] and not r.cands[n].meets(r.cands[x].deps[i]):
+          return
+        inc i
+    # Both checks only reject, so their order does not change the answer.
+    # [IMPL-DECISION G454] The cycle walk: whether a bound dependency reaches a
+    # bound name that requires `x`. Depths rise strictly along bound edges and
+    # `x`'s exceeds every parent's, so a name at its depth or deeper cannot lead
+    # to a parent: the walk skips it.
+    inc r.epoch
+    let e = r.epoch
+    block:
+      var i = 0
+      while i < r.parents[x].len:
+        tick(r)
+        r.parentAt[r.parents[x][i]] = e
+        inc i
+    r.walk.setLen(0)
+    for n in r.cands[x].depIds:
+      if n == x:
+        return # itself
+      if r.bound[n] and r.depth[n] < d and r.seenAt[n] != e:
+        r.seenAt[n] = e
+        r.walk.add(n)
+    while r.walk.len > 0:
+      let s = r.walk.pop()
+      if r.parentAt[s] == e:
+        return
+      var i = 0
+      while i < r.kids[s].len:
+        tick(r)
+        let k = r.kids[s][i]
+        inc i
+        if r.depth[k] < d and r.seenAt[k] != e:
+          r.seenAt[k] = e
+          r.walk.add(k)
+    r.bindOk = true
+
+  body
 
 proc raiseTo(r: var Resolver, k: NameId, v: int32, e: uint32) =
   ## Deepens `k` to `v` if that is deeper. Its first change in this bind goes
@@ -839,108 +1149,142 @@ proc raiseTo(r: var Resolver, k: NameId, v: int32, e: uint32) =
     r.bucketHi = max(r.bucketHi, int(old))
   r.depth[k] = v
 
-proc settle(r: var Resolver): Result[void, PackageError] =
+proc settleSteps(r: ref Resolver): RunSteps =
   ## [SPEC PM §11 l.1257-1260, l.1276-1277] After a bind that passed both
   ## checks: its edges join the bound graph and every name it deepens is
   ## deepened, then the depth limit is checked. A name over the limit
-  ## terminates the root operation; it is not backtracked.
+  ## terminates the root operation (`r.settled`); it is not backtracked.
   ##
   ## [IMPL-DECISION G454] Only what the bind changed is visited. Every edge
   ## between names bound before it goes from a lower depth to a higher one, so
   ## taking the deepened names in the order of their depths before the bind
   ## deepens each once, after all its deepened parents.
-  let x = r.binds[^1].id
-  r.binds[^1].linked = true
-  let start = r.binds[^1].trail
-  for n in r.cands[x].depIds:
-    inc r.work
-    if r.bound[n]:
-      r.kids[x].add(n)
-  for p in r.parents[x]:
-    inc r.work
-    r.kids[p].add(x)
-  inc r.epoch
-  let e = r.epoch
-  r.changedAt[x] = e
-  let dx = r.depth[x]
-  r.bucketLo = r.buckets.len
-  r.bucketHi = -1
-  for i in 0 ..< r.kids[x].len:
-    inc r.work
-    r.raiseTo(r.kids[x][i], dx + 1, e)
-  var b = r.bucketLo
-  while b <= r.bucketHi:
-    var i = 0
-    while i < r.buckets[b].len:
-      # Each is queued in a strictly later bucket than the name deepening it.
-      let n = r.buckets[b][i]
+  iterator body(): Suspension {.closure, gcsafe, raises: [].} =
+    r.settled = Opt.none(PackageError)
+    let x = r.binds[^1].id
+    r.binds[^1].linked = true
+    let start = r.binds[^1].trail
+    block:
+      var i = 0
+      while i < r.cands[x].depIds.len:
+        tick(r)
+        let n = r.cands[x].depIds[i]
+        if r.bound[n]:
+          growing(r, r.kids[x])
+          r.kids[x].add(n)
+        inc i
+    block:
+      var i = 0
+      while i < r.parents[x].len:
+        tick(r)
+        growing(r, r.kids[r.parents[x][i]])
+        r.kids[r.parents[x][i]].add(x)
+        inc i
+    inc r.epoch
+    let e = r.epoch
+    r.changedAt[x] = e
+    let dx = r.depth[x]
+    r.bucketLo = r.buckets.len
+    r.bucketHi = -1
+    block:
+      var i = 0
+      while i < r.kids[x].len:
+        tick(r)
+        r[].raiseTo(r.kids[x][i], dx + 1, e)
+        inc i
+    var b = r.bucketLo
+    while b <= r.bucketHi:
+      var i = 0
+      while i < r.buckets[b].len:
+        # Each is queued in a strictly later bucket than the name deepening it.
+        let n = r.buckets[b][i]
+        inc i
+        let dn = r.depth[n]
+        var j = 0
+        while j < r.kids[n].len:
+          tick(r)
+          r[].raiseTo(r.kids[n][j], dn + 1, e)
+          inc j
+      r.buckets[b].setLen(0)
+      inc b
+    # The greatest depth of a bound name: an unchanged one is no deeper than
+    # before, and `maxDepth` already covers it. It is raised before the limit
+    # check reports, as for every bound name.
+    r.maxDepth = max(r.maxDepth, int(dx))
+    for i in start ..< r.trail.len:
+      r.maxDepth = max(r.maxDepth, int(r.depth[r.trail[i][0]]))
+    # Before the bind no name was over the limit, or the run would have ended.
+    # So a name over it now is a changed bound name or a name a changed bound
+    # name at the limit or deeper requires.
+    let limit = r.limits.depth
+    var over = -1'i32
+    var i = start - 1
+    while i < r.trail.len:
+      let n =
+        if i < start:
+          x
+        else:
+          r.trail[i][0]
       inc i
-      let dn = r.depth[n]
-      for j in 0 ..< r.kids[n].len:
-        inc r.work
-        r.raiseTo(r.kids[n][j], dn + 1, e)
-    r.buckets[b].setLen(0)
-    inc b
-  # The greatest depth of a bound name: an unchanged one is no deeper than
-  # before, and `maxDepth` already covers it. It is raised before the limit
-  # check reports, as for every bound name.
-  r.maxDepth = max(r.maxDepth, int(dx))
-  for i in start ..< r.trail.len:
-    r.maxDepth = max(r.maxDepth, int(r.depth[r.trail[i][0]]))
-  # Before the bind no name was over the limit, or the run would have ended.
-  # So a name over it now is a changed bound name or a name a changed bound
-  # name at the limit or deeper requires.
-  let limit = r.limits.depth
-  var over = -1'i32
-  for i in start - 1 ..< r.trail.len:
-    let n =
-      if i < start:
-        x
-      else:
-        r.trail[i][0]
-    if int(r.depth[n]) > limit and (over < 0 or r.before(n, over)):
-      over = n
-    if int(r.depth[n]) >= limit:
-      for m in r.cands[n].depIds:
-        if over < 0 or r.before(m, over):
-          over = m
-  if over >= 0:
-    # [ruling S1] No depth in the message: it would show the limit, which is
-    # protected policy input (PM l.1514), to the caller.
-    r.tripped = "dependency_depth"
-    return err(
-      unavailableDependency(r.names[over] & " is beyond the dependency-depth limit")
-    )
-  ok()
+      if int(r.depth[n]) > limit and (over < 0 or r[].before(n, over)):
+        over = n
+      if int(r.depth[n]) >= limit:
+        # [IMPL-DECISION G455] Reading a name's dependency entries, counted.
+        var j = 0
+        while j < r.cands[n].depIds.len:
+          tick(r)
+          let m = r.cands[n].depIds[j]
+          inc j
+          if over < 0 or r[].before(m, over):
+            over = m
+    if over >= 0:
+      # [ruling S1] No depth in the message: it would show the limit, which is
+      # protected policy input (PM l.1514), to the caller.
+      r.tripped = "dependency_depth"
+      r.settled = Opt.some(
+        unavailableDependency(r.names[over] & " is beyond the dependency-depth limit")
+      )
 
-proc unbind(r: var Resolver, x: NameId) =
+  body
+
+proc unbindSteps(r: ref Resolver, x: NameId): RunSteps =
   ## Undoes the last bind, `x`'s: its depth changes, its edges, its
   ## requirements; `x` is unresolved again if it is still required.
-  let b = r.binds.pop()
-  doAssert b.id == x, "binds are undone in reverse order"
-  for i in countdown(r.trail.high, b.trail):
-    inc r.work
-    let (n, old) = r.trail[i]
-    r.depth[n] = old
-  r.trail.setLen(b.trail)
-  if b.linked:
-    for p in r.parents[x]:
-      inc r.work
-      doAssert r.kids[p][^1] == x, "a bind's edges are the last of its parents'"
-      r.kids[p].setLen(r.kids[p].len - 1)
-    r.kids[x].setLen(0)
-  let ids = r.cands[x].depIds
-  for i in countdown(ids.high, 0):
-    inc r.work
-    let n = ids[i]
-    doAssert r.parents[n][^1] == x, "a bind's requirements are the last of each name's"
-    r.parents[n].setLen(r.parents[n].len - 1)
-    r.reqs[n].setLen(r.reqs[n].len - 1)
-  r.bound[x] = false
-  dec r.boundCount
-  r.cands[x] = Cand()
-  if r.reqs[x].len > 0:
-    r.push(x)
+  iterator body(): Suspension {.closure, gcsafe, raises: [].} =
+    let b = r.binds.pop()
+    doAssert b.id == x, "binds are undone in reverse order"
+    var i = r.trail.high
+    while i >= b.trail:
+      tick(r)
+      let (n, old) = r.trail[i]
+      r.depth[n] = old
+      dec i
+    r.trail.setLen(b.trail)
+    if b.linked:
+      var j = 0
+      while j < r.parents[x].len:
+        tick(r)
+        let p = r.parents[x][j]
+        inc j
+        doAssert r.kids[p][^1] == x, "a bind's edges are the last of its parents'"
+        r.kids[p].setLen(r.kids[p].len - 1)
+      r.kids[x].setLen(0)
+    var k = r.cands[x].depIds.high
+    while k >= 0:
+      tick(r)
+      let n = r.cands[x].depIds[k]
+      dec k
+      doAssert r.parents[n][^1] == x,
+        "a bind's requirements are the last of each name's"
+      r.parents[n].setLen(r.parents[n].len - 1)
+      r.reqs[n].setLen(r.reqs[n].len - 1)
+    r.bound[x] = false
+    dec r.boundCount
+    r.cands[x] = Cand()
+    if r.reqs[x].len > 0:
+      r[].push(x)
+
+  body
 
 proc unboundDepth(r: var Resolver, x: NameId): int =
   ## [SPEC PM §11 l.1256] A required name's depth before it is bound: one more
@@ -950,24 +1294,31 @@ proc unboundDepth(r: var Resolver, x: NameId): int =
     inc r.work
     result = max(result, int(r.depth[p]) + 1)
 
-proc nextVersion(r: var Resolver, f: var Frame): Opt[string] =
-  ## [SPEC PM §11] The frame's next version satisfying every accumulated
-  ## requirement, in descending SemVer precedence. [IMPL-DECISION G454] Tested
-  ## as it comes: the name's requirements are the same each time its frame
-  ## tries a version, so this is the sequence a list made at the frame's push
-  ## would give.
-  while f.next < r.versions[f.id].len:
-    let v = r.versions[f.id][f.next]
-    inc f.next
-    var ok = true
-    for q in r.reqs[f.id]:
-      inc r.work
-      if not satisfies(q.kind, q.version, v):
-        ok = false
-        break
-    if ok:
-      return Opt.some(v)
-  Opt.none(string)
+proc versionSteps(r: ref Resolver, f: int): RunSteps =
+  ## [SPEC PM §11] The next version of frame `f` satisfying every accumulated
+  ## requirement, in descending SemVer precedence (`r.version`; none when it
+  ## has no more). [IMPL-DECISION G454] Tested as it comes: the name's
+  ## requirements are the same each time its frame tries a version, so this is
+  ## the sequence a list made at the frame's push would give.
+  iterator body(): Suspension {.closure, gcsafe, raises: [].} =
+    r.version = Opt.none(string)
+    let x = r.stack[f].id
+    while r.stack[f].next < r.versions[x].len:
+      let v = r.versions[x][r.stack[f].next]
+      inc r.stack[f].next
+      var ok = true
+      var i = 0
+      while i < r.reqs[x].len:
+        tick(r)
+        if not satisfies(r.reqs[x][i].kind, r.reqs[x][i].version, v):
+          ok = false
+          break
+        inc i
+      if ok:
+        r.version = Opt.some(v)
+        return
+
+  body
 
 proc charge(r: var Resolver, name, version: string): Result[void, PackageError] =
   ## [SPEC PM §11 l.1262-1268] [IMPL-DECISION I110] One charge per package name
@@ -1012,32 +1363,34 @@ proc sourceRoot(
   ## It has no identity until it is inspected, so it is charged after; an
   ## ineligible or unavailable source charges nothing.
   let x = r.inspectSource(root.source.get)
-  case x.kind
+  if x.isNil:
+    return err(pending())
+  case x[].kind
   of ikUnavailable:
-    return err(packageError(pecPackageUnavailable, "the root source: " & x.reason))
+    return err(packageError(pecPackageUnavailable, "the root source: " & x[].reason))
   of ikIneligible:
-    return err(x.error)
+    return err(x[].error)
   of ikEligible:
     discard
-  if package.get(x.identity.package) != x.identity.package or
-      root.version.get(x.identity.version) != x.identity.version:
+  if package.get(x[].identity.package) != x[].identity.package or
+      root.version.get(x[].identity.version) != x[].identity.version:
     # [SPEC PM §8 l.1074-1079] a manifest that conflicts with the selected
     # package reference is an invalid package, not an invalid request
     return err(
-      packageError(pecInvalidPackage, "the source's manifest declares " & $x.identity)
+      packageError(pecInvalidPackage, "the source's manifest declares " & $x[].identity)
     )
-  ?r.charge(x.identity.package, x.identity.version)
-  let (names, deps) = fresh(x.dependencies)
-  let at = r.installedAt.getOrDefault(x.identity.key, -1)
+  ?r.charge(x[].identity.package, x[].identity.version)
+  let (names, deps) = fresh(x[].dependencies)
+  let at = r.installedAt.getOrDefault(x[].identity.key, -1)
   ok(
     Cand(
-      identity: x.identity,
-      commitment: x.commitment,
-      installed: at >= 0 and r.installed[at].commitment == x.commitment,
+      identity: x[].identity,
+      commitment: x[].commitment,
+      installed: at >= 0 and r.installed[at].commitment == x[].commitment,
       source: root.source,
       depNames: names,
       deps: deps,
-      provides: contractKeys(x.provides),
+      provides: contractKeys(x[].provides),
     )
   )
 
@@ -1045,11 +1398,13 @@ proc versionRoot(r: var Resolver, id: PackageIdentity): Result[Cand, PackageErro
   if not r.known(id):
     return err(packageError(pecPackageUnavailable, "no source holds " & $id))
   ?r.charge(id.package, id.version)
-  let e = ?r.evaluate(id)
-  let c = ?r.rootCandidate(id, e)
+  let at = ?r.evaluate(id)
+  var c = ?r.rootCandidate(id, r.evals[at])
   if c.isNone:
-    return err(e.firstError.get(packageError(pecPackageUnavailable, $id)))
-  ok(c.get)
+    return err(r.evals[at].firstError.get(packageError(pecPackageUnavailable, $id)))
+  # [IMPL-DECISION G455] Moved, not copied: a copy of a maximum-size
+  # manifest's requirement list took milliseconds of the turn.
+  ok(move c.get)
 
 proc selectRoot(r: var Resolver, root: RootReference): Result[Opt[Cand], PackageError] =
   ## [SPEC PM §11, §15] A supplied source's verified manifest fixes the root;
@@ -1100,14 +1455,14 @@ proc selectRoot(r: var Resolver, root: RootReference): Result[Opt[Cand], Package
       break # descending: no newer version is left
     let id = PackageIdentity(package: name, version: v)
     ?r.charge(name, v)
-    let e = ?r.evaluate(id)
-    let c = ?r.rootCandidate(id, e)
+    let at = ?r.evaluate(id)
+    let c = ?r.rootCandidate(id, r.evals[at])
     if c.isSome:
       return ok(c)
-    if root.newerThan.isSome and e.unsupportedOnly:
+    if root.newerThan.isSome and r.evals[at].unsupportedOnly:
       continue # [SPEC PM §15 l.1707] not applicable
     if first.isNone:
-      first = e.firstError
+      first = r.evals[at].firstError
   if root.newerThan.isNone:
     return err(
       first.get(packageError(pecPackageUnavailable, "no normal release of " & name))
@@ -1141,110 +1496,391 @@ func counters(r: Resolver): ResolverCounters =
   result.attempts = r.attempts
   result.limit = r.tripped
 
-proc closure(r: var Resolver): Resolution =
-  var picked: seq[(string, NameId)]
-  for i in 0 ..< r.names.len:
-    if r.bound[i]:
-      inc r.work
-      picked.add((r.names[i], NameId(i)))
-  picked.sort()
-  result.root = r.cands[r.root].identity
-  for (n, x) in picked:
-    # [IMPL] Fields are read in place: a `let` copy of a candidate copies its
-    # dependency lists, which made this loop cubic in a dense closure.
-    var p = SelectedPackage(
-      identity: r.cands[x].identity,
-      commitment: r.cands[x].commitment,
-      installed: r.cands[x].installed,
-      source:
-        if r.cands[x].installed and x != r.root:
-          Opt.none(PackageSource)
-        else:
-          # [SPEC PM §15 l.1686-1687] The root's selected or supplied source is
-          # kept even when it is installed: its signature is the request's.
-          r.cands[x].source,
-      depth: int(r.depth[x]),
-    )
-    if r.cands[x].edges.isSome:
-      p.resolvedDependencies = r.cands[x].edges.get
-    else:
-      p.resolvedDependencies = newSeqOfCap[ResolvedDependency](r.cands[x].depIds.len)
-      for d in r.cands[x].depIds:
-        inc r.work
-        p.resolvedDependencies.add(
-          ResolvedDependency(
-            identity: r.cands[d].identity, commitment: r.cands[d].commitment
-          )
-        )
-    result.packages.add(move p)
-  result.counters = r.counters
-
-proc run(r: var Resolver, root: RootReference): Result[Resolution, PackageError] =
-  let picked = ?r.selectRoot(root)
-  if picked.isNone:
-    return
-      ok(Resolution(root: root.newerThan.get, unchanged: true, counters: r.counters))
-  let rc = picked.get
-  r.root = r.idOf(rc.identity.package)
-  # [SPEC PM §11] The root counts toward the partial closure, at depth zero; it
-  # was charged when it was examined, and binding it is an attempt.
-  ?r.attempt()
-  if not r.bindCand(r.root, rc):
-    return err(unavailableDependency("the root's own dependencies close a cycle"))
-  ?r.settle()
-
-  var stack: seq[Frame]
-  while true:
-    let next = r.nextUnresolved()
-    if next.isNone:
-      return ok(r.closure())
-    stack.add(Frame(id: next.get, depth: -1))
-    var placed = false
-    while stack.len > 0 and not placed:
-      let f = stack.len - 1
-      if stack[f].bound:
-        r.unbind(stack[f].id)
-        stack[f].bound = false
-      while true:
-        let x = stack[f].id
-        let version = r.nextVersion(stack[f]).valueOr:
-          break
-        if stack[f].depth < 0:
-          stack[f].depth = r.unboundDepth(x)
-        if stack[f].depth > r.limits.depth:
-          r.tripped = "dependency_depth" # [ruling S1] no depth in the message
-          return err(
-            unavailableDependency(
-              "inspecting " & r.names[x] & " exceeds the dependency-depth limit"
+proc closureSteps(r: ref Resolver): RunSteps =
+  ## The complete closure (`r.resolution`), in package-name byte order.
+  iterator body(): Suspension {.closure, gcsafe, raises: [].} =
+    var picked: seq[(string, NameId)]
+    var i = 0
+    while i < r.names.len:
+      if r.bound[i]:
+        tick(r)
+        picked.add((r.names[i], NameId(i)))
+      inc i
+    picked.sort()
+    r.resolution = Resolution(root: r.cands[r.root].identity)
+    var j = 0
+    while j < picked.len:
+      let x = picked[j][1]
+      inc j
+      # [IMPL] Fields are read in place: a `let` copy of a candidate copies its
+      # dependency lists, which made this loop cubic in a dense closure.
+      var p = SelectedPackage(
+        identity: r.cands[x].identity,
+        commitment: r.cands[x].commitment,
+        installed: r.cands[x].installed,
+        source:
+          if r.cands[x].installed and x != r.root:
+            Opt.none(PackageSource)
+          else:
+            # [SPEC PM §15 l.1686-1687] The root's selected or supplied source is
+            # kept even when it is installed: its signature is the request's.
+            r.cands[x].source,
+        depth: int(r.depth[x]),
+      )
+      if r.cands[x].edges.isSome:
+        p.resolvedDependencies = r.cands[x].edges.get
+      else:
+        p.resolvedDependencies = newSeqOfCap[ResolvedDependency](r.cands[x].depIds.len)
+        var k = 0
+        while k < r.cands[x].depIds.len:
+          tick(r)
+          let d = r.cands[x].depIds[k]
+          inc k
+          p.resolvedDependencies.add(
+            ResolvedDependency(
+              identity: r.cands[d].identity, commitment: r.cands[d].commitment
             )
           )
-        let name = r.names[x]
-        let id = PackageIdentity(package: name, version: version)
-        if (name, version) notin r.charged and
-            r.excludedByKnownCommitment(id, r.pinsFor(x)):
-          continue
-        ?r.charge(name, version)
-        let e = ?r.evaluate(id)
-        let c = (?r.dependencyCandidate(x, id, e)).valueOr:
-          continue
-        if r.boundCount + 1 > r.limits.names:
-          r.tripped = "partial_closure_names"
-          return err(
-            unavailableDependency(
-              "adding " & name & " exceeds the partial-closure package-name limit"
-            )
-          )
-        ?r.attempt()
-        if r.bindCand(x, c):
-          ?r.settle()
-          stack[f].bound = true
-          placed = true
+      r.resolution.packages.add(move p)
+    r.resolution.counters = r[].counters
+
+  body
+
+template finish(r: ref Resolver, o: Result[Resolution, PackageError]) =
+  ## [IMPL-DECISION G455] The run's outcome: marked, yielded, and the run ends
+  ## (rule I5). Only in `runSteps`' body.
+  r.ended = true
+  yield Suspension(kind: suDone, outcome: o)
+  return
+
+template fail(r: ref Resolver, e: PackageError) =
+  finish(r, Result[Resolution, PackageError].err(e))
+
+template sub(r: ref Resolver, steps: RunSteps) =
+  ## [IMPL-DECISION G455] A nested run of steps: each suspension it yields is
+  ## the run's. Nested steps only spend turns; their answers are marks in `r`.
+  let nested = steps
+  for s in nested():
+    yield s
+
+proc runSteps(r: ref Resolver, root: RootReference): RunSteps =
+  ## [SPEC PM §11, §15] [IMPL-DECISION G455] The search, as a run that
+  ## suspends where it needs an inspection or a retained-bytes answer and
+  ## where its turn's work is spent (5-3c's plan §3.5). `selectRoot` and
+  ## `evaluate` are called again once what they need is supplied: their
+  ## charges are once per name and version, and their memos are filled only
+  ## by supplied answers and completed evaluations, so a second call sees what
+  ## a synchronous run would.
+  iterator body(): Suspension {.closure, gcsafe, raises: [].} =
+    sub(r, setupSteps(r))
+    var picked = Opt.none(Cand)
+    while true:
+      var got = r[].selectRoot(root)
+      if r.miss.isSome:
+        yield r[].takeMiss()
+        continue
+      if got.isErr:
+        fail(r, got.error)
+      picked = move(got.get)
+      break
+    if picked.isNone:
+      finish(
+        r,
+        Result[Resolution, PackageError].ok(
+          Resolution(root: root.newerThan.get, unchanged: true, counters: r[].counters)
+        ),
+      )
+    # [IMPL-DECISION G455] Building a candidate's requirement list, counted by
+    # its entries: one of a maximum-size manifest, about 80,000, is built in one
+    # go, and the bind that reads it then starts a turn of its own.
+    spendBy(r, picked.get.deps.len)
+    r.root = r[].idOf(picked.get.identity.package)
+    # [SPEC PM §11] The root counts toward the partial closure, at depth zero;
+    # it was charged when it was examined, and binding it is an attempt.
+    block:
+      let a = r[].attempt()
+      if a.isErr:
+        fail(r, a.error)
+    r.cands[r.root] = move(picked.get)
+    picked = Opt.none(Cand)
+    sub(r, bindSteps(r, r.root))
+    if not r.bindOk:
+      fail(r, unavailableDependency("the root's own dependencies close a cycle"))
+    sub(r, settleSteps(r))
+    if r.settled.isSome:
+      fail(r, r.settled.get)
+
+    while true:
+      # [SPEC PM §11] The unresolved package name first in UTF-8 byte order: the
+      # heap's top once the entries that are no longer unresolved are dropped.
+      var next = -1'i32
+      while r.unresolved.len > 0:
+        let top = r.unresolved[0]
+        if r.reqs[top].len > 0 and not r.bound[top]:
+          next = top
           break
-        r.unbind(x)
+        r[].popTop()
+        if r.work >= r.turnEnd:
+          yield Suspension(kind: suTurn)
+      if next < 0:
+        sub(r, closureSteps(r))
+        finish(r, Result[Resolution, PackageError].ok(move r.resolution))
+      r.stack.add(Frame(id: next, depth: -1))
+      var placed = false
+      while r.stack.len > 0 and not placed:
+        let f = r.stack.len - 1
+        if r.stack[f].bound:
+          sub(r, unbindSteps(r, r.stack[f].id))
+          r.stack[f].bound = false
+        while true:
+          let x = r.stack[f].id
+          sub(r, versionSteps(r, f))
+          if r.version.isNone:
+            break
+          let version = r.version.get
+          if r.stack[f].depth < 0:
+            r.stack[f].depth = r[].unboundDepth(x)
+          if r.stack[f].depth > r.limits.depth:
+            r.tripped = "dependency_depth" # [ruling S1] no depth in the message
+            fail(
+              r,
+              unavailableDependency(
+                "inspecting " & r.names[x] & " exceeds the dependency-depth limit"
+              ),
+            )
+          let name = r.names[x]
+          let id = PackageIdentity(package: name, version: version)
+          if (name, version) notin r.charged and
+              r[].excludedByKnownCommitment(id, r[].pinsFor(x)):
+            continue
+          block:
+            let ch = r[].charge(name, version)
+            if ch.isErr:
+              fail(r, ch.error)
+          var at = -1
+          while true:
+            let got = r[].evaluate(id)
+            if r.miss.isSome:
+              yield r[].takeMiss()
+              continue
+            if got.isErr:
+              fail(r, got.error)
+            at = got.get
+            break
+          var dc = r[].dependencyCandidate(x, id, r.evals[at])
+          if dc.isErr:
+            fail(r, dc.error)
+          if dc.get.isNone:
+            continue
+          spendBy(r, dc.get.get.deps.len) # as the root's
+          if r.boundCount + 1 > r.limits.names:
+            r.tripped = "partial_closure_names"
+            fail(
+              r,
+              unavailableDependency(
+                "adding " & name & " exceeds the partial-closure package-name limit"
+              ),
+            )
+          block:
+            let a = r[].attempt()
+            if a.isErr:
+              fail(r, a.error)
+          r.cands[x] = move(dc.get.get)
+          sub(r, bindSteps(r, x))
+          if r.bindOk:
+            sub(r, settleSteps(r))
+            if r.settled.isSome:
+              fail(r, r.settled.get)
+            r.stack[f].bound = true
+            placed = true
+            break
+          sub(r, unbindSteps(r, x))
+        if not placed:
+          discard r.stack.pop()
       if not placed:
-        discard stack.pop()
-    if not placed:
-      return err(unavailableDependency("no complete dependency closure exists"))
+        fail(r, unavailableDependency("no complete dependency closure exists"))
+
+  body
+
+proc releaseSteps(r: ref Resolver): RunSteps =
+  ## [IMPL-DECISION G455] Frees what a run holds, a turn's work at a time, the
+  ## work being the elements freed: at the maxima a run holds gigabytes, and
+  ## freeing them at once would hold the module thread for seconds. Yields
+  ## `suDone` (with no outcome that matters) once all is freed. A table is
+  ## freed in one go, counted as its size: only `inspected` holds much, and its
+  ## values are freed one by one first.
+  iterator body(): Suspension {.closure, gcsafe, raises: [].} =
+    while r.names.len > 0:
+      let n = r.names.high
+      var size =
+        1 + r.reqs[n].len + r.parents[n].len + r.kids[n].len + r.versions[n].len +
+        r.cands[n].deps.len
+      if r.cands[n].edges.isSome:
+        size += r.cands[n].edges.get.len
+      spendBy(r, size)
+      r.ids.del(r.names[n])
+      r.names.setLen(n)
+      r.versions.setLen(n)
+      r.reqs.setLen(n)
+      r.parents.setLen(n)
+      r.kids.setLen(n)
+      r.depth.setLen(n)
+      r.cands.setLen(n)
+      r.bound.setLen(n)
+      r.seenAt.setLen(n)
+      r.parentAt.setLen(n)
+      r.changedAt.setLen(n)
+    while r.evals.len > 0:
+      var size = 1 + r.evals[^1].errors.len
+      for p in r.evals[^1].picks:
+        size += 1 + p.deps.len
+      spendBy(r, size)
+      r.evals.setLen(r.evals.len - 1)
+    # Rule I2: no view of the table is held across a yield.
+    var keys = newSeqOfCap[seq[byte]](r.inspected.len)
+    for k in r.inspected.keys:
+      keys.add(k)
+    spendBy(r, keys.len)
+    while keys.len > 0:
+      var size = 1
+      r.inspected.withValue(keys[^1], v):
+        if v[].kind == ikEligible:
+          size += v[].dependencies.len + v[].provides.len
+        v[] = Inspection(kind: ikUnavailable)
+      keys.setLen(keys.len - 1)
+      spendBy(r, size)
+    spendBy(r, r.inspected.len + r.ids.len + r.evalAt.len + r.partial.len)
+    r.inspected.clear()
+    r.ids.clear()
+    r.evalAt.clear()
+    r.partial.clear()
+    # The catalog and its index by identity, an entry at a time: 65,536 entries
+    # freed at once took 8 ms.
+    while r.catalog.len > 0:
+      spendBy(r, 2)
+      r.entries.del(r.catalog[^1].identity.key)
+      r.catalog.setLen(r.catalog.len - 1)
+    while r.installed.len > 0:
+      spendBy(r, 2)
+      r.installedAt.del(r.installed[^1].identity.key)
+      r.installed.setLen(r.installed.len - 1)
+    spendBy(
+      r,
+      r.entries.len + r.installedAt.len + r.charged.len + r.considered.len +
+        r.retainedAnswers.len,
+    )
+    r.entries.clear()
+    r.installedAt.clear()
+    r.charged.clear()
+    r.considered.clear()
+    r.retainedAnswers.clear()
+    spendBy(
+      r,
+      r.unresolved.len + r.binds.len + r.trail.len + r.buckets.len + r.walk.len +
+        r.stack.len,
+    )
+    r.unresolved.setLen(0)
+    r.binds.setLen(0)
+    r.trail.setLen(0)
+    r.buckets.setLen(0)
+    r.walk.setLen(0)
+    r.stack.setLen(0)
+    r.resolution = Resolution()
+    yield
+      Suspension(kind: suDone, outcome: Result[Resolution, PackageError].err(pending()))
+
+  body
+
+# The resumable run --------------------------------------------------------------------
+
+const
+  ResolverTurnWork* = 32_768'i64
+    ## [IMPL-DECISION G455] The work units one turn of a run spends before it
+    ## yields `suTurn` (5-3c's plan §3.6): a constant, not configuration (Q5),
+    ## since it changes no result, no counter and no limit (PM l.1279-1280). The
+    ## bench calibrated it (docs/CONFORMANCE.md, "The resumable run"): the
+    ## plan's 65,536 gave turns of 12 to 13 ms at the maxima on the Mac.
+  NoTurnBudget* = high(int64) ## a run that never yields `suTurn`
+
+type ResolverRun* = ref object
+  ## [IMPL-DECISION G455] One root operation's resolution, resumable. Its
+  ## driver holds it; it holds the resolver and its steps, and the resolver
+  ## holds neither (rule I6).
+  r: ref Resolver
+  steps: RunSteps
+  releasing: RunSteps ## `release`'s steps, once it is called
+  budget: int64
+
+proc startRun*(
+    input: sink ResolverInput, root: RootReference, budget = ResolverTurnWork
+): ResolverRun =
+  ## [IMPL-DECISION G455] A run of `root`'s resolution over `input`, none of it
+  ## done yet: `resume` runs it. `input.inspect` and `input.retained` are not
+  ## called: each inspection and each retained-bytes answer is asked for with
+  ## a suspension and given with `supply` or `supplyRetained`. `budget` is the
+  ## work of one turn; `NoTurnBudget` never ends one.
+  doAssert budget > 0, "a turn spends some work"
+  let r = new Resolver
+  r[].initResolver(input) # its setup is the run's first steps
+  ResolverRun(r: r, steps: runSteps(r, root), budget: budget)
+
+proc resume*(run: ResolverRun): Suspension =
+  ## [IMPL-DECISION G455] Runs one turn: until the run needs something, its
+  ## turn's work is spent, or it gives its outcome. Never after `suDone`.
+  doAssert not run.steps.isNil, "a run is not resumed after its outcome"
+  run.r.turnEnd =
+    if run.budget > high(int64) - run.r.work:
+      high(int64)
+    else:
+      run.r.work + run.budget
+  result = run.steps()
+  if result.kind == suDone:
+    doAssert run.r.ended
+    run.steps = nil # rule I6: the steps' environment goes with them
+
+proc release*(run: ResolverRun): bool =
+  ## [IMPL-DECISION G455] Frees one turn's work of what the run holds; true
+  ## once all of it is freed. After the outcome, or instead of it: a run that
+  ## is given up (its caller cancelled it) is not resumed again, and its steps
+  ## are dropped at the first call. Each call is one turn, as `resume`'s.
+  run.steps = nil
+  if run.releasing.isNil:
+    run.releasing = releaseSteps(run.r)
+  run.r.turnEnd =
+    if run.budget > high(int64) - run.r.work:
+      high(int64)
+    else:
+      run.r.work + run.budget
+  if run.releasing().kind == suDone:
+    run.releasing = nil
+    return true
+  false
+
+proc supply*(run: ResolverRun, source: PackageSource, inspection: sink Inspection) =
+  ## The inspection of a source a `suNeedSource` named. Ignored once the run
+  ## gave its outcome or is being released. [IMPL-DECISION G455] Taken, not
+  ## copied: a maximum-size manifest's copy took milliseconds, in the handler
+  ## that delivers it.
+  if not run.steps.isNil:
+    run.r.inspected[source.encoded] = inspection
+
+proc supplyRetained*(run: ResolverRun, record: int, answer: Result[void, string]) =
+  ## The retained-bytes answer for the installed record a `suNeedRetained`
+  ## named. Ignored once the run gave its outcome or is being released.
+  if not run.steps.isNil:
+    run.r.retainedAnswers[record] = answer
+
+func supplied*(run: ResolverRun): int =
+  ## The inspections supplied so far.
+  run.r.inspected.len
+
+func counters*(run: ResolverRun): ResolverCounters =
+  run.r[].counters
+
+func work*(run: ResolverRun): int64 =
+  ## [IMPL-DECISION G454] The work units counted so far, the same for the same
+  ## inputs whatever the budget.
+  run.r.work
 
 proc resolve*(
     input: ResolverInput,
@@ -1260,10 +1896,24 @@ proc resolve*(
   ## root's own error. `counters` holds the counts either way; they depend only
   ## on the inputs. `work` is the number of work units the run counted
   ## ([IMPL-DECISION G454]), the same for the same inputs.
-  var r = initResolver(input)
-  result = r.run(root)
-  counters = r.counters
-  work = r.work
+  ##
+  ## [IMPL-DECISION G455] The run, driven to its end in one go: each need is
+  ## answered by `input.inspect` and `input.retained` when it is asked for.
+  doAssert not input.retained.isNil, "the retained-bytes check is required"
+  let run = startRun(input, root, NoTurnBudget)
+  while true:
+    let s = run.resume()
+    case s.kind
+    of suNeedSource:
+      run.supply(s.source, input.inspect(s.source, input.trust))
+    of suNeedRetained:
+      run.supplyRetained(s.record, input.retained(input.installed[s.record]))
+    of suTurn:
+      discard
+    of suDone:
+      counters = run.counters
+      work = run.work
+      return s.outcome
 
 proc resolve*(
     input: ResolverInput, root: RootReference, counters: var ResolverCounters

@@ -1964,3 +1964,133 @@ suite "pkg.resolver: the resolver gives the frozen oracle's results (G454)":
         let want = described(oracleResolve(input, s.rootOf, k), k)
         let got = described(resolve(input, s.rootOf, c), c)
         check got == want
+
+# The resumable run (Tier 5 step 5-3c-2; DECISIONS G455) --------------------------------
+
+proc runBy(
+    u: Universe,
+    root: RootReference,
+    lim: ResolverLimits,
+    budget: int64,
+    work, turns, releaseTurns: var int64,
+): seq[string] =
+  ## [G455] One resolution as a resumable run of `budget` work units a turn, each need
+  ## answered when the run asks for it, as the driver does, then released turn by turn:
+  ## what `resolveBy` reports.
+  u.log.setLen(0)
+  u.checked.setLen(0)
+  let input = ResolverInput(
+    installed: u.installed,
+    catalog: u.catalog,
+    limits: lim,
+    trust: u.trust,
+    inspect: u.inspector,
+    retained: u.retained,
+  )
+  let run = startRun(input, root, budget)
+  turns = 0
+  while true:
+    var s = run.resume()
+    case s.kind
+    of suNeedSource:
+      run.supply(s.source, input.inspect(s.source, input.trust))
+    of suNeedRetained:
+      run.supplyRetained(s.record, input.retained(input.installed[s.record]))
+    of suTurn:
+      inc turns
+    of suDone:
+      work = run.work
+      result = described(s.outcome, run.counters)
+      break
+  releaseTurns = 1
+  while not run.release():
+    inc releaseTurns
+  result.add("inspected " & u.log.join(" "))
+  result.add("checked " & u.checked.join(" "))
+
+suite "pkg.resolver: the resumable run (G455)":
+  const Budgets = [1'i64, 2, 3, 17, 1_000, NoTurnBudget]
+
+  test "[IMPL-DECISION G455] seeded catalogs, under turn budgets of 1, 2, 3, 17 and 1,000 work units and none: the oracle's results, and one work total":
+    # The same retrievals in the same order as the oracle's synchronous run, whatever the
+    # budget; the work total and the turns are the same each time for one budget.
+    var rng = initRand(0x5_3C_2)
+    var seen: set[Feature]
+    var sliced, releasedInTurns = 0
+    for round in 0 ..< 2_000:
+      let g = rng.generated(seen)
+      checkpoint "round " & $round
+      let want = g.u.resolveBy(g.root, g.limits, oracle = true)
+      var total = -1'i64
+      var most = 0'i64
+      for budget in Budgets:
+        checkpoint "budget " & $budget
+        var work, turns, releaseTurns: int64
+        check g.u.runBy(g.root, g.limits, budget, work, turns, releaseTurns) == want
+        if total < 0:
+          total = work
+          most = turns
+        check work == total
+        check turns <= most
+        if budget == NoTurnBudget:
+          check turns == 0
+          check releaseTurns == 1
+        if budget == 1:
+          if work > 0:
+            check turns > 0
+            inc sliced
+          if releaseTurns > 1:
+            inc releasedInTurns
+        if budget == 17:
+          var work2, turns2, releaseTurns2: int64
+          check g.u.runBy(g.root, g.limits, budget, work2, turns2, releaseTurns2) == want
+          check work2 == work
+          check turns2 == turns
+          check releaseTurns2 == releaseTurns
+    check sliced > 1_000
+    check releasedInTurns > 1_000
+
+  test "[IMPL-DECISION G455] a run is resumed only until its outcome; what it holds is released after it, or instead of it":
+    let u = Universe()
+    u.add("a", "1.0.0", ["b ^1.0.0"])
+    u.add("b", "1.0.0")
+    let input = ResolverInput(
+      catalog: u.catalog,
+      limits: MaxResolverLimits,
+      trust: u.trust,
+      inspect: u.inspector,
+      retained: u.retained,
+    )
+    let root = RootReference(package: Opt.some("a"))
+    # Given up after its first need: no later answer reaches it.
+    let given = startRun(input, root, 1)
+    var first = given.resume()
+    while first.kind == suTurn: # the setup's turns
+      first = given.resume()
+    check first.kind == suNeedSource
+    var releases = 1
+    while not given.release():
+      inc releases
+    check releases > 1
+    given.supply(first.source, input.inspect(first.source, input.trust))
+    check given.supplied == 0
+    # Driven to its outcome: the same as the synchronous run's.
+    let run = startRun(input, root, 1)
+    var outcome: Result[Resolution, PackageError]
+    while true:
+      var s = run.resume()
+      case s.kind
+      of suNeedSource:
+        run.supply(s.source, input.inspect(s.source, input.trust))
+      of suNeedRetained:
+        run.supplyRetained(s.record, input.retained(input.installed[s.record]))
+      of suTurn:
+        discard
+      of suDone:
+        outcome = s.outcome
+        break
+    check outcome.get.packages.mapIt($it.identity) == @["a@1.0.0", "b@1.0.0"]
+    check resolve(input, root).get.packages.mapIt($it.identity) ==
+      @["a@1.0.0", "b@1.0.0"]
+    while not run.release():
+      discard
