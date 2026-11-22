@@ -541,9 +541,11 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
     operation its caller gave up, and answers the running ones at `stop`. `pm/shell.nim` runs each continue from a
     `callSoon` of its own, so I/O and timers go between two turns (F2).
   - The operation bound's resolver half (G477): `ResolverInput.operationEntries` counts the inputs one root
-    operation reads (each record once, with its dependency entries and provided contracts), and the read that passes
-    it ends the operation with `package-unavailable` (PM l.1308-1309), the four limits untouched. The synchronous
-    API runs with none; 5-5-3 adds the protected key `operation_entries`. No unit changes status.
+    operation reads (each record once, with its dependency entries, the contracts they list and its provided
+    contracts: one walk, `inputUnits`, beside `Inspection`), and the read that takes the count over it ends the
+    operation with `package-unavailable` (PM l.1308-1309), the four limits untouched. The synchronous API runs with
+    none; 5-5-3 adds the protected key `operation_entries` and weighs its cache over the same walk. No unit changes
+    status.
   - `test_resolver` drives 2,000 seeded catalogs through the run under six turn budgets against the oracle;
     `test_pm_driver` gains the engine's turns (alternation, stop, cancel, release) and each shape under every
     budget; `test_pm_hosted` a sliced operation with a second operation and a readiness event between its turns.

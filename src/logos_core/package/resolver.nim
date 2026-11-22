@@ -67,6 +67,24 @@ type
     of ikUnavailable:
       reason*: string
 
+  InputUnitKind* = enum
+    ## [IMPL-DECISION G477] The kinds of input one record holds, as its walk
+    ## (`inputUnits`) gives them: the operation bound counts each one, and the
+    ## verification cache weighs each in bytes (5-5-3). Each kind's size is
+    ## bounded, so a count of them bounds what a record holds.
+    iuRecord ## the record itself
+    iuDependency ## a dependency entry: its package name and version text
+    iuDependencyContract
+      ## [SPEC PM §4 l.295] a contract a dependency entry lists: up to about
+      ## 22,000 in one entry of a 4 MiB manifest
+    iuProvided ## a contract the record provides
+
+  InputUnit* = tuple[kind: InputUnitKind, bytes: int]
+    ## [IMPL-DECISION G477] One unit of a record's input, and the bytes of its
+    ## variable parts: a record's identity text (and an ineligible record's
+    ## message), a dependency entry's package name and version text, or a
+    ## contract's deterministic encoding (`encodedSize`).
+
   Inspector* =
     proc(source: PackageSource, trust: TrustInput): Inspection {.gcsafe, raises: [].}
     ## Locates, materializes and checks one source record: manifest commitment,
@@ -116,9 +134,9 @@ type
     operationEntries*: Opt[int]
       ## [IMPL-DECISION G477] The operation bound, protected input
       ## (`operation_entries`): how many inputs one root operation may read
-      ## (`ResolverCounters.entries`). Past it the operation ends with
-      ## `package-unavailable` (PM l.1308-1309), as an archive over
-      ## `archive_bytes` does. None: no bound. It is not a resolver limit: the
+      ## (`ResolverCounters.entries`). A count over it, not one equal to it,
+      ## ends the operation with `package-unavailable` (PM l.1308-1309), as an
+      ## archive over `archive_bytes` does. None: no bound. Not a limit: the
       ## four limits and their counters are untouched (PM l.1279-1280).
 
   SelectedPackage* = object
@@ -146,12 +164,11 @@ type
       ## its exhaustion answers `dependency-unavailable` like a missing
       ## dependency (PM l.1501-1502).
     entries*: int
-      ## [IMPL-DECISION G477] The inputs read: one for each record (a catalog
-      ## record when its inspection is supplied, an installed record at its
-      ## first evaluation), plus, for an eligible inspection, one for each of
-      ## its dependency entries and provided contracts, and for an installed
-      ## record, one for each of its dependency entries and each contract its
-      ## module declarations name. Each record once in a root operation.
+      ## [IMPL-DECISION G477] The inputs read, counted by `inputUnits`: each
+      ## record read (a catalog record when its inspection is supplied, an
+      ## installed record at its first evaluation), each of its dependency
+      ## entries, each contract a dependency entry lists, and each contract it
+      ## provides. Each record once in a root operation.
     bound*: string
       ## [IMPL-DECISION G477] `operation_entries` when the operation bound
       ## ended the operation; empty: it did not. For the operator's log: the
@@ -185,6 +202,62 @@ type
       discard
     of suDone:
       outcome*: Result[Resolution, PackageError]
+
+# A record's input units --------------------------------------------------------------
+
+iterator inputUnits*(x: Inspection): InputUnit =
+  ## [IMPL-DECISION G477] One inspection's input, unit by unit: the record,
+  ## then each dependency entry followed by the contracts it lists, then each
+  ## provided contract.
+  case x.kind
+  of ikEligible:
+    yield (iuRecord, x.identity.package.len + x.identity.version.len)
+    for d in x.dependencies:
+      yield (iuDependency, d.package.len + d.version.len)
+      for c in d.contracts:
+        yield (iuDependencyContract, encodedSize(c))
+    for c in x.provides:
+      yield (iuProvided, encodedSize(c))
+  of ikIneligible:
+    yield (iuRecord, x.error.msg.len)
+  of ikUnavailable:
+    yield (iuRecord, x.reason.len)
+
+iterator inputUnits*(p: InstalledPackage): InputUnit =
+  ## [IMPL-DECISION G477] One installed record's input, unit by unit, as an
+  ## inspection's: the record, each dependency entry followed by the contracts
+  ## it lists, then each contract its module declarations name.
+  yield (iuRecord, p.identity.package.len + p.identity.version.len)
+  for d in p.dependencies:
+    yield (iuDependency, d.package.len + d.version.len)
+    for c in d.contracts:
+      yield (iuDependencyContract, encodedSize(c))
+  for m in p.modules:
+    if m.primaryContract.isSome:
+      yield (iuProvided, encodedSize(m.primaryContract.get))
+    for c in m.implements:
+      yield (iuProvided, encodedSize(c))
+    for c in m.extends:
+      yield (iuProvided, encodedSize(c))
+
+func inputCount*(x: Inspection): int =
+  ## [IMPL-DECISION G477] The units one inspection holds
+  ## (`ResolverCounters.entries`): the count of its walk, by lengths, so no
+  ## contract is encoded to be counted.
+  result = 1
+  if x.kind == ikEligible:
+    result += x.dependencies.len + x.provides.len
+    for d in x.dependencies:
+      result += d.contracts.len
+
+func inputCount*(p: InstalledPackage): int =
+  ## [IMPL-DECISION G477] The units one installed record holds: the count of
+  ## its walk, by lengths.
+  result = 1 + p.dependencies.len
+  for d in p.dependencies:
+    result += d.contracts.len
+  for m in p.modules:
+    result += int(m.primaryContract.isSome) + m.implements.len + m.extends.len
 
 # Limits ----------------------------------------------------------------------------
 
@@ -590,19 +663,6 @@ proc pastBound(r: var Resolver): Result[void, PackageError] =
     )
   )
 
-func units(x: Inspection): int =
-  ## [IMPL-DECISION G477] The inputs one inspection holds (`ResolverCounters.entries`).
-  result = 1
-  if x.kind == ikEligible:
-    result += x.dependencies.len + x.provides.len
-
-func units(p: InstalledPackage): int =
-  ## [IMPL-DECISION G477] The inputs one installed record holds: itself, its
-  ## dependency entries and each contract its module declarations name.
-  result = 1 + p.dependencies.len
-  for m in p.modules:
-    result += int(m.primaryContract.isSome) + m.implements.len + m.extends.len
-
 proc inspectSource(
     r: var Resolver, s: PackageSource
 ): Result[ptr Inspection, PackageError] =
@@ -658,7 +718,7 @@ proc evaluate(r: var Resolver, id: PackageIdentity): Result[int, PackageError] =
         # retained bytes are asked for: an evaluation that waits for them is
         # made again.
         r.installedRead[e.installed] = true
-        r.countRead(r.installed[e.installed].units)
+        r.countRead(r.installed[e.installed].inputCount)
       ?r.pastBound()
       let p = r.installed[e.installed]
       if not p.commitment.supportsManifestSchema:
@@ -1942,7 +2002,7 @@ proc supply*(run: ResolverRun, source: PackageSource, inspection: sink Inspectio
   if not run.steps.isNil:
     let k = source.encoded
     if k notin run.r.inspected:
-      run.r[].countRead(inspection.units)
+      run.r[].countRead(inspection.inputCount)
     run.r.inspected[k] = inspection
 
 proc supplyRetained*(run: ResolverRun, record: int, answer: Result[void, string]) =

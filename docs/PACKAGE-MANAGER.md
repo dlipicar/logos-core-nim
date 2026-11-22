@@ -229,8 +229,9 @@ driver holds for the operation's life, on the module thread:
   its queued retrieval is dropped, and nothing answers it. A continue that arrives for it is ignored.
 - At `_MODULE_destroy` each operation still running is answered `package-unavailable`.
 - **The operation bound** (G477): the run counts the inputs it reads, a unit for each record read
-  (inspected or installed) and for each of its dependency entries and provided contracts, each record
-  once. The read that passes the bound ends the operation with `package-unavailable` (PM l.1308-1309),
+  (inspected or installed), for each of its dependency entries, for each contract an entry lists and
+  for each contract it provides, each record once (one walk, `inputUnits`). A count equal to the bound
+  goes on; the read that takes it over ends the operation with `package-unavailable` (PM l.1308-1309),
   and the caller's message does not state the bound. The four resolver limits and their counters are
   untouched. The resolver half is built; the protected key `operation_entries` in `lcn.pm_limits`
   comes with 5-5-3, and until then the driver runs with no bound.

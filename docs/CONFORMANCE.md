@@ -1210,11 +1210,13 @@ What the figures say:
 
 ### The operation bound
 
-G477. One root operation reads at most `operation_entries` inputs (5-5-3's protected key): a unit for
-each record read, inspected or installed, and one for each of its dependency entries and provided
-contracts, each record once. The read that passes it ends the operation with `package-unavailable`
-(PM l.1308-1309). The four resolver limits and their counters are untouched. The count is the same on
-every machine; `tools/pmbench.nim` prints it (`entries=`).
+G477. One root operation reads at most `operation_entries` inputs (5-5-3's protected key). The unit is
+one walk, `inputUnits` beside `Inspection` in `package/resolver.nim`: a unit for each record read
+(inspected or installed), for each of its dependency entries, for each contract a dependency entry lists
+(PM l.295) and for each contract it provides; each record once. A count equal to the bound goes on; the
+read that takes it over ends the operation with `package-unavailable` (PM l.1308-1309). The four resolver
+limits and their counters are untouched. The count is the same on every machine; `tools/pmbench.nim`
+prints it (`entries=`). 5-5-3's verification cache weighs the same walk in bytes.
 
 | Shape | Limits | Units read |
 |---|---|---|
@@ -1230,14 +1232,19 @@ every machine; `tools/pmbench.nim` prints it (`entries=`).
 | wide 80,000, 1,048,576 attempts | maxima | 80,062 |
 | lift 30/65,500 | maxima | 12,756 |
 
-The resolver state a unit costs, on the Mac under orc `-d:release` (peak RSS less the input's), by
-what the units are:
+The bench's shapes list no contracts. The resolver state a unit costs, on the Mac under orc
+`-d:release` (peak RSS less the input's; `build/scratch/memprobe.nim` and `memprobe2.nim`, each
+inspection built when it is asked for), by what the units are:
 - requirements on names that never bind, bound by k manifests of the same 80,000 names: about 0.8 KiB;
   dense 4,096 is the same (6.5 GiB);
-- the same with distinct names: about 1.6 to 1.8 KiB;
-- inspections held and never bound: 0.1 to 0.2 KiB.
+- the same with distinct names: about 1.6 to 1.8 KiB, the worst measured;
+- dependency entries listing contracts (k bound manifests, each of 10 entries with 8,000 contracts, or
+  of 1 entry with 18,000), the contracts encoded commitments of 221 bytes: about 1.5 KiB; the same held
+  and never bound: about 1.0 KiB;
+- inspections of plain entries held and never bound: 0.1 to 0.2 KiB.
 
-At the proposed default of 262,144 units, one operation's resolver state is at most about 460 MiB.
+So one operation's resolver state is at most about 460 MiB at the proposed default of 262,144 units,
+and about 29 GiB at the proposed maximum of 2^24 (1.8 KiB a unit).
 
 ### The archive's inspection
 

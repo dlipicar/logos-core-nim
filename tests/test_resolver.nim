@@ -2141,9 +2141,40 @@ func isPrefixOf(a, b: seq[string]): bool =
   a.len <= b.len and a == b[0 ..< a.len]
 
 suite "pkg.resolver: the operation bound (G477)":
-  test "[IMPL-DECISION G477] the inputs read: each record once, with its dependency entries and provided contracts, an installed one's counted before its retained bytes are asked for":
+  test "[IMPL-DECISION G477] one walk gives a record's input units: the record, each dependency entry and the contracts it lists, each provided contract":
+    let x = Inspection(
+      kind: ikEligible,
+      identity: ident("a@1.0.0"),
+      commitment: commitOf("a@1.0.0"),
+      dependencies: @[dep("bb ^1.0.0 +x +y"), dep("c =2.0.0")],
+      provides: @[contract("p")],
+    )
+    var walked: seq[InputUnit]
+    for u in x.inputUnits:
+      walked.add(u)
+    let expected: seq[InputUnit] = @[
+      (iuRecord, 6),
+      (iuDependency, 7),
+      (iuDependencyContract, encodedSize(contract("x"))),
+      (iuDependencyContract, encodedSize(contract("y"))),
+      (iuDependency, 6),
+      (iuProvided, encodedSize(contract("p"))),
+    ]
+    check walked == expected
+    check x.inputCount == 6
+    check Inspection(kind: ikUnavailable, reason: "gone").inputCount == 1
     let u = Universe()
-    u.add("a", "1.0.0", ["b ^1.0.0", "c ^1.0.0"], provides = ["x"]) # 1 + 2 + 1
+    u.install("c", "2.0.0", deps = ["d ^1.0.0 +x"], provides = ["y", "z"])
+    walked.setLen(0)
+    for w in u.installed[0].inputUnits:
+      walked.add(w)
+    check walked.mapIt(it.kind) ==
+      @[iuRecord, iuDependency, iuDependencyContract, iuProvided, iuProvided]
+    check u.installed[0].inputCount == 5
+
+  test "[IMPL-DECISION G477] the inputs read: each record once, with its dependency entries, the contracts they list and its provided contracts; an installed one counted before its retained bytes are asked for; a count at the bound goes on, one over it stops":
+    let u = Universe()
+    u.add("a", "1.0.0", ["b ^1.0.0", "c ^1.0.0 +y"], provides = ["x"]) # 1 + 2 + 1 + 1
     u.add("b", "1.1.0", outcome = ikIneligible) # 1
     u.add("b", "1.0.0") # 1
     u.install("c", "1.0.0", provides = ["y", "z"]) # 1 + 0 + 2
@@ -2152,7 +2183,7 @@ suite "pkg.resolver: the operation bound (G477)":
     var c: ResolverCounters
     let want = u.boundedBy(root, lim, Opt.none(int), counters = c)
     check want[0] == "root a@1.0.0 unchanged=false"
-    check c.entries == 9
+    check c.entries == 10
     check c.bound == ""
     check want[^2] == "inspected a@1.0.0#0 b@1.1.0#0 b@1.0.0#0"
     check want[^1] == "checked c@1.0.0"
@@ -2161,15 +2192,17 @@ suite "pkg.resolver: the operation bound (G477)":
     for budget in [1'i64, 3, NoTurnBudget]:
       checkpoint "budget " & $budget
       check u.boundedBy(root, lim, Opt.none(int), budget, c) == want
-      check c.entries == 9
-      check u.boundedBy(root, lim, Opt.some(9), budget, c) == want
+      check c.entries == 10
+      # At the bound: the count equals it, and nothing stops.
+      check u.boundedBy(root, lim, Opt.some(10), budget, c) == want
       check c.bound == ""
-      # Each stop is at the record whose inputs pass the bound, which is read and no more.
+      # Each stop is at the record whose inputs take the count over the bound, which is
+      # read and no more: one over the bound at 9, further over below.
       for (bound, inspected, checked) in [
-        (8, "a@1.0.0#0 b@1.1.0#0 b@1.0.0#0", ""),
-        (5, "a@1.0.0#0 b@1.1.0#0 b@1.0.0#0", ""),
-        (4, "a@1.0.0#0 b@1.1.0#0", ""),
-        (3, "a@1.0.0#0", ""),
+        (9, "a@1.0.0#0 b@1.1.0#0 b@1.0.0#0", ""),
+        (6, "a@1.0.0#0 b@1.1.0#0 b@1.0.0#0", ""),
+        (5, "a@1.0.0#0 b@1.1.0#0", ""),
+        (4, "a@1.0.0#0", ""),
         (1, "a@1.0.0#0", ""),
       ]:
         checkpoint "bound " & $bound
@@ -2198,13 +2231,24 @@ suite "pkg.resolver: the operation bound (G477)":
     )
     check c.bound == "operation_entries"
 
-  test "[IMPL-DECISION G477] seeded catalogs: at the inputs a run reads, the bound changes nothing; below them, the run ends package-unavailable after a prefix of the same retrievals, its counters no further than the unbounded run's":
+  test "[IMPL-DECISION G477] seeded catalogs: each record's count is its walk's; at the inputs a run reads, the bound changes nothing; below them, the run ends package-unavailable after a prefix of the same retrievals, its counters no further than the unbounded run's":
     var rng = initRand(0x5_3C_2_B0)
     var seen: set[Feature]
     var stopped = 0
     for round in 0 ..< 1_000:
       let g = rng.generated(seen)
       checkpoint "round " & $round
+      # The count by lengths is the walk's.
+      for x in g.u.outcomes.values:
+        var n = 0
+        for _ in x.inputUnits:
+          inc n
+        check x.inputCount == n
+      for p in g.u.installed:
+        var n = 0
+        for _ in p.inputUnits:
+          inc n
+        check p.inputCount == n
       var k: ResolverCounters
       let want = g.u.boundedBy(g.root, g.limits, Opt.none(int), counters = k)
       check want == g.u.resolveBy(g.root, g.limits, oracle = true)
