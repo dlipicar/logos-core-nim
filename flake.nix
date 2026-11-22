@@ -752,6 +752,33 @@
             python3 ${./tools/lint/layers.py} --config ${./tools/lint/layers.toml}
             touch $out
           '';
+          # No storage library among the dependencies or in the Package Manager's link inputs
+          # (G406): it reaches Logos Storage only through lcn.storage_fetch. nostorage.py
+          # reads layers.py beside it, so it runs from the copied tree.
+          lint-nostorage =
+            let
+              src = lib.fileset.toSource {
+                root = ./.;
+                fileset = lib.fileset.unions [
+                  ./logos_core.nimble
+                  ./nimble.lock
+                  ./nix/nimble-deps.json
+                  ./flake.nix
+                  ./flake.lock
+                  ./config.nims
+                  ./src
+                  ./sdk
+                  ./tests
+                  ./tools/lint
+                ];
+              };
+            in
+            s.pkgs.runCommand "lint-nostorage" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
+              cd ${src}
+              python3 -I tools/lint/nostorage.py --self-test
+              python3 -I tools/lint/nostorage.py --config tools/lint/nostorage.toml
+              touch $out
+            '';
           # The suites a change can reach (tools/affected_suites.py, wave 2's merge rule 1): its
           # planted cases, and on this tree the suites the rule names for genfixtures.nim,
           # DAEMON.md and commitment/choice.nim.

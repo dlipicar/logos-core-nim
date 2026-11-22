@@ -103,6 +103,8 @@ const
   daemonConfigPrimary* = "src/logos_core/daemon/daemon_config.cddl"
   trustTypesPath* = "src/logos_core/daemon/trust_types.nim"
   trustPrimary* = "src/logos_core/daemon/trust.cddl"
+  pmInputTypesPath* = "src/logos_core/pm/input_types.nim"
+  pmInputPrimary* = "src/logos_core/pm/input.cddl"
 
 proc daemonConfigDocument*(): string {.raises: [IOError].} =
   ## logosd's configuration schema, then the host configuration and authority
@@ -120,6 +122,23 @@ proc generatedDaemonConfigTypes*(): Result[string, string] =
         importPrefix: SdkImportRoot,
         schemaAccessor: "daemonConfigSchema",
         documentsAccessor: "daemonConfigDocuments",
+      ),
+      false,
+    )
+  except IOError as e:
+    err(e.msg)
+
+proc generatedPmInputTypes*(): Result[string, string] =
+  ## The Package Manager's protected input, `logos-core-nim.pm-input.v1` (G399),
+  ## for `pm/input.nim`.
+  try:
+    let set = ?acceptContractSet(readFile(pmInputPrimary), [], [], AcceptOptions())
+    nimModule(
+      set,
+      NimOptions(
+        importPrefix: SdkImportRoot,
+        schemaAccessor: "pmInputSchema",
+        documentsAccessor: "pmInputDocuments",
       ),
       false,
     )

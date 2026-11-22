@@ -290,6 +290,13 @@ def is_chronos(module):
     return name == "chronos" or name.startswith("chronos/")
 
 
+def external_name(module):
+    """The package a raw import names, or None for the standard library."""
+    if module.startswith(("std/", ".")):
+        return None
+    return module.removeprefix("pkg/").split("/")[0]
+
+
 def covers(entry, path):
     return path.startswith(entry) if entry.endswith("/") else path == entry
 
@@ -400,6 +407,37 @@ def check(root, config):
         elif strict:
             findings.append((facade, 0, "kit-facade", "the facade does not exist"))
 
+    # [G406] The external packages the Package Manager's import closure may reach.
+    pm_roots = config.get("pm_roots", [])
+    if pm_roots:
+        starts = [p for p in files if any(covers(r, p) for r in pm_roots)]
+        if not starts:
+            findings.append(("tools/lint/layers.toml", 0, "pm-external", "pm_roots name no file"))
+        seen = closure(starts, edges)
+        allowed_ext = set(config.get("pm_external_allowlist", []))
+        used_ext = set()
+        for reached in sorted(seen):
+            for module, line in raw.get(reached, ()):
+                name = external_name(module)
+                if name is None or resolve(root, reached, module) is not None:
+                    continue
+                if name in allowed_ext:
+                    used_ext.add(name)
+                else:
+                    findings.append(
+                        (
+                            reached,
+                            line,
+                            "pm-external",
+                            f"imports {module}, a package not on pm_external_allowlist: "
+                            + chain(seen, reached),
+                        )
+                    )
+        for name in sorted(allowed_ext - used_ext):
+            findings.append(
+                ("tools/lint/layers.toml", 0, "pm-external", f"stale entry: nothing reaches {name}")
+            )
+
     seen = closure([p for p in files if place[p] == "daemon_cli"], edges)
     for target in config["daemon_tls_forbidden"]:
         if target in seen:
@@ -456,6 +494,8 @@ SELF_CONFIG = {
     ],
     "daemon_allowlist": ["runtime/host"],
     "testing_importers": [],
+    "pm_roots": ["src/logos_core/pm/", "src/logos_core/package/"],
+    "pm_external_allowlist": ["results"],
     "layers": {
         "sdk_base": ["sdk/src/logos_sdk/"],
         "sdk_binding": [
@@ -492,6 +532,8 @@ CLEAN_TREE = {
     "src/logos_core/cli/main.nim": "import ../daemon/main\n",
     "src/logosd.nim": "import ./logos_core/daemon/main\n",
     "tests/test_engine.nim": "import ../src/logos_core/daemon/main\nimport logos_sdk/testing/helper\n",
+    "src/logos_core/pm/engine.nim": "import std/tables\nimport results\nimport ../package/lgx\n",
+    "src/logos_core/package/lgx.nim": "import logos_sdk/base/hex\n",
 }
 
 PLANTS = [
@@ -518,6 +560,9 @@ PLANTS = [
     ("testing-test-only", "src/logos_core/runtime/bad.nim", "import logos_sdk/testing/helper\n"),
     ("testing-test-only", "sdk/src/logos_sdk/kit/bad.nim", "import ../testing/helper\n"),
     ("unresolved", "src/logos_core/runtime/bad.nim", "import ../no/such/module\n"),
+    ("pm-external", "src/logos_core/pm/engine.nim", "import results\nimport libstorage\n"),
+    ("pm-external", "src/logos_core/package/lgx.nim", "import pkg/codex/node\n"),
+    ("pm-external", "sdk/src/logos_sdk/base/hex.nim", "import storage/client\n"),
 ]
 
 PARSED = [
@@ -594,6 +639,10 @@ def self_test():
     stale = dict(SELF_CONFIG, daemon_allowlist=["runtime/host", "runtime/engine"])
     if not any("stale entry" in f[3] for f in run(CLEAN_TREE, stale)):
         failures.append("a stale allowlist entry was accepted")
+
+    stale_ext = dict(SELF_CONFIG, pm_external_allowlist=["results", "zlib"])
+    if not any("stale entry: nothing reaches zlib" in f[3] for f in run(CLEAN_TREE, stale_ext)):
+        failures.append("a stale pm_external_allowlist entry was accepted")
 
     for root in SELF_CONFIG["kit_facade"]:
         no_facade = {k: v for k, v in CLEAN_TREE.items() if k != root}
