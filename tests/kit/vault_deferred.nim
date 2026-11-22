@@ -11,6 +11,8 @@
 {.used.}
 import std/[atomics, os]
 import logos_sdk/abi/types
+from logos_sdk/base/entry import lcnCallback, lcnNoNimHeap
+from logos_sdk/codegen/kitrt import kitEnter
 import ./vault_impl
 
 const MaxHeld = 8

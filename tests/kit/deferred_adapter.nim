@@ -13,6 +13,8 @@
 import std/[atomics, os]
 import logos_sdk/abi/types
 import logos_sdk/iface/outcome
+from logos_sdk/base/entry import lcnCallback, lcnNoNimHeap
+from logos_sdk/codegen/kitrt import kitEnter
 import logos_sdk/testing/fixtures/meter_impl
 
 type DeferredMode* = enum
