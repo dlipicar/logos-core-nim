@@ -1,117 +1,43 @@
-# INTERFACE requirement units checked by inspection rather than by a test.
-# Each item names the units and why no test can carry them; `spectrace gate` counts them as covered.
-
-[[item]]
-ids = ["IFC-0041"]
-reason = "A permission for toolchains. lcn-gen (sdk/src/lcn_gen.nim) reads the files named on its command line and passes their text on; acceptContractSet (iface/accept.nim) takes document text only, so no filename, workspace label or alias reaches acceptance or any identity."
+# INTERFACE requirement units core implements (restructure step R9, row 35) that are checked by
+# inspection rather than by a test. The spec's ledger, its main claims file and the SDK's items are in
+# sdk/conformance/. Each item names the units and why no test can carry them; `spectrace gate` counts
+# them as covered for core.
 
 [[item]]
 ids = ["IFC-0043"]
 reason = "A permission for runtime, package and deployment records; no obligation follows. No such record exists in this repository yet (RUNTIME and PM are tiers 3-4), and acceptance recomputes every implemented-interface root from the supplied documents rather than reading one from a record (test [IFC-0038])."
 
+# I-2.5-may (DECISIONS I88); split by package in R9, the kit's half in sdk/conformance/inspection/IFC.toml
 [[item]]
-ids = ["IFC-0077", "IFC-0078", "IFC-0460", "IFC-0473"]
-reason = "Addressed to contract authors and module implementations: which outcomes are expected domain failures is the author's judgement, and no schema or value shows it. The status paths in this repository (iface/payload.nim, iface/outcome.nim) produce a nonzero logos.error_code only for invocation failures (malformed or mismatched payloads, unknown methods), and logos.error_detail only with INVALID_PARAMS (test [IFC-0466])."
-
-[[item]]
-ids = ["IFC-0085"]
-reason = "Addressed to contract authors: what events are for. Acceptance enforces their shape and naming (tests [IFC-0081]-[IFC-0084]); whether an event stands in for a method is a design judgement no tool can check."
-
-[[item]]
-ids = ["IFC-0953", "IFC-0954", "IFC-0955"]
-reason = "No cache in this repository is keyed by less than its whole input, and no cached validation result stands in for a check. The parsed models kept beyond one call are the pinned common schema (commitment/construct.nim `pinned`), built once from the document in spec/pins.toml under the compiled-in commitment model, hash profile and suite and checked against the pinned root, and each generated Nim module's set (codegen/nimrt.nim loadSchema), built once from the exact documents embedded in that module. Nothing is looked up by name, path or alias; choice plans are rebuilt per call or held inside one such set."
-
-[[item]]
-ids = ["IFC-0624", "IFC-0898", "IFC-0899"]
-reason = "lcn-gen documents its limits in its usage text (sdk/src/lcn_gen.nim, `Limits`) and iface/cmap.nim's module doc: no identifier-length limit (identifiers are never truncated, hashed or aliased), input bounded by the INTERFACE §5.3 limits, and a mapping-limit failure for a discriminant past UINT32_MAX. With no identifier-length limit documented, §3.9.7's longest-supported and over-limit identifier cases do not arise; long identifiers with a common prefix are tested ([IFC-0895]) and the §5.3 limits are tested at and past their bound ([IFC-0625]). `lcn-gen cddl` documents the reverse direction's limits in the same text (DECISIONS G321): 16 MiB and 1,024 headers per input set, include depth 64, parenthesis depth 64 inside a literal, and the §5.3 limits on what it reconstructs. Those byte limits bound an identifier only incidentally and are not identifier-length limits, so the reverse direction has none either; each limit is tested past its bound (test T9.4 [IFC-0625]), as is a generated header past the set limit (T9.6)."
-
-[[item]]
-ids = ["IFC-0637"]
-reason = "Unreachable under the §5.3 limits this repository enforces: a choice has at most 65,536 arms (MaxSchemaNodes, iface/accept.nim), far below UINT32_MAX + 1. cmap.nim's choice mapping still checks the largest discriminant and fails with an explicit `mapping limit` error, and lcn-gen then writes nothing. In the reverse direction a discriminant comes from the C input, so an out-of-range tag value is a rejection with its own test ([IFC-0843]), and `lcn-gen cddl` then writes nothing either."
-
-# The reverse mapper (DECISIONS I98): the parts of these units no mapper test can show.
-[[item]]
-ids = ["IFC-0796"]
-reason = "A negative on where an include may resolve. Test T1.4 shows a file on disk that is outside the supplied set is not found; the network and compiler include-search halves follow from the shape of the code: iface/cinput.nim's resolver takes only the HeaderSource values it is given (logical name and text), takes no path or search list, and neither it nor iface/cparse.nim opens a file or a socket. Only lcn-gen's command line reads the files named on it, once each, before reconstruction starts."
-
-[[item]]
-ids = ["IFC-0819"]
-reason = "Test T1.8 shows the first negative as far as a mapper can: reusable headers under any logical prefix reconstruct identically, so no shared installed-header location is imposed. The other two negatives concern deployments: the reverse mapper is an authoring tool that runs on headers named explicitly, produces CDDL and headers as files, and adds no runtime header dependency and no restriction on which contract versions are installed: sdk/src/lcn_gen.nim is the only program that imports it."
-
-[[item]]
-ids = ["IFC-0852"]
-reason = "The duty binds whoever compiles these headers, and the reverse mapper compiles nothing: it never runs a preprocessor or a compiler. It reads header bytes as UTF-8 and rejects anything else, and this repository's own compile checks use UTF-8 source and execution character sets (test T2.10, sdk/tests/support/ccompile.nim)."
-
-[[item]]
-ids = ["IFC-0921", "IFC-0924"]
-reason = "Addressed to contract authors: value constraints a contract states outside its schema, and how deep its payloads may be. No contract in this repository states such constraints, and no tool can tell what depth an interface requires of its callers. The implementation side is tested: the payload depth limit is configurable, at least 128 and 1024 by default, and a rejection past it is INVALID_PARAMS without detail ([IFC-0923]-[IFC-0929])."
-
-# I-abstract (DECISIONS I88)
-[[item]]
-ids = ["IFC-0005", "IFC-0558"]
-reason = "IFC-0005 is a rule for reading this specification's CBOR references, and IFC-0558 says a module need not implement the authoring mappings while its contract artifacts and encoding must conform; neither is behaviour of its own that a test can carry. What they require is tested where it applies: every value at a contract boundary is encoded and checked as Logos deterministic CBOR, and non-deterministic CBOR is refused (tests [IFC-0409], [IFC-0415], [IFC-0417]); the kit's contract artifacts are the documents lcn-gen accepted, embedded with their recomputed roots, its call-surface descriptor round-trips (tests [IFC-0229], [IFC-0233]) and its C layouts match logos_types.h ([IFC-0934]). The reverse authoring mapping is built and claimed (DECISIONS I98): IFC-0003 and IFC-0004 are tested from either side in sdk/tests/test_rmap.nim (T7.6), under G158's common-name projection."
-
-# I-2.5-may (DECISIONS I88)
-[[item]]
-ids = ["IFC-0192", "IFC-0666"]
-reason = "IFC-0192 is IFC-0671's example block: a typed event handler typedef and subscribe helper for C, with implementation-defined names. lcn-gen takes IFC-0671's permission for Nim only (DECISIONS G339): a generated <stem>_calls.nim has a typed subscribe per event over a wrapped route handle (logos_sdk/codegen/consumert; test [IFC-0671] in tests/test_consumert.nim), while <stem>_calls.h has the typed invoke and clear helpers per method (test [IFC-0057]) and no subscription helper, so a C consumer subscribes through the route vtable's subscribe with the event name and a CBOR handler. IFC-0666 permits a terminal callback on the thread that detects the end, and the Runtime does not take it: engine.nim schedules a jkObserveEnd job and a lifecycle worker runs it (bindings.runEnd), never inside another binding operation (test [IFC-0656]). The typed helpers do not depend on that: their end callbacks take no lock that a handle operation holds (tests/test_consumert.nim, the end report while an operation holds its handle's lock)."
+ids = ["IFC-0666"]
+reason = "IFC-0666 permits a terminal callback on the thread that detects the end, and the Runtime does not take it: engine.nim schedules a jkObserveEnd job and a lifecycle worker runs it (bindings.runEnd), never inside another binding operation (test [IFC-0656])."
 
 # I-forced-termination (DECISIONS I88)
 [[item]]
 ids = ["IFC-0215"]
 reason = "A permission about forced termination of an execution envelope, taken for hosted realizations only (DECISIONS I97 re-read it). A Module Host whose _MODULE_destroy outlives the stop deadline or the shutdown grace is ended by force, so destroy may not return (G269; tests S-10 and S-11 in tests/test_hosted.nim, S-24 in tests/test_hosted_permissions.nim). A direct realization shares the Runtime's process and has no envelope to terminate: its _MODULE_destroy past the deadline is recorded as cleanup-timeout and left to return, never interrupted (engine.nim stop and shutdown paths; tests [RUN-1072] in tests/test_engine.nim)."
 
-# I-opaque (DECISIONS I88)
+# I-opaque (DECISIONS I88); split by package in R9, the C mapping's and the callers' half in sdk/conformance/inspection/IFC.toml
 [[item]]
-ids = ["IFC-0234", "IFC-0257", "IFC-0478", "IFC-0479", "IFC-0683"]
-reason = "Negatives on an ABI caller holding module- or Runtime-owned opaque objects; no test can show that something is never done. IFC-0234: native.probeNative copies the _MODULE_call_surface() bytes into its own seq right after the call and never writes or frees the module's storage (test [IFC-0233] shows the same bytes every call). IFC-0257, IFC-0478: LogosModuleContext is an {.incompleteStruct.} with no fields (abi/types.nim), so Runtime code cannot dereference it; the realizer keeps each context only in its realization record and passes it back to that binding's own entries; instances are identified by instance-id strings in the engine and the store, and route handles are separate HandleState objects, so a context is never serialized, used as an identity or used as a routing handle. IFC-0479: route state is a HandleState cast only inside runtime/bindings.nim (handleOf); lcn-gen's call helpers and the kit reach a route only through its vtable operations after checkRoute (test [IFC-0489]). IFC-0683: logos_response_owner_t is an ABI-only type (logos_types.h; abi/types.nim LogosResponseOwner); iface/cmap.nim adds the response_owner parameter to typed signatures only, never to a schema, a commitment or a CBOR value (tests [IFC-0934], [IFC-0057])."
+ids = ["IFC-0234", "IFC-0257", "IFC-0478"]
+reason = "Negatives on an ABI caller holding module- or Runtime-owned opaque objects; no test can show that something is never done. IFC-0234: native.probeNative copies the _MODULE_call_surface() bytes into its own seq right after the call and never writes or frees the module's storage (test [IFC-0233] shows the same bytes every call). IFC-0257, IFC-0478: LogosModuleContext is an {.incompleteStruct.} with no fields (abi/types.nim), so Runtime code cannot dereference it; the realizer keeps each context only in its realization record and passes it back to that binding's own entries; instances are identified by instance-id strings in the engine and the store, and route handles are separate HandleState objects, so a context is never serialized, used as an identity or used as a routing handle."
 
 # I-dispatch (DECISIONS I88)
 [[item]]
 ids = ["IFC-0247", "IFC-0248", "IFC-0492"]
 reason = "MAYs on which provider entry an ABI caller uses. The Runtime always calls _MODULE_dispatch: invoke.callProvider for every routed call, synchronous or asynchronous (asynccall runs it on a call worker), and invoke.systemCall for the Capability Authority's evaluate (G48(a)). IFC-0248's permission is therefore taken on the deterministic-CBOR path, the only one in direct mode, and IFC-0247's and IFC-0492's are not: native.completeNative resolves and requires a provider binding's typed provider functions (test [RUN-0056]) but the Runtime never calls them. Only the test harness (sdk/tests/kit/typed_harness.c) calls typed provider functions (tests [IFC-0164], [IFC-0162])."
 
-# I-app-setup (DECISIONS I88)
-[[item]]
-ids = ["IFC-0252", "IFC-0253", "IFC-0254"]
-reason = "IFC-0252 is a permission and IFC-0253, IFC-0254 bind the author of a method that needs application-level setup: what its response schema says and which code its handler returns. No test can show that for an arbitrary module. What this repository controls: lcn-gen keeps a schema method named init distinct from the lifecycle symbol (its own typedef and CALL_..._Init beside MODULE_init, test [IFC-0903]); the kit forwards a handler's own failure as given, and its own NOT_READY arises only from a missing Runtime service, never application state (codegen/kitrt.nim: no publish callback, no active provider entry on the thread), and a code the publish callback returns is the Runtime's result passed through as App A.4 says, which the Runtime gives only as INVALID_PARAMS or LOGOS_OK (INTERFACE l.3351, DECISIONS I105); the one module the repository ships, the Capability Authority (authority/logos_capability_authority_kit.nim), has no setup method and never returns NOT_READY (authority/core.nim)."
-
 # I-no-transport (DECISIONS I88)
 [[item]]
 ids = ["IFC-0524"]
 reason = "A negative over what crosses a Transport boundary (INTERFACE l.3960). The Runtime Control binding, the publish callback and their state (AttemptServices) live on the process's shared heap and are handed only to _MODULE_init in that process (bindings.fill). The transport I/O thread takes only IoCommand values: transport/io/api.nim checks at compile time that IoCommand and IoEvent hold no ref, ptr, pointer or proc, so none of them can be carried to a peer (DECISIONS I83, I90). A served invocation's context is built on the provider's side from its own session (runtime/served.nim, runtime/asynccall.nim newSessionCall)."
-
-# I-released-handle (DECISIONS I88)
-[[item]]
-ids = ["IFC-0518"]
-reason = "A negative on the consumer of a route handle; no test can show a use that never happens. The Runtime never holds a route handle (its own calls to the Capability Authority go through invoke.systemCall), and lcn-gen's call helpers and the kit keep none; the test fixtures release a handle last. The Runtime side makes a released handle unusable: routeReleaseOp (runtime/bindings.nim) deactivates the handle's subscriptions, waits for a running callback and frees the HandleState (dropHandle), and a released handle gets no terminal callback (test [IFC-0516])."
 
 # I-marked-may (DECISIONS I88, I92)
 [[item]]
 ids = ["IFC-0574", "IFC-0582"]
 reason = "A SHOULD and a MAY about buffers that hold a marked payload. IFC-0582: byte buffers of the Runtime, the transport and the Module Host that can hold a method payload (frame bodies, framed write copies, request and response copies, shared-heap copies, the caller's response copy) and the kit runtime's response blocks and call arenas are zeroed whether or not the payload is marked (DECISIONS G276; base/wipe.nim secureZero and freeWiped at each site). IFC-0574: encodeCbor sizes its output once and decodeCbor pre-sizes its containers (cbor), so no growth releases a partial copy; a route payload goes between the caller's process and the provider's directly, never through the carrier, so a hosted end adds the host's own copies only (DECISIONS G267; the carrier trace in tests [IFC-0575] W-7 of tests/test_wipe_routes.nim and P-13 of tests/test_hosted_routes.nim finds no pattern). No test can count copies a design avoided; the free scan of tests/test_wipe_routes.nim shows that none of those made is released unerased."
 
-# I-build (DECISIONS I88)
-[[item]]
-ids = ["IFC-0587", "IFC-0602"]
-reason = "Build-level rules no runtime test can observe. IFC-0587: every native participant here is built by one toolchain in one build (the Nim compiler and its C backend for the Runtime, the kit modules and the Capability Authority; the same C compiler for sdk/tests/kit/typed_harness.c), and every exchanged function type, export and callback is cdecl (abi/types.nim, the kit's exportc procs in codegen/kitgen.nim, the generated headers); every exchanged struct's size, alignment and offsets are checked against logos_types.h ([IFC-0934]). IFC-0602: LOGOS_C_MAPPING_REVISION appears only in logos_types.h and in the compile-time check generated headers carry (iface/cmap.nim; test [IFC-0597]); no Runtime, realizer or kit code reads, compares or hashes it, and schema identity is computed from the documents alone."
-
-# I-typed-caller (DECISIONS I88)
-[[item]]
-ids = ["IFC-0679", "IFC-0691", "IFC-0693", "IFC-0697"]
-reason = "Duties and negatives of an ABI caller of typed provider functions. The Runtime is never one: it always calls _MODULE_dispatch (invoke.callProvider, invoke.systemCall; see I-dispatch), so no Runtime path can show them. The only such caller is the test harness (sdk/tests/kit/typed_harness.c, driven by sdk/tests/support/typedharness.nim `run`): it copies what it reports (status text and outputs) before checking the outcome, then clears the owner once with logos_response_owner_clear whatever checkOutcome found, on the thread that read the outputs and after reading them, frees no storage the owner governs, and reads no output after clearing (tests [IFC-0685], [IFC-0694]). That these things never happen is a negative no test can carry."
-
-# I-alias-may (DECISIONS I88)
-[[item]]
-ids = ["IFC-0687"]
-reason = "A permission for a provider's response storage, taken by the kit: typed outputs point into the call's CallArena blocks (codegen/callrt.nim), and every empty text, bytes or array output points at the one static emptyStorage, so several outputs may alias it. Callers treat outputs as borrowed and free none of them (tests [IFC-0689]: an empty response's empty owner; [IFC-0685]: the owner frees only its own storage)."
-
 # I-ctx-concurrent-may (DECISIONS I88)
 [[item]]
 ids = ["IFC-0777"]
 reason = "A permission for the module: it may run caller, is_cancelled and publish on one context concurrently while it holds the borrow. The Runtime's operations allow it: each admits itself through the invocation's entry guard (callside.enterGuard, leaveGuard), whose lock is held only to count the entry; callerOp reads identity fixed at the invocation's creation and isCancelledOp an atomic flag (invoke.nim), and publishOp delivers outside that lock. Whether a module uses the permission is its choice; current and caller from many threads at once are tested ([IFC-0771])."
-
-# I-subend-callback (re-pin P3a; DECISIONS G225)
-[[item]]
-ids = ["IFC-0966", "IFC-0967"]
-reason = "Duties of the module that registers observe_subscription_end, which bind the registering code and which no Runtime path can show. IFC-0966: the callback must not operate on or release the binding or handle that reports the end. The Runtime runs a report on a Runtime event worker (rcevents.runReport) or on a Module Host worker (host/consumer, jkSubEnd), never on the registering thread, and release waits for a running report (subend.busy), so a callback that released its own handle would wait for itself; not doing so is the module's duty. IFC-0967: there is no unregister operation, and the Runtime uses the registered user data only until release of the binding or handle returns: release suppresses reports that have not begun and waits for a running one (bindings.routeReleaseOp, host/consumer routeReleaseOp; test [IFC-0669]). Keeping that state valid until then is the module's duty. A module that uses lcn-gen's typed helpers (DECISIONS G339) has both duties kept for it by logos_sdk/codegen/consumert: an operation on the handle, or through the Runtime Control binding, from its own end callback is refused NOT_READY, and the registration state lives until the handle's release or, for the binding, until the module's RouteSet closes, and past a failed initialization for good (tests/test_consumert.nim)."
