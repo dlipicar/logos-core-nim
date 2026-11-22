@@ -76,13 +76,13 @@ when defined(posix):
     hostExe = moduleHostProgram()
     chatterLib = buildKitLibrary("chatter_impl.nim", "lgdchatter")
     beaconRoot = @(
-      acceptContractSet(readFile(repoDir / fixtureDir / "beacon_module.cddl"))
+      acceptContractSet(readFile(fixtureDir / "beacon_module.cddl"))
       .expect("the beacon_module contract set").primary.root
     ) ## so `chatter-1` provides it: a hosted provider's endpoint is made in `run/ep`
     cliArt = cliArtifact()
     meterLib = buildKitLibrary("meter_impl.nim", "lgdmeter")
     meterRoot = @(
-      acceptContractSet(readFile(repoDir / "spec/mirrors/IFC/3.9.1.module.cddl"))
+      acceptContractSet(readFile("spec/mirrors/IFC/3.9.1.module.cddl"))
       .expect("the meter_module contract set").primary.root
     )
     # [DECISIONS G342, G335] The thread-confined ledger built with the other
@@ -96,7 +96,7 @@ when defined(posix):
           "ledger_lib.nim", "lgdledger", otherMm, exports = "ledger_module"
         )
     ledgerRoot = @(
-      acceptContractSet(readFile(repoDir / fixtureDir / "ledger_module.cddl"))
+      acceptContractSet(readFile(fixtureDir / "ledger_module.cddl"))
       .expect("the ledger_module contract set").primary.root
     )
 

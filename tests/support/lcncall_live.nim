@@ -126,7 +126,7 @@ proc digestOfFile(path: string): seq[byte] =
   @(h.finish())
 
 proc rootOf(path: string): seq[byte] =
-  @(acceptContractSet(readFile(repoDir / path)).expect(path).primary.root)
+  @(acceptContractSet(readFile(path)).expect(path).primary.root)
 
 func hexOf(bytes: openArray[byte]): string =
   for b in bytes:

@@ -3,8 +3,8 @@
 `lcn-gen kit` turns a module's contract into a Nim module, its *kit*. The kit exports the C symbols a
 Runtime loads (INTERFACE §2.6) and calls the handlers you write in Nim. This guide covers generating a
 kit, writing handlers, the thread-confined mode and its `async` handlers, publishing events, calling
-other modules, and building the library. The decisions behind it are DECISIONS G335–G342 and I71; the
-kit's output is PROVISIONAL (App A.3, A.4) until the spec owner settles it.
+other modules, building the library, and requiring the SDK from a module repository. The decisions behind
+it are DECISIONS G335–G342, I71 and G433–G436; the kit's output is PROVISIONAL (App A.3, A.4) until the spec owner settles it.
 
 The example below is a whole module. `sdk/tests/test_module_kit_guide.nim` takes its files and command
 lines from this document, generates the kit, builds the library and calls it, so the example is kept
@@ -307,6 +307,67 @@ build the test libraries with each set. Two more, `kit-toolchains-storage-2d81a7
 `kit-toolchains-delivery-0de7b335`, build them against each library's own chronos (the main line
 after 4.4.0) and the stew, bearssl or httputils it locks, beside a host on 4.4.1 (G439).
 
-**Getting the SDK.** Until the SDK is a nimble package of its own (the repository split's packaging
-step), put this repository's `sdk/src` on the Nim path (`--path:`, or a `nimble.paths` entry), with
-the packages `logos_core.nimble` locks. A module repository will then `requires` the SDK instead.
+**A library's own switches stay with it.** Nim reads the `config.nims` and `nim.cfg` files above the
+source it compiles, so a module library's own configuration applies when its repository builds it, and
+never when another repository builds against it. A repository that builds a kit against
+logos-storage-nim gets none of storage's switches: its build line carries the ones the library needs.
+The `kit-toolchains` checks pass storage's and delivery's sets for that reason.
+
+## 9. Requiring the SDK
+
+The SDK is the nimble package `logos_sdk` (`sdk/logos_sdk.nimble`, DECISIONS G433): the modules this
+guide imports, the kit, `lcn-gen`, the contracts it ships and the test helpers under
+`logos_sdk/testing`. A module repository requires it by name and one minor version (G434):
+
+```nim module.nimble
+requires "logos_sdk >= 0.1.0 & < 0.2.0"
+```
+
+Until the repository split's extraction the SDK has no address of its own, so it is not required by
+URL, and none of our packages is ever required by commit or by `file://`. Nimble meets the requirement
+in one of two ways.
+
+- **An install** into the module repository's Nimble directory, from a committed tree in a copy with no
+  `origin`. From a checkout with an origin, Nimble locks the repository's root, and a fresh setup then
+  installs `logos_core` in the SDK's place. The order is install, lock (which reads the network), setup;
+  `setup` before the first lock fails:
+
+  ```sh install
+  git clone CORE_CHECKOUT SDK_COPY && git -C SDK_COPY remote remove origin
+  cd SDK_COPY/sdk && nimble --useSystemNim -y --nimbleDir:MODULE/nimbledeps install
+  cd MODULE && nimble --useSystemNim -y lock && nimble --useSystemNim setup -l
+  ```
+
+  A fresh clone of the module repository, CI's included, installs the SDK the same way before its
+  `nimble setup`.
+- **A develop link** (`nimble develop -a:CORE_CHECKOUT/sdk`), while you change the SDK itself. It builds
+  and sets up, but `nimble lock` refuses it, so switch to an install whenever the lock has to change.
+
+**One SDK revision per Nimble directory.** The SDK's version stays `0.1.0` while it changes, so two
+installs with different content can share it. When they meet in one Nimble directory, `setup` and
+`lock` take whichever the filesystem lists first, and `setup` keeps it even over a lock that names the
+other's checksum, without a word; `bin/lcn-gen` links the one installed last. Nimble checks no lock
+checksum for any package (Nimble 0.26.2; core's DECISIONS G436). So install each SDK revision into a
+fresh Nimble directory, record the core commit it came from, and have a suite check that every
+directory `nimble.paths` names, `logos_sdk`'s among them, ends in the checksum the lock records for
+it. That is a check for mismatches, not against tampering: an install edited in place keeps its name
+and passes. `logos_sdk/testing/lockcheck`'s `installMismatches` does that from the project's root;
+pass the names of any packages you take from a develop link, written in the suite itself rather than
+read from the environment. The same suite checks that `nimbledeps/bin/lcn-gen` resolves into the
+directory `nimble.paths` names for `logos_sdk`: the link follows the last install, not the lock.
+
+**The generated-code check.** A module repository that commits its generated files compares them with a
+fresh generation by the installed SDK's `lcn-gen`, which Nimble builds at install with the module
+repository's compiler. With local dependencies that is `nimbledeps/bin/lcn-gen`. `lcn-gen --version`
+prints the SDK's version, and the check compares it with the lock's `logos_sdk` entry. Until the
+extraction every SDK revision is `0.1.0`, so the version cannot tell two revisions apart; the
+`nimble.paths` test above does.
+
+**The installed files.** The SDK's contracts are under its install, for `lcn-gen calls` (§6):
+`$(nimble path logos_sdk)/logos_sdk/contracts/lcn_storage_fetch.cddl`.
+
+**Where Nimble keeps its caches.** Nimble 0.26 keeps `pkgcache/`, its download cache, and `buildtemp/`
+under the configured Nimble directory, `~/.nimble` by default, in local-dependencies mode too.
+`--nimbleDir` moves `pkgcache/` and not `buildtemp/`. A run can reuse an earlier run's clones without a
+git call, so a check that must fetch nothing looks there too, or runs with `HOME`, `XDG_CONFIG_HOME` and
+`XDG_CACHE_HOME` pointed at a fresh directory outside every checkout (G436).

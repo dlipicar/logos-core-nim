@@ -1392,7 +1392,7 @@ proc readyLive(
   doAssert rc.stage(result, 2, tunerValue("radio-2", 9)).updated.state_revision == 3
 
 let
-  tunerSet = acceptContractSet(readFile(repo / fixtureDir / "tuner_module.cddl")).tryGet
+  tunerSet = acceptContractSet(readFile(fixtureDir / "tuner_module.cddl")).tryGet
   tunerRoot = tunerSet.primary.root
   tunerSchema = encodeCbor(schemaResponse(tunerSet, tunerRoot).tryGet)
 

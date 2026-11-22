@@ -11,17 +11,17 @@
 ##
 ## A fourth library exports the modules' typed call helpers (§2.7.2, App A.5),
 ## which this host calls through route handles bound directly to the module
-## libraries (`support/testroute`): caller, helpers and provider then each run
+## libraries (`logos_sdk/testing/testroute`): caller, helpers and provider then each run
 ## on a Nim runtime of their own.
 
-import std/[dynlib, os, osproc, streams, strutils, typedthreads]
+import std/[compilesettings, dynlib, json, os, osproc, streams, strutils, typedthreads]
 import unittest2
 import logos_sdk/base/perthread
 import logos_sdk/iface/[accept, provider]
 from logos_sdk/kit/rc_types import LogosNSModuleConfigurationConfigurationInput, encode
 import
-  logos_sdk/testing/[kitbuild, kitruntime, specdata, tunerconfig],
-  ./support/[fakeprovider, testroute, typedharness]
+  logos_sdk/testing/[kitbuild, kitruntime, specdata, testroute, tunerconfig],
+  ./support/[fakeprovider, typedharness]
 import logos_sdk/testing/testdirs
 import
   logos_sdk/testing/generated/
@@ -161,7 +161,7 @@ let sensorConfined = block:
   ## `_MODULE_async_api` (`sensor_confined_impl.nim`), linked with that kit's
   ## export list (`sdk/tests/generated/confined/`).
   var tree = kitTree()
-  tree.generated = @[repoDir / sdkGeneratedDir / "confined"]
+  tree.generated = @[absolutePath(sdkGeneratedDir / "confined")]
   load(
     buildKitLibraryIn(
       tree, "sensor_confined_impl.nim", "kitsensorc", exports = "sensor_module"
@@ -433,7 +433,7 @@ suite "ifc.kit: kit modules as shared libraries (INTERFACE §2.6, §2.8) [IMPL]"
     ]:
       checkpoint name
       var listed = 0
-      for line in lines(repoDir / dir / module & "_kit.exports"):
+      for line in lines(dir / module & "_kit.exports"):
         if line.len > 0 and line[0] == '_':
           checkpoint line
           check lib.handle.symAddr(cstring(line[1 ..^ 1])) != nil
@@ -486,7 +486,7 @@ suite "ifc.kit: kit modules as shared libraries (INTERFACE §2.6, §2.8) [IMPL]"
     check checkOutcome(init(addr i, addr ctx), contextShape(ctx)).isOk
     destroy(ctx)
     var listed = 0
-    for line in lines(repoDir / sdkGeneratedDir / "idle_module_kit.exports"):
+    for line in lines(sdkGeneratedDir / "idle_module_kit.exports"):
       if line.len > 0 and line[0] == '_':
         inc listed
     check listed == 3
@@ -990,3 +990,150 @@ suite "ifc.kit: what a confined kit's destroy leaves registered (DECISIONS G438)
       # KiB (x86_64) and 34108 KiB (arm64), with no LeakSanitizer report.
       when not (defined(asan) or defined(tsan) or defined(msan)):
         check grown < 1024 * 1024
+
+suite "ifc.kit: a kit fixture built from an installed SDK (DECISIONS G435) [IMPL]":
+  test "[IMPL-DECISION G435] a fixture no configuration gives search paths builds with the host's, and fails without them":
+    # The SDK's sources in their installed layout (lint-packaging holds the install list to
+    # sdk/src's files), outside the repository: under it, the root config.nims would give the
+    # fixture its paths with or without kitbuild's.
+    let installed = getTempDir() / ("lcn-kit-installed-" & $getCurrentProcessId())
+    removeDir(installed)
+    copyDir(sdkTestingDir.parentDir.parentDir, installed)
+    defer:
+      removeDir(installed)
+    let
+      fixtures = installed / "logos_sdk" / "testing" / "fixtures"
+      source = fixtures / "fetch_fake_impl.nim"
+    # The build records every file it reads (`nimBetterRun`'s `depfiles`), through a project
+    # file of the copy's own that sets no path.
+    writeFile(
+      fixtures / "fetch_fake_impl.nims", "switch(\"define\", \"nimBetterRun\")\n"
+    )
+    require not treeSetsPaths(source)
+    check hostPathArgs(source).len > 0
+    # In the repository the root config.nims sets the paths, so kitbuild adds none.
+    check hostPathArgs(fixtureDir / "fetch_fake_impl.nim").len == 0
+    let control = execCmdEx(
+      quoteShellCommand(
+        [
+          getCurrentCompilerExe(),
+          "c",
+          "--hints:off",
+          "--app:lib",
+          "-d:noSignalHandler",
+          "--import:logos_sdk/base/hostsignals",
+          "--nimcache:" & installed / "nimcache-control",
+          "-o:" & installed / "libcontrol",
+          source,
+        ]
+      )
+    )
+    check control.exitCode != 0
+    check "logos_sdk/base/hostsignals" in control.output
+    let lib = buildKitLibraryIn(
+      KitTree(
+        sources: @[fixtures],
+        generated: @[installed / "logos_sdk" / "testing" / "generated"],
+        build: absolutePath("build" / "kit-installed"),
+      ),
+      "fetch_fake_impl.nim",
+      "kifake",
+      exports = "fetch_fake_module",
+    )
+    let handle = loadLib(lib)
+    require handle != nil
+    check handle.symAddr("logos_fetch_fake_module_MODULE_init") != nil
+    # No configuration file of the repository applied, and the copy's own did: the build was
+    # configured as it is in an installed package. Its modules of logos_sdk come through the
+    # host's search paths, which here are the repository's sdk/src, as the host's must be.
+    # Every file it read is the copy's, its compiler's (the first configuration file is the
+    # compiler's `config/nim.cfg`) or under one of the host's search paths.
+    # The build's record of what it read is the one JSON file in its nimcache. Nim names it after
+    # the output file with its extension replaced, and kitbuild's output differs by platform:
+    # `libkifake.dylib.tmp-<pid>`, moved into place, on POSIX (so `libkifake.dylib.json`), and
+    # `kifake.dll` itself on Windows (so `kifake.json`).
+    var records: seq[string]
+    for record in walkFiles(lib.parentDir / "nimcache-kifake" / "*.json"):
+      records.add record
+    checkpoint $records
+    require records.len == 1
+    let info = parseJson(readFile(records[0]))
+    # The record's paths are native: `\` on Windows, where case does not tell paths apart either.
+    # They are also resolved: under a TMPDIR through macOS's `/tmp` symlink, as the Nix shell on
+    # GitHub's macOS runner has (`/tmp/nix-shell.*`), the compiler records the copy as
+    # `/private/tmp/...`. So a path that exists is compared with its symlinks followed.
+    proc norm(path: string): string =
+      result =
+        try:
+          expandFilename(path)
+        except OSError:
+          normalizedPath(path)
+      when defined(windows):
+        result = result.toLowerAscii
+
+    proc under(path, root: string): bool =
+      norm(path).startsWith(norm(root) & DirSep)
+
+    let repo = getCurrentDir()
+    var configs: seq[string]
+    for config in info["configFiles"]:
+      configs.add(config.getStr)
+    checkpoint $configs
+    var copyConfig = false
+    for config in configs:
+      check not config.under(repo)
+      if norm(config) == norm(installed / "logos_sdk" / "testing" / "config.nims"):
+        copyConfig = true
+    check copyConfig
+    require configs.len > 0
+    var roots = @[installed, configs[0].parentDir.parentDir]
+    for path in querySettingSeq(searchPaths):
+      roots.add(path)
+    var read, elsewhere = 0
+    for entry in info["depfiles"]:
+      let path = entry[0].getStr
+      inc read
+      var known = false
+      for root in roots:
+        if path.under(root):
+          known = true
+      if not known:
+        checkpoint "read from elsewhere: " & path
+        inc elsewhere
+    check read > 0
+    check elsewhere == 0
+
+  test "[IMPL-DECISION G435] a configuration sets search paths in any spelling Nim accepts, and a failed build names it":
+    let dir = getTempDir() / ("lcn-kit-paths-" & $getCurrentProcessId())
+    removeDir(dir)
+    createDir(dir / "sub")
+    defer:
+      removeDir(dir)
+    let source = dir / "sub" / "probe.nim"
+    writeFile(source, "")
+    require not treeSetsPaths(source)
+    for (file, text, sets) in [
+      ("config.nims", "--define:lcnTestHooks\n--noNimblePath\n# --path:x\n", false),
+      ("config.nims", "--Path:\"x\"\n", true),
+      ("config.nims", "switch(\"nimble_path\", \"x\")\n", true),
+      ("config.nims", "when true:\n  include \"nimble.paths\"\n", true),
+      ("nim.cfg", "-p:x\n", true),
+      ("nim.cfg", "NimblePath = \"x\"\n", true),
+      ("probe.nims", "--P=x\n", true),
+    ]:
+      let at =
+        if file == "probe.nims":
+          dir / "sub" / file
+        else:
+          dir / file
+      writeFile(at, text)
+      checkpoint file & ": " & text
+      check treeSetsPaths(source) == sets
+      if sets:
+        check pathsConfig(source) == at
+        check at in withheldPathsNote(source)
+        check hostPathArgs(source).len == 0
+      else:
+        check withheldPathsNote(source) == ""
+        check hostPathArgs(source).len > 0
+      removeFile(at)

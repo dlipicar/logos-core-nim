@@ -1382,7 +1382,7 @@ proc declaredName(item: string): string =
 
 suite "ifc.c-abi: the typed call helpers' header (INTERFACE §2.1, §2.7.2, App A.5) [IMPL]":
   test "[IFC-0057] [IFC-0208] [IFC-0627] [IFC-0628] [IFC-0706] <stem>_calls.h: an invoke and a clear helper per exposed method, outside the header set and with no logos_ symbol":
-    let kitShapes = readFile(repoDir / fixtureDir / "shapes_module.cddl")
+    let kitShapes = readFile(fixtureDir / "shapes_module.cddl")
     for (stem, s) in [
       ("shapes_module", accepted(kitShapes)),
       ("sensor_module", accepted(mod392, [ifc392], [sup392])),

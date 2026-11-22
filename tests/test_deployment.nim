@@ -124,7 +124,7 @@ when defined(posix):
     hostExe = moduleHostProgram()
     chatterLib = buildKitLibrary("chatter_impl.nim", "dplchatter")
     beaconRoot = @(
-      acceptContractSet(readFile(repoDir / fixtureDir / "beacon_module.cddl"))
+      acceptContractSet(readFile(fixtureDir / "beacon_module.cddl"))
       .expect("the beacon_module contract set").primary.root
     ) ## so `chatter-1` is a provider: its endpoint is made in `run/ep`
 
@@ -496,11 +496,11 @@ when defined(posix):
           i = text.find("logos.", j)
 
       var mirrored: seq[string]
-      for f in walkDirRec(repoDir / "spec" / "mirrors"):
+      for f in walkDirRec("spec" / "mirrors"):
         mirrored.add readFile(f).tokens(quoted = false)
       var seen = 0
       for root in ["src", "sdk" / "src"]:
-        for f in walkDirRec(repoDir / root):
+        for f in walkDirRec(root):
           var found: seq[string]
           if f.endsWith(".nim"):
             found = readFile(f).tokens(quoted = true)

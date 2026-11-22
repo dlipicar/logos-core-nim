@@ -15,7 +15,7 @@ export results
 
 const TunerRoot* = "tuner.config"
 
-let tunerDocument* = readFile(repoDir / fixtureDir / "tuner_config.cddl")
+let tunerDocument* = readFile(fixtureDir / "tuner_config.cddl")
 
 proc rootsOf*(document, root: string): (seq[byte], seq[byte]) =
   ## The schema root and the root's subtree root, recomputed from the text.
