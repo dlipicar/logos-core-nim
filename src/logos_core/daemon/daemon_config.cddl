@@ -43,6 +43,7 @@ lcn.dc_runtime = {
   ? max_payload_depth: uint16,
   ? module_host: lcn.app_path,
   ? module_host_env: [* lcn.app_env_name],
+  ? remote_program: lcn.app_path,
 }
 
 ; allow-all needs the development switch in the trust file (decision 11).
@@ -151,14 +152,19 @@ lcn.dc_test_diagnostics = {
 ; remote: the remote profile logos.remote.tls-tcp (G407-G410; REMOTE.md).
 ; enabled: logosd starts its remote side, which needs runtime_instance_id to be
 ; a lowercase UUID version 4 (RUNTIME l.2592-2593) and the remote trust input
-; (section 6a). signing: what signs the TLS handshakes with the Runtime's key;
-; absent is "logosd". key-holder needs key_holder, the logos_keyholder program,
-; and key_holder needs key-holder; "process-copy" is accepted only by a logosd
-; built with -d:logosTestSigning.
+; (section 6a), and refuses policy allow-all (G415). signing: what signs the
+; TLS handshakes with the Runtime's key; absent is "logosd". key-holder needs
+; key_holder, the logos_keyholder program, and key_holder needs key-holder;
+; "process-copy" is accepted only by a logosd built with -d:logosTestSigning.
+; listeners and exports (G412; RUNTIME §9.3.9): the deployment's remote
+; listener and provider export records, as Runtime Control holds them, only
+; with enabled; validated as Runtime Control validates them (l.3319-3321).
 lcn.dc_remote = {
   enabled: bool,
   ? signing: lcn.dc_remote_signing,
   ? key_holder: lcn.app_path,
+  ? listeners: [* lcn.rc_remote_listener_record],
+  ? exports: [* lcn.rc_provider_export_record],
 }
 
 lcn.dc_remote_signing = "logosd" / "key-holder" / "process-copy"

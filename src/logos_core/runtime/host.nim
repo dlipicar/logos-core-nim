@@ -515,6 +515,11 @@ proc launch(h: ptr HostRuntime): LogosResult =
         policy: c.authorityPolicy,
         runtimeId: runtimeId,
         facts: h.facts,
+        enrolled:
+          if c.remote.isSome:
+            c.remote.get.enrolled
+          else:
+            @[],
         profile: c.permissions,
       ),
     ).isOkOr:

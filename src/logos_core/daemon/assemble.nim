@@ -215,19 +215,31 @@ proc assembleDaemon*(
     let t = checkedRemoteTrust(s).valueOr:
       return err(startError(ExitRefused, "the remote trust input: " & error))
     seenRemote = Opt.some(t.digest)
-  let prepared = prepareDaemon(
-    s, bytes, seen, hooksBuild = opts.hooksBuild, checkKey = true, exe = opts.exe
-  ).valueOr:
-    return err(startError(ExitRefused, error))
-  let evidenceKeys = startEvidenceKeys(s, prepared.config, seen).valueOr:
-    return err(startError(ExitRefused, "the evidence keys: " & error))
   # [G299; G408] The remote input's second read, continuity and enrollment
-  # rules and snapshot, before either mark moves; it writes nothing.
+  # rules and snapshot, before either mark moves; it writes nothing. Its
+  # snapshot goes through the derived host configuration to the remote
+  # processes (5-7a-2).
   var remote = Opt.none(RemoteStart)
   if remoteOn:
     let st = confirmRemoteTrust(s, seenRemote).valueOr:
       return err(startError(ExitRefused, "the remote trust input: " & error))
     remote = Opt.some(st)
+  let prepared = prepareDaemon(
+    s,
+    bytes,
+    seen,
+    hooksBuild = opts.hooksBuild,
+    checkKey = true,
+    exe = opts.exe,
+    remote =
+      if remote.isSome:
+        Opt.some(RemoteSeen(snapshot: remote.get.snapshot))
+      else:
+        Opt.none(RemoteSeen),
+  ).valueOr:
+    return err(startError(ExitRefused, error))
+  let evidenceKeys = startEvidenceKeys(s, prepared.config, seen).valueOr:
+    return err(startError(ExitRefused, "the evidence keys: " & error))
   # [G409; G410] The TLS credential: a pending rotation taken up, then the key
   # loaded by the signing service. In key-holder mode logosd checks the
   # certificate and never opens the key, which the holder loads.
@@ -278,6 +290,9 @@ proc assembleDaemon*(
     )
     for line in r.conflicts & r.report:
       logWarn("remote-trust-report: " & line)
+  for line in prepared.policyReport:
+    # [G415] A Runtime the policy names without an active enrollment.
+    logWarn("authority-policy-report: " & line)
   let c = prepared.config
   let path = prepareRunDir(s, c.ctl.socketDir).valueOr:
     return err(startError(ExitRefused, error))

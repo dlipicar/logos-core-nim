@@ -335,9 +335,11 @@ func isUuidV4*(s: string): bool =
 proc checkRemote*(
     dc: LcnDaemonConfig, testSigningBuild = TestSigningBuild
 ): Result[RemoteSettings, string] =
-  ## [IMPL-DECISION G407, G410] `remote`: who signs, and with `enabled` the
-  ## Runtime id the remote profiles require. `testSigningBuild` is this
-  ## build's: a test passes `false` to check a packaged logosd's refusal.
+  ## [IMPL-DECISION G407, G410, G412, G415] `remote`: who signs, and with
+  ## `enabled` the Runtime id the remote profiles require, a policy other than
+  ## `allow-all`, and the deployment's listener and export records.
+  ## `testSigningBuild` is this build's: a test passes `false` to check a
+  ## packaged logosd's refusal.
   var r = RemoteSettings(signing: rsLogosd)
   if dc.remote.isNone:
     return ok(r)
@@ -364,6 +366,14 @@ proc checkRemote*(
     return err(
       "runtime.runtime_instance_id must be a lowercase UUID version 4 with remote.enabled"
     )
+  if r.enabled and dc.policy.kind == LcnDcPolicyKind.Allow_all:
+    # [G415; owner O1 = (i), 2026-11-21] allow-all would admit every
+    # forwarded consumer.
+    return err("policy: allow-all is refused with remote.enabled")
+  if not r.enabled and (x.listeners.isSome or x.exports.isSome):
+    # [G412] The records are validated as Runtime Control validates them by
+    # the derived host configuration's checks (check 5).
+    return err("remote.listeners and remote.exports need remote.enabled")
   ok(r)
 
 proc checkDaemonConfig*(

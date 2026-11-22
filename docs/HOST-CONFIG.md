@@ -55,6 +55,7 @@ lcn.app_config = {
   ? call_audit: lcn.app_call_audit,
   ? routing: [* lcn.app_routing_rule],
   ? transport: lcn.app_transport,
+  ? remote: lcn.app_remote,
   ? permissions: lcn.app_permissions,
   ? state_transfers: [* lcn.app_state_transfer],
 }
@@ -72,11 +73,15 @@ lcn.app_runtime = {
   ? endpoint_dir: lcn.app_path,
   ? module_host: lcn.app_path,
   ? module_host_env: [* lcn.app_env_name],
+  ? remote_program: lcn.app_path,
 }
 
 ; module_host: the logos-module-host program, an absolute path (Tier 4b step
 ; 4b-3); without it hosted_dynamic is refused. module_host_env: the names of
 ; the variables every Module Host gets from the daemon's environment.
+; remote_program: the logos_remote program, an absolute path (Tier 5 step
+; 5-7a-2; DECISIONS G411); without it no remote profile is enabled here, and
+; enabling a remote listener is MODULE_ERROR (G412).
 lcn.app_env_name = tstr .size (1..128)
 
 lcn.app_path = tstr .size (1..4096)
@@ -135,6 +140,21 @@ lcn.app_transport = {
   ? max_outbound: uint16,
   ? max_calls: uint32,
   ? max_in_flight: uint32,
+}
+
+; Remote transport (RUNTIME §9.3.9; Tier 5 step 5-7a-2; DECISIONS G408, G412,
+; G415; docs/REMOTE.md). Only the embedding host sets it (logosd's compose).
+; snapshot: this start's trust snapshot, one deterministic-CBOR lcn.rch_snapshot
+; (remote/carrier.cddl); its Runtimes with an active record are the enrolled
+; ones. listeners and exports: the deployment's records (RUNTIME l.3319-3321),
+; held as Runtime Control holds them (lcn.rc_x is logos.runtime_control.x and
+; lcn.rt_x is logos.runtime.x, generated from the mirrored contract), each
+; address at most once and each export naming a listener here, validated as
+; Runtime Control validates them.
+lcn.app_remote = {
+  snapshot: bstr .size (1..16842752),
+  ? listeners: [* lcn.rc_remote_listener_record],
+  ? exports: [* lcn.rc_provider_export_record],
 }
 
 ; The permission profile (RUNTIME l.1595, l.2526-2604; DECISIONS G110, G279,

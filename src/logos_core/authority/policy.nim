@@ -10,6 +10,16 @@
 ##
 ## Rules have no order. Deny overrides allow; the code of a denial is the first
 ## that applies in CA §7's table (l.783-794; G377).
+##
+## [G415; owner decision B5, item O1 (a), (x)] A forwarded consumer, the module
+## instance an enrolled Runtime authenticated and forwards an operation for
+## (RUNTIME l.1685-1699), is known by its instance id and its Runtime alone. A
+## subject that names no Runtime matches local instances only; one whose
+## `runtimes` names that Runtime matches it (`matches`). In an `inspect` rule's
+## `grants` and `audit`, a subject that names no Runtime covers every
+## consumer's records, local and forwarded (`covers`). Provider selectors and
+## the targets of `runtime-control` and `module-execution` scopes name this
+## Runtime's own instances and providers (`lcn.ap_selector`), never `runtimes`.
 
 {.push raises: [].}
 
@@ -31,7 +41,10 @@ const
 
 type
   Subject* = object
-    ## Fields AND, entries OR; `{}` matches any Runtime-known instance (G47).
+    ## Fields AND, entries OR; `{}` matches any local instance (G47; G415).
+    runtimes*: Opt[seq[string]]
+      ## [G415] the Runtimes whose forwarded consumers it names; none: local
+      ## instances only (O1)
     instances*: Opt[seq[string]]
     modules*: Opt[seq[string]]
     signers*: Opt[seq[seq[byte]]]
@@ -111,6 +124,9 @@ type
     ## addresses are filtered with it (CA l.78-79). It never authenticates
     ## anything (l.80).
     instance*: string
+    runtime*: string
+      ## [G415] a forwarded consumer's Runtime; empty: a local instance. A
+      ## forwarded consumer has no module, signer or package here.
     module*: string
     signer*: Opt[seq[byte]]
     package*: Opt[string]
@@ -134,7 +150,11 @@ func snapshot*(instance: string, f: InstanceFacts): FactsSnapshot =
     instance: instance, module: f.module, signer: f.signer, package: f.package
   )
 
-func matches*(s: Subject, f: FactsSnapshot): bool =
+func forwarded*(instance, runtime: string): FactsSnapshot =
+  ## [G415] A forwarded consumer's facts: its instance id and its Runtime.
+  FactsSnapshot(instance: instance, runtime: runtime)
+
+func factsMatch(s: Subject, f: FactsSnapshot): bool =
   if s.instances.isSome and f.instance notin s.instances.get:
     return false
   if s.modules.isSome and f.module notin s.modules.get:
@@ -145,11 +165,33 @@ func matches*(s: Subject, f: FactsSnapshot): bool =
     return false
   true
 
+func matches*(s: Subject, f: FactsSnapshot): bool =
+  ## [G47; G415, O1 (a)] A subject that names no Runtime matches local
+  ## instances only; one that names Runtimes matches only forwarded consumers
+  ## of those Runtimes.
+  if s.runtimes.isSome:
+    if f.runtime.len == 0 or f.runtime notin s.runtimes.get:
+      return false
+  elif f.runtime.len > 0:
+    return false
+  s.factsMatch(f)
+
+func covers*(s: Subject, f: FactsSnapshot): bool =
+  ## [G415, O1 (x)] An `inspect` rule's `grants` or `audit` subject against
+  ## the facts of a record's consumer or a grant's target: one that names no
+  ## Runtime covers every consumer, local and forwarded; one that names
+  ## Runtimes covers only their forwarded consumers.
+  if s.runtimes.isSome:
+    if f.runtime.len == 0 or f.runtime notin s.runtimes.get:
+      return false
+  s.factsMatch(f)
+
 func modulesOnly(s: Subject): bool =
   s.modules.isSome and s.instances.isNone and s.signers.isNone and s.packages.isNone
 
 func named(s: Subject): bool =
-  s.instances.isSome or s.modules.isSome or s.signers.isSome or s.packages.isSome
+  s.runtimes.isSome or s.instances.isSome or s.modules.isSome or s.signers.isSome or
+    s.packages.isSome
 
 func namesTarget(p: Pattern): bool =
   ## A pattern naming a provider, module or instance (CA l.784): a subject with
@@ -190,7 +232,21 @@ proc setOf[T](xs: Opt[seq[T]], nonEmpty: bool, what: string): Result[void, strin
     ?setOf(xs.get, nonEmpty, what)
   ok()
 
-proc compileSubject(s: LcnApSubject, what: string): Result[Subject, string] =
+func isRuntimeIdV4*(s: string): bool =
+  ## [SPEC RUNTIME l.2592-2593] A lowercase canonical UUID version 4: what
+  ## every Runtime id of the remote profiles is (8-4-4-4-12 lowercase hex
+  ## digits, version 4, the RFC 9562 variant).
+  if s.len != 36:
+    return false
+  for i, c in s:
+    if i in [8, 13, 18, 23]:
+      if c != '-':
+        return false
+    elif c notin {'0' .. '9', 'a' .. 'f'}:
+      return false
+  s[14] == '4' and s[19] in {'8', '9', 'a', 'b'}
+
+proc compileSelector(s: LcnApSelector, what: string): Result[Subject, string] =
   ?setOf(s.instances, true, what & ".instances")
   ?setOf(s.modules, true, what & ".modules")
   ?setOf(s.signers, true, what & ".signers")
@@ -204,8 +260,42 @@ proc compileSubject(s: LcnApSubject, what: string): Result[Subject, string] =
     )
   )
 
+proc compileSubject(s: LcnApSubject, what, runtimeId: string): Result[Subject, string] =
+  ## [G415] `runtimes`: a set of lowercase UUIDv4 Runtime ids, never this
+  ## Runtime's own (a subject names local instances by naming no Runtime),
+  ## and never beside `modules`, `signers` or `packages`, which a forwarded
+  ## consumer does not carry, so such a subject could match nothing (as CA
+  ## l.305 for a field the subject does not carry). An id with no active
+  ## enrollment loads and matches no consumer (`unenrolledRuntimes`).
+  var r = ?compileSelector(
+    LcnApSelector(
+      instances: s.instances,
+      modules: s.modules,
+      signers: s.signers,
+      packages: s.packages,
+    ),
+    what,
+  )
+  if s.runtimes.isSome:
+    ?setOf(s.runtimes, true, what & ".runtimes")
+    for id in s.runtimes.get:
+      if not isRuntimeIdV4(id):
+        return err(what & ".runtimes: not a lowercase UUIDv4 Runtime id: " & id)
+      if runtimeId.len > 0 and id == runtimeId:
+        return err(
+          what & ".runtimes names this Runtime: a subject names local instances " &
+            "by naming no Runtime"
+        )
+    if s.modules.isSome or s.signers.isSome or s.packages.isSome:
+      return err(
+        what & ": runtimes cannot stand beside modules, signers or packages, " &
+          "which a consumer of another Runtime does not carry"
+      )
+    r.runtimes = s.runtimes
+  ok(r)
+
 proc compileTarget(
-    t: LcnApTarget, issuedAllowed: bool, what: string
+    t: LcnApTarget, issuedAllowed: bool, what, runtimeId: string
 ): Result[Target, string] =
   case t.kind
   of LcnApTargetKind.Self:
@@ -215,7 +305,7 @@ proc compileTarget(
       return err(what & ": \"issued\" is valid only in revoke and inspect rules")
     ok(Target(kind: tkIssued))
   of LcnApTargetKind.lcn_Ap_subject:
-    let subject = ?compileSubject(t.arm_lcn_Ap_subject, what)
+    let subject = ?compileSubject(t.arm_lcn_Ap_subject, what, runtimeId)
     ok(Target(kind: tkSubject, subject: subject))
 
 proc resolveDecls(
@@ -274,7 +364,7 @@ proc compilePattern(
     for a in p.actions:
       r.paActions.incl PaActionKind(ord(a.kind))
     if p.providers.isSome:
-      r.providers = Opt.some(?compileSubject(p.providers.get, what & ".providers"))
+      r.providers = Opt.some(?compileSelector(p.providers.get, what & ".providers"))
     if p.access.isSome:
       let a = p.access.get
       let
@@ -315,7 +405,7 @@ proc compilePattern(
           if x in restrictedRoots():
             return err(what & ": a restricted declaration")
     if p.targets.isSome:
-      r.targets = Opt.some(?compileSubject(p.targets.get, what & ".targets"))
+      r.targets = Opt.some(?compileSelector(p.targets.get, what & ".targets"))
     ok(r)
   of LcnApScopeKind.lcn_Ap_module_execution:
     let p = s.arm_lcn_Ap_module_execution
@@ -323,7 +413,7 @@ proc compilePattern(
     ?setOf(p.modes, true, what & ".modes")
     ?setOf(p.placements, true, what & ".placements")
     var r = Pattern(kind: pkExecution)
-    r.execTargets = ?compileSubject(p.targets, what & ".targets")
+    r.execTargets = ?compileSelector(p.targets, what & ".targets")
     for a in p.actions:
       r.meActions.incl MeActionKind(ord(a.kind))
     if p.modes.isSome:
@@ -364,7 +454,7 @@ func commitmentOf(c: LcnApCommitment): CommitmentRequirements =
   CommitmentRequirements(request: c.request, response: c.response)
 
 proc compileRule(
-    x: LcnApRule, i: int, profile: PermissionProfile
+    x: LcnApRule, i: int, profile: PermissionProfile, runtimeId: string
 ): Result[Rule, string] =
   let what = "rules[" & $i & "]"
   let subjectOf =
@@ -374,7 +464,7 @@ proc compileRule(
     of LcnApRuleKind.lcn_Ap_issue: x.arm_lcn_Ap_issue.subject
     of LcnApRuleKind.lcn_Ap_revoke: x.arm_lcn_Ap_revoke.subject
     of LcnApRuleKind.lcn_Ap_inspect: x.arm_lcn_Ap_inspect.subject
-  let subject = ?compileSubject(subjectOf, what & ".subject")
+  let subject = ?compileSubject(subjectOf, what & ".subject", runtimeId)
   case x.kind
   of LcnApRuleKind.lcn_Ap_allow:
     let a = x.arm_lcn_Ap_allow
@@ -406,7 +496,7 @@ proc compileRule(
   of LcnApRuleKind.lcn_Ap_issue:
     let a = x.arm_lcn_Ap_issue
     var r = Rule(kind: rkIssue, subject: subject)
-    r.issueTargets = ?compileTarget(a.targets, false, what & ".targets")
+    r.issueTargets = ?compileTarget(a.targets, false, what & ".targets", runtimeId)
     r.issue = ?compilePatterns(a.scopes, what, profile)
     if a.max_validity_ms.isSome and a.max_validity_ms.get < MinValidityMs:
       return err(what & ".max_validity_ms is below 1000")
@@ -415,21 +505,25 @@ proc compileRule(
   of LcnApRuleKind.lcn_Ap_revoke:
     let a = x.arm_lcn_Ap_revoke
     var r = Rule(kind: rkRevoke, subject: subject)
-    r.revokeTargets = ?compileTarget(a.targets, true, what & ".targets")
+    r.revokeTargets = ?compileTarget(a.targets, true, what & ".targets", runtimeId)
     ok(r)
   of LcnApRuleKind.lcn_Ap_inspect:
     let a = x.arm_lcn_Ap_inspect
     var r = Rule(kind: rkInspect, subject: subject)
     if a.grants.isSome:
-      r.grants = Opt.some(?compileTarget(a.grants.get, true, what & ".grants"))
+      r.grants =
+        Opt.some(?compileTarget(a.grants.get, true, what & ".grants", runtimeId))
     if a.audit.isSome:
-      r.audit = Opt.some(?compileTarget(a.audit.get, true, what & ".audit"))
+      r.audit = Opt.some(?compileTarget(a.audit.get, true, what & ".audit", runtimeId))
     r.policyChanges = a.policy_changes.get(false)
     ok(r)
 
-proc loadPolicy*(bytes: openArray[byte], profile = NoProfile): Result[Policy, string] =
+proc loadPolicy*(
+    bytes: openArray[byte], profile = NoProfile, runtimeId = ""
+): Result[Policy, string] =
   ## Decodes and validates a policy, resolving every name to its exact root;
-  ## permission patterns against `profile`.
+  ## permission patterns against `profile`; with `runtimeId`, a subject naming
+  ## that Runtime is refused (G415).
   let p = decode(LcnAuthorityPolicy, bytes).valueOr:
     return err("policy: " & error)
   if not validSource(p.source):
@@ -449,7 +543,7 @@ proc loadPolicy*(bytes: openArray[byte], profile = NoProfile): Result[Policy, st
       return err("policy: audit.records is outside 1024..1048576")
   ?setOf(p.rules, true, "policy: rules")
   for i, x in p.rules:
-    let rule = compileRule(x, i, profile).valueOr:
+    let rule = compileRule(x, i, profile, runtimeId).valueOr:
       return err("policy: " & error)
     r.rules.add rule
   ok(r)
@@ -623,16 +717,22 @@ func targetMatches*(
     target: Address,
     targetFacts: FactsSnapshot,
     issuer: Opt[Address],
+    inspecting = false,
 ): bool =
   ## A rule's `targets`, `grants` or `audit` against one grant or record.
-  ## `"self"`: the target is the caller; `"issued"`: the caller issued it.
+  ## `"self"`: the target is the caller; `"issued"`: the caller issued it. An
+  ## `inspect` rule's subject covers forwarded consumers when it names no
+  ## Runtime (G415, O1 (x)); an `issue` or `revoke` rule's does not (O1 (a)).
   case t.kind
   of tkSelf:
     target == caller
   of tkIssued:
     issuer.isSome and issuer.get == caller
   of tkSubject:
-    t.subject.matches(targetFacts)
+    if inspecting:
+      t.subject.covers(targetFacts)
+    else:
+      t.subject.matches(targetFacts)
 
 # Visibility (CA §10 l.1382-1390) ----------------------------------------------------
 
@@ -662,7 +762,9 @@ func canSeeGrant*(
   ## grant implies seeing it.
   for r in p.rules:
     if r.kind == rkInspect and r.grants.isSome and r.subject.matches(callerFacts) and
-        r.grants.get.targetMatches(caller, target, targetFacts, issuer):
+        r.grants.get.targetMatches(
+          caller, target, targetFacts, issuer, inspecting = true
+        ):
       return true
   p.canRevoke(caller, callerFacts, target, targetFacts, issuer)
 
@@ -698,7 +800,7 @@ func canSeeRecord*(
       if issuedByCaller:
         return true
     of tkSubject:
-      if subject.isSome and t.subject.matches(subject.get):
+      if subject.isSome and t.subject.covers(subject.get):
         return true
   false
 
@@ -725,3 +827,48 @@ func issueCoversAction*(
         r.issue.coversAnAction(scopes):
       return true
   false
+
+# The load report (G415) ---------------------------------------------------------------
+
+func runtimeRefs*(p: Policy): seq[tuple[what, id: string]] =
+  ## [G415] Every Runtime a rule subject or an `issue`, `revoke` or `inspect`
+  ## target names, with where.
+  template check(where: string, s: Subject) =
+    if s.runtimes.isSome:
+      for id in s.runtimes.get:
+        result.add((where, id))
+
+  for i, r in p.rules:
+    let what = "rules[" & $i & "]"
+    check(what & ".subject", r.subject)
+    case r.kind
+    of rkIssue:
+      if r.issueTargets.kind == tkSubject:
+        check(what & ".targets", r.issueTargets.subject)
+    of rkRevoke:
+      if r.revokeTargets.kind == tkSubject:
+        check(what & ".targets", r.revokeTargets.subject)
+    of rkInspect:
+      if r.grants.isSome and r.grants.get.kind == tkSubject:
+        check(what & ".grants", r.grants.get.subject)
+      if r.audit.isSome and r.audit.get.kind == tkSubject:
+        check(what & ".audit", r.audit.get.subject)
+    else:
+      discard
+
+func unenrolledReport*(
+    refs: openArray[tuple[what, id: string]], enrolled: openArray[string]
+): seq[string] =
+  ## [G415] One line per Runtime named that is not actively enrolled: it
+  ## loads and matches no consumer, so a revocation needs no policy edit, and
+  ## the start names it.
+  for r in refs:
+    if r.id notin enrolled:
+      result.add(
+        r.what & " names Runtime " & r.id &
+          ", which has no active logos.remote.tls-tcp enrollment: it matches no consumer"
+      )
+
+func unenrolledRuntimes*(p: Policy, enrolled: openArray[string]): seq[string] =
+  ## [G415] `unenrolledReport` of the policy's own references.
+  unenrolledReport(p.runtimeRefs, enrolled)
