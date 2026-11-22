@@ -227,7 +227,7 @@ deferred past the re-pin.
 12. Platforms, build, CI and tooling
 13. Implementation defaults chosen without a separate question
 14. Index
-15. Revisions and implementation choices since work started (R1–R7, I1–I115)
+15. Revisions and implementation choices since work started (R1–R7, I1–I120)
 
 ---
 
@@ -3263,6 +3263,29 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   failed, so 128 lifecycle jobs that each wait for work queued behind them can still stall. Overflow
   workers are joined by `close` like the others.
 - **Status:** decided and built 2026-11-13 (I88, part 11a). `[IMPL-DECISION G242]` in `test_async`.
+- **Revised 2026-11-22 (CI run 44978149107; ruled (b) with Fable):** for a refusal, "busy" means inside a
+  job. A call worker is inside a job from taking it off the queue until its completion message is sent, a
+  refused call it only discards included (`Shared.callInJob`); a worker spawned but not yet running one is
+  not. While a spawned call worker is not inside a job, nothing is refused and the refusal clock starts
+  again. **Fallback:** a call worker that never takes a job would then leave queued calls with no answer,
+  so once the pool has its 128 workers, calls are queued and no call worker has taken or finished a job
+  for 10 × `refuseDelay` (`CallStallFactor`; 10 s by default), the oldest queued call is refused anyway,
+  one each such period, with the diagnostic "a call worker did not take a queued call". While other call
+  workers still take or finish jobs, the long bound keeps starting again, so a worker that never starts
+  beside 127 that do makes the fallback refuse nothing: queued calls are served in order as long as some
+  call worker takes or finishes a job within each 10 × `refuseDelay`, and no call waits forever while the
+  pool makes progress. **Spawning** still
+  counts a spawned worker busy, in the call pool and the lifecycle pool alike: once refusing needs every
+  worker inside a job, a pool at its bound with a worker not yet started refuses nothing, and below the
+  bound a stalled worker is covered by the next overflow spawn. Its cost: a slow-starting worker can bring
+  an overflow spawn that was not needed, within the pool's bound. **Reason:** the Runtime counted a call
+  worker busy from its spawn (`callBusy > callSpawned` only shows that calls are queued). On an arm ASan
+  runner the 128th call worker started more than `refuseDelay` after its spawn, so the call it was about to
+  take was the oldest not begun and was refused, and it took the next. A refused call's job stays queued
+  and counted until a worker takes it, so a worker started later than twice `refuseDelay` found every
+  queued call refused and had none: a call was refused while a worker was free, which is not the capacity
+  limit MODULE_ERROR stands for. `test_async` finds the refused calls by outcome; a test hook
+  (`setLateCallWorkerForTests`, under `lcnTestHooks`) starts the 128th worker late or never.
 
 ### G243 — A static record that names a binding the host never registered
 - **Kind:** FREE · **Specs:** RUNTIME §13 (static registration, `start`), l.3442.
@@ -7491,7 +7514,15 @@ their history.
   does not count: residual work that existed before, not something every handler is protected from.
   A handler whose unwinding waited for a completion arriving after the 2 s bound now finishes during
   `destroyModule` instead of being abandoned; its invocation still completes once, NOT_READY, since
-  `unwindDeferred` leaves what is outstanding to teardown. A handler that ignored its cancellation can
+  `unwindDeferred` leaves what is outstanding to teardown. Its task ends too only if `destroyModule`
+  outlasts the task's tail, the route's and the kit's awaits, a few turns of the loop after the
+  handler's last statement. Otherwise teardown abandons that tail as G338 says, its frames pinned.
+  LeakSanitizer reported that from the `wait` 12 case (778 bytes in 8 indirect allocations, CI run
+  44991040073 on fef0991), whose `destroyModule` returned at its first 10 ms tick after the handler
+  ended; it now awaits 20 more turns first. With test hooks the kit counts its deferred tasks begun
+  and not ended (`liveDeferredTasks`), so every build checks what LeakSanitizer caught by chance:
+  this case and the unwound `[IFC-0769]` one leave none, the `noCancel` case leaves its one
+  (2026-11-22). A handler that ignored its cancellation can
   be woken while `destroyModule` awaits. That is memory-safe for `async` handlers and outside the
   contract (INTERFACE l.2116-2117); timers could already wake it before.
 - **For the guide** (MODULE-KIT §3): `destroyModule` may await a callback a foreign thread posts, a
@@ -7658,6 +7689,13 @@ their history.
   memory grown by under 1 MiB (it rarely returns to the byte; Mac 2026-11-21: 16 KiB orc, 0 refc,
   16 KiB orc-release). It is the regression check for the wake-up descriptor: without this decision
   each cycle leaks one (Linux) or two (macOS).
+  - **Under a sanitizer** (`-d:asan`, `-d:tsan`, `-d:msan`) the resident bound is not asserted, and
+    the growth is only printed. The descriptor and thread checks still run. A sanitizer build
+    allocates with malloc, so every free goes to the sanitizer's runtime. ASan's quarantine (256 MB
+    by default) keeps freed chunks resident and unreused, and TSan's and MSan's allocators and shadow
+    memory are not bounded by this either. CI run 44960968929 on 1ae98a2 failed the bound under ASan
+    on both architectures: 16880 KiB on x86_64 and 34108 KiB on arm64, with no LeakSanitizer report.
+    The same logic grows by at most 16 KiB without a sanitizer (branch `ci-fix-kit-rss`).
   - **The amendment's cases.** Every child now runs under a bound (`leftoverRun`, 120 s by default);
     one that outlives it is killed and fails its case.
     - In `test_kit_dylib`, `probe` 30 has the next destroy replace the dispatcher (destroy mode 10,
@@ -7804,6 +7842,95 @@ their history.
   suite.
 - **Status:** built 2026-11-21 (Tier 5 step N-1e, part D).
 
+### G442 — Sanitizer reports from child processes fail the check
+- **Kind:** IMPL · **Specs:** none (test infrastructure); the owner's rule of 2026-11-19 (no sanitizer
+  runs while building); planning's ruling of 2026-11-22; Fable's checks,
+  `tier5-plans/fable-checks/sanitizer-logpath-plan.md` (C1-C5, K1-K5, S1-S4).
+- **Found** (N-1, triaging CI run 44991040073). A report in a child process reached only the child's
+  stderr and exit status. Hosted suites classify a Module Host's end as `host-terminated` without
+  reading its status, so `test_hosted-tsan` passed 29/29 over a TSan race in a host
+  (`tests/kit/probe_impl.nim:414`), seen in every CI run from 44960968929 on, on both architectures.
+  What logosd and logosctl write to stderr goes to files (`daemonproc`) that a passing case never
+  reads.
+- **Decision.**
+  - **A report directory per check.** Every sanitizer check runs its suite through
+    `tools/sanitizer/reports.sh run`: the flake's asan, tsan and msan checks (`suiteRun` in
+    `flake.nix`; the base variants' command is unchanged), and `nimble test_asan`, `test_tsan` and
+    `test_msan`, per suite. The script empties the directory and writes a marker file in it.
+  - **The variables.** It appends `log_path=<dir>/report:log_exe_name=1` to `ASAN_OPTIONS`,
+    `LSAN_OPTIONS`, `MSAN_OPTIONS`, `TSAN_OPTIONS` and `UBSAN_OPTIONS`; the last setting wins.
+    - The compiled-in defaults and suppressions in `tests/support/sanitizers.c` stay, because the
+      runtimes read the variables after them. A suppressed report writes nothing.
+    - It also appends `external_symbolizer_path` to `MSAN_OPTIONS` when `llvm-symbolizer` is on
+      `PATH`, since a host's environment has no `PATH`. GCC's runtimes, which asan and tsan use,
+      symbolize in the process.
+    - Each process that prints anything writes `report.<program>.<pid>`, and a report is written when
+      it is found. A host's `_exit` or SIGKILL loses nothing already reported.
+  - **Strict.** The check fails in any of four cases:
+    - any file but the marker is there, an empty one included;
+    - the marker is gone (on Linux each instrumented process re-creates a removed directory, and on
+      macOS a report into a missing one is dropped);
+    - the suite failed;
+    - a canary suite has no canary.
+    A runtime warning that recurs gets the runtime option that silences it, with its own row, never a
+    filter.
+  - **Printing.** The first line names every cause. Then come each distinct `SUMMARY:` line with its
+    count, then one file in full per distinct line, at most 10, each cut at 64 KiB. The job must print
+    them, because `log_path` also takes the suite's own reports out of the log.
+  - **Every path names the variables.**
+    - The Runtime's hosts get only `module_host_env` (I91). Every hosted test configuration fills it
+      from `SanitizerEnv`, and logosd's hosts get theirs the same way from logosd's environment.
+      `daemonproc` passes that environment on whole.
+    - Transport peers, logosd, logosctl and osproc's children inherit the variables.
+    - `test_module_host`'s own hosts had none: `hostowner.startHost` now adds this process's settings
+      to the environment it is given, and H-14's allow-list names them.
+    - No product change: `module_host_env` is already how a deployment passes a sanitizer's settings
+      (HOST-CONFIG).
+  - **One list, and a lint (C1).** `SanitizerEnv` is defined once, in
+    `tests/support/sanitizerenv.nim`. `tools/lint/sanitizerenv.py` (the `lint-sanitizer-env` check)
+    fails two kinds of test:
+    - one whose host environment (`moduleHostEnv =`, `module_host_env =`, `newSupervisor(`,
+      `spawnProcess(`) does not name it;
+    - one that turns `startHost`'s `sanitizerEnv` off.
+    Either is allowed if the statement, or the comment line above it, carries
+    `# [G442] sanitizer-env: <why>`.
+  - **Delivery, in every build (K5).** Three cases set all five variables: S-2 (`test_hosted`), H-2
+    and H-14 (`test_module_host`), and a `test_logosd` case. `deliverySettings` takes the check's own
+    values, else `verbosity=0`. Each case checks that a host on its path got each variable with that
+    value: the Runtime's, a direct host, and logosd's. The probe reports through `env-of`, chatter
+    through `LCN_CHATTER_SHOW_ENV`.
+  - **Canaries, under a sanitizer only (K1-K4).**
+    - In the same three suites a host writes one stack trace with `__sanitizer_print_stack_trace()`:
+      the probe's `sanitizer-trace`, chatter's `LCN_CHATTER_SANITIZER_TRACE`.
+    - Once the host is reaped, `takeCanary` moves its file to `<dir>/canary/` if every line is a frame
+      of one trace (`#0`, `#1`, ...; no function name is needed, since MemorySanitizer's host frames
+      may have none). Anything else stays as a report.
+    - `reports.sh` needs at least one canary file, each one trace, for `test_hosted`,
+      `test_module_host` and `test_logosd` (`CANARY_SUITES`), so a canary that never ran fails.
+    - The control is a `test_module_host` host started without the settings. No file of its appears;
+      its trace goes to the suite's stderr.
+    - A canary proves only that the runtime honours `log_path` in a child. Delivery is proven in every
+      build.
+  - **What is checked without a sanitizer.**
+    - `reports.sh self-test`, the `sanitizer-reports` check, covers the causes, the printing, the cap
+      and the cut, the marker and the canaries. It also runs `run` with stub suites: a suite that
+      passes but leaves a report fails.
+    - The lint's self-test, the canary checker as a plain case, and the delivery cases.
+    - The sanitizer path itself first runs in GitHub CI's sanitizer jobs after the push. That run is
+      the inventory of reports nobody has seen, the daemon suites' `.err` files among them. Planning
+      triages it before `SANITIZERS_BLOCKING` is set for the final pass.
+- **Limits.**
+  - A process that outlives its suite can report after the script has run. Hosts end with their
+    carrier, and several suites check that none is left.
+  - A suite that hangs and is killed never reaches the script, and its own reports are no longer in
+    the log.
+  - Module Hosts end with `_exit` or SIGKILL, so LeakSanitizer never runs in a host. Running it there,
+    with `__lsan_do_recoverable_leak_check()` before a graceful `exitnow` under `-d:asan`, is a later
+    step. After a leak report AddressSanitizer's `_exit` replaces a status of 0, so cases that expect
+    0, H-14 among them, need care there.
+- **For the split (C5).** A module's or the daemon's repository that runs hosted suites under a
+  sanitizer needs the same script and helper.
+
 ### G317 — The reverse mapper's input set
 - **Kind:** IMPL (gaps Q1, Q4; reading Q6) · **Specs:** INTERFACE §3 · **Plan:** `tier5-plans/step5-1-reverse-mapper.md` §4.1. Section and Q numbers below are the plan's; `l.` cites are INTERFACE.
 - **Decision.** Plan §3.2 and §3.3. `<stdbool.h>`, `<stddef.h>` and `<stdint.h>` are the only angle includes, the ones `logos_types.h` includes (IF l.3432-3434). `"logos_types.h"` is the only fixed include and is optional (Q6: l.2335, l.2217-2219, l.2640); redeclaring a fixed common type is rejected. An include cycle is rejected, which is stricter than l.2297. A file-level include guard may enclose declarations and the fixed and standard includes, never a contract-header include, a check or a document guard (l.2325). Comments-document remarks 1 (`65d614be`)
@@ -7909,6 +8036,215 @@ their history.
 - **Kind:** Choice [IMPL] · **Plan:** `tier5-plans/stepN-2-cli.md` §8. Section and Q numbers below are the plan's.
 - **Decision.** §3.1 (Q4, re-cited by planning, P2, and its ruling (a) of 2026-11-20, which replaces P2's "S7's deny once S4 is applied"): no self-exit, an [IMPL] choice on R l.1735 (a self-stop would cancel the retained intent) and R l.3123 (routes close after `cli.route_idle_ms`); `stop_module` answering on acceptance (R l.3554-3556) removed the old reason. It rests on S7's execution deny of stop: in authority mode a `stop_module` needs an execution stop decision for the requester (`engine.nim`, the `aaStop` request), which S7 refuses `lcn_call` whatever an operator rule allows. Under the development switch nothing is denied to any module, and `lcn_call`'s code has no lifecycle call. `module stop lcn_call` stays allowed
 - **Status.** Built in N-2b: S7's execution deny and `cli.route_idle_ms`; `test_daemon_config`, `test_lcn_call` L-1, L-10.
+
+### G433 — The packages inside this repository
+- **Kind:** Choice [IMPL] · **Plan:** `tier5-plans/stepW2-P-plan.md` §3.1 (the repository split's
+  packaging step, W2-P.2; rulings 3 and 4 and blocker 4).
+- **Decision.** `sdk/logos_sdk.nimble` makes `sdk/` the package `logos_sdk`, version `0.1.0`. Its
+  requirements are ranges, a subset of what core pins (G341): `nim >= 2.2.14 & < 2.3.0`,
+  `results >= 0.5.0 & < 0.6.0`, `chronos >= 4.4.0 & < 4.5.0`. No unittest2: nothing under `sdk/src`
+  imports it, and a dependent whose tests use it requires it itself (chronos brings it anyway). `lcn-gen`
+  is the SDK's program: `src/lcn_gen.nim` moved to `sdk/src/lcn_gen.nim`, and `lcn-gen --version` prints
+  the SDK's version, read from `logos_sdk.nimble` when lcn-gen is compiled (beside `src/` in this
+  repository and in Nimble's build at install, so there is no third home). Core's `logos_core.nimble` moves
+  to `0.1.0` with it and drops `lcn_gen` from its programs; that line is core's version's one home: the
+  flake reads both versions from the nimble files, and the daemon's fallback is `0.1.0-dev`. The SDK's file
+  carries the Nimble 0.26 guard; core's gets it with G436. From the extraction on, a version line changes
+  only together with a signed tag. Nix's lock reader (`nix/nimble-deps.nix`) refuses a lock with a `nim`
+  entry, as `lint-packaging` does: our locks are made with `--useSystemNim`, which writes none (G436 records
+  that rule with Nimble 0.26.2). Today's lock has none, so no evaluation changes.
+- **Status:** built in W2-P.2 (I120).
+
+### G434 — How our packages require each other
+- **Kind:** Choice [IMPL] · **Plan:** `tier5-plans/stepW2-P-plan.md` §3.2, §3.6 (the spike's §3.3, §3.5,
+  §10, §12).
+- **Inside this repository core does not require the SDK.** A `file://./sdk` requirement resolves once,
+  but its lock entry has an empty URL, so the next `nimble lock` fails and `nimble setup` crashes, and its
+  checksum moves with every `sdk/` edit. Core's exact pins already hold every SDK requirement, so
+  `lint-packaging` checks instead that each version `nimble.lock` holds for a package the SDK names lies
+  in the SDK's range, that core's `nim` pin does, and that every locked package `sdk/src` imports is one
+  the SDK requires.
+- **Never by commit, never by `file://`,** and before the extraction never by URL: no nimble file of ours
+  requires one of our packages that way, and the lint refuses it.
+- **A module repository** requires `logos_sdk >= 0.1.0 & < 0.2.0` by name. Nimble meets it with an install
+  into the module repository's Nimble directory, from a committed tree in a copy with no `origin` (from a
+  checkout with one, Nimble locks the repository's root and a fresh setup installs `logos_core` in the SDK's
+  place), in the order install, lock, setup; or with a develop link, which builds but cannot be locked.
+  **One SDK revision per Nimble directory:** with two installs of one version, `setup` and `lock` take the
+  one the filesystem lists first, `setup` keeps it even over a lock that names the other's checksum, and
+  `bin/lcn-gen` links the one installed last (Nimble 0.26.2 `packageinfo.nim:341-353`). Nimble checks
+  no lock checksum for any package (draft #191, G436). So a module repository installs each SDK revision
+  into a fresh Nimble directory, records the commit, and tests with `logos_sdk/testing/lockcheck` that
+  every directory `nimble.paths` names, `logos_sdk`'s among them, carries the lock's checksum. Until the
+  extraction every SDK revision is `0.1.0`, so `lcn-gen --version` cannot tell two apart; that test does.
+- **Addresses** (the owner's question 6, plan §3.6): `lint-packaging` matches the account followed by a
+  slash, in every spelling, and allows an address of ours only where §3.6 does, in its one spelling;
+  `flake.lock` and this record are exempt. The extraction keeps the old names unused and re-tags each
+  repository after its address commit.
+- **Status:** built in W2-P.2 (I120); `sdk/docs/MODULE-KIT.md` §9 says it for a module's author.
+
+### G435 — What each package installs, and kit builds outside this repository
+- **Kind:** Choice [IMPL] · **Plan:** `tier5-plans/stepW2-P-plan.md` §3.3 (blockers 1, 5 and 8).
+- **Install lists per package.** Each nimble file lists the extensions and files its package installs;
+  the SDK installs its C sources, contracts, export lists, `testing/config.nims` and
+  `logos_sdk/testing/testroute` (moved from `sdk/tests/support/`). `lint-packaging` checks that every
+  file under a package's `srcDir` is one its list installs, by Nimble 0.26.2's whitelist rules, which
+  ignore `skipDirs`. `logos_core/schemas.coreSchemaDir` names core's schema directory in a checkout and
+  installed alike, so a dependent that generates from core's schemas, as the daemon does, never names a
+  path into core's tree.
+- **Test data relative to the package.** `testdirs` gives the fixtures and their generated files as
+  directories under its own, wherever the package is, and the SDK repository's own test data as paths
+  from the repository's root; its `repoDir` goes. `KitTree` is exported, so a dependent's tests build
+  kits from a tree of their own.
+- **Search paths for a kit library or program built from another tree** (`kitbuild.hostPathArgs`, also
+  used by core's `childbuild`). If a configuration file Nim reads for the source sets search paths
+  (`--path`, `-p`, `--nimblePath`, `switch("path", …)`, `nimble.paths`, in any spelling Nim accepts:
+  case, underscores, one or two dashes, `:` or `=`), nothing is passed, and the build takes its paths from
+  there, as today; a failed build then names that file. Otherwise the host's search paths are passed in
+  the host's order (back to front, since each `--path` goes to the front), its compiler's library
+  directories dropped only when `LCN_KIT_NIM` names another compiler. The test is "a file that sets search
+  paths", not "any configuration file": the installed SDK's `testing/config.nims` sits above its fixtures
+  and only defines `lcnTestHooks`. `test_kit_dylib`'s installed-package case builds from a copy outside
+  this repository and checks, under `-d:nimBetterRun`, that every file the build read is under the copy,
+  the compiler's tree or a host search path.
+- **Build switches a package cannot set** stay the guide's §8 build line: a library's own `config.nims`
+  does not travel with it, so a dependent's build line carries the switches the library needs.
+- **Status:** built in W2-P.2 (I120).
+
+### G436 — Nimble 0.26.2, the lock, and the Nim pin
+- **Kind:** Choice [IMPL] · **Plan:** `tier5-plans/stepW2-P-plan.md` §3.4 (blockers 2 and 7; the spike's
+  §1, §3, §3.7, §11).
+- **Nimble.** `nix/nimble.nix` builds Nimble 0.26.2 from the Nim tree's own `nim/dist/nimble`, so it costs
+  no download, and the overlay puts it in place of nixpkgs' 0.20.1 for the dev shell and the android
+  shell. Its install check fails when a Nim update brings another Nimble. Both nimble files stop a Nimble
+  older than 0.26. 0.20.1 emptied or crashed on a lock made over an existing one, and crashed on macOS
+  without `--useSystemNim`.
+- **`--useSystemNim` on every Nimble command** in CI, `tools/ci/windows.ps1`, the README and the module
+  guide, which `lint-packaging` checks. Nimble then neither installs nor locks a Nim.
+- **The lock has no `nim` entry.** Such an entry needs a network read of `nim-lang/Nim` when CI checks the
+  lock. A failed read writes an empty revision and exits 0. Its checksum is taken over the local Nim, so
+  ours (`d57c3c6a`, from Nix on the Mac and on Linux alike) differs from storage's (`860024ec`) for the
+  same 2.2.14. The lock is regenerated from scratch with 0.26.2 and the flag: the same eight packages,
+  revisions and checksums, with `nim` in each dependency list. On the Mac, on framework.lan and in this
+  step's no-network rerun it came out byte for byte the same.
+- **The Nim pin has one home,** `logos_core.nimble`'s `requires "nim == …"`.
+  - Nix asserts that its Nim has that version.
+  - `lint-packaging` requires the pin to be exact, `windows.ps1`'s `$NimVersion` to equal it, and the
+    SDK's range to hold it.
+  - Nimble never compares the Nim on the path with the requirement, so the `nimble` job and
+    `windows.ps1`'s `setup` and `test` compare `nim --version` with the pin before their first Nimble
+    command.
+- **Nix's lock reader** takes only git entries with a URL and a revision. It refuses, naming the entry and
+  the fix:
+  - a `nim` entry;
+  - an empty `url`, which a `file://` requirement writes;
+  - an empty `vcsRevision`, which a failed remote read writes;
+  - a non-empty task table: no `taskRequires`.
+- **CI** keeps no cache of `~/.nimble`, so a runner starts empty. 0.26.2 fetches the package list itself,
+  so the workaround for 0.20.1's segfault goes. The lock check regenerates the lock from scratch and
+  compares it byte for byte. `workflow_dispatch` gains `nimble_only`, which runs only the `nimble` and
+  `windows` jobs. That check recomputes every checksum from fresh downloads into `~/.nimble`, not from
+  the `nimbledeps/` the suites use.
+- **What the lock does not pin.** Nimble 0.26.2 compares none of a lock's checksums with what it installs
+  or finds installed: it takes an install by name, version and revision (draft #191). So
+  `tools/check_installs.nim` checks for mismatches, through `logos_sdk/testing/lockcheck`.
+  - **What it promises:** each install the compiler will use, as Nimble chose it, carries the checksum the
+    lock records, or the run stops before anything compiles. That covers an install made from other
+    content, a renamed directory, a lock moved without a new setup, and two installs of one version
+    where Nimble takes the wrong one (draft #189).
+  - **What it does not promise:** evidence against tampering. An edit inside a directory that keeps its
+    name passes (*What an equal suffix shows*, below).
+  - It exits 1 with one line per finding unless:
+    - the lock records a SHA-1 checksum for every package but `nim` (also `lint-packaging`'s
+      `lock-complete`);
+    - each such package has exactly one `pkgs2/<name>-<version>-<sha1>` directory in `nimble.paths`,
+      whose suffix is the lock's `checksums.sha1` (Nimble names the directory after the checksum it
+      computed at install, and reads it back from the name ever after). Amended by G468: that
+      directory and the `srcDir` its own nimble file declares, both listed, are one install;
+    - its version is the lock's where that is a plain version (a `#commit` entry installs under the
+      package's declared version);
+    - `nimble.paths` names no install the lock lacks, and no other directory but the project's own
+      `srcDir` (which Nimble lists too) and the listed develop links: a local source is a finding.
+  - **Where it runs.** `checkInstalls` in `logos_core.nimble`:
+    - first in every `nimble test*` task and in `build_runtime_lib`;
+    - before `nimble build`, from a `before build` hook, in a checkout with `nimbledeps/`. Nimble also
+      runs that hook when a dependent installs `logos_core`, in its `buildtemp/` copy of the package,
+      which leaves `nimbledeps/` out, so it is skipped there; a toy package with the same guard showed
+      both cases. That is the right behaviour: the dependent's lock governs that install, not core's.
+      Nimble takes the root's lock, ignores a dependency's, and builds core's programs in `buildtemp/`
+      against the dependent's installs (Nimble 0.26.2 `install.nim:225`, `:236-300`; the hook runs from
+      `build.nim:86`), so the check that applies is the dependent's own, over its own lock. The
+      daemon's nimble file gets the same check at the extraction (plan §3.1);
+    - as a step of its own right after `nimble setup` in CI's `nimble` job and in `windows.ps1 setup`,
+      so a suite the job compiles directly is covered too;
+    - inside a task it sees the installs Nimble's own solve picked: before a task runs, Nimble solves
+      again and rewrites an existing `nimble.paths` (`nimble.nim:2690-2702`), so an edited file is
+      undone. Outside a task it reads the file as it stands: CI's step reads what `setup -l` just
+      wrote, and a run by hand reads whatever is there;
+    - not covered: `nimble build` in a checkout on global dependencies, which has no `nimbledeps/` (its
+      test tasks, unguarded, still check); a suite a developer compiles by hand; and `regen`. Deployed
+      outputs come from Nix, never from Nimble, and the Nix checks run `test_lockcheck` too, with the
+      real lock in their sources.
+  - **Setup not run.** No `nimble.paths`, or install directories that are gone, is one finding that says
+    to run `nimble setup`: never a crash or an empty pass. A mismatch says it too, for a `nimble.paths`
+    left from before the lock moved.
+  - **Develop links.** A package may come from a `nimble develop` link instead only if `developLinks` in
+    `tools/check_installs.nim` names it; the link's package is read from the nimble file in or above its
+    directory. Core names none, and a name is added there in a reviewed change, never by an environment
+    variable or a flag. A module repository calls the same helper from its own suite.
+  - **What an equal suffix shows:** that the tracked files of the tree Nimble installed from had the
+    lock's names and bytes when the directory was made. CI is the strong case: no cache and a fresh
+    fetch, so the suffix is computed in that job. On a developer's machine it is as old as the
+    directory. It does not show:
+    - a later edit to an installed file: a directory edited in place keeps its name, and passes;
+    - a directory copied in, or left from before, under the right name: the name travels with the
+      content, and in lock mode Nimble uses an existing directory rather than replacing it;
+    - untracked files in the tree installed from, as a reused clone can hold;
+    - a package's git submodules, which Nimble's checksum leaves out. BoringSSL's sources are one, so
+      only Nix's fixed-output hash (`fetchSubmodules = true`) covers them.
+  - **Line endings.** The checksum is over the bytes checked out. Nimble turns `core.autocrlf` off in
+    each clone, but a fetch by revision leaves `core.eol` native, so a package whose `.gitattributes`
+    marks files as text would get CRLF on Windows and another checksum. The eight locked revisions hold
+    no `.gitattributes` at any depth. `windows.ps1` sets both for every git its steps start
+    (`GIT_CONFIG_*`), leaving the machine's git configuration alone, so a later Nimble command that
+    fetches checks out the same bytes as setup. A file whose attribute forces CRLF is CRLF on every
+    system, so its checksum is the same everywhere.
+  - **The checker** imports only the standard library and the helper, both from this tree: it is built
+    from the installs it judges.
+  - **Not elsewhere.** Not a lint: Nix's sandbox has no Nimble installs. Not a core suite: Nix writes its
+    own `nimble.paths` with `pkgs2/<name>-<version>` and no checksum (`nix/nim-derivation.nix`), so it
+    would skip in every Nix check. Not `config.nims`, which runs on every compile, kit builds in
+    temporary trees included.
+- **A check that must fetch nothing, or show that a package stands alone,** runs with `HOME`,
+  `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` in a fresh directory outside every checkout. Nim reads every
+  `config.nims` above a source, and Nimble's `buildtemp/` guard holds only when nothing above `HOME`
+  configures Nim.
+- **Fetches.** An owner-approved fetch opens the guard for the named revisions at depth 1 only. Otherwise
+  clones are pre-seeded and Nimble runs offline. `releases.json` (`nim-lang.org`) stays refused locally,
+  and CI's cold runners read it on every run (a few KB).
+- **Status:** built in W2-P.1 (I120).
+
+### G468 — The lock check: an install and its own `srcDir` are one install (amends G436)
+- **Kind:** IMPL · **Plan:** `tier5-plans/stepW2-X-plan.md` X0.10 (spike §3.1; Fable's re-check of draft 2).
+- **Why.** Nimble 0.26.2 installs a package it fetches in local mode whole, with its `srcDir` inside it, and
+  lists both the install directory and that `srcDir` in `nimble.paths` (`packageinfo.nim:416-421`,
+  `build.nim:45-54`; draft #199). G436's check counted the pair as two installs of one package, so every
+  fresh setup that fetches a `srcDir` package failed it: storage's lrucache, merkletree, npeg and zippy
+  today (N-4.2's `test_installs_match_lock`), and the SDK once the extraction's repositories fetch it.
+- **The rule.** In `logos_sdk/testing/lockcheck`, an install directory and the `srcDir` its own nimble
+  file declares, both named in `nimble.paths`, are one install. A directory pairs only with its own
+  `srcDir`, and only once: another directory under the install, another install's `srcDir`, or a second
+  listing of the pair still counts, so two installs of one package, each with its pair, are still two.
+  `lockMismatches` does no I/O and takes the pairs as (root, `srcDir`); `installMismatches` reads each
+  install's `srcDir` from the one nimble file in its directory, as it already reads the project's own.
+  Everything else in G436's check is unchanged: the checksum, the version and the develop links are
+  judged once per install.
+- **Tests.** `sdk/tests/test_lockcheck.nim`: the pair passes, also with Windows separators and in Nim's
+  VM; a directory under the install that is not its `srcDir`, or another install's `srcDir`, does not
+  pair; two installs of one package with their pairs fail as two; a pair under a checksum not the lock's
+  is one finding; from a root, a pair read from the nimble file passes, and one whose nimble file names
+  another `srcDir` fails.
+- **Status:** built in X0.10.
 
 ## 13. Implementation defaults chosen without a separate question
 
@@ -8177,10 +8513,16 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G404 | freshness: the baseline only | FREE (C9) | 9 |
 | G405 | resolution over asynchronous retrieval: the driver and the engine | IMPL | 9 |
 | G406 | no storage library in the Package Manager | FREE | 9 |
+| G433 | the packages inside this repository | Choice | 12 |
+| G434 | how our packages require each other | Choice | 12 |
+| G435 | what each package installs, and kit builds outside this repository | Choice | 12 |
+| G436 | Nimble 0.26.2, the lock, and the Nim pin | Choice | 12 |
 | G437 | what runs while a confined kit's `destroyModule` runs | IMPL | 12 |
 | G438 | closing a confined kit's module-thread dispatcher, and what destroy left | IMPL | 12 |
 | G439 | a chronos variant in `kit-toolchains`: the kits under the libraries' own chronos | IMPL | 12 |
 | G440 | a post gate that outlives a confined kit's context | IMPL | 12 |
+| G442 | sanitizer reports from child processes fail the check | IMPL | 12 |
+| G468 | the lock check: an install and its own `srcDir` are one install (amends G436) | IMPL | 12 |
 
 ---
 
@@ -8312,5 +8654,6 @@ of work follows the tiers in `docs/SPEC-STATUS.md`: most settled areas first.
 | I114 | IMPL | Tier 5 step 5-3a: the `lcn.storage_fetch` contract and the package trust file (PACKAGE MANAGER l.401-449, l.733-745, l.854-862, l.1453-1465; RUNTIME l.601-626; plan `tier5-plans/step5-3a-trust.md` revision 5; reviews `opus-checks/step5-3a-plan.md` and `fable-checks/step5-3a-plan.md`, synthesis `fable-checks/step5-3a-synthesis.md`). Built as 5-3a-1, 5-3a-2a and 5-3a-2b | **5-3a-1, the contract** (G395; G91, G136 and G140 amended): `sdk/src/logos_sdk/contracts/` starts with `lcn_storage_fetch.cddl`, its generated types, calls and C headers (`lcn_NS_storage_fetch_*`, the generator's names for a dotted namespace) and its root (`lcn_storage_fetch_root.nim`, written by `nimble regen` from the commitment code; `test_nimgen` checks it current); the layer lint puts `contracts/` in `sdk_binding`. The fake `fetch_fake_module` (`testing/fixtures/`, its kit, calls and export lists in `testing/generated/`) derives each object from its locator with BLAKE3's extendable output read at an offset (`Blake3Hasher.finish(seek, …)`, new, over the vendored `blake3_hasher_finalize_seek`). The harness `testing/storagefetch.nim` takes materialized route handles (the INTERFACE §5.2 consumer surface, so the typed calls are the generated ones), an optional readiness driver and a fixture, and returns what it found wrong. `sdk/docs/STORAGE-FETCH.md` (the SDK's first document) holds the contract verbatim, checked by `sdk/tests/test_storage_fetch_contract.nim`, which also runs the call checks against the fake over the in-process route. `tests/test_storage_fetch.nim` runs the whole harness against the fake `direct_static` and `hosted_dynamic` under a test Runtime, and a hosted probe reading 4 MiB from the hosted fake in four calls, with P-13's trace finding none of the object's bytes or its locator in a carrier frame [RUN-0815]. No unit is claimed: the contract is half of PKG-0474's evidence, which 5-3b claims. **5-3a-2a** (the package trust file and logosd's start; G396, G398; G137, G299 and G96 amended). **The document** (core, `package/`): `trustdoc.cddl` holds `lcn.package_trust` (`logos-core-nim.trust.v2`) and `lcn.trust_file` (v1, which leaves `daemon/trust.cddl`; that file keeps the mark and the evidence key binding and cites PM l.401-406); its codecs are generated into `trustdoc_types.nim`, registered in `tests/support/genfixtures_core.nim` and `tools/regen_nim.nim`. `trustdoc.nim`: `decodeTrust` (deterministic CBOR within the exported `MaxTrustBytes`, against the schema of the value's format; v1 read as the v2 content with no anchor and nothing selected), `checkTrust` (the floor; kids and each anchor's names strictly ascending by bytes, names non-empty; a catalog or provenance selection refused, naming it), `inForce`, `acceptedSigning` (the anchors in force through `addAnchor`, only for a file `checkTrust` passes) and `floorTrust`. **The daemon:** `trustfile.nim`'s `TrustInput` is renamed `TrustFileState` (file, digest, present), and `config`, `compose`, `sessioninit`, `assemble` and the tests follow; `logosctl.nim` needed no change. `readTrust` decodes only; `checkedTrust` adds the rules; `establishTrust` runs the rules, key separation (`separateKeys` against `sessionEvidenceKeys`: every binding under `keys/`, retired ones included, and the binding beside the configured key; read at a start only when the file names an anchor, `startEvidenceKeys`, so a session without anchors gains no new refusal; G397), the conversion, the change since the start's first read (`seen`), then continuity and the mark, and returns the state with the accepted `TrustInput`. `assembleDaemon` applies the rules at both reads, passes the evidence keys and keeps the accepted input as `Daemon.signing` for 5-3b. The comparison of the two reads now comes before the mark moves (4b-6a made it after). `decide` (now a proc) names `logosctl trust reestablish --revision 1` when there is no file and the mark holds the v1 floor's digest (Q15). `initTrust` writes the v2 floor, and `setDevelopment` keeps the anchors and selections and writes v2 (the unchanged rule and the writers' checks are 5-3a-2b's). Layers: `package/trustdoc` joins `daemon_allowlist`. `docs/DAEMON.md` §6: both schemas verbatim, the rules, the start order and Q15's case; its command prose stays for 5-3a-2b. **Tests:** `test_trustdoc` (new: the round trip, an unknown field in each of the five maps, determinism and the bound, the profile literal against the mirrored one, the v1 reader, the canonical form [PKG-0107] [PKG-0072] [PKG-0434], exact names [PKG-0071] [PKG-0073], development anchors [BCP-0094] [BCP-0103], the selections [PKG-0169] [PKG-0467], only the file selects [PKG-0166], `acceptedSigning` feeding `verifyPackage` [PKG-0074] [PKG-0075] [PKG-0083]), `test_daemon_config` (the trust document's rules in the schema suite; the decision table with anchors; one name added, a marker flipped and a key changed at one revision refused [PKG-0418] [PKG-0420] [TXT-0463]; the start order and the two reads; a v1 session; Q15; key separation, current, retired and configured elsewhere [PKG-0435], and the bindings read only for a file with anchors; DAEMON.md verbatim), `test_gen_current`, `test_rmap_system`, and `test_logosd` and `test_deployment` for the rename. No claim moves: 5-3a-2b moves the ledger. **Departures from plan revision 5 in 5-3a-2a** (kept on planning's word, 2026-11-20): the two reads of a start are compared before the mark moves, not after as 4b-6a did, so a file changed during a start never moves it; the floor is a rule of `checkTrust`, not of the read, so `trust show` reads a file below it; a signing profile other than the baseline fails at decode against the CDDL literal, before any rule, since the schema fixes the value; `setDevelopment` carried the anchors over without checking them until 5-3a-2b replaced it with the checked writers; a selection's refusal reads "this implementation supports no … profile", naming no product. **5-3a-2b** (`logosctl trust`, the documents and the claims; G397 built; G303, I41 and I43 amended). **The writers** (`daemon/trustfile.nim`): the pure edits `withAnchor`, `withoutAnchor`, `withNames`, `withoutNames` and `withDevelopment`; `validateTrust` (the schema and the 1 MiB bound, `checkTrust`, `separateKeys`, `acceptedSigning`: what a start applies before continuity); `commitTrust` (nothing written when the edit changes nothing, otherwise revision + 1 in v2 if `validateTrust` passes, the refusal ending with `CorrectByHand` when the current file already fails, Q17; a writer whose change changes nothing refuses such a file too); `reestablish` takes the evidence keys and refuses a file `validateTrust` refuses, writing no mark. `setDevelopment` is gone: `trust development` is one more edit. **The command** (`src/logosctl.nim`): `trust anchor add|remove|add-names|remove-names` with `--kid` (text or `hex:`) and `--key` (96 hex digits or `@FILE`, `lcn-pkg keygen`'s line accepted); the evidence keys read from `keys/` and the configured binding when the file before or after names an anchor; `trust development` with the number of development anchors entering or leaving force; `trust show` with the profile, the anchors (`kid_text` when printable ASCII, `in_force`), the selections and `refused`; `trust reestablish` with the checks. Render in `daemon/render.nim` (`trustJson`, `trustRows`, `anchorsTable`, `kidText`). **Documents:** `docs/DAEMON.md` §6 (the commands, every writer's checks, the unchanged rule, the refused file, JSON; `reestablish` with the checks; what the switch gates) and §2, §8; `docs/DEPLOYMENT.md` rows 5b (Supported), 5c and 22, §1's ground 1 (the file holds anchors and nothing uses them; the answer stays *no*), §2's table and revocation, §5, §20 and SECURITY §13's table; `docs/CONFORMANCE.md` "What Tier 5 step 5-3a-2 changes" (claims, limits, bounds); `docs/SPEC-STATUS.md` (the A4 and C rows by step, the open-items row split, the log). `src/lcn_pkg.nim`'s header says its JSON trust file is no trust input (I41). **Claims and ledger:** `conformance/claims/PKG.toml`: PKG-0418 to PKG-0421 and PKG-0083 leave their deferrals (claimed through §4.1), PKG-0166 and PKG-0169 claimed by name, with PKG-0166's note on the sources that arrive later; `spec/repin-pending.toml` loses PKG-0418 and TXT-0463, and `spec/repin-text-cleared.toml` gains TXT-0463's `[[text]]` record (step P7, `tests/test_daemon_config.nim`; its `[[deferred]]` record stays). The inspection reasons of PKG-0422, BCP-0042, BCP-0074, BCP-0094 and BCP-0096 are re-read (A9): PKG-0422's ground 1 no longer held. **Tests:** `test_daemon_config` suite `dc.trustctl` (each change the next revision, one added name included [PKG-0418] [TXT-0463]; the unchanged rule; the refusals, nothing written [PKG-0107] [PKG-0072] [PKG-0434] [PKG-0435]; a refused file: every writer says to correct it, `reestablish` writes no mark, a change that removes the cause is written [PKG-0169]; the revision limit); `test_logosd` (the commands as processes from a Tier 4b v1 session, `--kid hex:` and `--key @FILE`, unchanged commands exit 0, logosd starts with the result, `trust show` text and JSON with the banner [PKG-0418] [TXT-0463]; the refusals exit 1 and write nothing, the hand-set selection shown with its reason and refused by the writers, `reestablish` and logosd [PKG-0435] [PKG-0169]; continuity across starts now with an anchor in the file [PKG-0419] [PKG-0421]). **Departures from plan revision 5 in 5-3a-2b** (kept on planning's word, 2026-11-21; Q16's and Q17's widening and the canonical names are G397's, as built, and `setDevelopment`'s removal is above): the inspection reasons of BCP-0042, BCP-0074, BCP-0094 and BCP-0096, DEPLOYMENT row 22 and SECURITY §13's table are reworded beyond plan §4.2, since each described the Tier 4b file, a switch and no anchors, which A9's re-read found no longer true; TXT-0463's cleared record names `tests/test_daemon_config.nim` at step P7, as the other cleared records do, since spectrace has no `same_step` check for the plan to cite; the remote trust input gets its own SPEC-STATUS row (5-7a, decided by C2), split from the 5-3a row, so that row can read built while the remote input stays 5-7a's; `trust show` and `trust reestablish` read the evidence keys only when the file names an anchor, as a start does since 3a7d052, so neither fails a session without anchors over a binding it does not need; PKG-0419 and PKG-0421 take their evidence from an anchor added to the existing continuity process test, which already restarts logosd across revisions, rather than from a second test of the same path. **5-3a-2c** (planning's ruling on the two questions 5-3a-2b left open, after Fable's answers, 2026-11-21; no spec gap, PM l.119 leaves both to the implementation; G397 amended). **Withdrawals of what is not there are refused:** `withoutAnchor` returns a refusal for a kid that names no anchor ("no anchor has kid HEX", without `trust anchor add`'s hint), and `withoutNames` is all or nothing, refusing with every name the anchor does not authorize byte for byte; additions and settings of what is already so stay unchanged (exit 0). bb554fd's unchanged answer naming the kid goes. **JSON:** `refused` is `refusal` (it holds a reason, and `refused` is a `status` of ctl.cddl and cli.cddl); `kid_text` is left out for a text beginning `hex:`, in the text table too, since `--kid` would read it as hex; `development_anchors` counts the anchors marked `development` whether or not anything changed; DAEMON.md says `in_force` is what the file says. `trust show`'s continuity reads "not reached" when the rules refuse the file. **Documents:** DAEMON.md §6, DEPLOYMENT §2's Revocation paragraph (a removal naming something absent is refused, BCP l.364), G397 and plan §3.3 (Q16). **Tests:** `dc.trustctl` (the unchanged case without withdrawals; the absent anchor and name among the refusals; remove-names all or nothing, by case and normalization form), `test_logosd` (the unchanged commands, the refused withdrawals exit 1, `development_anchors` unchanged, continuity on a refused file, a kid whose text is `hex:ab`). | 2026-11-20, 2026-11-21 |
 | I115 | IMPL | Tier 5: the marked-copy audit (G276, G278; INTERFACE §1.2.1, §1.4.1 l.380-386; `tier5-plans/marked-copy-audit.md`, one row per site with its evidence; the probe in `tier5-plans/marked-copy-probe/`). Built as `a71ebac` and `bd97ba8` | **The rule.** In results 0.5.1, `isOkOr`, `isErrOr`, `valueOr`, `errorOr`, `and`, `or` and `orErr` begin with `let s = (self)`, and whatever part of `s` the template does not move out is freed unzeroed; `?` moves both sides, and `get`, `value` and `error` are lent (`resultsLent`). Whether `s` is a copy is the compiler's cursor inference (the probe, under the free scan, orc and orc `-d:release` alike): a `var` local is copied; a `let` local is not, except inside a loop; a field of a `var` object, a `var` parameter and a plain parameter are not; `discard ?f()` drops a copy. An object, tuple or array constructor passed to a non-sink parameter borrows its fields and is not destroyed (Nim 2.2.14 `compiler/injectdestructors.nim` l.884-929). Not a Nim bug: the copy is results' own `TODO avoid copy`, and zeroing before release is G276's requirement, not the language's. **Nine paths fixed**, each with a case that fails without its fix: (1) `abi/checks.providerChecked` zeroes a status outside the provider set in place, not in a copy; (2) `codegen/consumert.completeTyped` zeroes the checked completion status and erases a failure's text once `onDone` returns; (3) `iface/outcome.checkDetail` zeroes the decoded detail tree; (4) `codegen/kitrt` registers `releaseLastFailure` with `onThreadRelease`, so the per-thread failure text is cleared at a thread's end (`a71ebac`); (5) `runtime/invoke.commitSync` zeroes a provider's failure when the route's end decides a synchronous call; (6) `transport/envelope.failureOf` zeroes a refused failure; (7) `transport/hello.readFirst` zeroes the first frame's tree, and the payload and failure text of a first message that is not a Hello (`wipeRefused`); (8) `transport/session.onResponse` zeroes the failure text of a Response for no outstanding request; (9) `host/consumer.setFailure` zeroes the `clip` copy. Tests: `test_wipe_routes` gains the matrix steps `outside` and `detail` (W-4, W-6, W-7, and W-7's hosted consumer through the probe's new `call-quiet`), a W-4 `commitSync` case and a W-8 typed-failure case; `test_wipe` W-2 gains three refused-message cases. **Four found safe** by the rule: `transport/session.nim` :540 `encoded(Message(... response: resp))` and `checkStatus`'s `checkFailure(InvocationFailure(...))` (constructors passed to non-sink parameters), `checkFailure`'s `let m = f.message.get` (a cursor), and `readDetail`'s `view` (a template over `toOpenArray`); the md lists the sites that never see marked text. **Out of scope**, with reasons: ticket copies on the Hello path (R18: a ticket exists only transiently; fix 7 zeroes a received Hello's tree); the carrier's frame copies (no marked payload crosses the carrier, I92); `host/rcbinding`'s `clip` temporaries (Runtime Control marks nothing). **Handed on:** `cli/` is a consumer like any other, so G276 applies to `lcn_call`. N-2's `lcn_call` refuses every marked method before any route (its `commands.nim` :594, checked by L-5), so N-2b exposes only the refused argument text and records that as a non-claim; N-2d builds the full erasure (a marked response erased once written out) with a W-case, citing this audit. **Open:** whether a newer `results` drops the copy is unchecked; nothing was downloaded. Checks on `bd97ba8`: the 18 touched suites in orc, refc and orc-release on the Mac and on framework.lan, nph, the three lints and the spectrace gate at 6cac8335 | 2026-11-20 |
 | I116 | IMPL | Tier 5 step 5-3b: Package Manager foundations, A4 and A2 (PACKAGE MANAGER §4.1 to §4.4, §6, §11, §13, l.834-858, l.1294-1331; STORAGE-FETCH; plan `tier5-plans/step5-3b-plan.md`, its revision log and planning's rulings §12; reviews `fable-checks/step5-3b-plan.md`). Built as 5-3b-1 (the engine) and 5-3b-2 (the channel and the module) | **Open.** **5-3b-1, the engine** (G399's value, G401, G402's retrieval, G403, G404, G405's driver and engine, G406; G90 amended, G150 replaced, notes on G91 and G166). `src/logos_core/pm/`: `input` (`lcn.pm_input`, generated types, `decodePmInput`), `catalog` (`lcn.package_catalog` and `lcn.pm_catalog_kept`, the canonical order, the digest pin, sequence continuity against the kept document), `fetcher` (one retrieval: `stat_object`, 1 MiB reads with BLAKE3, the retries and waits of G402), `vcache` (G403), `driver` (the resolver over a memo, G405) and `engine` (sans-I/O: commands out, events in; routes and their renewal with fresh keys, readiness, acquisition and the kept catalog, one retrieval per binding, a deadline timer per call, `resolve` for one root). `lcn-pkg catalog` writes the canonical document and prints its digest. `tools/lint/nostorage.py` and `nostorage.toml` (the flake check `lint-nostorage`) and `layers.py`'s `pm-external` rule with `layers.toml`'s `pm_roots` and `pm_external_allowlist` (G406). `docs/PACKAGE-MANAGER.md` but the channel and the daemon's section. Suites `test_pm_input`, `test_pm_catalog`, `test_pm_fetch`, `test_pm_vcache`, `test_pm_driver`, cases in `test_lcn_pkg`; the engine is tested over scripted providers in one process, the hosted case is 5-3b-2's. 25 PKG units claimed (§4.2's 9, §4.4's 0114, 0115 and 0449, PKG-0353's in-process half, and 0019, 0021, 0069, 0076, 0077, 0079, 0081, 0082, 0112, 0167, 0472 and 0473 by entry). `[IMPL]` The resolver's limits are an engine parameter with no configured source yet. G400 is recorded as decided. **5-3b-2** adds G399's daemon section and compose, builds G400, G402's grants and locator documentation (PKG-0474), G405's shell and `pmtest_module`, and closes this row. | 2026-11-21 |
+| I120 | IMPL | Tier 5 step W2-P: the repository split's packaging (`tier5-plans/wave2-plan.md`; plan `tier5-plans/stepW2-P-plan.md`, spike record `tier5-plans/stepW2-P-spike.md`; G433-G436). Parts W2-P.2: the two packages; W2-P.1: Nimble 0.26.2, the lock and the Nim pin | **W2-P.2.** `sdk/` is the Nimble package `logos_sdk` 0.1.0, with `lcn-gen` as its program and ranges for its requirements (G433, `acf7fb0`). Kits build, and test data is read, from an installed SDK as from a checkout (G435, `ac561f5`). `lint-packaging` checks the install lists, the requirements, the lock and the addresses (`cfd2a96`). A module repository requires the SDK by name, one SDK revision per Nimble directory (G434, `4458360`; `sdk/docs/MODULE-KIT.md` §9). **W2-P.1.** Nimble 0.26.2 built from the copy Nim 2.2.14 ships, in place of nixpkgs' 0.20.1 (`931a306`); every Nimble command passes `--useSystemNim`, the lock has no `nim` entry and is regenerated byte for byte, both nimble files refuse a Nimble older than 0.26, and the Nim pin has one home (`806fd6d`); CI and `tools/ci/windows.ps1` run with them, and `workflow_dispatch` gains `nimble_only` for the trial push (G436, `b8f305f`). `test_kit_dylib`'s installed-package case reads the build record under its Windows name too (`4374de4`). Nimble checks none of a lock's checksums (draft #191, found by N-4), so `tools/check_installs.nim`, through `logos_sdk/testing/lockcheck`, compares every install `nimble.paths` names with the lock before every `nimble test*` task, `build_runtime_lib` and, in a checkout with `nimbledeps/`, `nimble build`, and as its own step after setup in CI and `windows.ps1` (first in `1c4b9ee`; G436, Fable's §10 on the plan). Test: `test_lockcheck`. The Nimble drafts the step found, #189 (two installs of one version) and #191, are in `build/scratch/upstream/ISSUES.md`, not filed. The checks on each host are in the spike record's §4 and the merge note | 2026-11-21 |
 | R6 | SCOPE (revises R1; Tier 5 plan A6) | CI legs from Tier 5 | Linux x86_64, Linux aarch64 and macOS arm64 in the `nix` and `nimble` jobs; Windows x86_64 in the `windows` job, on the Nimble path with its own toolchain, the library suites under orc, blocking since step 5-4c (G123 as revised, G334). Android and iOS join with M12, with G105 and G125. Owner's approval of the Tier 5 plan, batch A (A6), 2026-11-16. | 2026-11-16 |
 | R7 | SCOPE (Tier 5 restructure; plan `tier5-plans/restructure-in-place.md`) | The SDK inside this repository | `sdk/` is the package `logos_sdk`, this implementation's layer 1: the base set (CBOR, cdCDDLe, hashing, commitments, INTERFACE), the generators, the module kit and `logos_sdk/testing`. Core (`src/logos_core/`), the daemon and the CLI are built on it. `tools/lint/layers.py` (the check `lint-layers`, strict) holds the import direction with no recorded exception. Each spec's ledger has one owning package: CDE, CMT and HSH are under `sdk/conformance/`, the rest, IFC included until its claims are split, under `conformance/`; `spectrace owners` holds that a unit has one owner. No behaviour, claim or gate result changed. | 2026-11-18 |

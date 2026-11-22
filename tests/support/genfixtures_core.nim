@@ -2,11 +2,12 @@
 ## tests/test_gen_current.nim: the types and kits of its system contracts, its configuration and
 ## state formats, and the fixtures only core's suites use.
 
-import std/sequtils
+import std/[os, sequtils]
 import results
 import logos_sdk/iface/accept
 import logos_sdk/codegen/[kitgen, nimgen, sdkroot]
 import logos_sdk/testing/fixturegen
+import logos_core/schemas
 
 export fixturegen
 
@@ -75,8 +76,8 @@ const
 
 const
   hostConfigTypesPath* = "src/logos_core/runtime/host_config_types.nim"
-  hostConfigPrimary* = "src/logos_core/runtime/host_config.cddl"
-  policyPrimary* = "src/logos_core/authority/policy.cddl"
+  hostConfigPrimary* = coreSchemaDir / "runtime" / "host_config.cddl"
+  policyPrimary* = coreSchemaDir / "authority" / "policy.cddl"
 
 proc hostConfigDocument*(): string {.raises: [IOError].} =
   ## The host configuration schema, then the authority policy schema its

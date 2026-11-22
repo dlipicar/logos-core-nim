@@ -19,7 +19,9 @@ sit above it. Eight rules keep that shape:
   python3 tools/lint/layers.py [--config tools/lint/layers.toml]
   python3 tools/lint/layers.py --self-test
 
-Prints `file:line: rule: ...` for each violation and exits 1 if there is any. The layer map,
+Prints `file:line: rule: ...` for each violation and exits 1 if there is any. A root that is not a
+directory, or one with no `.nim` file under the scanned trees, exits 2: from the wrong folder the
+lint would otherwise check nothing, and pass under a config that is not strict. The layer map,
 the allowlist and the recorded exceptions are in `layers.toml`. An exception or an allowlist
 entry that no import needs any more is itself a failure, so neither can go stale. With
 `strict = true` no exception is accepted and every layer must exist.
@@ -30,6 +32,8 @@ with bracket lists on later lines and with the prefix on the line before its bra
 """
 
 import argparse
+import contextlib
+import io
 import os
 import re
 import sys
@@ -647,12 +651,47 @@ def self_test():
         if not any(f[2] == "kit-facade" for f in run(no_facade, strict)):
             failures.append(f"strict accepted a missing facade root: {root}")
 
+    # The two runs that check nothing, under the config that would pass them (not strict, no
+    # allowlist), and the clean tree through the same entry.
+    loose = dict(SELF_CONFIG, daemon_allowlist=[])
+
+    def status(root, config):
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return lint(root, config)
+
+    with tempfile.TemporaryDirectory() as root:
+        if status(os.path.join(root, "missing"), loose) != 2:
+            failures.append("a missing root did not exit 2")
+        if status(root, loose) != 2:
+            failures.append("an empty root did not exit 2")
+        plant_tree(root, CLEAN_TREE)
+        if status(root, SELF_CONFIG) != 0:
+            failures.append("the clean tree did not exit 0 through lint")
+
     for failure in failures:
         print("self-test:", failure)
     if failures:
         return 1
-    print(f"layers self-test: {len(PARSED)} parses and {len(PLANTS)} planted violations caught")
+    print(
+        f"layers self-test: {len(PARSED)} parses and {len(PLANTS)} planted violations caught,"
+        " a missing and an empty root refused"
+    )
     return 0
+
+
+def lint(root, config):
+    """The exit status over `root`: 0 clean, 1 a finding, 2 nothing to check."""
+    if not os.path.isdir(root):
+        print(f"layers: {root}: not a directory", file=sys.stderr)
+        return 2
+    findings, (files, edges, excused) = check(root, config)
+    if not files:
+        print(f"layers: no .nim file under {root} ({', '.join(SCANNED)})", file=sys.stderr)
+        return 2
+    for path, line, rule, message in findings:
+        print(f"{path}:{line}: {rule}: {message}")
+    print(f"layers: {files} files, {edges} project imports, {excused} recorded exceptions")
+    return 1 if findings else 0
 
 
 def main():
@@ -665,11 +704,7 @@ def main():
         return self_test()
     with open(args.config, "rb") as f:
         config = tomllib.load(f)
-    findings, (files, edges, excused) = check(args.root, config)
-    for path, line, rule, message in findings:
-        print(f"{path}:{line}: {rule}: {message}")
-    print(f"layers: {files} files, {edges} project imports, {excused} recorded exceptions")
-    return 1 if findings else 0
+    return lint(args.root, config)
 
 
 if __name__ == "__main__":
