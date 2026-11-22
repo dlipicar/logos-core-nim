@@ -1045,6 +1045,13 @@ An installed package is inflated twice, once to judge it and once to extract it.
   file the peaks at 64 MiB and 256 MiB of incompressible content differ by at most 8 MiB and stay under 96 MiB.
   The control, the reader before 5-5-2b (`tests/support/lgxoracle.nim`) on the 64 MiB archive, passes 96 MiB.
   `test_lgx_equiv` compares every reading with that reader's results (G29's note).
+- **The full corpus** [IMPL]: by default `test_lgx_equiv` samples its 180-file archive (each cut that keeps
+  `manifest.cose` costs four signature verifications). `LCN_LGX_FULL_CORPUS=1` samples nothing: all three
+  archives are cut at every 512-byte boundary of the tar stream and of the compressed stream and at every trailer
+  byte, and every entry of each is dropped, doubled, swapped and has each header field broken. It runs once in the
+  final CI pass, orc-release on Linux, from the dev shell, since a flake check does not see the caller's
+  environment: `LCN_LGX_FULL_CORPUS=1 nim c -r --mm:orc -d:release tests/test_lgx_equiv.nim`. In that build on
+  the Mac it compares 9,315 archives in about 20 minutes (1,198 s); by default, about 1,430 in under 2 minutes.
 - **Measured** (a scratch program, not committed: 5-3c-1's `pmbench archive` and `pmbench inspect`, with
   `inspectLgx` over the file beside them; one signed archive whose one data artifact is incompressible; CPU time
   of the inspection and the process's peak, each the median of three processes; Mac, `-d:release`). "In memory" is

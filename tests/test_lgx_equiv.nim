@@ -8,6 +8,15 @@
 ## crossed in both directions, an input set over 8 MiB); the documents' total cap, the one refusal
 ## the oracle does not make, compared with the expected result. `test_lgx`'s last suite runs the
 ## same comparison on every archive `test_lgx` builds.
+##
+## **The full corpus** [IMPL]: by default the 180-file archive (`rich`) is sampled, since each
+## cut that keeps `manifest.cose` costs four signature verifications. With
+## `LCN_LGX_FULL_CORPUS=1` nothing is sampled: all three archives are cut at every 512-byte
+## boundary of the tar stream and of the compressed stream, and at every trailer byte, and every
+## entry of each is dropped, doubled and swapped and has each header field broken. It is run
+## once in the final CI pass, orc-release on Linux, from the dev shell (a flake check does not see
+## the caller's environment): `LCN_LGX_FULL_CORPUS=1 nim c -r --mm:orc -d:release
+## tests/test_lgx_equiv.nim`. CONFORMANCE, "The streaming reader".
 
 import std/[algorithm, atomics, os, random, sequtils, strutils, tables]
 import unittest2
@@ -17,6 +26,10 @@ import ./support/[lgxcorpus, lgxoracle]
 
 let scratch = getTempDir() / "lcn-test-lgx-equiv-" & $getCurrentProcessId()
 createDir(scratch)
+
+let full = getEnv("LCN_LGX_FULL_CORPUS") == "1" ## nothing sampled (above)
+if full:
+  echo "    LCN_LGX_FULL_CORPUS=1: the full corpus, nothing sampled"
 
 var kinds = initCountTable[Agreement]()
 
@@ -225,14 +238,21 @@ suite "pkg.lgx streaming: equivalence with the in-memory reader (step 5-5-2b, pl
     check agrees(rich) == agSame
 
   test "[IMPL-DECISION G446] [IMPL-DECISION G29] truncations: the tar stream at every 512-byte boundary of two archives, the trailer at every byte, and random offsets":
-    for a in [base, small]:
+    # `rich` too, and every compressed stream, with the full corpus.
+    let cutAll =
+      if full:
+        @[base, small, rich]
+      else:
+        @[base, small]
+    for a in cutAll:
       let t = gunzip(a, 1 shl 30).get
       for cut in countup(0, t.len - 1, 512):
         discard agrees(gzipCompress(t[0 ..< cut]).get)
     # The compressed stream: every 512 bytes of `base`, and the trailer's every byte of both.
-    for cut in countup(0, base.len - 1, 512):
-      discard agrees(base[0 ..< cut])
-    for a in [base, small]:
+    for a in (if full: cutAll else: @[base]):
+      for cut in countup(0, a.len - 1, 512):
+        discard agrees(a[0 ..< cut])
+    for a in cutAll:
       for back in 1 .. 16:
         discard agrees(a[0 ..< a.len - back])
     for a in [base, small, rich]:
@@ -252,9 +272,12 @@ suite "pkg.lgx streaming: equivalence with the in-memory reader (step 5-5-2b, pl
     for a in [base, small, rich]:
       let es = entriesOf(a)
       # Every entry of `base`; the first twelve of `small` (the manifest files, the
-      # directories, the first files) and twelve more; twelve of `rich`.
+      # directories, the first files) and twelve more; twelve of `rich`. Every entry of each,
+      # with the full corpus.
       var at = toSeq(0 ..< es.len)
-      if a == small:
+      if full:
+        discard
+      elif a == small:
         at = toSeq(0 ..< min(es.len, 12)) & toSeq(0 ..< 12).mapIt(rng.rand(es.len - 1))
       elif a == rich:
         at = toSeq(0 ..< 12).mapIt(rng.rand(es.len - 1))
@@ -310,9 +333,13 @@ suite "pkg.lgx streaming: equivalence with the in-memory reader (step 5-5-2b, pl
       let es = entriesOf(a)
       # Every field of the first eight entries (the manifest files, the directories, the first
       # files) of the two smaller archives; one field of each later entry of `small`, in turn;
-      # eight random pairs of `rich`.
+      # eight random pairs of `rich`. Every field of every entry of each, with the full corpus.
       var pairs: seq[(int, int)]
-      if a == rich:
+      if full:
+        for i in 0 ..< es.len:
+          for k in 0 .. 15:
+            pairs.add((i, k))
+      elif a == rich:
         for _ in 0 ..< 8:
           pairs.add((rng.rand(es.len - 1), rng.rand(15)))
       else:
