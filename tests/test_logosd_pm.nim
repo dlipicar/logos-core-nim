@@ -28,7 +28,8 @@ when defined(posix):
   from logos_sdk/contracts/generated/lcn_storage_fetch_root import LcnStorageFetchRoot
   import
     ./support/[
-      clibuild, daemonbuild, daemonproc, modulehostbuild, pmfixture, shortdir, slowdown
+      clibuild, daemonbuild, daemonproc, modulehostbuild, pmfixture, sanitizerenv,
+      shortdir, slowdown,
     ],
     logos_sdk/testing/kitbuild
 
@@ -40,8 +41,6 @@ when defined(posix):
     StopDeadlineMs = 10_000 * Slow
     StopMs = 3 * StopDeadlineMs
     HostsGoneMs = 10_000 * Slow
-    SanitizerEnv =
-      ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
     FakeInstance = "fetch-1"
     PmInstance = "pm-1"
     FakeState = "fetch-1"
