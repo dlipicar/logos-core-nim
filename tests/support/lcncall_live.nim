@@ -11,6 +11,7 @@ import
   ]
 import std/posix except Time
 import unittest2
+import ./sanitizerenv
 import logos_sdk/cbor
 import logos_sdk/crypto/blake3
 from logos_sdk/base/perthread import releasePerThread
@@ -46,6 +47,9 @@ const
   IdleMs = min(60_000 * Slow * Load, 600_000)
     ## `ctl.idle_timeout_ms` and `cli.idle_timeout_ms` where no case is about
     ## them (test_ctl_module's reason)
+  RenewMarginMs = 5_000'i64
+    ## [G348] lcn_call renews a route with less than this, or a tenth of its
+    ## validity, left (routes.nim's own constant; L-10)
   StopDeadlineMs = 5_000 * Slow
     ## L-13's `stop_deadline_ms`: its provider ignores its cancellation, so
     ## its stop ends at this deadline
@@ -57,8 +61,6 @@ const
   HelloMs = Timeout
     ## `transport.hello_timeout_ms`: a hosted provider's Hello asks the
     ## Runtime about the ticket over the carrier (test_hosted_routes' `roomy`)
-  SanitizerEnv =
-    ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
   MeterInstance = "meter-1"
   ShapesInstance = "shapes-1"
   VaultInstance = "vault-1"
@@ -123,7 +125,7 @@ proc digestOfFile(path: string): seq[byte] =
   @(h.finish())
 
 proc rootOf(path: string): seq[byte] =
-  @(acceptContractSet(readFile(repoDir / path)).expect(path).primary.root)
+  @(acceptContractSet(readFile(path)).expect(path).primary.root)
 
 func hexOf(bytes: openArray[byte]): string =
   for b in bytes:

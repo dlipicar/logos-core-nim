@@ -1126,6 +1126,11 @@ type
     calls*: Channel[CallJob]
     callWorkers*: array[MaxCallWorkers + MaxNestedCallWorkers, Thread[ptr Shared]]
     callSpawned*: int ## written by the Runtime thread only
+    callInJob*: Atomic[int]
+      ## [G242 revised] call workers inside a job, from taking it until its
+      ## completion message is sent; a worker spawned but not yet running one
+      ## is not. A refusal needs all of them inside one
+    callTaken*: Atomic[int] ## [G242 revised] call jobs taken so far
     evals*: Channel[EvalJob] ## the ordinary evaluation lane
     evalWorkers*: array[EvalWorkers, Thread[ptr Shared]]
     evalSpawned*: int ## written by the Runtime thread only

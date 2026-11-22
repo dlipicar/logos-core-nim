@@ -7,9 +7,9 @@ import std/[monotimes, os, posix, times]
 import results
 import ../../src/logos_core/runtime/[carrier, hostsup]
 import ../../src/logos_core/transport/io/sock
-import ./slowdown
+import ./[sanitizerenv, slowdown]
 
-export carrier, slowdown
+export carrier, sanitizerenv, slowdown
 
 type HostRun* = object
   pid*: int
@@ -23,11 +23,23 @@ type HostRun* = object
 const DefaultWaitMs* = 10_000
 
 proc startHost*(
-    program: string, env: seq[string] = @[], listener = cint(-1), lock = cint(-1)
+    program: string,
+    env: seq[string] = @[],
+    listener = cint(-1),
+    lock = cint(-1),
+    sanitizerEnv = true,
 ): HostRun =
+  ## `env` (`NAME=value` entries) is the host's whole environment, as the supervision's
+  ## allow-list makes it. [G442] With `sanitizerEnv`, the default, this process's `SanitizerEnv`
+  ## settings are added, so the host reports where the sanitizer check reads; a case turns it off
+  ## only to show a host without them.
+  var whole = env
+  if sanitizerEnv:
+    whole.add(sanitizerSettings())
   var fds: array[2, cint]
   doAssert socketPair(addr fds) == 0, "no socket pair"
-  let pid = spawnProcess(program, env, fds[1], listener, lock)
+  # [G442] sanitizer-env: `whole` has them, added above
+  let pid = spawnProcess(program, whole, fds[1], listener, lock)
   discard fdClose(fds[1])
   doAssert pid.isOk, "the host did not start: " & pid.error
   HostRun(pid: pid.get, fd: fds[0], reader: newCarrierReader())
