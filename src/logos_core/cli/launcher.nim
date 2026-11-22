@@ -30,7 +30,9 @@
 ## - **Send.** One request, its descriptors (stdout, stderr, each `@FILE`) on
 ##   the frame's first byte; `deadline_ms` is what remains of the timeout
 ##   after activation. `busy` is retried until the timeout; `closing` goes
-##   through activation again.
+##   through activation again. A retry that the timeout ends before lcn_call
+##   answers it reports the refusal until the timeout: the command was never
+##   taken. A reply that never comes otherwise is "no reply within N ms".
 ## - **Wait.** For `done`, with no deadline of its own: the command has its
 ##   (`deadline_ms`), a stream none. A readable `cancelFd` (SIGINT or SIGTERM)
 ##   half-closes the connection, which cancels the command; lcn_call answers
@@ -375,6 +377,7 @@ proc launch*(l: Launch): Result[int, LaunchFailure] =
     return err(failure(ExitRefused, "at most " & $(MaxFds - 2) & " @FILE arguments"))
   let deadline = getMonoTime() + initDuration(milliseconds = l.timeoutMs)
   var ms = 20
+  var refused = "" ## the last `busy` or `closing` refusal, retried since
   while true:
     let fd = ?l.activate(deadline)
     if l.message.deadline_ms.isSome:
@@ -395,11 +398,24 @@ proc launch*(l: Launch): Result[int, LaunchFailure] =
     )
     if reply.isErr:
       closeFd(fd)
+      let timedOut = wrote.isOk and reply.error.kind == feTimeout
+      if timedOut and refused.len > 0:
+        # [IMPL] A retry the timeout ends before lcn_call answers it: the
+        # command was never taken, and `busy` (or `closing`) was the last
+        # answer. A backoff may end just short of the deadline, so this is
+        # the order of events whenever lcn_call cannot answer in what is left.
+        return err(failure(ExitUnreachable, refused & " until the timeout"))
       return err(
         failure(
           ExitUnreachable,
-          "lcn_call did not take the command: " &
-            (if wrote.isErr: wrote.error else: reply.error.message),
+          "lcn_call did not take the command: " & (
+            if wrote.isErr:
+              wrote.error
+            elif timedOut:
+              "no reply within " & $l.timeoutMs & " ms"
+            else:
+              reply.error.message
+          ),
         )
       )
     let r = reply.get
@@ -421,6 +437,7 @@ proc launch*(l: Launch): Result[int, LaunchFailure] =
       of LcnCliRefusedReasonChoiceKind.Busy, LcnCliRefusedReasonChoiceKind.Closing:
         # [G344; plan §3.3] `busy` is retried; `closing` goes through
         # activation again: wait on `stopping`, start from `unloaded`.
+        refused = text
         case pause(ms, deadline, l.cancelFd)
         of psSlept:
           discard
