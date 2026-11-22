@@ -80,7 +80,7 @@ const
     ## [lcnTestHooks builds] the variables a test passes to the program
   SanitizerVars = ["ASAN_OPTIONS", "UBSAN_OPTIONS", "TSAN_OPTIONS", "LSAN_OPTIONS"]
 
-const ReplyMessageMax = 512 ## [IMPL] a start's message is cut there
+const ReplyMessageMax* = 512 ## [IMPL] a start's message is cut there (`cutMessage`)
 
 type
   RemoteSign* = proc(
@@ -141,7 +141,7 @@ type
     ## A start's answer, which the supervision thread writes and the caller
     ## reads and frees. [refc] No GC'd field: under refc no thread may free
     ## memory another thread's heap made, so the message is copied into the
-    ## reply's own bytes (`answer`).
+    ## reply's own bytes (`answer`), cut on a code point (`cutMessage`).
     done: Atomic[bool] ## set last, with release; read with acquire
     code: ErrorCode
     messageLen: int
@@ -209,6 +209,18 @@ type
     posts: Channel[Post]
 
   RemoteSupervisor* = ptr RemoteSupervisorObj
+
+func cutMessage*(message: string, max = ReplyMessageMax): string =
+  ## [IMPL] A start's message as its reply holds it: at most `max` bytes, cut
+  ## back to the last complete code point, so that text reaching a tstr (an
+  ## error reply, a log, a Runtime Control answer) stays valid UTF-8, which
+  ## the strict decoder requires.
+  if message.len <= max:
+    return message
+  var n = max
+  while n > 0 and (uint8(message[n]) and 0xC0) == 0x80:
+    dec n
+  message[0 ..< n]
 
 proc wake(s: RemoteSupervisor) =
   when defined(posix):
@@ -334,10 +346,10 @@ when defined(posix):
   proc answer(r: ptr StartReply, code: ErrorCode, message: string) =
     ## On the supervision thread: the waiting caller's answer.
     r.code = code
-    let n = min(message.len, r.message.len)
-    if n > 0:
-      copyMem(addr r.message[0], unsafeAddr message[0], n)
-    r.messageLen = n
+    let m = cutMessage(message, r.message.len)
+    if m.len > 0:
+      copyMem(addr r.message[0], unsafeAddr m[0], m.len)
+    r.messageLen = m.len
     r.done.store(true, moRelease)
 
   proc reply(p: RemoteProc, code: ErrorCode, message: string) =

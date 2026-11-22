@@ -24,6 +24,8 @@ when defined(posix):
       sessioninit,
     ]
   import ../src/logos_core/runtime/host
+  from std/unicode import validateUtf8
+  from ../src/logos_core/runtime/remotesup import cutMessage, ReplyMessageMax
   from ../src/logos_core/runtime/hostsup import nil # compiles hostspawn.c
   import ./support/[daemonbuild, daemonproc, rchannel, shortdir, slowdown, tls_fixtures]
 
@@ -447,3 +449,21 @@ when defined(posix):
       discard close(mine)
       discard close(lfd)
       discard close(lockFd)
+
+  suite "remote: the supervisor's answer to a start [IMPL]":
+    test "[IMPL] a start's message is cut at 512 bytes back to the last complete code point: 511 ASCII bytes and a 3-byte character keep the 511 bytes, valid UTF-8":
+      let euro = "\xE2\x82\xAC" # U+20AC, 3 bytes
+      let long = repeat('a', 511) & euro
+      check long.len == 514
+      let cut = cutMessage(long)
+      check cut.len == 511
+      check cut == repeat('a', 511)
+      check validateUtf8(cut) == -1
+      # At the limit and below it, nothing is cut; a character that ends at the
+      # limit is kept whole.
+      check ReplyMessageMax == 512
+      check cutMessage(repeat('a', 512)) == repeat('a', 512)
+      check cutMessage("short") == "short"
+      let fits = repeat('a', 509) & euro
+      check cutMessage(fits) == fits
+      check cutMessage(fits & "b").len == 512
