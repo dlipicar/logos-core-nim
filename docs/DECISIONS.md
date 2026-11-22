@@ -7810,7 +7810,8 @@ their history.
       `lock-complete`);
     - each such package has exactly one `pkgs2/<name>-<version>-<sha1>` directory in `nimble.paths`,
       whose suffix is the lock's `checksums.sha1` (Nimble names the directory after the checksum it
-      computed at install, and reads it back from the name ever after);
+      computed at install, and reads it back from the name ever after). Amended by G468: that
+      directory and the `srcDir` its own nimble file declares, both listed, are one install;
     - its version is the lock's where that is a plain version (a `#commit` entry installs under the
       package's declared version);
     - `nimble.paths` names no install the lock lacks, and no other directory but the project's own
@@ -7873,6 +7874,28 @@ their history.
   clones are pre-seeded and Nimble runs offline. `releases.json` (`nim-lang.org`) stays refused locally,
   and CI's cold runners read it on every run (a few KB).
 - **Status:** built in W2-P.1 (I120).
+
+### G468 — The lock check: an install and its own `srcDir` are one install (amends G436)
+- **Kind:** IMPL · **Plan:** `tier5-plans/stepW2-X-plan.md` X0.10 (spike §3.1; Fable's re-check of draft 2).
+- **Why.** Nimble 0.26.2 installs a package it fetches in local mode whole, with its `srcDir` inside it, and
+  lists both the install directory and that `srcDir` in `nimble.paths` (`packageinfo.nim:416-421`,
+  `build.nim:45-54`; draft #199). G436's check counted the pair as two installs of one package, so every
+  fresh setup that fetches a `srcDir` package failed it: storage's lrucache, merkletree, npeg and zippy
+  today (N-4.2's `test_installs_match_lock`), and the SDK once the extraction's repositories fetch it.
+- **The rule.** In `logos_sdk/testing/lockcheck`, an install directory and the `srcDir` its own nimble
+  file declares, both named in `nimble.paths`, are one install. A directory pairs only with its own
+  `srcDir`, and only once: another directory under the install, another install's `srcDir`, or a second
+  listing of the pair still counts, so two installs of one package, each with its pair, are still two.
+  `lockMismatches` does no I/O and takes the pairs as (root, `srcDir`); `installMismatches` reads each
+  install's `srcDir` from the one nimble file in its directory, as it already reads the project's own.
+  Everything else in G436's check is unchanged: the checksum, the version and the develop links are
+  judged once per install.
+- **Tests.** `sdk/tests/test_lockcheck.nim`: the pair passes, also with Windows separators and in Nim's
+  VM; a directory under the install that is not its `srcDir`, or another install's `srcDir`, does not
+  pair; two installs of one package with their pairs fail as two; a pair under a checksum not the lock's
+  is one finding; from a root, a pair read from the nimble file passes, and one whose nimble file names
+  another `srcDir` fails.
+- **Status:** built in X0.10.
 
 ## 13. Implementation defaults chosen without a separate question
 
@@ -8141,6 +8164,7 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G438 | closing a confined kit's module-thread dispatcher, and what destroy left | IMPL | 12 |
 | G439 | a chronos variant in `kit-toolchains`: the kits under the libraries' own chronos | IMPL | 12 |
 | G440 | a post gate that outlives a confined kit's context | IMPL | 12 |
+| G468 | the lock check: an install and its own `srcDir` are one install (amends G436) | IMPL | 12 |
 
 ---
 
