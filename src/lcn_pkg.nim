@@ -1,6 +1,7 @@
 ## lcn-pkg: package-producer and checking tools for the PM §3/§4 manifest, the
-## §4.3 COSE_Sign1 SLH-DSA-SHA2-192s profile and §7.1 LGX archives. A subset for
-## now: no fetch, catalog, install or Nix profile.
+## §4.3 COSE_Sign1 SLH-DSA-SHA2-192s profile, §7.1 LGX archives and the catalog
+## document (DECISIONS G401; docs/PACKAGE-MANAGER.md §3). A subset for now: no
+## fetch, install or Nix profile.
 ##
 ## [IMPL] File formats that are tool conventions, not spec formats:
 ## - a manifest source is CBOR diagnostic notation (RFC 8949 §8); `manifest
@@ -13,14 +14,18 @@
 ##   "public_key": "<hex>", "packages": ["<exact name>", ...]}]}. It is a
 ##   producer's test convenience and no trust input (PM l.421; DECISIONS I41):
 ##   logosd reads only the package trust file (docs/DAEMON.md §6), whose
-##   `logosctl trust anchor --kid` takes a hex kid as `hex:`, as `sign` does.
+##   `logosctl trust anchor --kid` takes a hex kid as `hex:`, as `sign` does;
+## - a catalog source is CBOR diagnostic notation: an array of PM §6 catalog
+##   entries, `{"identity": {"package": ..., "version": ...}, "source": {"kind":
+##   "lgx", "storage": BINDING, "object": h'LOCATOR'}}`, in any order.
 
 import std/[algorithm, json, os, parseopt, strutils]
 import results
 import logos_sdk/base/hex
 import logos_sdk/cbor
 import logos_sdk/crypto/blake3
-import ./logos_core/package/lgx
+import ./logos_core/package/[lgx, records]
+import ./logos_core/pm/catalog
 
 const usage = """
 Usage:
@@ -32,6 +37,7 @@ Usage:
   lcn-pkg lgx pack --manifest:manifest.cbor --cose:manifest.cose --variants:DIR
                    --out:PACKAGE.lgx
   lcn-pkg verify PACKAGE.lgx --trust:TRUST.json [--platform:OS/ARCH[/ABI]]
+  lcn-pkg catalog SOURCE.edn --sequence:N [--out:catalog.cbor]
 
 keygen         writes a fresh SLH-DSA-SHA2-192s secret key (FIPS 205 key
                generation from the operating-system CSPRNG, PM §4.3) readable
@@ -45,6 +51,11 @@ sign           signs the manifest's commitment claim (PM §4.3, hedged); --emit-
 lgx pack       writes an LGX archive (PM §7.1) from DIR/<variant id>/...
 verify         opens a package: archive rules, signature against the trust
                file, variant selection (default: this host), artifact hashes
+catalog        writes the canonical catalog document (G401) of the entries in
+               SOURCE under sequence N, refusing a repeated entry, and prints its
+               BLAKE3-256 digest for the daemon configuration. It signs
+               nothing: the catalog is unsigned, and its entries are location
+               data only (PM §6)
 
 KID is text, or hex:<digits> for raw bytes.
 """
@@ -368,6 +379,42 @@ proc verifyCmd*(package, trustPath, platform: string): int =
     echo "module: ", d.module, " (", d.artifact, ")"
   0
 
+proc catalogCmd*(source, sequenceText, output: string): int =
+  ## [G401] The catalog document of SOURCE's entries under `--sequence`.
+  if source.len == 0 or sequenceText.len == 0:
+    return fail("catalog needs SOURCE.edn and --sequence\n" & usage)
+  let sequence =
+    try:
+      parseBiggestUInt(sequenceText)
+    except ValueError:
+      return fail("--sequence is not an unsigned integer: " & sequenceText)
+  let src =
+    try:
+      readFile(source)
+    except CatchableError as e:
+      return fail("cannot read " & source & ": " & e.msg)
+  let v = parseDiag(src).valueOr:
+    return fail(source & ": " & error)
+  if v.kind != ckArray:
+    return fail(source & " is not an array of catalog entries")
+  var entries: seq[CatalogEntry]
+  for i, item in v.items:
+    let e = decodeCatalogEntry(item).valueOr:
+      return fail(source & ": entry " & $i & ": " & error)
+    entries.add(e)
+  let bytes = encodeCatalog(uint64(sequence), entries).valueOr:
+    return fail(error)
+  # The Package Manager's own reading, with its default bounds.
+  let c = decodeCatalog(bytes).valueOr:
+    return fail("the document would be refused: " & error)
+  writeBytes(output, bytes).isOkOr:
+    return fail(error)
+  echo output
+  echo "sequence: ", c.sequence
+  echo "entries: ", c.entries.len
+  echo "digest: ", c.digest.toHex
+  0
+
 proc main(): int =
   var
     args: seq[string]
@@ -391,7 +438,7 @@ proc main(): int =
 
   const known = [
     "out", "variants", "kid", "key", "emit-tbs", "attach-sig", "manifest", "cose",
-    "trust", "platform",
+    "trust", "platform", "sequence",
   ]
   for (k, _) in opts:
     if k notin known:
@@ -441,6 +488,18 @@ proc main(): int =
         "",
       opt("trust"),
       opt("platform"),
+    )
+  of "catalog":
+    catalogCmd(
+      if args.len > 1:
+        args[1]
+      else:
+        "",
+      opt("sequence"),
+      if opt("out").len > 0:
+        opt("out")
+      else:
+        "catalog.cbor",
     )
   else:
     fail(usage.strip)

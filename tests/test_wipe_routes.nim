@@ -23,6 +23,7 @@ import
     typedthreads,
   ]
 import unittest2
+import ./support/sanitizerenv
 import ../src/logos_core/runtime/[engine, routing]
 from ../src/logos_core/runtime/invoke import commitSync
 from ../src/logos_core/runtime/plumbing import CallTicket
@@ -1141,8 +1142,6 @@ when defined(posix):
   from ../src/logos_core/host/state import ExitWipeAudit
 
   const
-    SanitizerEnv =
-      ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
     HoldSlot = 14'u64 ## `exchange` there waits for a cancel or the file `open`
     HVault = "hv"
     HProbe = "p"

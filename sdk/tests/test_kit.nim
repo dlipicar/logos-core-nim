@@ -1077,7 +1077,7 @@ proc cRun(statements: seq[string], name = "layout"): Result[seq[string], string]
   let base = dir / name
   writeFile(base & ".c", src)
   let exe = base & (when defined(windows): ".exe" else: "")
-  let generated = repoDir / generatedDir
+  let generated = generatedDir
   let (o, rc) = execCmdEx(
     quoteShell(cc) & " -std=c17 -Wall -Werror -I " & quoteShell(generated) & " " &
       quoteShell(base & ".c") & " -o " & quoteShell(exe)
@@ -1156,7 +1156,7 @@ suite "ifc.kit: the converters' C layout (INTERFACE §2.3) [IMPL]":
 # Interface-only providers and earlier contracts (DECISIONS G339) -------------------------
 
 proc kitDocument(name: string): string =
-  readFile(repoDir / sdkKitDir / name)
+  readFile(sdkKitDir / name)
 
 proc surfaceOf(
     fn: proc(outLen: ptr csize_t): ptr uint8 {.cdecl, gcsafe, raises: [].}

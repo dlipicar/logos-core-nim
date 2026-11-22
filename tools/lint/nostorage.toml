@@ -1,0 +1,20 @@
+# The deny list of tools/lint/nostorage.py (DECISIONS G406; docs/PACKAGE-MANAGER.md §1).
+# The Package Manager reaches Logos Storage only through `lcn.storage_fetch` and the
+# storage_module that provides it (owner, 2026-11-20): no storage library is a dependency of
+# this repository or is linked into the Package Manager. Reviewed like layers.toml: a change
+# here is a change to that rule.
+
+# Names and URL fragments, matched without case anywhere in a checked string.
+deny = [
+  "libstorage",
+  "logos-storage",
+  "logos_storage",
+  "storage-nim",
+  "codex",
+  "nim-codex",
+  "libcodex",
+]
+
+# Where the link and build pragmas are checked: these sources and their in-repository import
+# closure. layers.toml's `pm_roots` names the same directories for the import rule.
+roots = ["src/logos_core/pm/", "src/logos_core/package/"]

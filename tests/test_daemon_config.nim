@@ -11,7 +11,7 @@
 ## (G343-G346). No logosd process and no Runtime: those are `test_logosd`
 ## (6b) and `test_lcn_call`.
 
-import std/[os, sequtils, strutils]
+import std/[algorithm, os, sequtils, strutils]
 import unittest2
 import logos_sdk/cbor
 import logos_sdk/base/hex
@@ -22,6 +22,10 @@ import
 import ../src/logos_core/runtime/authz
 from ../src/logos_core/runtime/store import openStore, close
 from ../src/logos_core/runtime/authscopes import evaluateRequest, AuthorityModule
+from ../src/logos_core/authority/facts import InstanceFacts, putInstance, putProvider
+from logos_sdk/kit/rc_types import LogosNSRuntimeControlRouteAccess, encode
+from logos_sdk/cbor/encode import cmpBytes
+import logos_sdk/contracts/generated/lcn_storage_fetch_root
 from ../src/logos_core/permissions import PermissionSetting, HostAmbient, profileV1
 from ../src/logos_core/loader/contract import LoaderInstanceId, LoaderModuleName
 from ../src/logos_core/orchestration/settings import OrchestratorModule
@@ -30,6 +34,10 @@ from ../src/logos_core/durable import release, writeAtomic
 from ../src/logos_core/cli/lcn_call_configuration_types import
   LcnCallSettings, LcnCallSettingsDeploymentChoiceKind, decode
 import ./support/authfixture, logos_sdk/testing/[kitbuild, schemasuite]
+from ../src/logos_core/pm/input import MaxReadDeadlineMs
+from ../src/logos_core/package/resolver import
+  ResolverLimits, resolverLimits, `==`, MaxResolverLimits, names, depth, candidates,
+  attempts
 
 let work =
   currentSourcePath().parentDir.parentDir / "build" / "daemon-config" / kitVariant
@@ -114,8 +122,8 @@ const
   DcRules = [
     "lcn.daemon_config", "lcn.dc_runtime", "lcn.dc_policy", "lcn.dc_orchestration",
     "lcn.dc_restart", "lcn.dc_override", "lcn.dc_call_audit", "lcn.dc_evidence_store",
-    "lcn.dc_permissions", "lcn.dc_ctl", "lcn.dc_cli", "lcn.dc_test_hooks",
-    "lcn.dc_test_diagnostics",
+    "lcn.dc_permissions", "lcn.dc_ctl", "lcn.dc_cli", "lcn.dc_package_manager",
+    "lcn.dc_test_hooks", "lcn.dc_test_diagnostics",
   ]
   TrustRules = ["lcn.trust_mark", "lcn.ev_key_binding"]
   TrustdocRules = [
@@ -767,11 +775,11 @@ type PolicyEnv = object
   sink: ChannelSink
   a: Authority
 
-proc openPolicy(diag: string, cli = false): PolicyEnv =
+proc openPolicy(diag: string, cli = false, pm = Opt.none(PmSettings)): PolicyEnv =
   let dc = dcOf(diag)
   let orch = orchestratorValue(dc).expect("an orchestration value")
   let policy =
-    mergedPolicy(dc.policy.arm_Capability_authority, orch, cli).expect("a policy")
+    mergedPolicy(dc.policy.arm_Capability_authority, orch, cli, pm).expect("a policy")
   let dir = freshDir("ca")
   privateDir(dir)
   result.facts = daemonFacts()
@@ -1081,6 +1089,343 @@ proc commit(
 
 proc fileBytes(s: Session): string =
   readFile(s.trustPath)
+
+# dc.package_manager ---------------------------------------------------------------
+
+const
+  PmBinding = """[{"binding": "main", "instance": "st"}]"""
+  PmCatalog =
+    """{"storage": "main", "object": h'636174616c6f67', "digest": """ & Zero32 & "}"
+
+proc pmSection(
+    instance = "pm", storage = PmBinding, catalog = PmCatalog, extra = ""
+): string =
+  "{\"instance\": \"" & instance & "\", \"storage\": " & storage & ", \"catalog\": " &
+    catalog & (if extra.len > 0: ", " & extra else: "") & "}"
+
+proc pmText(
+    section = pmSection(),
+    modules =
+      @[withState(hostedModule("pm", "pkgmgr"), "pm"), hostedModule("st", "storesvc")],
+): string =
+  dcText(
+    extra = "\"modules\": [" & modules.join(", ") & "], \"package_manager\": " & section
+  )
+
+proc directModule(instance: string): string =
+  "{\"instance\": \"" & instance & "\", \"module\": \"dsvc\", \"implementation\": " &
+    "{\"strategy\": \"direct_dynamic\", \"artifact\": {\"id\": \"dsvc\", " &
+    "\"local_path\": \"/opt/dsvc/libdsvc.so\", \"hash\": " & Zero32 &
+    ", \"hash_suite\": \"logos.hash-suite.blake3-256\"}}}"
+
+proc withHost(text: string): string =
+  ## `text` with a `module_host`, which a composed hosted instance needs.
+  text.replace(
+    "{\"runtime_instance_id\": \"rt-1\"}",
+    "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & getAppFilename() & "\"}",
+  )
+
+func presetLine(instance: string): string =
+  ## The start's log line for logosd's preset (DAEMON.md §3, `package_manager`'s row).
+  "package_manager: " & instance & " gets resolver limits partial_closure_names " &
+    $PresetPartialClosureNames & ", dependency_depth " & $PresetDependencyDepth &
+    ", candidates_per_name " & $PresetCandidatesPerName & ", assignment_attempts " &
+    $PresetAssignmentAttempts & " (logosd's preset)"
+
+suite "dc.package_manager: the Package Manager's section, its input and S9 to S11 [IMPL-DECISION G399] [IMPL-DECISION G400] [IMPL-DECISION G402]":
+  test "check 2: each refusal names the field it concerns":
+    let pmEntry = withState(hostedModule("pm", "pkgmgr"), "pm")
+    let st = hostedModule("st", "storesvc")
+    let configured = pmEntry[0 ..< pmEntry.len - 1] & ", \"configuration\": h'a0'}"
+    for (text, want) in [
+      (
+        pmText(modules = @[st]),
+        "package_manager.instance: pm is not an entry of modules",
+      ),
+      (
+        pmText(modules = @[directModule("pm"), st]),
+        "package_manager.instance: pm is not hosted_dynamic (the Package Manager runs in its own process)",
+      ),
+      (
+        pmText(modules = @[hostedModule("pm", "pkgmgr"), st]),
+        "package_manager.instance: pm has no state_assignment",
+      ),
+      (
+        pmText(modules = @[configured, st]),
+        "package_manager.instance: pm has configuration: the Package Manager has none, and its trust input is never configuration (CONFIGURATION l.58)",
+      ),
+      (pmText(pmSection(storage = "[]")), "package_manager.storage holds no binding"),
+      (
+        pmText(
+          pmSection(
+            storage =
+              """[{"binding": "main", "instance": "st"}, {"binding": "main", "instance": "st"}]"""
+          )
+        ),
+        "package_manager.storage: binding main is named twice",
+      ),
+      (
+        pmText(pmSection(storage = """[{"binding": "main", "instance": "pm"}]""")),
+        "package_manager.storage: binding main names the Package Manager's own instance",
+      ),
+      (
+        pmText(pmSection(storage = """[{"binding": "main", "instance": "zz"}]""")),
+        "package_manager.storage: binding main: zz is not an entry of modules",
+      ),
+      (
+        pmText(modules = @[pmEntry, directModule("st")]),
+        "package_manager.storage: binding main: st is not hosted_dynamic",
+      ),
+      (
+        pmText(
+          pmSection(
+            catalog =
+              """{"storage": "other", "object": h'63', "digest": """ & Zero32 & "}"
+          )
+        ),
+        "package_manager.catalog.storage: other is not a binding",
+      ),
+      (
+        pmText(pmSection(extra = "\"limits\": {\"read_deadline_ms\": 0}")),
+        "package_manager: limits.read_deadline_ms must be 1 to " & $MaxReadDeadlineMs,
+      ),
+      (
+        pmText(
+          pmSection(
+            extra =
+              "\"resolver_limits\": {\"partial_closure_names\": 4097, \"dependency_depth\": 1, " &
+              "\"candidates_per_name\": 1, \"assignment_attempts\": 1}"
+          )
+        ),
+        "package_manager: resolver_limits: resolver limit partial_closure_names is above its maximum 4096",
+      ),
+    ]:
+      checkpoint want
+      check refusal(text) == want
+
+  test "[ruling C1] resolver_limits holds all four limits or is absent: a partial one fails check 1":
+    let text = pmText(
+      pmSection(
+        extra =
+          "\"resolver_limits\": {\"partial_closure_names\": 16, \"dependency_depth\": 15}"
+      )
+    )
+    check decodeDaemonConfig(dcBytes(text)).isErr
+
+  test "[ruling C4] the composed input passes the Package Manager's decoder: a trust state it refuses fails the check":
+    var t = floorTrust()
+    t.catalog = LcnTrustSelection(selected: Opt.some("logos.catalog.example"))
+    check refusal(pmText(), TrustFileState(file: t)).startsWith(
+      "package_manager: trust: this implementation supports no catalog profile"
+    )
+
+  test "[IMPL-DECISION G443] the preset's relations: attempts at least names, depth below names, each within its maximum":
+    let names = int(PresetPartialClosureNames)
+    let depth = int(PresetDependencyDepth)
+    let candidates = int(PresetCandidatesPerName)
+    let attempts = int(PresetAssignmentAttempts)
+    # A full closure takes one attempt per name; a path of `names` names has at most
+    # `names - 1` edges, so a larger depth limit could never trip (fable-checks §7.1).
+    check attempts >= names
+    check depth < names
+    check names <= MaxResolverLimits.names
+    check depth <= MaxResolverLimits.depth
+    check candidates <= MaxResolverLimits.candidates
+    check attempts <= MaxResolverLimits.attempts
+    check resolverLimits(names, depth, candidates, attempts).isOk
+
+  test "[ruling C2] [ruling C3] the preset applies when resolver_limits is absent, and the start line names its origin":
+    let c = checked(pmText()).get
+    check c.pm.isSome
+    let pm = c.pm.get
+    check pm.instance == "pm"
+    check pm.providers == @["st"]
+    check pm.limitsOrigin == loPreset
+    let preset = resolverLimits(
+      int64(PresetPartialClosureNames),
+      int64(PresetDependencyDepth),
+      int64(PresetCandidatesPerName),
+      int64(PresetAssignmentAttempts),
+    )
+    check pm.resolverLimits == preset.get
+    check pmStartLine(pm) == presetLine("pm")
+    let own = checked(
+      pmText(
+        pmSection(
+          extra =
+            "\"resolver_limits\": {\"partial_closure_names\": 16, \"dependency_depth\": 15, " &
+            "\"candidates_per_name\": 4, \"assignment_attempts\": 1000}"
+        )
+      )
+    ).get.pm.get
+    check own.limitsOrigin == loOperator
+    check pmStartLine(own) ==
+      "package_manager: pm gets resolver limits partial_closure_names 16, dependency_depth 15, " &
+      "candidates_per_name 4, assignment_attempts 1000 (package_manager.resolver_limits)"
+
+  test "compose: the instance's lcn.pm_input, byte for byte, its only protected input":
+    let s = Session(dir: freshDir())
+    let p = prepareDaemon(s, dcBytes(withHost(pmText())), prod).get
+    let app = p.composition.appConfig
+    let expected = dcBytes(
+      "{\"trust\": h'" & prod.file.encode.get.toHex &
+        "', \"format\": \"logos-core-nim.pm-input.v1\", " & "\"catalog\": " & PmCatalog &
+        ", \"storage\": " & PmBinding & ", \"resolver_limits\": {\"dependency_depth\": " &
+        $PresetDependencyDepth & ", \"assignment_attempts\": " &
+        $PresetAssignmentAttempts & ", \"candidates_per_name\": " &
+        $PresetCandidatesPerName & ", \"partial_closure_names\": " &
+        $PresetPartialClosureNames & "}}"
+    )
+    check app.protected_inputs.isSome
+    check app.protected_inputs.get.len == 1
+    if app.protected_inputs.get.len == 1:
+      check app.protected_inputs.get[0].instance == "pm"
+      check app.protected_inputs.get[0].input == expected
+    # The instance's own record is the operator's, unchanged: the input is not configuration.
+    let rec = app.modules.filterIt(it.instance == "pm")
+    check rec.len == 1 and rec[0].configuration.isNone
+    # Without the section, no instance gets one.
+    let plain = prepareDaemon(
+      Session(dir: freshDir()),
+      dcBytes(
+        withHost(
+          dcText(extra = "\"modules\": [" & hostedModule("st", "storesvc") & "]")
+        )
+      ),
+      prod,
+    ).get
+    check plain.composition.appConfig.protected_inputs.isNone
+
+  test "[G402] S9 to S11 with the section: five rules, each provider once, in byte order":
+    let orch = orchestratorValue(dcOf(pmText())).get
+    let base = systemRules(orch).get
+    let two = PmSettings(instance: "pm", providers: @["st", "a", "st"])
+    let rules = systemRules(orch, pm = Opt.some(two)).get
+    check rules.len == base.len + 5
+    let added = rules[base.len .. ^1].mapIt(toDiag(it))
+    # S9's Runtime Control rule names no target: a list method's decision
+    # names none, so a rule with `targets` would never allow list_modules (I86).
+    check "\"list_modules\"" in added[0]
+    check "\"targets\"" notin added[0]
+    check "\"providers\": {\"instances\": [\"a\", \"st\"]}" in added[2]
+    check "\"providers\": {\"instances\": [\"a\", \"st\"]}" in added[3]
+    check added[4].startsWith(
+      "{\"kind\": \"allow\", \"subject\": {\"instances\": [\"a\", \"st\"]}"
+    )
+    # They are in the policy compose hands the authority.
+    let c = checked(pmText()).get
+    let s = Session(dir: freshDir())
+    let ca = prepareDaemon(s, dcBytes(withHost(pmText())), prod).get.composition.appConfig.policy
+    check ca.kind == LcnAppPolicyKind.Capability_authority
+    check ca.arm_Capability_authority.policy.rules.len ==
+      systemRules(orch, pm = c.pm).get.len
+
+  test "[G402] S9 to S11, decided by the Capability Authority: the routes, calls, readiness event and list_modules, and nothing else":
+    # The Package Manager `pm` and its provider `st` (record p-st); `b`'s
+    # record p-b also implements lcn.storage_fetch but is no binding.
+    let text = pmText()
+    var e = openPolicy(text, pm = checked(text).get.pm)
+    check e.facts.putInstance("pm", InstanceFacts(module: "pkgmgr")).isOk
+    check e.facts.putInstance("st", InstanceFacts(module: "storesvc")).isOk
+    check e.facts.putProvider("p-st", "st").isOk
+    check e.facts.putProvider("p-b", "b").isOk
+    proc rc(operation: string, route = ""): AuthzRequest =
+      AuthzRequest(
+        action: aaRuntimeControl,
+        operation: operation,
+        consumer: "pm",
+        target: route,
+        route: route,
+      )
+
+    proc fetch(
+        action: AuthzAction,
+        operation: string,
+        declaration: openArray[byte] = [],
+        provider = "p-st",
+        access: seq[byte] = @[],
+    ): AuthzRequest =
+      AuthzRequest(
+        action: action,
+        operation: operation,
+        consumer: "pm",
+        target: provider,
+        provider: provider,
+        route: "route-1",
+        module: "storesvc",
+        contract: @LcnStorageFetchRoot,
+        declaration: @declaration,
+        access: access,
+      )
+
+    # The access the Package Manager's establishment asks (pm/shell.nim).
+    var methods = @[
+      @LcnStorageFetchStatObjectRoot,
+      @LcnStorageFetchReadObjectRoot,
+      @LcnStorageFetchFetchReadinessRoot,
+    ]
+    methods.sort(
+      proc(a, b: seq[byte]): int =
+        cmpBytes(a, b)
+    )
+    let access =
+      LogosNSRuntimeControlRouteAccess(
+        methods: Opt.some(methods),
+        subscribe_events: Opt.some(@[@LcnStorageFetchReadinessChangedRoot]),
+      ).encode.get
+    # S9: the Runtime Control methods that hold a route, and list_modules.
+    check e.allows(rc("establish_route"))
+    check e.allows(rc("renew_route", "route-1"))
+    check e.allows(rc("close_route", "route-1"))
+    check e.allows(rcReq("pm", "list_modules"))
+    # No other Runtime Control method, and no Runtime Control event (S9's deny).
+    check not e.allows(rcReq("pm", "list_routes"))
+    check not e.allows(rcReq("pm", "shutdown_runtime"))
+    check not e.allows(rcReq("pm", "get_readiness", "st"))
+    check not e.allows(rcReq("pm", "start_module", "st"))
+    for ev in ["module_state_changed", "route_state_changed", "inventory_changed"]:
+      checkpoint ev
+      check e.denial(eventReq("pm", ev)) == DenialKind.Consumer_denied
+    # S9's route and calls, and S10's subscription: to the binding's provider only.
+    for p in ["p-st", "p-b"]:
+      checkpoint p
+      let mine = p == "p-st"
+      check e.allows(fetch(aaRoute, "establish_route", provider = p, access = access)) ==
+        mine
+      check e.allows(fetch(aaRoute, "renew_route", provider = p, access = access)) ==
+        mine
+      for (name, root) in [
+        ("stat_object", LcnStorageFetchStatObjectRoot),
+        ("read_object", LcnStorageFetchReadObjectRoot),
+        ("fetch_readiness", LcnStorageFetchFetchReadinessRoot),
+      ]:
+        checkpoint name
+        check e.allows(fetch(aaCall, name, root, provider = p)) == mine
+      check e.allows(
+        fetch(
+          aaSubscribeEvent,
+          "fetch_readiness_changed",
+          LcnStorageFetchReadinessChangedRoot,
+          provider = p,
+        )
+      ) == mine
+    # S11: the binding's provider instance publishes that event; no other does.
+    proc published(publisher, provider: string): AuthzRequest =
+      AuthzRequest(
+        action: aaPublishEvent,
+        operation: "fetch_readiness_changed",
+        consumer: publisher,
+        target: "pm",
+        provider: provider,
+        route: "route-1",
+        module: "storesvc",
+        contract: @LcnStorageFetchRoot,
+        declaration: @LcnStorageFetchReadinessChangedRoot,
+      )
+
+    check e.allows(published("st", "p-st"))
+    check not e.allows(published("b", "p-b"))
+    e.close()
 
 suite "dc.trust: the trust file's continuity [IMPL-DECISION G137] [IMPL-DECISION G299] [D27]":
   test "[PKG-0418] [PKG-0419] [PKG-0420] [PKG-0421] the decision table":
@@ -1774,7 +2119,7 @@ suite "dc.init: logosctl init's session [IMPL-DECISION G192] [batch E 19] [U8]":
     check getFilePermissions(s.runDir) == {fpUserRead, fpUserWrite, fpUserExec}
 
 suite "dc.docs: docs/DAEMON.md carries the schemas and the system rules verbatim":
-  test "every daemon CDDL file, the package trust file's and the launcher's, and S1-S8 for init's default configuration, word for word":
+  test "[PKG-0474] every daemon CDDL file, the package trust file's and the launcher's, S1-S11 and logosd's preset of the resolver limits, word for word":
     let root = currentSourcePath().parentDir.parentDir
     let doc = readFile(root / "docs" / "DAEMON.md")
     for name in [
@@ -1796,3 +2141,18 @@ suite "dc.docs: docs/DAEMON.md carries the schemas and the system rules verbatim
     for r in systemRules(orch, cli = true).get[base.len .. ^1]:
       cli.add(toDiag(r) & "\n")
     check (cli & "```") in doc
+    # [G402] S9 to S11, which logosd adds with a package_manager section.
+    let withCli = systemRules(orch, cli = true).get.len
+    let pm = PmSettings(instance: "package_manager", providers: @["storage"])
+    var pmRules = "```text\n"
+    for r in systemRules(orch, cli = true, pm = Opt.some(pm)).get[withCli .. ^1]:
+      pmRules.add(toDiag(r) & "\n")
+    check (pmRules & "```") in doc
+    # [G399; ruling C2, C3] logosd's preset and the start's log line.
+    let preset =
+      "`partial_closure_names` " & $PresetPartialClosureNames & ", `dependency_depth` " &
+      $PresetDependencyDepth & ", `candidates_per_name` " & $PresetCandidatesPerName &
+      " and `assignment_attempts` " & $PresetAssignmentAttempts
+    check preset in doc
+    check "`package_manager: <instance> gets resolver limits partial_closure_names N, dependency_depth N, candidates_per_name N, assignment_attempts N (logosd's preset)`" in
+      doc

@@ -1,7 +1,7 @@
 ## `lcn.storage_fetch` [DECISIONS G395] (`sdk/src/logos_sdk/contracts/lcn_storage_fetch.cddl`,
 ## `sdk/docs/STORAGE-FETCH.md`): the document and its root, the generated codecs, and the
 ## conformance harness's call checks (`logos_sdk/testing/storagefetch`) against the reference
-## fake over the SDK's in-process route (`support/testroute`). That route takes no
+## fake over the SDK's in-process route (`logos_sdk/testing/testroute`). That route takes no
 ## subscriptions, so the readiness checks run in core's `tests/test_storage_fetch.nim`, under a
 ## test Runtime; here the fake's methods are called and its publications read where the kit
 ## records them.
@@ -15,7 +15,8 @@ from logos_sdk/testing/generated/fetch_fake_module_calls import
   invoke, FetchFakeSetReadinessRequest, FetchFakeSetReadinessRequestReadinessChoice,
   FetchFakeSetReadinessRequestReadinessChoiceKind, FetchFakeSetFaultRequest
 import logos_sdk/testing/fixtures/fetch_fake_impl
-import ./support/[genfixtures, testroute]
+import logos_sdk/testing/testroute
+import ./support/genfixtures
 
 # The fake, in this process ----------------------------------------------------------------
 

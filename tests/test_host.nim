@@ -1013,12 +1013,16 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
       c.runtime.module_host = Opt.some(dir / "missing")
       check parse(c).rejects("module_host does not exist")
       c.runtime.module_host = Opt.some(program)
+      # [G442] sanitizer-env: parsed only, no host starts
       c.runtime.module_host_env = Opt.some(newSeq[string]())
       check parse(c).rejects("module_host_env is present but empty")
+      # [G442] sanitizer-env: parsed only, no host starts
       c.runtime.module_host_env = Opt.some(@["A=B"])
       check parse(c).rejects("module_host_env names A=B badly or twice")
+      # [G442] sanitizer-env: parsed only, no host starts
       c.runtime.module_host_env = Opt.some(@["TSAN_OPTIONS", "TSAN_OPTIONS"])
       check parse(c).rejects("module_host_env names TSAN_OPTIONS badly or twice")
+      # [G442] sanitizer-env: parsed only, no host starts
       c.runtime.module_host_env = Opt.some(@["TSAN_OPTIONS", "ASAN_OPTIONS"])
       check parse(c).get.moduleHostEnv == @["TSAN_OPTIONS", "ASAN_OPTIONS"]
       # A declaration needs it as a module does.

@@ -20,16 +20,18 @@ default = "deferred:tier-5"
 # (§4.3), built over the vendored slhdsa-c (DECISIONS R4, I68). Promoted from tier
 # 5 as sans-I/O: §6 catalog entries and inspection records, and §11 resolution
 # (I69, G167). Fetch, catalog documents, the storage role, installation, Runtime
-# handoffs and the methods are tier 5. The Package Manager handoff to the Runtime (§17)
+# handoffs and the methods are tier 5. Step 5-3b-1 (DECISIONS I116) claims §4.2 and §4.4 (the
+# baseline only, G404), §13's retrieval through lcn.storage_fetch (G402), and the catalog,
+# cache and trust-in-use units below (G401, G403). The Package Manager handoff to the Runtime (§17)
 # is Tier 5 too (owner decision 1 (a), 2026-11-13, area 7; DECISIONS I97); logosd built
 # the trust file's carrier in Tier 4b (G299).
 "§2" = "claimed"
 "§3" = "claimed"
 "§4" = "claimed"
 "§4.1" = "claimed"
-"§4.2" = "deferred:tier-5"
+"§4.2" = "claimed"
 "§4.3" = "claimed"
-"§4.4" = "deferred:tier-5"
+"§4.4" = "claimed"
 "§4.5" = "deferred:tier-5"
 "§5" = "claimed"
 "§6" = "claimed"
@@ -38,6 +40,7 @@ default = "deferred:tier-5"
 "§9" = "claimed"
 "§10" = "deferred:tier-5"
 "§11" = "claimed"
+"§13" = "claimed"
 "§14" = "deferred:tier-5"
 "§16" = "claimed"
 "§17" = "deferred:tier-5"
@@ -93,30 +96,25 @@ default = "deferred:tier-5"
 "PKG-0650" = "deferred:tier-5"
 # §15.2: progress phases; TXT-0497 and TXT-0498 ride it to 5-6b (G362).
 "PKG-0568" = "deferred:tier-5"
-# §2: the Nix profile, and the catalog, Storage and backend metadata a manifest
-# must win over, come with fetch and the Nix profile.
+# §2: the Nix profile comes with step 5-10. The catalog, Storage and backend metadata a
+# manifest must win over (PKG-0019, PKG-0021) are claimed through "§2" by step 5-3b-1:
+# tests/test_pm_driver.nim (DECISIONS G401, G405).
 "PKG-0017" = "deferred:tier-5"
-"PKG-0019" = "deferred:tier-5"
-"PKG-0021" = "deferred:tier-5"
 # §4: configuration schema and default artifacts reach CONFIG through the Package
 # Manager handoff (Tier 5, area 7); app-config v1 carries declarations directly (I87).
 "PKG-0060" = "deferred:tier-5"
-# §4: catalog entries, Storage and Nix metadata are fetch's, the storage role's and the Nix
-# profile's (Tier 5); the unit is claimed with them, not with the handoff.
-"PKG-0069" = "deferred:tier-5"
-# §4.1: verification caching, rotation and revocation act on resolution and the
-# installed set; catalog trust and the protected trust-input path come with the
-# Package Manager service. PKG-0083 (a development deployment's own anchor through
-# the same protected path) is claimed through "§4.1" by step 5-3a-2: the package
-# trust file's development anchor (DECISIONS G137, G396; tests [PKG-0083]).
-"PKG-0076" = "deferred:tier-5"
-"PKG-0077" = "deferred:tier-5"
-"PKG-0079" = "deferred:tier-5"
+# §4: PKG-0069 (catalog entries, Storage metadata and archive names never override the
+# manifest) is claimed through "§4" by step 5-3b-1; Nix metadata adds its case with 5-10.
+# §4.1: the verification cache, rotation and what no catalog or Storage content may do
+# (PKG-0076, PKG-0077, PKG-0079, PKG-0081, PKG-0082) are claimed through "§4.1" by step
+# 5-3b-1 (DECISIONS G403). PKG-0080, a removed or revoked anchor never used for a new
+# resolution, installation, update or handoff, is step 5-5's: 5-3b carries its inspection
+# half under [PKG-0080]. PKG-0083 (a development deployment's own anchor through the same
+# protected path) is claimed through "§4.1" by step 5-3a-2: the package trust file's
+# development anchor (DECISIONS G137, G396; tests [PKG-0083]).
 "PKG-0080" = "deferred:tier-5"
-"PKG-0081" = "deferred:tier-5"
-"PKG-0082" = "deferred:tier-5"
-# §4.3: freshness is the §4.2 catalog's.
-"PKG-0112" = "deferred:tier-5"
+# §4.3: PKG-0112 (no freshness from a signature alone) is claimed through "§4.3" by step
+# 5-3b-1, with the catalog's sequence (DECISIONS G401, G404).
 # §4.3: key separation across package signing, provenance (§4.5), call evidence (CA
 # §9.1) and TLS. The package-signing keys (lcn-pkg keygen) and the call-evidence key
 # (tools/evidence_keygen.nim, logosd's daemon/evkey.nim; G149, G301) exist and are made
@@ -151,12 +149,17 @@ default = "deferred:tier-5"
 # package/trustdoc.nim, so the Package Manager refuses it too. PKG-0166: only the
 # package trust file selects; a manifest field is refused by its decoder and a
 # source's provenance_object selects nothing. Of the sources PM l.733-734 lists,
-# the Storage object arrives with 5-3b and the caller with 5-6a, and Nix metadata
-# and the provenance object only if 5-10 and 5-11 are built: each of those steps
-# adds its case under [PKG-0166]. The claim covers "select" until a profile can
+# the Storage object arrived with 5-3b-1 (tests/test_pm_driver.nim: a Storage
+# object named as provenance_object changes nothing), the caller comes with 5-6a,
+# and Nix metadata and the provenance object only if 5-10 and 5-11 are built:
+# each of those steps adds its case under [PKG-0166]. The claim covers "select" until a profile can
 # be selected; "disable" and "weaken" have no object before then.
 "PKG-0166" = "claimed"
 "PKG-0169" = "claimed"
+# §4.5: PKG-0167, the baseline applied when no provenance profile is selected, is claimed
+# by step 5-3b-1: a source's provenance_object is never read and changes no inspection or
+# resolution (DECISIONS G402; tests [PKG-0167]).
+"PKG-0167" = "claimed"
 # §5: package identity, installed records, sources and retention; the
 # admission bound needs the Runtime handoff and exact Transport overheads.
 "PKG-0172" = "deferred:tier-5"
@@ -197,11 +200,11 @@ default = "deferred:tier-5"
 # before a ready invocation path, is claimed with §9: tests [PKG-0288] (DECISIONS I97).
 "PKG-0287" = "deferred:tier-5"
 "PKG-0289" = "deferred:tier-5"
-# §6: catalog documents, their acquisition and the storage locators are fetch's
-# (G90, G91); presentation contracts belong to applications.
-"PKG-0472" = "deferred:tier-5"
-"PKG-0473" = "deferred:tier-5"
-"PKG-0474" = "deferred:tier-5"
+# §6: the catalog document, its acquisition and refresh and catalog policy (PKG-0472,
+# PKG-0473) are claimed through "§6" by step 5-3b-1 (DECISIONS G401; docs/PACKAGE-MANAGER.md
+# §3); the bindings' retrieval API and locator encodings (PKG-0474) by step 5-3b-2 (G402;
+# PACKAGE-MANAGER.md §4, sdk/docs/STORAGE-FETCH.md §5, DAEMON.md §3).
+# Presentation contracts belong to applications.
 "PKG-0475" = "out-of-scope:a requirement on application catalog contracts"
 # §11: a permission package producers have. A permission's `reason` (PKG-0335): with
 # permission definitions built (Tier 4b step 4b-4, I93), no requested permission
@@ -213,6 +216,13 @@ default = "deferred:tier-5"
 # Package Manager does not verify (l.1239); a dependency that needs a contract lists it (re-pin P7b, I110 Q11).
 "PKG-0594" = "out-of-scope:a requirement on package producers"
 "PKG-0595" = "out-of-scope:a requirement on package producers"
+# §13: retrieval from Logos Storage (PKG-0353) is claimed through "§13" by step 5-3b-1 (DECISIONS
+# G402). Local resolved artifacts for the Runtime and Module Loader (PKG-0354) are step 5-8's; the
+# initial Package Manager's module facts and artifacts from protected input (PKG-0513, PKG-0514)
+# are step 5-6a's.
+"PKG-0354" = "deferred:tier-5"
+"PKG-0513" = "deferred:tier-5"
+"PKG-0514" = "deferred:tier-5"
 "PKG-0596" = "out-of-scope:a permission for package producers"
 "PKG-0335" = "deferred:tier-5"
 # §12 l.1401, l.1434-1435, l.1441: the handoff's `extends`, which 5-5 constructs and 5-8 checks
