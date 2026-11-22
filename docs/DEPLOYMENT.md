@@ -615,13 +615,17 @@ The Logos blockchain node as a module (DECISIONS G419–G424; the library's `log
   (`blockchain_config.cddl`, delivered at init). It reads no environment variable and no home
   directory. The chain's deployment is built in, or a read-only file the configuration names, with an
   optional SHA-256 that init checks (DECISIONS G441). Its circuits are compiled in, it serves no HTTP
-  API, and it logs to standard error, which its Module Host inherits (§23). Its permission settings must
+  API, and it logs to standard error, which its Module Host inherits (§23). On Linux its prover
+  (rapidsnark, as the circuits' prebuilt archive ships it) also logs each proof, about 1.4 KB of phase
+  names, to `MyLogFile.log` in the working directory. While the node runs, the module's process works
+  in its state directory's `prover/`, and the module empties that file in place past 1 MiB (DECISIONS
+  G421, G422). Its permission settings must
   hold `logos-core-nim.host-ambient` (§7; [DAEMON.md](DAEMON.md), "Grants"); with it, its host has the
   access of logosd's user (§8, 8b).
 - **State** (§9): its state directory `state/modules/<assignment>/` holds `keystore.yaml` (0600: the
   node's keys, which the library makes at the first start, or placed before it; never rewritten),
-  `node/` (the library's database) and `run/` (the configuration rendered for the library, rewritten at
-  each start, no secret). The keystore is the node's identity and the key to its funds, protected by its
+  `node/` (the library's database), `run/` (the configuration rendered for the library, rewritten at
+  each start, no secret) and `prover/` (the process's working directory; on Linux, the prover's log). The keystore is the node's identity and the key to its funds, protected by its
   mode only (§19). A `state_transfers` entry with `copy` clones it: two instances then hold one identity
   and spend the same funds. `move` hands it over.
 - **Stop figure** (DECISIONS G423): `_MODULE_init` starts the node and `_MODULE_destroy` stops it,
