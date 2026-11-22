@@ -7262,7 +7262,12 @@ their history.
   does not count: residual work that existed before, not something every handler is protected from.
   A handler whose unwinding waited for a completion arriving after the 2 s bound now finishes during
   `destroyModule` instead of being abandoned; its invocation still completes once, NOT_READY, since
-  `unwindDeferred` leaves what is outstanding to teardown. A handler that ignored its cancellation can
+  `unwindDeferred` leaves what is outstanding to teardown. Its task ends too only if `destroyModule`
+  outlasts the task's tail, the route's and the kit's awaits, a few turns of the loop after the
+  handler's last statement. Otherwise teardown abandons that tail as G338 says, its frames pinned.
+  LeakSanitizer reported that from the `wait` 12 case (778 bytes in 8 indirect allocations, CI run
+  44991040073 on fef0991), whose `destroyModule` returned at its first 10 ms tick after the handler
+  ended; it now awaits 20 more turns first (2026-11-22). A handler that ignored its cancellation can
   be woken while `destroyModule` awaits. That is memory-safe for `async` handlers and outside the
   contract (INTERFACE l.2116-2117); timers could already wake it before.
 - **For the guide** (MODULE-KIT §3): `destroyModule` may await a callback a foreign thread posts, a
