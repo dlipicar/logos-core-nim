@@ -851,19 +851,23 @@ suite "trn.dcbor: deterministic CBOR and validation (TRANSPORT §2.3, §8.3)":
     check decodeMessage(rawRequest(0, "exists", allowed, start)).isOk
 
   test "[IMPL-DECISION G38] only COSE_Sign1 and the diagnostic display ask for the generic data model":
-    # Relative to the repository root, where the suites run.
+    # The ends of `/`-separated paths; `walkDirRec` gives `\` on Windows. Each one
+    # must match a file, or a skipped file would go unseen.
     let allowed = ["crypto/cose.nim", "daemon/render.nim", "cbor/decode.nim"]
-    var scanned = 0
+    var scanned, skipped = 0
     for root in [repoPath("src"), repoPath("sdk/src")]:
       for f in walkDirRec(root):
         if not f.endsWith(".nim"):
           continue
         inc scanned
-        if allowed.anyIt(f.endsWith(it)):
+        let path = f.replace('\\', '/')
+        if allowed.anyIt(path.endsWith("/" & it)):
+          inc skipped
           continue
         checkpoint f
         check "allowExtended" notin readFile(f)
     check scanned > 100
+    check skipped == allowed.len
 
   test "[TRN-0203] invalid UTF-8 inside a payload passes the envelope and fails at the schema":
     let invalidText = CborValue(kind: ckText, text: "\xff", validUtf8: false)
