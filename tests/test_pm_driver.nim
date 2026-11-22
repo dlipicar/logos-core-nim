@@ -805,3 +805,35 @@ suite "the resolver measurement's shapes, by their counts (ruling M6; G443)":
       # A budget of one unit ends a turn at each count: one unit, or a step counted as
       # several (a list's growth, a setup entry's bytes; chain: 522 turns for 1,231 units).
       check most >= int(base.work div 4)
+
+  test "[IMPL-DECISION G477] the operation bound: a shape reads its records and their entries; at that count it resolves as without a bound, one below it ends package-unavailable, the same under every turn budget, with no limit named":
+    # dense(n): n records and n(n-1)/2 dependency entries; chain(n): n records, n - 1 entries.
+    check driveShape(dense(10), preset).counters.entries == 10 + 45
+    check driveShape(chain(10), preset).counters.entries == 10 + 9
+    for (name, s, lim) in [
+      ("chain past the depth", chain(depthLimit + 1), preset),
+      ("dense", dense(depthLimit + 1), preset),
+      ("layered", layered(depthLimit + 1, depthLimit), preset),
+      ("wide", wide(50, 4), limitsWith(attempts = MaxResolverLimits.attempts)),
+      ("hub", hub(30, 4), preset),
+      ("lift", lift(30, 4), preset),
+    ]:
+      let base = driveShape(s, lim, NoTurnBudget)
+      let e = base.counters.entries
+      check base.counters.bound == ""
+      var first: BenchRun
+      for budget in [NoTurnBudget, 64, 1]:
+        checkpoint name & " under " & $budget
+        let at = driveShape(s, lim, budget, Opt.some(e))
+        check at.outcome.summary == base.outcome.summary
+        check at.counters == base.counters
+        let below = driveShape(s, lim, budget, Opt.some(e - 1))
+        check below.outcome.summary == "error package-unavailable"
+        check below.counters.bound == "operation_entries"
+        check below.counters.limit == ""
+        check below.counters.entries == e
+        if budget == NoTurnBudget:
+          first = below
+        else:
+          check below.counters == first.counters
+          check below.work == first.work

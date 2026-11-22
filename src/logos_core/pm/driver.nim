@@ -72,12 +72,19 @@ proc initDriver*(
     limits: ResolverLimits,
     root: RootReference,
     budget = ResolverTurnWork,
+    operationEntries = Opt.none(int),
 ): Driver =
   ## [G455] `budget` is the work of one turn (`ResolverTurnWork`, a constant;
   ## the tests give others). 5-3b and 5-3c resolve against no installed state
-  ## (5-5 adds it).
-  let input =
-    ResolverInput(catalog: @catalog, limits: limits, trust: trust, retained: noRetained)
+  ## (5-5 adds it). [G477] `operationEntries` is the operation bound
+  ## (`ResolverInput.operationEntries`; 5-5 passes `operation_entries`).
+  let input = ResolverInput(
+    catalog: @catalog,
+    limits: limits,
+    trust: trust,
+    retained: noRetained,
+    operationEntries: operationEntries,
+  )
   Driver(run: startRun(input, root, budget))
 
 proc step*(d: Driver): DriverStep =

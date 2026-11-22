@@ -113,6 +113,13 @@ type
     inspect*: Inspector
     retained* {.requiresInit.}: RetainedCheck
       ## required: no default leaves an installed candidate's bytes unchecked
+    operationEntries*: Opt[int]
+      ## [IMPL-DECISION G477] The operation bound, protected input
+      ## (`operation_entries`): how many inputs one root operation may read
+      ## (`ResolverCounters.entries`). Past it the operation ends with
+      ## `package-unavailable` (PM l.1308-1309), as an archive over
+      ## `archive_bytes` does. None: no bound. It is not a resolver limit: the
+      ## four limits and their counters are untouched (PM l.1279-1280).
 
   SelectedPackage* = object
     identity*: PackageIdentity
@@ -138,6 +145,18 @@ type
       ## operator's log: a limit is protected policy input (PM l.1514), and
       ## its exhaustion answers `dependency-unavailable` like a missing
       ## dependency (PM l.1501-1502).
+    entries*: int
+      ## [IMPL-DECISION G477] The inputs read: one for each record (a catalog
+      ## record when its inspection is supplied, an installed record at its
+      ## first evaluation), plus, for an eligible inspection, one for each of
+      ## its dependency entries and provided contracts, and for an installed
+      ## record, one for each of its dependency entries and each contract its
+      ## module declarations name. Each record once in a root operation.
+    bound*: string
+      ## [IMPL-DECISION G477] `operation_entries` when the operation bound
+      ## ended the operation; empty: it did not. For the operator's log: the
+      ## bound is protected input (PM l.1514), and the caller's message does
+      ## not state it. `limit` stays empty.
 
   Resolution* = object
     root*: PackageIdentity
@@ -398,6 +417,11 @@ type
     maxNames: int
     maxDepth: int
     tripped: string ## the limit that ended the run (`ResolverCounters.limit`)
+    # [IMPL-DECISION G477] The operation bound:
+    entryBound: int ## `operationEntries`, or `high(int)` for none
+    inputsRead: int ## the inputs read (`ResolverCounters.entries`)
+    installedRead: seq[bool] ## by installed record: counted
+    stopped: string ## the bound that ended the run (`ResolverCounters.bound`)
     # [IMPL-DECISION G455] The resumable run:
     stack: seq[Frame] ## the search's frames, kept across suspensions
     miss: Opt[Suspension]
@@ -527,15 +551,18 @@ proc initResolver(r: var Resolver, input: sink ResolverInput) =
     l.candidates <= MaxResolverLimits.candidates and
     l.attempts <= MaxResolverLimits.attempts,
     "resolver limits come from resolverLimits or decodeResolverLimits"
+  doAssert input.operationEntries.get(1) > 0, "the operation bound is positive"
   var input = input
   r = Resolver(
     installed: move input.installed,
     catalog: move input.catalog,
     limits: l,
     trust: move input.trust,
+    entryBound: input.operationEntries.get(high(int)),
     turnEnd: high(int64),
   )
   r.buckets.setLen(l.depth + 1)
+  r.installedRead.setLen(r.installed.len)
 
 func pending(): PackageError =
   ## [IMPL-DECISION G455] What a helper returns when the search needs something
@@ -543,17 +570,56 @@ func pending(): PackageError =
   ## so this error is never an outcome.
   packageError(pecPackageUnavailable, "not supplied yet")
 
-proc inspectSource(r: var Resolver, s: PackageSource): ptr Inspection =
+proc countRead(r: var Resolver, units: int) =
+  ## [IMPL-DECISION G477] Counts `units` inputs read toward the operation
+  ## bound.
+  r.inputsRead += units
+
+proc pastBound(r: var Resolver): Result[void, PackageError] =
+  ## [IMPL-DECISION G477] The operation bound's stop, once the inputs read
+  ## pass it: [SPEC PM §11 l.1308-1309] the material needed to resolve the
+  ## closure cannot be materialized here, which proves nothing about any
+  ## candidate or closure. The message does not state the bound (PM l.1514).
+  if r.inputsRead <= r.entryBound:
+    return ok()
+  r.stopped = "operation_entries"
+  err(
+    packageError(
+      pecPackageUnavailable,
+      "the operation reads more package records and entries than this deployment allows",
+    )
+  )
+
+func units(x: Inspection): int =
+  ## [IMPL-DECISION G477] The inputs one inspection holds (`ResolverCounters.entries`).
+  result = 1
+  if x.kind == ikEligible:
+    result += x.dependencies.len + x.provides.len
+
+func units(p: InstalledPackage): int =
+  ## [IMPL-DECISION G477] The inputs one installed record holds: itself, its
+  ## dependency entries and each contract its module declarations name.
+  result = 1 + p.dependencies.len
+  for m in p.modules:
+    result += int(m.primaryContract.isSome) + m.implements.len + m.extends.len
+
+proc inspectSource(
+    r: var Resolver, s: PackageSource
+): Result[ptr Inspection, PackageError] =
   ## [IMPL-DECISION G455] The supplied inspection of `s`, read in place: a
   ## copy of one with a maximum-size manifest took milliseconds. Nil, with the
   ## need noted, until one is supplied. Each source is asked for at the point
   ## a synchronous run would inspect it, and once (`Inspector`). The caller
   ## is done with it before anything is supplied.
+  ##
+  ## [IMPL-DECISION G477] Its inputs were counted when it was supplied: past
+  ## the operation bound, reading it ends the operation.
   let k = s.encoded
   r.inspected.withValue(k, v):
-    return v
+    ?r.pastBound()
+    return ok(v)
   r.miss = Opt.some(Suspension(kind: suNeedSource, source: s))
-  nil
+  ok(nil)
 
 proc takeMiss(r: var Resolver): Suspension =
   result = r.miss.get
@@ -587,6 +653,13 @@ proc evaluate(r: var Resolver, id: PackageIdentity): Result[int, PackageError] =
   else:
     e = Eval(installed: r.installedAt.getOrDefault(id.key, -1))
     if e.installed >= 0:
+      if not r.installedRead[e.installed]:
+        # [IMPL-DECISION G477] Counted at its first evaluation, before its
+        # retained bytes are asked for: an evaluation that waits for them is
+        # made again.
+        r.installedRead[e.installed] = true
+        r.countRead(r.installed[e.installed].units)
+      ?r.pastBound()
       let p = r.installed[e.installed]
       if not p.commitment.supportsManifestSchema:
         # [SPEC PM §11 l.1217-1218] Ineligible, and not an integrity failure:
@@ -619,7 +692,7 @@ proc evaluate(r: var Resolver, id: PackageIdentity): Result[int, PackageError] =
   let records = r.entries.getOrDefault(id.key)
   while next < records.len:
     let source = r.catalog[records[next]].source
-    let x = r.inspectSource(source)
+    let x = ?r.inspectSource(source)
     if x.isNil:
       r.partial[id.key] = (move e, next)
       return err(pending())
@@ -1362,7 +1435,7 @@ proc sourceRoot(
   ## [SPEC PM §11, §15] A supplied source's verified manifest fixes the root.
   ## It has no identity until it is inspected, so it is charged after; an
   ## ineligible or unavailable source charges nothing.
-  let x = r.inspectSource(root.source.get)
+  let x = ?r.inspectSource(root.source.get)
   if x.isNil:
     return err(pending())
   case x[].kind
@@ -1495,6 +1568,8 @@ func counters(r: Resolver): ResolverCounters =
   result.depth = r.maxDepth
   result.attempts = r.attempts
   result.limit = r.tripped
+  result.entries = r.inputsRead
+  result.bound = r.stopped
 
 proc closureSteps(r: ref Resolver): RunSteps =
   ## The complete closure (`r.resolution`), in package-name byte order.
@@ -1861,8 +1936,14 @@ proc supply*(run: ResolverRun, source: PackageSource, inspection: sink Inspectio
   ## gave its outcome or is being released. [IMPL-DECISION G455] Taken, not
   ## copied: a maximum-size manifest's copy took milliseconds, in the handler
   ## that delivers it.
+  ##
+  ## [IMPL-DECISION G477] Its inputs count toward the operation bound here,
+  ## once for each source: the run reads it when it is resumed.
   if not run.steps.isNil:
-    run.r.inspected[source.encoded] = inspection
+    let k = source.encoded
+    if k notin run.r.inspected:
+      run.r[].countRead(inspection.units)
+    run.r.inspected[k] = inspection
 
 proc supplyRetained*(run: ResolverRun, record: int, answer: Result[void, string]) =
   ## The retained-bytes answer for the installed record a `suNeedRetained`
@@ -1891,7 +1972,8 @@ proc resolve*(
   ## [SPEC PM §11, §15] Resolves the complete transitive closure of `root`, or
   ## reports an update that changes nothing, or fails with
   ## `dependency-unavailable` (no closure, a conflict, or a limit reached),
-  ## `package-unavailable` (material that could not be obtained),
+  ## `package-unavailable` (material that could not be obtained, or the
+  ## operation bound passed: [IMPL-DECISION G477]),
   ## `artifact-integrity-failed` (retained bytes absent or altered) or the
   ## root's own error. `counters` holds the counts either way; they depend only
   ## on the inputs. `work` is the number of work units the run counted

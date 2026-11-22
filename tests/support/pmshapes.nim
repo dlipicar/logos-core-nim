@@ -239,14 +239,18 @@ proc shapeOf*(name: string, size, parameter: int): Opt[Shape] =
     Opt.none(Shape)
 
 proc driveShape*(
-    s: Shape, limits: ResolverLimits, budget = ResolverTurnWork
+    s: Shape,
+    limits: ResolverLimits,
+    budget = ResolverTurnWork,
+    operationEntries = Opt.none(int),
 ): BenchRun =
   ## Runs the driver to its outcome, answering every inspection from the table at once.
-  ## `budget` is the work of one turn ([G455]).
+  ## `budget` is the work of one turn ([G455]); `operationEntries` the operation bound
+  ## ([G477]).
   var t: TrustInput
   let made = getMonoTime()
   let made0 = cpuTime()
-  let d = initDriver(s.catalog, t, limits, s.rootOf, budget)
+  let d = initDriver(s.catalog, t, limits, s.rootOf, budget, operationEntries)
   result.setupCpu = cpuTime() - made0
   result.setup = getMonoTime() - made
   while true:

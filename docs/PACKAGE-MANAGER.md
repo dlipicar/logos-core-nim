@@ -228,6 +228,12 @@ driver holds for the operation's life, on the module thread:
 - **A caller that gives its operation up** (its future cancelled) cancels it: it takes no more turns,
   its queued retrieval is dropped, and nothing answers it. A continue that arrives for it is ignored.
 - At `_MODULE_destroy` each operation still running is answered `package-unavailable`.
+- **The operation bound** (G477): the run counts the inputs it reads, a unit for each record read
+  (inspected or installed) and for each of its dependency entries and provided contracts, each record
+  once. The read that passes the bound ends the operation with `package-unavailable` (PM l.1308-1309),
+  and the caller's message does not state the bound. The four resolver limits and their counters are
+  untouched. The resolver half is built; the protected key `operation_entries` in `lcn.pm_limits`
+  comes with 5-5-3, and until then the driver runs with no bound.
 
 The locator encodings of each provider are STORAGE-FETCH §5's table. In logosd the bindings are
 `package_manager.storage` ([DAEMON.md](DAEMON.md) §3), each naming a `hosted_dynamic` instance that

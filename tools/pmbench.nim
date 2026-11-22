@@ -74,7 +74,9 @@ proc sync(which: string, s: Shape, limits: ResolverLimits) =
     " attempts=",
     c.attempts,
     " limit=",
-    (if c.limit.len > 0: c.limit else: "none")
+    (if c.limit.len > 0: c.limit else: "none"),
+    " entries=",
+    c.entries
   echo "  ms=",
     took.inMicroseconds.float / 1000.0,
     " cpu_ms=",
@@ -235,7 +237,9 @@ proc main() =
     " attempts=",
     c.attempts,
     " limit=",
-    (if c.limit.len > 0: c.limit else: "none")
+    (if c.limit.len > 0: c.limit else: "none"),
+    " entries=",
+    c.entries
   echo "  steps=",
     r.steps,
     " longest_ms=",

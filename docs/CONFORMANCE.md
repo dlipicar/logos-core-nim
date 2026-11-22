@@ -1208,6 +1208,37 @@ What the figures say:
 - **CI asserts counts:** `test_pm_driver` gives each shape the same outcome, counters, work and
   retrievals under budgets of 32,768, 1,000, 64, 17 and 1 units and under none (M6).
 
+### The operation bound
+
+G477. One root operation reads at most `operation_entries` inputs (5-5-3's protected key): a unit for
+each record read, inspected or installed, and one for each of its dependency entries and provided
+contracts, each record once. The read that passes it ends the operation with `package-unavailable`
+(PM l.1308-1309). The four resolver limits and their counters are untouched. The count is the same on
+every machine; `tools/pmbench.nim` prints it (`entries=`).
+
+| Shape | Limits | Units read |
+|---|---|---|
+| chain 33 | preset | 65 |
+| dense 32 | preset | 528 |
+| layered 256/32 | preset | 32,007 |
+| hub 30/256 | preset | 8,405 |
+| wide 80,000 | preset | 80,051 |
+| chain 4,095 | maxima | 8,189 |
+| hub 255/4, lift 255/4 | maxima | 33,668, 32,653 |
+| dense 4,096 | maxima | 8,390,656 |
+| layered 4,096/64 | maxima | 8,261,695 |
+| wide 80,000, 1,048,576 attempts | maxima | 80,062 |
+| lift 30/65,500 | maxima | 12,756 |
+
+The resolver state a unit costs, on the Mac under orc `-d:release` (peak RSS less the input's), by
+what the units are:
+- requirements on names that never bind, bound by k manifests of the same 80,000 names: about 0.8 KiB;
+  dense 4,096 is the same (6.5 GiB);
+- the same with distinct names: about 1.6 to 1.8 KiB;
+- inspections held and never bound: 0.1 to 0.2 KiB.
+
+At the proposed default of 262,144 units, one operation's resolver state is at most about 460 MiB.
+
 ### The archive's inspection
 
 The other hold on the Package Manager's module thread is the verification cache's inspection of a
