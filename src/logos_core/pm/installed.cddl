@@ -1,17 +1,20 @@
 ; The installed-state files (Tier 5 step 5-5; DECISIONS G445; docs/PACKAGE-MANAGER.md §8). Each
 ; is one Logos deterministic-CBOR value; pm/installed.nim reads and writes both, and checks each on
-; every load against this text and the pinned PACKAGE MANAGER App A record type. Closed: an
-; unknown field is refused. The rules the schema cannot say are pm/installed.nim's.
+; every load against this text, then what it embeds against the pinned PACKAGE MANAGER App A types.
+; A supporting schema, resolved against itself and the common schema only: the App A types are
+; carried as bytes or text and checked apart, so that no name here is a logos. one (BCP-0104).
+; Closed: an unknown field is refused. The rules the schema cannot say are pm/installed.nim's.
 
-; <state_dir>/install/r/<rid>/m/record.<generation>: one installed record. `record` is the exact
-; PACKAGE MANAGER §5 record, its `local_path`s relative to the record's `a/` directory: they are
+; <state_dir>/install/r/<rid>/m/record.<generation>: one installed record. `record` is the
+; deterministic-CBOR encoding of the exact PACKAGE MANAGER §5 installed_package_record (App A),
+; its `local_path`s relative to the record's `a/` directory: they are
 ; the selected variant's artifact paths, and the store makes them absolute from the current state
 ; directory at each load. `generation` counts the record files of one rid, from 1; a signer
 ; replacement writes the next one (PKG-0608). `archive_digest` is the BLAKE3-256 of the archive
 ; the record was installed from, for diagnostics only.
 lcn.pm_installed_record = {
   format: 1,
-  record: logos.package_manager.installed_package_record,
+  record: bstr,
   generation: uint64,
   archive_digest: bstr .size 32,
 }
@@ -27,10 +30,10 @@ lcn.pm_installed_index = {
 }
 
 ; One committed record: its directory (32 lowercase hexadecimal digits, by rule), the generation
-; of its record file, and its identity.
+; of its record file, and its identity, which App A's package_identity governs (by rule).
 lcn.pm_index_entry = {
   rid: tstr .size 32,
   generation: uint64,
-  package: logos.package_manifest.package_name,
-  version: logos.package_manifest.package_version,
+  package: tstr,
+  version: tstr,
 }

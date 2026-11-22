@@ -6285,22 +6285,26 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Description:** the spec defines the record a caller sees, not how a Package Manager keeps it.
 - **Decision:**
   - **The record file**, `install/r/<rid>/m/record.<g>` (`pm/installed.cddl`'s `lcn.pm_installed_record`):
-    `format: 1`; the exact `installed_package_record`, its `local_path`s relative to the record's `a/` directory
-    (the selected variant's artifact paths); `generation`, from 1; and `archive_digest`, the BLAKE3-256 of the
-    archive it came from, for diagnostics only.
-  - **Every load checks it** against that text and App A's record rule, then against its signed manifest
-    (`matchesManifest`): the same identity and commitment; the selected variant's artifacts exactly as signed; its
-    selected module declarations unchanged and in manifest order; one edge per direct dependency, in order. The
-    typed declarations kept are the manifest's.
+    `format: 1`; `record`, the deterministic-CBOR bytes of the exact `installed_package_record`, its `local_path`s
+    relative to the record's `a/` directory (the selected variant's artifact paths); `generation`, from 1; and
+    `archive_digest`, the BLAKE3-256 of the archive it came from, for diagnostics only.
+  - **Every load checks it** against that text, its `record` against App A's record rule, then against its signed
+    manifest (`matchesManifest`): the same identity and commitment; the selected variant's artifacts exactly as
+    signed; its selected module declarations unchanged and in manifest order; one edge per direct dependency, in
+    order. The typed declarations kept are the manifest's.
   - **The index**, `install/index` (`lcn.pm_installed_index`): `format: 1`, `sequence` (commits so far) and one
     `{rid, generation, package, version}` per record, sorted by package name bytes, then version text bytes. Each
     identity and each rid occurs once; a rid is 32 lowercase hexadecimal digits. The identity is there so that a
     start can name a record whose file is missing or unreadable (R3). It is read and written within 64 MiB, which
     holds at least 200,000 records at the longest identities; an index that would pass it is refused.
-  - **The contract schema** both files are checked with (`installed.checkType`) is App A, which governs (PM
-    l.1842-1845), with the manifest schema and the Module Configuration types it names; the latter come from the
-    Runtime Control types' supporting document, mirrored from `spec/mirrors/CFG/`. `installed.cddl`'s rules are
-    renamed into the module's namespace, as `test_pm_catalog` does for `catalog.cddl`.
+  - **The schemas** both files are checked with (`installed.checkType`): `installed.cddl` on its own, as an
+    ordinary supporting schema of the `lcn` namespace; and App A, which governs (PM l.1842-1845), with the manifest
+    schema and the Module Configuration types it names (the latter from the Runtime Control types' supporting
+    document, mirrored from `spec/mirrors/CFG/`), for the embedded record and each index identity
+    (`package_identity`). App A's types are carried as bytes and text and checked apart, because one document's
+    declarations share one namespace, and renaming `lcn.` rules into `logos.package_manager` would define `logos.`
+    names of our own (BCP-0104). 5-5-1 first renamed them, as `test_pm_catalog` does in a test; `test_deployment`'s
+    BCP-0104 scan of `src` caught it.
   - **The commit protocol** (`pm/store.nim`; l.1721-1728, PKG-0610, PKG-0611), under the storage failure model of
     DEPLOYMENT §19:
     1. **Stage** (`stage`): the paths under the root's rules (G444) and the admission bound (G452), both before any

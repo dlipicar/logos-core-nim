@@ -9,9 +9,10 @@
 ## - **`local_path`** is `base & path`: `path` is the artifact's variant-relative path, and `base`
 ##   the record's absolute `a/` directory, which the store rebuilds from the current state
 ##   directory at each start (G444). The record file stores the relative paths (`base` empty).
-## - **The files** are `installed.cddl`'s, checked on every load against that text and the pinned
-##   App A record type (PM l.1842-1845: App A governs), then against the rules the schema cannot
-##   say.
+## - **The files** are `installed.cddl`'s, a supporting schema of the `lcn` namespace of its own
+##   (BCP-0104: no `logos.` name is ours). Each is checked on every load against that text, and
+##   the record it embeds, and each index identity, against the pinned App A types (PM l.1842-1845:
+##   App A governs); then against the rules the schema cannot say.
 ## - **The contract schema** (`checkType`) is App A with the manifest schema (PM §4) and the Module
 ##   Configuration types (CONFIGURATION §9) it names, as the Package Manager's module document
 ##   declares them. The results, handoff and admission modules check their values with it.
@@ -38,10 +39,10 @@ const
   InstalledArtifactType* = "logos.package_manager.installed_artifact" ## [SPEC PM §10]
   RuntimeHandoffType* = "logos.package_manager.runtime_handoff" ## [SPEC PM §12]
   PackageErrorType* = "logos.package_manager.package_error" ## [SPEC PM §14]
-  RecordFileType* = "logos.package_manager.lcn_pm_installed_record"
-    ## `installed.cddl`'s `lcn.pm_installed_record`, renamed into the module's namespace
-  IndexType* = "logos.package_manager.lcn_pm_installed_index"
-    ## `installed.cddl`'s `lcn.pm_installed_index`, renamed likewise
+  PackageIdentityType* = "logos.package_manager.package_identity" ## [SPEC PM §5]
+  RecordFileType* = "lcn.pm_installed_record"
+    ## `installed.cddl`: `m/record.<generation>`
+  IndexType* = "lcn.pm_installed_index" ## `installed.cddl`: `install/index`
   FileFormat* = 1'u64 ## [G445] both files' `format`
   RidChars* = 32 ## [G444] a rid: 32 lowercase hexadecimal digits (128 random bits)
   MaxIndexBytes* = 64 * 1024 * 1024
@@ -87,6 +88,8 @@ type
 type PmContract = ref object
   set: SchemaSet
   model: SchemaModel
+  files: SchemaSet ## `installed.cddl`, on its own
+  filesModel: SchemaModel
 
 proc configurationTypes(): Result[string, string] =
   ## [SPEC CONFIGURATION §9] The Module Configuration types, as mirrored into the Runtime
@@ -97,22 +100,25 @@ proc configurationTypes(): Result[string, string] =
       return ok(d)
   err("the Runtime Control types carry no Module Configuration types")
 
-proc contractDocument*(): string =
-  ## App A followed by `installed.cddl`, its two `lcn.` files renamed into the module's
-  ## namespace: one document's declarations share one namespace.
-  PackageManagerContractDocument.strip & "\n\n" &
-    InstalledCddl.multiReplace(
-      ("lcn.pm_installed_record", RecordFileType),
-      ("lcn.pm_installed_index", IndexType),
-      ("lcn.pm_index_entry", "logos.package_manager.lcn_pm_index_entry"),
-    )
-
 proc loadContract(): Result[PmContract, string] =
   let cfg = ?configurationTypes()
   let c = ?acceptContractSet(
-    contractDocument(), [], [PackageManifestDocument, cfg], AcceptOptions(system: true)
+    PackageManagerContractDocument,
+    [],
+    [PackageManifestDocument, cfg],
+    AcceptOptions(system: true),
   )
-  ok(PmContract(set: c.schemaSet, model: c.primary.model))
+  # [IMPL] An ordinary supporting schema, resolved against itself and the common schema
+  # only: what it embeds from App A is checked against App A by `checkType`.
+  let f = ?acceptContractSet(InstalledCddl, [], [], AcceptOptions())
+  ok(
+    PmContract(
+      set: c.schemaSet,
+      model: c.primary.model,
+      files: f.schemaSet,
+      filesModel: f.primary.model,
+    )
+  )
 
 proc loadPinnedContract(): PmContract =
   let c = loadContract()
@@ -127,11 +133,16 @@ func contract(): PmContract =
     pmContract()
 
 func checkType*(name: string, v: CborValue): Result[void, string] =
-  ## `v` against the Package Manager's type `name` (App A, or `installed.cddl` renamed).
+  ## `v` against the Package Manager's type `name`: App A's, or `installed.cddl`'s.
   let c = contract()
-  let d = c.model.find(name).valueOr:
-    return err("the Package Manager schema has no " & name)
-  c.set.validatePath(0, d.body, v).isOkOr:
+  let files = name.startsWith("lcn.")
+  let found = (if files: c.filesModel else: c.model).find(name)
+  if found.isNone:
+    return err(
+      (if files: "installed.cddl" else: "the Package Manager schema") & " has no " & name
+    )
+  let d = found.get
+  (if files: c.files else: c.set).validatePath(0, d.body, v).isOkOr:
     var at = ""
     for seg in error:
       at.add("/" & seg.getText.get(toDiag(seg)))
@@ -265,9 +276,11 @@ proc encodeRecordFile*(f: RecordFile): Result[seq[byte], string] =
   ## [G445] The record file, checked against `installed.cddl` before it is written.
   if f.generation == 0:
     return err("a record file's generation starts at 1")
+  let rv = recordValue(f.record, "")
+  ?checkType(InstalledRecordType, rv)
   let v = cborMap(
     (cbor("format"), cbor(FileFormat)),
-    (cbor("record"), recordValue(f.record, "")),
+    (cbor("record"), cbor(encodeCbor(rv))),
     (cbor("generation"), cbor(f.generation)),
     (cbor("archive_digest"), cbor(f.archiveDigest)),
   )
@@ -360,16 +373,18 @@ func digestOf(v: CborValue): Digest =
 proc decodeRecordFile*(
     bytes: openArray[byte], m: Manifest, commitment: ManifestCommitment
 ): Result[RecordFile, string] =
-  ## [G445] A record file, checked against `installed.cddl` and App A, then against its
-  ## signed manifest `m` with `commitment` (`matchesManifest`). Its module declarations are
-  ## the manifest's.
+  ## [G445] A record file, checked against `installed.cddl`, its embedded record against App
+  ## A, then against its signed manifest `m` with `commitment` (`matchesManifest`). Its module
+  ## declarations are the manifest's.
   let v = decodeCbor(bytes).valueOr:
     return err("the record file is not one Logos deterministic-CBOR value")
   ?checkType(RecordFileType, v)
   let generation = v.lookup("generation").get.getUint64.get
   if generation == 0:
     return err("the record file's generation is 0")
-  let rv = v.lookup("record").get
+  let rv = decodeCbor(v.lookup("record").get.getBytes.get).valueOr:
+    return err("the record file's record is not one Logos deterministic-CBOR value")
+  ?checkType(InstalledRecordType, rv)
   let identity = ?decodeIdentity(rv.lookup("identity").get)
   let source = ?decodeSource(rv.lookup("source").get)
   var r = InstalledRecord(
@@ -426,6 +441,7 @@ proc decodeIndex*(bytes: openArray[byte]): Result[InstalledIndex, string] =
   for e in v.items("records"):
     let identity =
       PackageIdentity(package: e.text("package"), version: e.text("version"))
+    ?checkType(PackageIdentityType, identity.toCbor)
     discard ?decodeIdentity(identity.toCbor)
     i.records.add(
       IndexEntry(

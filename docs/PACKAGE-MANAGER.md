@@ -287,11 +287,13 @@ This implementation applies the mandatory package-signature and artifact-verific
 - **`local_path`** is one artifact file's absolute location, `<record's a/ directory>/<path>`, where
   `path` is the artifact's path in its variant. The record file keeps the relative paths, and the
   absolute ones are rebuilt from the current state directory at each start.
-- **The record file** (`pm/installed.cddl`, `lcn.pm_installed_record`) holds `format: 1`, the record,
-  its generation (from 1; a signer replacement writes the next) and the BLAKE3-256 of the archive it
-  came from, for diagnostics. **Every load checks it** against that text and App A's record rule, then
-  against its signed manifest: the same identity and commitment, the variant's artifacts exactly as
-  signed, the selected declarations unchanged and in order, one edge per dependency (G445).
+- **The record file** (`pm/installed.cddl`, `lcn.pm_installed_record`) holds `format: 1`, the record
+  as its deterministic-CBOR bytes, its generation (from 1; a signer replacement writes the next) and
+  the BLAKE3-256 of the archive it came from, for diagnostics. `installed.cddl` stands alone in the
+  `lcn` namespace, and App A's types are checked apart (BCP-0104). **Every load checks it** against
+  that text, its record against App A's record rule, then against its signed manifest: the same
+  identity and commitment, the variant's artifacts exactly as signed, the selected declarations
+  unchanged and in order, one edge per dependency (G445).
 - **The index** (`lcn.pm_installed_index`) names the committed records: `format: 1`, the count of
   commits, and `{rid, generation, package, version}` per record, sorted by package name bytes, then
   version text bytes, each identity and each rid once. It is read within 64 MiB, at least 200,000

@@ -47,6 +47,17 @@ proc put(m: CborValue, key: string, x: CborValue) =
       return
   m.entries.add((cbor(key), x))
 
+proc opened(bytes: openArray[byte]): CborValue =
+  ## A record file with its embedded record decoded in place, to read or change.
+  result = decodeCbor(bytes).get
+  result.put("record", decodeCbor(result["record"].getBytes.get).get)
+
+proc sealed(v: CborValue): seq[byte] =
+  ## `opened`'s value encoded again, its record embedded as bytes.
+  let w = decodeCbor(encodeCbor(v)).get
+  w.put("record", cbor(encodeCbor(w["record"])))
+  encodeCbor(w)
+
 proc drop(m: CborValue, key: string) =
   m.entries.keepItIf(it.key.getText != Opt.some(key))
 
@@ -174,9 +185,10 @@ suite "installed records (G445)":
     let f =
       RecordFile(record: rec, generation: 3, archiveDigest: blake3(bytesOf("archive")))
     let bytes = encodeRecordFile(f).get
-    let v = decodeCbor(bytes).get
+    let v = opened(bytes)
     check v["format"] == cbor(1'u64)
     check v["record"]["artifacts"].items[0]["local_path"] == cbor("lib/libalpha.so")
+    check sealed(v) == bytes
     let back = decodeRecordFile(bytes, man, com).get
     check back.generation == 3
     check back.archiveDigest == f.archiveDigest
@@ -186,9 +198,19 @@ suite "installed records (G445)":
     check encodeRecordFile(RecordFile(record: rec, generation: 0)).isErr
 
     proc refused(change: proc(v: CborValue)): bool =
-      let v = decodeCbor(bytes).get
+      let v = opened(bytes)
       change(v)
-      decodeRecordFile(encodeCbor(v), man, com).isErr
+      decodeRecordFile(sealed(v), man, com).isErr
+
+    # The record embedded as a map, not as its bytes; and bytes that are not one
+    # deterministic value.
+    check decodeRecordFile(encodeCbor(opened(bytes)), man, com).isErr
+    block:
+      let v = decodeCbor(bytes).get
+      var inner = v["record"].getBytes.get
+      inner.add(0)
+      v.put("record", cbor(inner))
+      check decodeRecordFile(encodeCbor(v), man, com).isErr
 
     check refused(
       proc(v: CborValue) =
@@ -255,10 +277,10 @@ suite "installed records (G445)":
     let (r, m, c) = recordOf(variant = Darwin)
     let bytes = encodeRecordFile(RecordFile(record: r, generation: 1)).get
     check decodeRecordFile(bytes, m, c).isOk
-    let v = decodeCbor(bytes).get
+    let v = opened(bytes)
     let mods = v["record"]["modules"].items
     v["record"].put("modules", cborArray(mods[1], mods[0]))
-    check decodeRecordFile(encodeCbor(v), m, c).isErr
+    check decodeRecordFile(sealed(v), m, c).isErr
 
   test "the index round-trips in identity order, each identity and rid once, within its bound":
     proc entry(rid, name, version: string, g = 1'u64): IndexEntry =
