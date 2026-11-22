@@ -5,9 +5,11 @@
 ## imports it (`ssl/*.cc` and the amalgamated `boringssl_units/ssl_*.cc`). logosd
 ## calls libcrypto only and links with dead stripping, so none of that code may
 ## be left in it. The check takes every symbol that only those objects define,
-## from a nimcache that compiled them, and finds none in the program. Labels a
-## compiler makes in each object (exception tables, temporaries) are left out:
-## their names collide across objects by chance. A list that does not name
+## from a nimcache that compiled them, and finds none in the program. Only
+## their global symbols count: an object's local names (static functions, the
+## labels and tables a compiler numbers in each object) can recur by chance in
+## an object the nimcache lacks. A linked program lists the globals as local
+## (the binding hides them), so the program's every defined symbol is searched. A list that does not name
 ## `SSL_new` is no list of libssl's symbols, and the check fails. So does a
 ## program that holds none of libcrypto's symbols, which logosd calls: its
 ## symbol table was stripped, and finding nothing in it would prove nothing.
@@ -39,15 +41,19 @@ func compilerLabel(name: string): bool =
       return true
   false
 
-proc definedSymbols(path: string): HashSet[string] =
+proc definedSymbols(path: string, globalOnly = false): HashSet[string] =
+  ## `nm`'s defined symbols; with `globalOnly`, those of an upper-case type.
   let (output, code) =
     execCmdEx(quoteShellCommand(["nm", "-P", "--defined-only", path]))
   if code != 0:
     raise newException(OSError, "nm " & path & ": " & output)
   for line in output.splitLines:
     let f = line.splitWhitespace
-    if f.len >= 2 and f[1] != "U" and not compilerLabel(f[0]):
-      result.incl(f[0])
+    if f.len < 2 or f[1] == "U" or compilerLabel(f[0]):
+      continue
+    if globalOnly and not f[1][0].isUpperAscii:
+      continue
+    result.incl(f[0])
 
 func entryPoint*(): string =
   ## libssl's `SSL_new`, as `nm` names it on this system.
@@ -62,7 +68,7 @@ proc checkNoSsl*(nimcache, program: string): SslCheck =
       continue
     if isSslObject(name):
       inc result.objects
-      ssl.incl(definedSymbols(path))
+      ssl.incl(definedSymbols(path, globalOnly = true))
     else:
       let defined = definedSymbols(path)
       other.incl(defined)

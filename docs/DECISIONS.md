@@ -6595,10 +6595,12 @@ their history.
     `-Wl,--gc-sections` on Linux. Nothing resolves symbols from logosd: it is linked without
     `-rdynamic`, `-export_dynamic` or `dynamic_lookup`. Only the audit build's executables export
     their symbols on Linux, and logosd ships no audit build.
-    - *The check* (`tests/support/nossl.nim`) takes every symbol that only those objects define in a
-      nimcache that compiled them. Compiler labels are left out. A list without `SSL_new` fails, and so
-      does a program that holds none of libcrypto's symbols, whose symbol table was stripped. The check
-      asserts that none of those symbols is in logosd, and it runs in two places:
+    - *The check* (`tests/support/nossl.nim`) takes every global symbol that only those objects define
+      in a nimcache that compiled them. Local names (static functions, the labels and switch tables a
+      compiler numbers in each object, such as GCC's `CSWTCH.n`) are left out, because they can recur
+      by chance in an object the nimcache lacks. A list without `SSL_new` fails, and so does a program
+      that holds none of libcrypto's symbols, whose symbol table was stripped. The check asserts that
+      none of those symbols is in logosd, and it runs in two places:
       - in `test_logosd`, on the test build, on plain builds only, because a sanitizer can keep
         libssl's tables and their code alive (ASan's per-object global registration, the other
         sanitizers' per-object constructors);
@@ -6606,13 +6608,15 @@ their history.
         that compiles the objects is linked too, without dead stripping, and must fail the check, so
         the search is not vacuous. Nothing runs it; it is linked because Nim 2.2.14 links under
         `--noLinking:on` too (upstream ISSUES 196).
-    - *Measured on macOS:* the test build had 1570 of libssl's 1577 symbols before the change and none
-      after; the binary went from 13.4 MB to 11.3 MB. The release build also has none. *On Linux*
-      (x86_64, the flake's toolchain): the deployed logosd holds none of the 1897 symbols that only
-      libssl's objects define (GNU `nm` lists local symbols too), and 5653 of libcrypto's. The ssl units
-      are compiled without `-ffunction-sections`, which reaches only Nim's own C (Fable), so they went
-      whole, as nothing references them. The fallback wording ("linked but unreachable") is not
-      needed.
+    - *Measured* (global symbols only):
+      - macOS: 1174 counted. The test and release builds hold none of them, and the probe linked whole
+        holds all 1174. Before the change, the test build held 1570 of the 1577 then counted (locals
+        included). The binary went from 13.4 MB to 11.3 MB.
+      - Linux (x86_64, the flake's toolchain): 1072 counted. The deployed logosd holds none of them,
+        and the probe holds all 1072. logosd holds 5653 of libcrypto's symbols.
+      - The ssl units are compiled without `-ffunction-sections`, which reaches only Nim's own C
+        (Fable). They went whole because nothing references them. The fallback wording ("linked but
+        unreachable") is not needed.
     - *What the owner is told:* logosd's binary holds no libssl code, checked on the binary (the link
       line still names libssl's objects).
 - **Status:** decided 2026-11-21 with the 5-7a plan; built 2026-11-22 (I117, part 5-7a-1).
