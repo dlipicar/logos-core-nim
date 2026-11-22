@@ -1211,6 +1211,58 @@ proc completeTyped[R](
     wipeTyped(outcome.get)
   wipeError(outcome)
 
+proc newCall(
+    complete: CompleteProc,
+    onDone: pointer,
+    user: pointer,
+    marked: bool,
+    dispatch: Dispatcher,
+): ptr CallObj =
+  result = cast[ptr CallObj](allocShared0(sizeof(CallObj)))
+  result.complete = complete
+  result.onDone = onDone
+  result.user = user
+  result.marked = marked
+  result.dispatch = dispatch
+  result.status.clear()
+
+proc prepared(c: ptr CallObj, r: LogosResult): Result[PreparedCall, InvocationFailure] =
+  ## The `prepare_call` result of a route or a binding: the call, or none.
+  let shaped = checkOutcome(r, handleShape(c.call.vtable, c.call.state))
+  if shaped.isErr:
+    if r.code == 0 and c.call.vtable != nil and c.call.state != nil and
+        checkAsyncCall(addr c.call).isOk:
+      c.call.vtable.release(addr c.call)
+    deallocShared(c)
+    return err(toFailure(shaped.error, "prepare_call"))
+  checkAsyncCall(addr c.call).isOkOr:
+    deallocShared(c)
+    return err(toFailure(error, "prepare_call"))
+  ok(PreparedCall(p: c))
+
+proc callOptions(timeoutMs: uint64): LogosAsyncOptions =
+  # [SPEC INTERFACE l.1992] Options and callbacks are always passed.
+  LogosAsyncOptions(
+    abiVersion: AsyncCallAbiVersion,
+    structSize: csize_t(sizeof(LogosAsyncOptions)),
+    hasTimeout: timeoutMs > 0,
+    timeoutMs: timeoutMs,
+  )
+
+proc callCallbacks(c: ptr CallObj): LogosAsyncCallbacks =
+  LogosAsyncCallbacks(
+    abiVersion: AsyncCallAbiVersion,
+    structSize: csize_t(sizeof(LogosAsyncCallbacks)),
+    complete: onCompleteCb,
+    userData: c,
+  )
+
+func paramsOf(params: openArray[byte]): ptr UncheckedArray[uint8] =
+  if params.len == 0:
+    nil
+  else:
+    cast[ptr UncheckedArray[uint8]](unsafeAddr params[0])
+
 proc prepareWith(
     h: RouteHandle,
     bare: string,
@@ -1224,51 +1276,47 @@ proc prepareWith(
   ?h.beginOperation()
   defer:
     h.endOperation()
-  let c = cast[ptr CallObj](allocShared0(sizeof(CallObj)))
-  c.complete = complete
-  c.onDone = onDone
-  c.user = user
-  c.marked = marked
-  c.dispatch = h.dispatch
-  c.status.clear()
-  # [SPEC INTERFACE l.1992] Options and callbacks are always passed.
-  var options = LogosAsyncOptions(
-    abiVersion: AsyncCallAbiVersion,
-    structSize: csize_t(sizeof(LogosAsyncOptions)),
-    hasTimeout: timeoutMs > 0,
-    timeoutMs: timeoutMs,
-  )
-  var callbacks = LogosAsyncCallbacks(
-    abiVersion: AsyncCallAbiVersion,
-    structSize: csize_t(sizeof(LogosAsyncCallbacks)),
-    complete: onCompleteCb,
-    userData: c,
-  )
-  let p =
-    if params.len == 0:
-      nil
-    else:
-      cast[ptr UncheckedArray[uint8]](unsafeAddr params[0])
+  let c = newCall(complete, onDone, user, marked, h.dispatch)
+  var options = callOptions(timeoutMs)
+  var callbacks = callCallbacks(c)
   let r = h.route.vtable.prepareCall(
     addr h.route,
     cstring(bare),
-    p,
+    paramsOf(params),
     csize_t(params.len),
     addr options,
     addr callbacks,
     addr c.call,
   )
-  let shaped = checkOutcome(r, handleShape(c.call.vtable, c.call.state))
-  if shaped.isErr:
-    if r.code == 0 and c.call.vtable != nil and c.call.state != nil and
-        checkAsyncCall(addr c.call).isOk:
-      c.call.vtable.release(addr c.call)
-    deallocShared(c)
-    return err(toFailure(shaped.error, "prepare_call"))
-  checkAsyncCall(addr c.call).isOkOr:
-    deallocShared(c)
-    return err(toFailure(error, "prepare_call"))
-  ok(PreparedCall(p: c))
+  prepared(c, r)
+
+proc prepareWith(
+    b: BindingEvents,
+    bare: string,
+    params: openArray[byte],
+    complete: CompleteProc,
+    onDone: pointer,
+    user: pointer,
+    timeoutMs: uint64,
+    marked: bool,
+): Result[PreparedCall, InvocationFailure] =
+  if b.isNil:
+    return err(failure(ecInvalidParams, "null binding events"))
+  if insideBindingEnd(b.rc):
+    return err(refusedInEnd())
+  let c = newCall(complete, onDone, user, marked, b.dispatch)
+  var options = callOptions(timeoutMs)
+  var callbacks = callCallbacks(c)
+  let r = b.rc.vtable.prepareCall(
+    b.rc,
+    cstring(bare),
+    paramsOf(params),
+    csize_t(params.len),
+    addr options,
+    addr callbacks,
+    addr c.call,
+  )
+  prepared(c, r)
 
 proc prepareTyped*[R](
     h: RouteHandle,
@@ -1290,6 +1338,30 @@ proc prepareTyped*[R](
     return err(failure(ecInvalidParams, "a null completion handler"))
   prepareWith(
     h, bare, params, completeTyped[R], cast[pointer](onDone), user, timeoutMs, marked
+  )
+
+proc prepareRc*[R](
+    b: BindingEvents,
+    bare: string,
+    params: openArray[byte],
+    T: typedesc[R],
+    onDone: CallDone[R],
+    user: pointer = nil,
+    timeoutMs: uint64 = 0,
+    marked = false,
+): Result[PreparedCall, InvocationFailure] =
+  ## [DECISIONS G339, G464] A Runtime Control method's asynchronous call through
+  ## the module's binding (INTERFACE §2.9, l.3868), as `prepareTyped` is a
+  ## route's: `bare` is the method's name, `params` its request bytes, and the
+  ## completion, decoded with `R.decode`, goes to `onDone`, on the kit's module
+  ## thread when `b` has a confined kit's dispatcher. No completion procedure of
+  ## the module's own is handed to the binding. Refused NOT_READY inside the
+  ## binding's end callback (l.1480). `submit`, `cancel` and `release` it as a
+  ## route's.
+  if onDone.isNil:
+    return err(failure(ecInvalidParams, "a null completion handler"))
+  prepareWith(
+    b, bare, params, completeTyped[R], cast[pointer](onDone), user, timeoutMs, marked
   )
 
 func isNil*(c: PreparedCall): bool =
