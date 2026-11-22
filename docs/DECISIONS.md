@@ -6996,8 +6996,13 @@ their history.
     answers `unavailable`.
   - STORAGE-FETCH §5 and the README say retrieval is from the start of the object, and what would bring ranged
     reads back.
-- **Status:** decided 2026-11-21 (planning's rulings Q7, the evicted block, P1 and R2, after Fable's reviews). Not
-  built yet: N-4.3 builds it, and PKG-0474 is claimed with it.
+- **Status:** decided 2026-11-21 (planning's rulings Q7, the evicted block, P1 and R2, after Fable's reviews). Built
+  2026-11-22 by N-4.3 (`logos_module/src/module/fetchserve.nim`, merged into storage's `logos-core-module` at
+  `3e3409bf`, not pushed). The cases that need `storage.fetch`, `storage.remove` or mix come with N-4.4. A read
+  takes its download's want handle itself and races it against the bound [IMPL], so the handle all of the block's
+  waiters share is never cancelled. The README states a storage limit the tests found: one peer search per 3 s
+  for all downloads, which a stalled download takes (upstream draft #216). PKG-0474 was claimed by 5-3b-2 (I116);
+  the README documents this binding's locator (G5).
 
 ### G429 — Paths in storage_module's methods
 - **Kind:** FREE (Tier 5 step N-4; plan §3.7; G99 decided for storage; Q4 (a)) · **Specs:** RUNTIME l.3776-3784 (a
