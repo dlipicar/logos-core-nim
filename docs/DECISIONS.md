@@ -227,7 +227,7 @@ deferred past the re-pin.
 12. Platforms, build, CI and tooling
 13. Implementation defaults chosen without a separate question
 14. Index
-15. Revisions and implementation choices since work started (R1–R7, I1–I115)
+15. Revisions and implementation choices since work started (R1–R7, I1–I115, I118)
 
 ---
 
@@ -315,6 +315,10 @@ deferred past the re-pin.
 - **Options offered:** (a) Nim over the Rust library's C FFI *(recommended)*; (b) Rust, exporting the C
   ABI directly. **Decision:** (b). Consequence: the code generator, kits and the conformance harness must
   be language-neutral (they test built artifacts).
+- **Revised 2026-11-22 (the Tier 5 plan's A4 (a), approved by the owner 2026-11-16; built in step N-3,
+  I118):** for blockchain, (a) replaces (b). The module is Nim, a confined kit module over the library's C
+  binding, which is linked into the module library as a static archive (G419–G424). The consequence
+  stands: the generator, kits and harness test built artifacts. The Rust output is the Rust SDK's (D29).
 
 ### D11 — Where modules run on desktop
 - **Kind:** SCOPE/FREE · **Specs:** RUNTIME §2, §4.2 (placement is policy), §5.1, §5.3 ("In-process
@@ -6470,6 +6474,12 @@ their history.
   node inside a ready instance; Core lifecycle stays authoritative; any state they write goes to
   state_dir. Methods depending on the inner node return a typed `not-started` arm before it starts
   (RUNTIME §3.4 l.618-633 forbids NOT_READY for application state).
+- **Amended 2026-11-22 for blockchain (the owner's answer to the stepN-3 plan's Q4; G423, I118):**
+  blockchain keeps none of `start`, `stop` and `generate_user_config`. `_init` starts the inner node and
+  `_destroy` stops it, since blockchain has no observable outcome before stop; the keys are the library's
+  own, made at the first `_init` (G144, G422). With no state before the start there is no `not-started`
+  arm: an inner node that stops by itself answers `unavailable` with `node-stopped` (G424). (b) stands
+  for the other modules until their steps decide.
 
 ### G98 — Delivery's RLN and service-discovery dependencies
 - **Kind:** FREE · **Specs:** RUNTIME §7.5 (module-to-module calls only through Runtime routes).
@@ -6565,6 +6575,8 @@ their history.
   only successful inits are constrained), §2.8.
 - **Options offered:** (a) refuse with LOGOS_ERR_MODULE, null context, no leak *(recommended)*; (b)
   support multiple instances. **Decision:** (a).
+- **Cited 2026-11-22 (Tier 5 step N-3, G420):** the blockchain module relies on (a). With one instance
+  per process, the poster its C callbacks share, static and never freed, is safe.
 
 ### G136 — Storage start blocking on DHT bootstrap
 - **Kind:** FREE · **Description:** storage's `start()` awaits the network bootstrap (up to minutes),
@@ -6590,6 +6602,14 @@ their history.
   and a loopback API live in Core configuration; devnet genesis from an e2e fixture; keystore backup
   documented; `generate_user_config` kept as a method *(recommended)*; (b) keys only through the method.
 - **Decision:** (a).
+- **Amended 2026-11-22 (the owner's answer to the stepN-3 plan's Q4 and Q5; G422, G423, I118):**
+  `generate_user_config` is not a method (G97's amendment). The keystore is made at the first `_init`
+  when absent, by the library's own key generation, or placed before it, and is never rewritten.
+  Network, initial peers and ports are the typed configuration (G422); there is no API, loopback or
+  other (Q5 (c)), and v1 has no package default for initial peers (the node profile's, N-6a). The
+  devnet's keystore and deployment are made at test time from the library's standalone files, not an
+  e2e fixture. The keystore's backup and what a `copy` transfer clones are in `docs/DEPLOYMENT.md` §26
+  and the module's README.
 
 ### G147 — Storage mix (private downloads)
 - **Kind:** FREE · **Options offered:** (a) typed mix configuration (enabled, pool, SPRs inline);
@@ -6602,6 +6622,144 @@ their history.
   discovery through libp2p_module, an RLN-enabled round trip against the local LEZ sequencer; live:
   libp2p active, rln/lez_rln installed but idle under the logos.test preset *(recommended)*; (b) also
   enable RLN in the live run. **Decision:** (a).
+
+### G419 — The blockchain module's artifact: the C binding as a static archive inside the kit library
+- **Kind:** IMPL, under C8 · **Specs:** INTERFACE §2 (one module library, its exports); PM l.1183 (one
+  self-contained module library, G93's interim); stepN-3 plan §3.8, §4.1.
+- **Decision.** The library's C binding (`logos-blockchain-c`, a cdylib in its manifest) is built as a
+  static archive with `cargo rustc --crate-type staticlib` (no manifest change) and linked into the module's
+  kit library, so the module is one file. The kit's export list hides every symbol of the archive: the
+  library exports exactly the kit's ten symbols, no `NimMain` and no Rust symbol, and `nm` finds
+  `start_lb_node_embedded` inside, hidden (T1). Its dynamic dependencies are within an allowlist of system
+  libraries (macOS: libSystem, libobjc, libc++, libiconv and four system frameworks; Linux: libc, libm,
+  libpthread, libdl, librt, libutil, libgcc_s, libstdc++ and the loader); no OpenSSL is linked. On Linux the
+  RUNPATH names only `/nix/store` paths and `GNU_STACK` is `RW` (`-z noexecstack`, spike F1).
+  - Two archives: `logos-blockchain-c-static` (release profile: fat LTO, one codegen unit) for the
+    artifact, and `logos-blockchain-c-static-test` (the `ci-release` profile, LTO off, and the
+    `lcn-test-hooks` feature) for test builds only; the spike's F3 measured the test profile's crate rebuild
+    2.9 times faster on framework.lan and 2.5 times on the Mac. The release artifact holds neither the
+    test-hook marker `lcn_test_hooks_blockchain_c` nor the kit's strict-destroy marker (T1).
+  - The packages hold the archive, the header and the link line only (`doInstallCargoArtifacts = false`;
+    crane's default put the 840 MB cargo target into each output).
+- **Tests:** `logos_module/tests/test_artifact.nim` (T1), on the module package's library on Linux.
+- **Status:** built 2026-11-22 (Tier 5 steps N-3.1 and N-3.2; I118).
+
+### G420 — The blockchain module's threads: a confined kit over C workers
+- **Kind:** IMPL, on G335, G338, G111 · **Specs:** INTERFACE l.1955, l.2100, l.2114-2115 (destroy and
+  calls in flight); stepN-3 plan §3.5, §3.6.
+- **Decision.**
+  - A confined kit with `--async-api` (`lcn-gen kit --confined --async-api`; N-1's thread-confined mode).
+  - Four C worker threads run the library's blocking calls. Jobs live in a C table keyed by an id (`queued`,
+    `running`, `done`, `abandoned`; 256 at most, a full table answers `unavailable` with `busy`); a
+    completion is posted to the module thread with its id, and a worker frees an abandoned job's result
+    itself. Event copies live in a table keyed by id too, so destroy frees the copies whose posts the kit
+    dropped.
+  - The mutex, the conditions, the `closed` mark, the id counter and the poster are static and never freed,
+    so a late callback tests memory that still exists. The library's threads reach the module only through C
+    callbacks behind the `closed` mark; no Nim code runs on a foreign thread. One instance per process
+    (G111) makes the callbacks' process-wide poster safe.
+  - A 5 s watchdog on the same workers notices an inner node that stopped by itself (G423).
+  - **Destroy posts nothing and awaits no posted callback.** It sets the `closed` mark, closes the queue,
+    waits on the glue's condition variable for running jobs, calls `shutdown_node` on the module thread,
+    joins the workers and frees both tables. It holds under the kit's order at N-1e (G437, G438, G440).
+  - Job results cross into Nim as a Nim object (`JobResult`), not the C struct: under refc an `importc`
+    struct in a case object whose other branch holds a GC'd field is copied as zeros (Nim 2.2.14; upstream
+    draft #195 in `build/scratch/upstream/ISSUES.md`).
+- **Tests:** T7 `test_threads` (16 threads at once, a slow job beside fast ones, cancellation queued and
+  running, destroy with a job running: it waits for the abandoned job's library call, 2.7 s for the 3 s
+  hook, and every count balances; a post after destroy stops at the `closed` mark); T5's thread plateau.
+- **Status:** built 2026-11-22 (Tier 5 step N-3.2; I118).
+
+### G421 — The blockchain module's placement: `hosted_dynamic` in a process of its own
+- **Kind:** IMPL, on RUNTIME l.3645 · **Specs:** RUNTIME l.3645 (a module's supported placements);
+  LOADER §5 (placements); stepN-3 plan §3.6 step 5, §3.7.
+- **Decision.** `hosted_dynamic` with placement `process` only, one node per process: stated in
+  `docs/DEPLOYMENT.md` §26 and the module's README, and in the node profile when N-6a builds it. No code
+  check while NP-14 is open (a module cannot declare the placements it supports).
+  - **Grounds:** the library's threads outlive `_destroy` (planning's ruling, 2026-11-21): tokio's and
+    RocksDB's pools wind down after `shutdown_node` returns, and one `tracing-appender` thread stays per
+    start (T5: 4 other threads throughout, and the appenders equal to the starts). What still ends a
+    process from inside the library: a Rust abort (a double panic, a panic in drop while unwinding, out of
+    memory) and C++ faults in RocksDB or rapidsnark. In a host of its own that ends only that host.
+  - **What a host must do:** never unload the library, and end with `_exit` after the release, running no
+    exit handlers beside those threads. logos-core-nim's Module Host does both (`host/main.nim`: no
+    `dlclose`; `exitnow` after `released`).
+- **Tests:** T9 `test_hosted`: an orc logosd realizes the module in a Module Host and drives it with
+  `logosctl` (start, a call, three events, `describe`). Five stops each end their host and leave the
+  instance `unloaded`, never `error`, with no "ended unexpectedly" in logosd's log, and logosd exits 0: the
+  plan's condition (d), planning's ruling (a), that each host ends orderly (its terminal lane-0 message read,
+  released by the Runtime). The host's exit status is recorded only inside the Runtime (`HostEnd.status`), so
+  T9 cannot see it; a diagnostic for an orderly end with a nonzero status is a later core step.
+- **Status:** built 2026-11-22 (Tier 5 step N-3.3; I118).
+
+### G422 — D5 for blockchain: typed configuration, no environment, no home directory
+- **Kind:** IMPL, for the owner with the stepN-3 plan (D5) · **Specs:** CONFIG l.223 (configuration is
+  the module's input); PM l.1183; stepN-3 plan §3.3, §3.4.
+- **Decision.**
+  - `blockchain_config.cddl`'s typed configuration, delivered as `configuration_input`; the module reads no
+    environment variable and no home directory (the embedded start, `start_lb_node_embedded`, takes none;
+    T4 with hostile `NET_PORT`, `STATE_PATH`, `LOG_LEVEL`, `DEPLOYMENT`, `HTTP_HOST`,
+    `LOGOS_BLOCKCHAIN_CIRCUITS` and `HOME`).
+  - The deployment built in, or a read-only file named by configuration with an optional `sha256` that
+    `_init` checks (G441 refines: BearSSL's SHA-256 over the bytes the library reads, from the module's
+    copy).
+  - Circuits compiled in; logs to standard error only; no HTTP API (Q5 (c)).
+  - The time source a named server, `time: { ntp_server, ? update_interval }`, with no `"system"` arm;
+    `127.0.0.1:9` is the offline value. `cryptarchia: { prolonged_bootstrap_period }` optional, absent the
+    library's hour; a lower value is logged once at start (planning's rulings (a), 2026-11-21, with Fable
+    §10).
+  - `network`: `listen_host` (an IPv4 literal: the library's limit), `port`, `initial_peers` (at most 64),
+    `external_address`, `nat` (`static` or `traversal`); `blend.port`; `runtime_threads` (1 to 64). The
+    prelude has no integer ranges, so the bounds are checked at start.
+  - The state layout: `keystore.yaml` (0600; the library's own keys, made at the first `_init` or placed
+    before it, never rewritten), `node/` (the library's database), `run/user_config.yaml` (0600, rewritten
+    at every `_init`, no secret; its `version` from the library's own `generate_user_config` output) and,
+    with `sha256`, `run/deployment.yaml`.
+- **Tests:** T4, T5, T11, T6 (the devnet with a placed keystore), `test_units`; T9 checks the configuration
+  the module renders under logosd.
+- **Status:** built 2026-11-22 (Tier 5 step N-3.2; I118).
+
+### G423 — D6 for blockchain: `_init` starts the node, an unprepared destroy stops it
+- **Kind:** IMPL, for the owner with the stepN-3 plan (Q4 (a)) · **Specs:** INTERFACE l.2100; RUNTIME
+  l.3462-3472, l.3654, l.3700-3701, l.3705, l.3713-3719; stepN-3 plan §3.6.
+- **Decision** (the single D6 rule for node modules, blockchain's row):
+  - `_init` starts the inner node. There is no `start`, `stop` or `generate_user_config` method: blockchain
+    has no observable outcome before stop (v1's calls are reads, and nothing is owed to peers). G97 (b) and
+    G144 (a) are amended for blockchain.
+  - An unprepared `_destroy` does the whole shutdown and joins its work before returning, and awaits no
+    posted callback (G420). Its expected time is F7's; measured unprepared destroys: 1.2 ms on the Mac and
+    1.3 ms on framework.lan (T5, idle), 0.5 to 670 ms hosted under logosd (T9).
+  - The stop figure: F7's slowest plus 5 s, at least 10 s: the default `stop_deadline_ms`, 10 s. The
+    per-module field and the orchestrator's preparation call (RUNTIME l.3713-3716) are wave 3's small core
+    step.
+  - The node's shutdown budget: the drain, plus the longest path of unprepared release times through the
+    ordering constraints, plus a 5 s margin, rounded up to whole 5 s. The node's `shutdown_grace_ms` is
+    20000 (owner, Q4 (a), 2026-11-21), to be reconciled with N-4's figure; the node profile (N-6a) sets it.
+  - An inner node that stops by itself: every node method answers `unavailable` with `node-stopped`, and
+    the module calls `report_failure` once (RUNTIME l.3654); the instance is `error`
+    (`reported-by-module`) and a restart policy recovers it (T8, T9).
+  - The library's text goes only to the log, a failed `_init` and `report_failure`, never into a response.
+- **Tests:** T5 (init and destroy times, the thread plateau), T7 (destroy with a job running), T8 (the
+  node stopped by itself), T9 (the failure, the recovery and five stops under logosd).
+- **Status:** built 2026-11-22 (Tier 5 steps N-3.2, N-3.3; I118).
+
+### G424 — The blockchain module's contract v1
+- **Kind:** IMPL, on D20, COMMITMENT l.966-976, l.1007-1010, RUNTIME l.614 · **Specs:** as named;
+  stepN-3 plan §3.2.
+- **Decision.**
+  - `node_info`, `cryptarchia_info`, `network_info` and `chain_progress_event`, one per block the node
+    processed. Every response has an open `unavailable` arm (`code`, the module's `reason`), written out in
+    each response (COMMITMENT §3.1 step 5): v1 sends `node-stopped`, `library-error` and `busy`, and a
+    consumer treats any other code as unavailable. `mode` has a catch-all, `other`. No marked method; no
+    `import_key` (the devnet places its keystore before the first start).
+  - Frozen when N-6a pins its root in policy rules or N-5 starts, whichever is first. N-5's contract
+    extends it and lists v1 under `extends` (TF-62, G393).
+  - The policy's rule classes (D4): `lcn_call` and consumers get `provider-access` (discover,
+    establish-route, renew-route, call, subscribe-event) on v1's root, the module its own
+    `publish-event`; its permission settings hold `logos-core-nim.host-ambient`.
+- **Tests:** T2 `test_contract` (roots recomputed from the text; the frozen-declarations rule on a fixture
+  v2), T9 (the calls, events and `describe` through `lcn_call`).
+- **Status:** built 2026-11-22 (Tier 5 step N-3.2; I118).
 
 ### G441 — The blockchain module's deployment digest: BearSSL, on the bytes the library reads
 - **Kind:** IMPL, refining G422 · **Specs:** none (the module's own configuration,
@@ -7148,6 +7306,10 @@ their history.
   handlers and set their own dispositions: logosd (a signal thread over blocked SIGTERM, SIGINT,
   SIGHUP, SIGUSR1 and SIGUSR2; SIGPIPE ignored; `docs/DAEMON.md` §13), `logos-module-host` (SIGPIPE
   ignored, `host/main.nim`), logosctl, lcn-gen and lcn-pkg (Nim's handlers: a stack trace on a crash).
+- **Cited 2026-11-22 (Tier 5 step N-3, G419):** the blockchain module's Rust library follows the same
+  rule. Its embedded start leaves out the node's `SystemSig` service, the one that would take the
+  process's signals, so the module library leaves its host's dispositions alone (the spike's F5 and F6;
+  T3 `test_signals`).
   A module repository builds its module library with the switch too (the kit's guide, TIER5-PLAN N-1).
 - **Test:** `tests/test_host_dylib.nim` "[DECISIONS G340] loading the library leaves the host's SIGINT,
   SIGSEGV and SIGPIPE dispositions as they were": a sentinel handler on each before the load, compared
@@ -7992,6 +8154,12 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G396 | the package trust file v2 | FREE | 9 |
 | G397 | `logosctl trust` for the package trust file, and key separation | FREE | 9 |
 | G398 | catalog and provenance selections in the package trust file | FREE (C3, C9) | 9 |
+| G419 | the blockchain module's artifact: the C binding as a static archive inside the kit library | IMPL | 11 |
+| G420 | the blockchain module's threads: a confined kit over C workers | IMPL | 11 |
+| G421 | the blockchain module's placement: `hosted_dynamic` in a process of its own | IMPL | 11 |
+| G422 | D5 for blockchain: typed configuration, no environment, no home directory | IMPL (D5) | 11 |
+| G423 | D6 for blockchain: `_init` starts the node, an unprepared destroy stops it | IMPL (Q4 (a)) | 11 |
+| G424 | the blockchain module's contract v1 | IMPL | 11 |
 | G437 | what runs while a confined kit's `destroyModule` runs | IMPL | 12 |
 | G438 | closing a confined kit's module-thread dispatcher, and what destroy left | IMPL | 12 |
 | G439 | a chronos variant in `kit-toolchains`: the kits under the libraries' own chronos | IMPL | 12 |
@@ -8127,5 +8295,6 @@ of work follows the tiers in `docs/SPEC-STATUS.md`: most settled areas first.
 | I113 | IMPL | The re-pin, P9: the Credential Store scope, claims, docs and close (BCP §5.1 l.286-290, §5.4 l.360-410; plan `tier5-plans/repin/P9.md` revision 1; reviews and synthesis `tier5-plans/repin/reviews/P9-*.md`) | **The deployment document** (c1; G309's and D27's P9 notes): `docs/DEPLOYMENT.md` cites 6cac8335. Row 24 answers BCP l.374 *none*: no Credential Store is deployed (BCP-0101, by inspection; §25 says why an operator's `logos_credential_store` fails at its start). Row 25 answers BCP l.383 (BCP-0102): §12 takes SEC l.394's seven examples first, then every finite shared pool as built with its total and per-consumer limit (the Transport loop totals, `AuthorityLimits`, the authority's audit storage, the orchestrator's 4,096 episodes; none per provider), names the four that queue, evict or drop as no pool, and says HOST-CONFIG sets no total bound on active routes. Row 22 and §20 answer BCP l.403-406's four non-production mechanisms by name (BCP-0103, claimed by test_logosd's test; BCP-0093 retired with a `[[stale]]` record). The duty table is re-anchored and swept again (`bcp-deploy-duty-if1473`), and every `deploydoc` reason was read against it by hand. **The test** (Q3, Q4, Q12): test_deployment's one test [BCP-0102] [TXT-0555] [TXT-0350] compares the facts' pools and audit bound with the code, compares the facts' `runtime_claim` (logosd's Runtime instance: the engine with `lcn_orchestrator`) with the code's names, and shows that an operator-declared `logos_credential_store` is accepted by logosd and fails at its start (no logosd refusal). **The claim** (c2; G159 settled; I94's note): the Credential Store is published and not claimed; a RUNTIME claim covers a Runtime instance with its orchestration module (BCP l.286; R l.66). **The close** (c3): P9 in `closed`; `pending --step P1` to `P9` reported nothing open. **Q11:** before `--step` went, 121 readings were read again (all 37 informative and 54 holds, 20 removed, 10 reword): 103 agree, 14 rest on thinner evidence than their record says, and 4 misstate the text: TXT-0335 is `removed` where R §5.2.1 l.1027 rewords the sentence (so is TXT-0336, not sampled), TXT-0345's `holds` reverses BCP l.83's dependency, TXT-0193's account of in-flight behaviour is the G174 interim P5d replaced, and TXT-0566 misreads SEC l.476. No conclusion is reversed and nothing is to build. At the merge review the four, and TXT-0336, were corrected in `spec/repin-text-cleared.toml` (TXT-0335 and TXT-0336 become `informative`: the frozen list has no new-side entry for l.1027 or l.1038 to pair a `reword` with). Then, at planning's request, every reading the sample left out was read against both revisions as well, so all 248 have been read: of those 140 (97 `removed`, 29 `reword`, and the 14), 116 agree, 8 misstate the text or the code (TXT-0262 and TXT-0329, reworded rather than removed, now `holds` with a test; TXT-0332 and TXT-0453, which hid the change; TXT-0343, BCP l.81's dependency reversed as in TXT-0345; TXT-0449, SEC l.476 as in TXT-0566; TXT-0499 and TXT-0500, which missed that `runtime/host_config.cddl` projects PM's `provider_requirement` and `requested_permission`), and 16 rest on thinner evidence than they said (13 of the 14, TXT-0166, TXT-0347, TXT-0537), now naming the direct test or saying which part rests on reading the code. Each was corrected in its record, with TXT-0067's old line range; no reading hid a requirement that still binds and that nothing claims, defers or puts out of scope, and nothing is to build. **The tool** (c4; I104's note): `spec/repin-pending.toml` holds `[deferred]` only (53 units, 19 text entries); `spectrace` drops the sub-steps, `closed`, `[[moved]]`, `--step` and the held handling in `mirror`, `pins`, `gate` and `deploydoc`; a unit the re-pin tracked stays in `[deferred]` while its claims file defers it; the 6 units of the frozen list's `[deferred]` leave it only claimed, with evidence, and any other unit that leaves with a status other than claimed is named in its claims file and in a decision row (Fable's rule); `deploydoc` matches a duty row's citation whole. The self-test has 77 cases. **The citations** (c5; Q7, Q8, Q9): `tools/cites/` holds the survey scripts (`cites.py` maps each cited line through the old and new text, skips fenced blocks and sends a widened range to hand reading; `triage.py` buckets and `--write`s; `sweep.py` sweeps the duty table), and SPEC-STATUS's "When a spec revision lands" gives the procedure. On c4's tree, in living sections outside fences: 714 citations (docs 471, claims and inspection files 219, `host_config.nim` 24): 273 shift, 255 hand, 160 current, 26 same. 269 shift citations rewritten; 5 automatic rows that sampling found wrong (4 shift, 1 current) were set by hand; the hand bucket read in full, the 82 unattributed citations included: 136 set, 117 kept, 2 by a text fix. **Q8's widening:** every stale citation in `src/logos_core/runtime/host_config.nim` (21 rewritten), the only code file; the parent plan's rule (lines a step touched) stands for the rest. Records (DECISIONS rows, SPEC-STATUS's Log, CONFORMANCE's dated sections) keep their revision's lines (Q14). Found while reading: HOST-CONFIG's Loader-loss paragraph states G360; two labels (BCP, TRANSPORT) and PERMISSIONS' reconciliation heading; two citations wrong before the re-pin (AUTHORITY-POLICY CA l.124, DEPLOYMENT SEC l.521). **The docs** (c6): SPEC-STATUS, CONFORMANCE, DECISIONS and README cite 6cac8335; DECISIONS gains the 6cac8335 section and `CS`; G361-G363 move to §9 unchanged (Q13). **Checks:** the gates at each commit; §10.1's eleven suites under orc after c1, c5 and c6. **Numbers:** the last used are G394 and I113. | 2026-11-20 |
 | I114 | IMPL | Tier 5 step 5-3a: the `lcn.storage_fetch` contract and the package trust file (PACKAGE MANAGER l.401-449, l.733-745, l.854-862, l.1453-1465; RUNTIME l.601-626; plan `tier5-plans/step5-3a-trust.md` revision 5; reviews `opus-checks/step5-3a-plan.md` and `fable-checks/step5-3a-plan.md`, synthesis `fable-checks/step5-3a-synthesis.md`). Built as 5-3a-1, 5-3a-2a and 5-3a-2b | **5-3a-1, the contract** (G395; G91, G136 and G140 amended): `sdk/src/logos_sdk/contracts/` starts with `lcn_storage_fetch.cddl`, its generated types, calls and C headers (`lcn_NS_storage_fetch_*`, the generator's names for a dotted namespace) and its root (`lcn_storage_fetch_root.nim`, written by `nimble regen` from the commitment code; `test_nimgen` checks it current); the layer lint puts `contracts/` in `sdk_binding`. The fake `fetch_fake_module` (`testing/fixtures/`, its kit, calls and export lists in `testing/generated/`) derives each object from its locator with BLAKE3's extendable output read at an offset (`Blake3Hasher.finish(seek, …)`, new, over the vendored `blake3_hasher_finalize_seek`). The harness `testing/storagefetch.nim` takes materialized route handles (the INTERFACE §5.2 consumer surface, so the typed calls are the generated ones), an optional readiness driver and a fixture, and returns what it found wrong. `sdk/docs/STORAGE-FETCH.md` (the SDK's first document) holds the contract verbatim, checked by `sdk/tests/test_storage_fetch_contract.nim`, which also runs the call checks against the fake over the in-process route. `tests/test_storage_fetch.nim` runs the whole harness against the fake `direct_static` and `hosted_dynamic` under a test Runtime, and a hosted probe reading 4 MiB from the hosted fake in four calls, with P-13's trace finding none of the object's bytes or its locator in a carrier frame [RUN-0815]. No unit is claimed: the contract is half of PKG-0474's evidence, which 5-3b claims. **5-3a-2a** (the package trust file and logosd's start; G396, G398; G137, G299 and G96 amended). **The document** (core, `package/`): `trustdoc.cddl` holds `lcn.package_trust` (`logos-core-nim.trust.v2`) and `lcn.trust_file` (v1, which leaves `daemon/trust.cddl`; that file keeps the mark and the evidence key binding and cites PM l.401-406); its codecs are generated into `trustdoc_types.nim`, registered in `tests/support/genfixtures_core.nim` and `tools/regen_nim.nim`. `trustdoc.nim`: `decodeTrust` (deterministic CBOR within the exported `MaxTrustBytes`, against the schema of the value's format; v1 read as the v2 content with no anchor and nothing selected), `checkTrust` (the floor; kids and each anchor's names strictly ascending by bytes, names non-empty; a catalog or provenance selection refused, naming it), `inForce`, `acceptedSigning` (the anchors in force through `addAnchor`, only for a file `checkTrust` passes) and `floorTrust`. **The daemon:** `trustfile.nim`'s `TrustInput` is renamed `TrustFileState` (file, digest, present), and `config`, `compose`, `sessioninit`, `assemble` and the tests follow; `logosctl.nim` needed no change. `readTrust` decodes only; `checkedTrust` adds the rules; `establishTrust` runs the rules, key separation (`separateKeys` against `sessionEvidenceKeys`: every binding under `keys/`, retired ones included, and the binding beside the configured key; read at a start only when the file names an anchor, `startEvidenceKeys`, so a session without anchors gains no new refusal; G397), the conversion, the change since the start's first read (`seen`), then continuity and the mark, and returns the state with the accepted `TrustInput`. `assembleDaemon` applies the rules at both reads, passes the evidence keys and keeps the accepted input as `Daemon.signing` for 5-3b. The comparison of the two reads now comes before the mark moves (4b-6a made it after). `decide` (now a proc) names `logosctl trust reestablish --revision 1` when there is no file and the mark holds the v1 floor's digest (Q15). `initTrust` writes the v2 floor, and `setDevelopment` keeps the anchors and selections and writes v2 (the unchanged rule and the writers' checks are 5-3a-2b's). Layers: `package/trustdoc` joins `daemon_allowlist`. `docs/DAEMON.md` §6: both schemas verbatim, the rules, the start order and Q15's case; its command prose stays for 5-3a-2b. **Tests:** `test_trustdoc` (new: the round trip, an unknown field in each of the five maps, determinism and the bound, the profile literal against the mirrored one, the v1 reader, the canonical form [PKG-0107] [PKG-0072] [PKG-0434], exact names [PKG-0071] [PKG-0073], development anchors [BCP-0094] [BCP-0103], the selections [PKG-0169] [PKG-0467], only the file selects [PKG-0166], `acceptedSigning` feeding `verifyPackage` [PKG-0074] [PKG-0075] [PKG-0083]), `test_daemon_config` (the trust document's rules in the schema suite; the decision table with anchors; one name added, a marker flipped and a key changed at one revision refused [PKG-0418] [PKG-0420] [TXT-0463]; the start order and the two reads; a v1 session; Q15; key separation, current, retired and configured elsewhere [PKG-0435], and the bindings read only for a file with anchors; DAEMON.md verbatim), `test_gen_current`, `test_rmap_system`, and `test_logosd` and `test_deployment` for the rename. No claim moves: 5-3a-2b moves the ledger. **Departures from plan revision 5 in 5-3a-2a** (kept on planning's word, 2026-11-20): the two reads of a start are compared before the mark moves, not after as 4b-6a did, so a file changed during a start never moves it; the floor is a rule of `checkTrust`, not of the read, so `trust show` reads a file below it; a signing profile other than the baseline fails at decode against the CDDL literal, before any rule, since the schema fixes the value; `setDevelopment` carried the anchors over without checking them until 5-3a-2b replaced it with the checked writers; a selection's refusal reads "this implementation supports no … profile", naming no product. **5-3a-2b** (`logosctl trust`, the documents and the claims; G397 built; G303, I41 and I43 amended). **The writers** (`daemon/trustfile.nim`): the pure edits `withAnchor`, `withoutAnchor`, `withNames`, `withoutNames` and `withDevelopment`; `validateTrust` (the schema and the 1 MiB bound, `checkTrust`, `separateKeys`, `acceptedSigning`: what a start applies before continuity); `commitTrust` (nothing written when the edit changes nothing, otherwise revision + 1 in v2 if `validateTrust` passes, the refusal ending with `CorrectByHand` when the current file already fails, Q17; a writer whose change changes nothing refuses such a file too); `reestablish` takes the evidence keys and refuses a file `validateTrust` refuses, writing no mark. `setDevelopment` is gone: `trust development` is one more edit. **The command** (`src/logosctl.nim`): `trust anchor add|remove|add-names|remove-names` with `--kid` (text or `hex:`) and `--key` (96 hex digits or `@FILE`, `lcn-pkg keygen`'s line accepted); the evidence keys read from `keys/` and the configured binding when the file before or after names an anchor; `trust development` with the number of development anchors entering or leaving force; `trust show` with the profile, the anchors (`kid_text` when printable ASCII, `in_force`), the selections and `refused`; `trust reestablish` with the checks. Render in `daemon/render.nim` (`trustJson`, `trustRows`, `anchorsTable`, `kidText`). **Documents:** `docs/DAEMON.md` §6 (the commands, every writer's checks, the unchanged rule, the refused file, JSON; `reestablish` with the checks; what the switch gates) and §2, §8; `docs/DEPLOYMENT.md` rows 5b (Supported), 5c and 22, §1's ground 1 (the file holds anchors and nothing uses them; the answer stays *no*), §2's table and revocation, §5, §20 and SECURITY §13's table; `docs/CONFORMANCE.md` "What Tier 5 step 5-3a-2 changes" (claims, limits, bounds); `docs/SPEC-STATUS.md` (the A4 and C rows by step, the open-items row split, the log). `src/lcn_pkg.nim`'s header says its JSON trust file is no trust input (I41). **Claims and ledger:** `conformance/claims/PKG.toml`: PKG-0418 to PKG-0421 and PKG-0083 leave their deferrals (claimed through §4.1), PKG-0166 and PKG-0169 claimed by name, with PKG-0166's note on the sources that arrive later; `spec/repin-pending.toml` loses PKG-0418 and TXT-0463, and `spec/repin-text-cleared.toml` gains TXT-0463's `[[text]]` record (step P7, `tests/test_daemon_config.nim`; its `[[deferred]]` record stays). The inspection reasons of PKG-0422, BCP-0042, BCP-0074, BCP-0094 and BCP-0096 are re-read (A9): PKG-0422's ground 1 no longer held. **Tests:** `test_daemon_config` suite `dc.trustctl` (each change the next revision, one added name included [PKG-0418] [TXT-0463]; the unchanged rule; the refusals, nothing written [PKG-0107] [PKG-0072] [PKG-0434] [PKG-0435]; a refused file: every writer says to correct it, `reestablish` writes no mark, a change that removes the cause is written [PKG-0169]; the revision limit); `test_logosd` (the commands as processes from a Tier 4b v1 session, `--kid hex:` and `--key @FILE`, unchanged commands exit 0, logosd starts with the result, `trust show` text and JSON with the banner [PKG-0418] [TXT-0463]; the refusals exit 1 and write nothing, the hand-set selection shown with its reason and refused by the writers, `reestablish` and logosd [PKG-0435] [PKG-0169]; continuity across starts now with an anchor in the file [PKG-0419] [PKG-0421]). **Departures from plan revision 5 in 5-3a-2b** (kept on planning's word, 2026-11-21; Q16's and Q17's widening and the canonical names are G397's, as built, and `setDevelopment`'s removal is above): the inspection reasons of BCP-0042, BCP-0074, BCP-0094 and BCP-0096, DEPLOYMENT row 22 and SECURITY §13's table are reworded beyond plan §4.2, since each described the Tier 4b file, a switch and no anchors, which A9's re-read found no longer true; TXT-0463's cleared record names `tests/test_daemon_config.nim` at step P7, as the other cleared records do, since spectrace has no `same_step` check for the plan to cite; the remote trust input gets its own SPEC-STATUS row (5-7a, decided by C2), split from the 5-3a row, so that row can read built while the remote input stays 5-7a's; `trust show` and `trust reestablish` read the evidence keys only when the file names an anchor, as a start does since 3a7d052, so neither fails a session without anchors over a binding it does not need; PKG-0419 and PKG-0421 take their evidence from an anchor added to the existing continuity process test, which already restarts logosd across revisions, rather than from a second test of the same path. **5-3a-2c** (planning's ruling on the two questions 5-3a-2b left open, after Fable's answers, 2026-11-21; no spec gap, PM l.119 leaves both to the implementation; G397 amended). **Withdrawals of what is not there are refused:** `withoutAnchor` returns a refusal for a kid that names no anchor ("no anchor has kid HEX", without `trust anchor add`'s hint), and `withoutNames` is all or nothing, refusing with every name the anchor does not authorize byte for byte; additions and settings of what is already so stay unchanged (exit 0). bb554fd's unchanged answer naming the kid goes. **JSON:** `refused` is `refusal` (it holds a reason, and `refused` is a `status` of ctl.cddl and cli.cddl); `kid_text` is left out for a text beginning `hex:`, in the text table too, since `--kid` would read it as hex; `development_anchors` counts the anchors marked `development` whether or not anything changed; DAEMON.md says `in_force` is what the file says. `trust show`'s continuity reads "not reached" when the rules refuse the file. **Documents:** DAEMON.md §6, DEPLOYMENT §2's Revocation paragraph (a removal naming something absent is refused, BCP l.364), G397 and plan §3.3 (Q16). **Tests:** `dc.trustctl` (the unchanged case without withdrawals; the absent anchor and name among the refusals; remove-names all or nothing, by case and normalization form), `test_logosd` (the unchanged commands, the refused withdrawals exit 1, `development_anchors` unchanged, continuity on a refused file, a kid whose text is `hex:ab`). | 2026-11-20, 2026-11-21 |
 | I115 | IMPL | Tier 5: the marked-copy audit (G276, G278; INTERFACE §1.2.1, §1.4.1 l.380-386; `tier5-plans/marked-copy-audit.md`, one row per site with its evidence; the probe in `tier5-plans/marked-copy-probe/`). Built as `a71ebac` and `bd97ba8` | **The rule.** In results 0.5.1, `isOkOr`, `isErrOr`, `valueOr`, `errorOr`, `and`, `or` and `orErr` begin with `let s = (self)`, and whatever part of `s` the template does not move out is freed unzeroed; `?` moves both sides, and `get`, `value` and `error` are lent (`resultsLent`). Whether `s` is a copy is the compiler's cursor inference (the probe, under the free scan, orc and orc `-d:release` alike): a `var` local is copied; a `let` local is not, except inside a loop; a field of a `var` object, a `var` parameter and a plain parameter are not; `discard ?f()` drops a copy. An object, tuple or array constructor passed to a non-sink parameter borrows its fields and is not destroyed (Nim 2.2.14 `compiler/injectdestructors.nim` l.884-929). Not a Nim bug: the copy is results' own `TODO avoid copy`, and zeroing before release is G276's requirement, not the language's. **Nine paths fixed**, each with a case that fails without its fix: (1) `abi/checks.providerChecked` zeroes a status outside the provider set in place, not in a copy; (2) `codegen/consumert.completeTyped` zeroes the checked completion status and erases a failure's text once `onDone` returns; (3) `iface/outcome.checkDetail` zeroes the decoded detail tree; (4) `codegen/kitrt` registers `releaseLastFailure` with `onThreadRelease`, so the per-thread failure text is cleared at a thread's end (`a71ebac`); (5) `runtime/invoke.commitSync` zeroes a provider's failure when the route's end decides a synchronous call; (6) `transport/envelope.failureOf` zeroes a refused failure; (7) `transport/hello.readFirst` zeroes the first frame's tree, and the payload and failure text of a first message that is not a Hello (`wipeRefused`); (8) `transport/session.onResponse` zeroes the failure text of a Response for no outstanding request; (9) `host/consumer.setFailure` zeroes the `clip` copy. Tests: `test_wipe_routes` gains the matrix steps `outside` and `detail` (W-4, W-6, W-7, and W-7's hosted consumer through the probe's new `call-quiet`), a W-4 `commitSync` case and a W-8 typed-failure case; `test_wipe` W-2 gains three refused-message cases. **Four found safe** by the rule: `transport/session.nim` :540 `encoded(Message(... response: resp))` and `checkStatus`'s `checkFailure(InvocationFailure(...))` (constructors passed to non-sink parameters), `checkFailure`'s `let m = f.message.get` (a cursor), and `readDetail`'s `view` (a template over `toOpenArray`); the md lists the sites that never see marked text. **Out of scope**, with reasons: ticket copies on the Hello path (R18: a ticket exists only transiently; fix 7 zeroes a received Hello's tree); the carrier's frame copies (no marked payload crosses the carrier, I92); `host/rcbinding`'s `clip` temporaries (Runtime Control marks nothing). **Handed on:** `cli/` is a consumer like any other, so G276 applies to `lcn_call`. N-2's `lcn_call` refuses every marked method before any route (its `commands.nim` :594, checked by L-5), so N-2b exposes only the refused argument text and records that as a non-claim; N-2d builds the full erasure (a marked response erased once written out) with a W-case, citing this audit. **Open:** whether a newer `results` drops the copy is unchecked; nothing was downloaded. Checks on `bd97ba8`: the 18 touched suites in orc, refc and orc-release on the Mac and on framework.lan, nph, the three lints and the spectrace gate at 6cac8335 | 2026-11-20 |
+| I118 | IMPL | Tier 5 step N-3: the blockchain node as a Logos Core module (G419-G424, G441; D10 revised, G97 and G144 amended, G111 and G340 cited; plan `tier5-plans/stepN-3-plan.md`, spike `tier5-plans/stepN-3-spike.md`) | **Where.** The library's clone `logos-blockchain` (no push URL), from master at `e0d79cc25`. Branches: `lcn/n3-1-embedded` (`4ff155b9a`: the embedded start `start_lb_node_embedded` without `SystemSig` and the HTTP service, the static packages, the cargo tests), `lcn/n3-2-module` (`c77ce98cf`: the module; `56192e5e4`: G441) and `lcn/n3-3-hosted` (`718606723`: the late-post report written through a rename; `72a011436`: T9; `7162acef2`: T9's permission case cites G110; `5b7c03d23`: condition (d)'s wording), each merged `--no-ff` into `lcn/blockchain-module` (`154774268`, `52e60e13a`, `95a76de53`). Its `logos_module/` directory moves to the module's own repository unchanged. Core: docs only, on `stepN-3` (`ffa12fa`: G441; then this row's commit). **Built.** `logos-blockchain-c-static` and `-static-test` (G419); contract v1 and the configuration (G424, G422); the C glue and the confined kit (G420); D6's rule (G423); the placement (G421); the deployment digest (G441); the suites T1 to T9, T11 and `test_units`, each a flake check `blockchain-module-<suite>-<orc|refc|orcrelease>` on x86_64-linux and aarch64-darwin; the cargo tests. **Measured** (F7, T5, T7, T9). Init 17.5-55.1 ms on the Mac and 31.5-83.4 ms on framework.lan; destroy 1.2-12.7 ms and 1.4-2.8 ms; an unprepared destroy on an idle node 1.2 ms and 1.3 ms. Over ten cycles the other threads stay at 4 and the `tracing-appender` threads equal the starts; after the last cycle the Mac keeps `tracing-appender` and `futures-timer`, Linux `rocksdb:low`, `rocksdb:high`, `tracing-appende` and `futures-timer` (G421's grounds). Destroy with a job running waits 2.7 s for T7's 3 s hook, every count balanced. Under logosd in a Module Host: destroys 0.5-670 ms on the Mac and 1.9-3.5 ms on framework.lan; T9 runs 15-27 s. **Checks.** N-3.1: the archives, the cargo tests (11 passed, 0 failed, 22 ignored) and the release output free of test hooks, on framework.lan and the Mac. N-3.2 on `56192e5e4`: the ten suites x orc/refc/orc-release on the Mac (30/30) and framework.lan (30/30), the library-side cargo test (2/2); the flake check on framework.lan: 29 of 30 suite checks, the cargo tests and `logos-blockchain-utils-lcn-tests`, the failure a test race in T7 under orc-release (it read the late-post report before the glue wrote it), fixed in `718606723`. N-3.3: T7 and T9 x orc/refc/orc-release on the Mac (6/6) and T7, T8 and T9 x 3 on framework.lan (9/9), T9's refc case a skip (G277); T9 again under orc on the merged tree's `5b7c03d23` (2/2); the library's flake check on framework.lan (`72a011436`, rc 0, 1063 s): the 33 suite checks, the three `blockchain-module-hosted-*` ones in the sandbox on core's packaged logosd, logosctl, `lcn_call` and Module Host; `spectrace deploydoc` and `pending`. **Upstream.** Nim draft #195 in `build/scratch/upstream/ISSUES.md` (an `importc` struct in a refc case object copied as zeros; G420's `JobResult`). Not filed. **Downloads** (reported after, the owner's rule of 2026-11-22): the Rust 1.100.0 toolchain through rustup (1.4 GB, for rustfmt), the workspace's git dependencies (`~/.cargo/git` 410 to 885 MB) and a crates.io index update on the Mac, all deleted when N-3 ends; the core input at `349f4a5` through the git fetcher. **Left.** N-3.4 (the SDK as a package); the per-module stop field and the orchestrator's preparation call (wave 3); NP-14 (G421); a bound blend port, which needs two nodes (N-6a) | 2026-11-22 |
 | R6 | SCOPE (revises R1; Tier 5 plan A6) | CI legs from Tier 5 | Linux x86_64, Linux aarch64 and macOS arm64 in the `nix` and `nimble` jobs; Windows x86_64 in the `windows` job, on the Nimble path with its own toolchain, the library suites under orc, blocking since step 5-4c (G123 as revised, G334). Android and iOS join with M12, with G105 and G125. Owner's approval of the Tier 5 plan, batch A (A6), 2026-11-16. | 2026-11-16 |
 | R7 | SCOPE (Tier 5 restructure; plan `tier5-plans/restructure-in-place.md`) | The SDK inside this repository | `sdk/` is the package `logos_sdk`, this implementation's layer 1: the base set (CBOR, cdCDDLe, hashing, commitments, INTERFACE), the generators, the module kit and `logos_sdk/testing`. Core (`src/logos_core/`), the daemon and the CLI are built on it. `tools/lint/layers.py` (the check `lint-layers`, strict) holds the import direction with no recorded exception. Each spec's ledger has one owning package: CDE, CMT and HSH are under `sdk/conformance/`, the rest, IFC included until its claims are split, under `conformance/`; `spectrace owners` holds that a unit has one owner. No behaviour, claim or gate result changed. | 2026-11-18 |

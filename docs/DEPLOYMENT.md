@@ -245,7 +245,8 @@ G265): a hosted module has the filesystem, network, device, process and credenti
 user, and no operating-system resource control is applied. A process the module moves out of its
 group or session outlives the host. Processes of the same user can reach each other's sockets and
 files (CONFORMANCE, "Properties not claimed"). Outside Tier 5: DECISIONS D16 leaves sandbox and container
-placements and their controls out, and so does the Tier 5 plan (its area K).
+placements and their controls out, and so does the Tier 5 plan (its area K). A payload module's own
+network behaviour, beside its peers, is in §26.
 
 **The data path.**
 
@@ -397,6 +398,7 @@ Item 13. Five deadlines, in milliseconds, each 1 to 3,600,000 where configurable
   the host process must end"). At shutdown logosd retries the Runtime's destruction for `shutdown_grace_ms` plus 5 s; ending
   the process is the remaining escalation, which a service manager's stop timeout (90 s) performs.
 - **Loader loss** ends logosd with exit 4 ([DAEMON.md](DAEMON.md) §15).
+- **A payload module's figures** (its stop time, the shutdown grace its profile sets) are in §26.
 
 ## 14. Upgrade and verified defaults
 
@@ -479,7 +481,8 @@ Item 21.
 - **Other principals:** other operating-system users are kept out by the modes. Processes of the same
   user can read everything, and write the policy, the trust file and the evidence key.
 - **Backup and synchronization:** no synchronization facility exists. A backup or a synchronized copy
-  of the session holds everything, the evidence key's secret half included.
+  of the session holds everything, the evidence key's secret half included, and a payload module's
+  keys (§26).
 - **Restore:** a restored older `trust.cbor` is refused by continuity; a restored `state/` without its
   mark needs `logosctl trust reestablish`; a lost `state/` needs a new session ([DAEMON.md](DAEMON.md)
   §2, §6, §11).
@@ -591,6 +594,57 @@ would come with one.
   Store.
 - `tests/test_deployment.nim` checks the facts' `credential_store`, the default composition, logosd's
   acceptance of the operator module and its refusal at binding.
+
+## 26. Payload modules
+
+Not an item of its own. What items 6a, 8, 9 and 13 answer for logosd holds for every operator module; a
+payload module built on the kit adds where it may be placed, what it takes from its realization, its
+state, its stop figure and its network behaviour apart from its peers (BCP l.370). The module's README
+gives the same answers. Nothing here changes a row of the item table.
+
+### blockchain_module
+
+The Logos blockchain node as a module (DECISIONS G419–G424; the library's `logos_module/README.md`).
+
+- **Placement** (DECISIONS G421): `hosted_dynamic` with placement `process` only, one node per
+  process. The library's threads outlive `_MODULE_destroy`, so a host must never unload the library and
+  must end with `_exit` after the release; logosd's Module Host does both. `direct_dynamic` would leave
+  those threads in logosd's process. Nothing refuses another placement while NP-14 is open (a module
+  cannot declare the placements it supports): the operator's daemon-config decides.
+- **Resources** (D5 for blockchain, DECISIONS G422): the module takes only its typed configuration
+  (`blockchain_config.cddl`, delivered at init). It reads no environment variable and no home
+  directory. The chain's deployment is built in, or a read-only file the configuration names, with an
+  optional SHA-256 that init checks (DECISIONS G441). Its circuits are compiled in, it serves no HTTP
+  API, and it logs to standard error, which its Module Host inherits (§23). Its permission settings must
+  hold `logos-core-nim.host-ambient` (§7; [DAEMON.md](DAEMON.md), "Grants"); with it, its host has the
+  access of logosd's user (§8, 8b).
+- **State** (§9): its state directory `state/modules/<assignment>/` holds `keystore.yaml` (0600: the
+  node's keys, which the library makes at the first start, or placed before it; never rewritten),
+  `node/` (the library's database) and `run/` (the configuration rendered for the library, rewritten at
+  each start, no secret). The keystore is the node's identity and the key to its funds, protected by its
+  mode only (§19). A `state_transfers` entry with `copy` clones it: two instances then hold one identity
+  and spend the same funds. `move` hands it over.
+- **Stop figure** (DECISIONS G423): `_MODULE_init` starts the node and `_MODULE_destroy` stops it,
+  joins its work before returning and awaits no posted callback. Measured unprepared destroys: 1.2 ms on
+  macOS and 1.3 ms on Linux for an idle node, 0.5 to 670 ms under logosd in a Module Host. A library call
+  in flight holds destroy until it returns. The default `runtime.stop_deadline_ms` (10000) holds. A
+  daemon-config that runs the node sets `runtime.shutdown_grace_ms` to 20000, the node's figure (§13);
+  the node profile (Tier 5 step N-6a) will. An inner node that stops by itself makes
+  every method answer `unavailable` (`node-stopped`) and reports one failure: the instance is `error`
+  (`reported-by-module`) and a restart policy recovers it.
+- **Network behaviour apart from its peers** (BCP l.370):
+  - **Time.** The node asks the NTP server `time.ntp_server` at start and every `time.update_interval`
+    (15 s when absent), one request to each address the name resolves to. An unreachable server leaves
+    the slot timer on the local clock, with one warning each interval. `127.0.0.1:9` is the offline
+    value: an IP literal, so no resolver is asked, and nothing answers.
+  - **NAT.** With `network.nat` `static` the node sends nothing to the network's gateway. `traversal`
+    turns on the library's NAT behaviour: a gateway lookup, autonat, and port mapping through PCP,
+    NAT-PMP and UPnP.
+  - It listens on `network.listen_host` and `network.port`, and on `blend.port` once the blend
+    membership reaches the era's minimum size; it dials `network.initial_peers`.
+- **Bootstrap period.** With `cryptarchia.prolonged_bootstrap_period` absent, the library's hour
+  applies: for that hour a fresh node's `mode` is `bootstrapping` and it does not lead. A lower value is
+  logged once at start.
 
 ## Facts
 

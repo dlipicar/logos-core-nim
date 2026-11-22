@@ -144,6 +144,7 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-11 | NP-13 | provenance attests the assembled archive | open (E3) |
 | 5-13 | TF-43 (G310); the units still deferred | the member set of E1; E2's relabels | open (E1, E2, E3) |
 | N-2 | marked methods through the CLI | local targets only (INTERFACE l.368-369, l.373): a marked request from files or stdin, a marked response to stdout, every copy erased; non-local targets refused | decided 2026-11-17 (owner); built in N-2d (G349, I102) |
+| N-3 | the blockchain module's placements: NP-14, a module cannot declare the placements it supports (G421) | `hosted_dynamic` with placement `process` only, one node per process, stated in `docs/DEPLOYMENT.md` §26 and the module's README; nothing refuses another placement | decided 2026-11-21 (planning's ruling on the library's threads); built in N-3.3 (I118); NP-14 open |
 
 Unanswered upstream and bearing on Tier 5: NP-12 to NP-14 (NP-11 is settled by text: PM l.964, l.1172, and
 NP-15 by PM l.1096-1101 at 6cac8335),
@@ -468,6 +469,18 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
 
   Claimed: PKG-0083, PKG-0166, PKG-0169 and PKG-0418 to PKG-0421 (seven units; planning's rulings moved PKG-0083 from
   5-3b and PKG-0166 and PKG-0169 from 5-11). TXT-0463 cleared by test with PKG-0418. PKG-0167 goes to 5-3b.
+
+- 2026-11-22, Tier 5 step N-3 (I118), the blockchain node as a Logos Core module (G419-G424, G441; D10 revised,
+  G97 and G144 amended): a Nim confined kit module over the library's C binding, linked in as a static archive, in
+  the library's clone (`lcn/blockchain-module`). Contract v1 (three reads and `chain_progress_event`), the typed
+  configuration with no environment and no home directory, `_init` starting the node and an unprepared destroy
+  stopping it, placement `hosted_dynamic`/`process` only (NP-14 open; the open-items row). T9 runs it under logosd
+  in a Module Host with `logosctl`: a call, events, `describe`, a failure the restart policy recovers, five clean
+  stops, and a start refused without host-ambient. `docs/DEPLOYMENT.md` §26 answers for it as a payload module
+  (placement, resources, keystore, stop figure, NTP, NAT, the bootstrap period); no row of the item table changes,
+  and no inspection item is made untrue: CAP-0075 to CAP-0082 still hold (one permission, host-ambient), and rows
+  8b, 9 and 21 hold for the node's state and keystore. `docs/DAEMON.md` gains the module as the Grants example.
+  No unit changes status.
 
 ## Tiers at f4f83471 (the original plan)
 
