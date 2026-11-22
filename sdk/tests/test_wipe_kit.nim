@@ -7,7 +7,9 @@
 ## its sealed form and their value roots; the test wipes its own copies first.
 ## Hits are counted only where the scan sees the Nim heap (orc, arc). These
 ## paths carry a marked payload under refc too, unlike a Runtime's routes
-## (G277), so every other check runs there.
+## (G277), so every other check runs there. The Windows leg runs the suite
+## too: the scan is off there (`wipeAuditScans()`), so only the hit counts are
+## skipped and the suite needs no POSIX guard.
 
 import std/[os, strutils, sysrand]
 import unittest2

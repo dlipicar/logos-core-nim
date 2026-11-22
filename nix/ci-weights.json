@@ -572,6 +572,12 @@
   "test_wipe_cli-orc-release": 11.7,
   "test_wipe_cli-refc": 10.5,
   "test_wipe_cli-tsan": 15.3,
+  "test_wipe_kit-asan": 1.5,
+  "test_wipe_kit-msan": 2.6,
+  "test_wipe_kit-orc": 2.3,
+  "test_wipe_kit-orc-release": 1.7,
+  "test_wipe_kit-refc": 2.0,
+  "test_wipe_kit-tsan": 1.1,
   "test_wipe_routes-asan": 11.0,
   "test_wipe_routes-msan": 18.6,
   "test_wipe_routes-orc": 13.4,
@@ -581,10 +587,10 @@
  },
  "groupMeans": {
   "orc-spec": 6.0,
-  "asan": 10.1,
+  "asan": 10.0,
   "tsan": 6.9,
-  "msan": 10.9,
-  "refc": 5.6,
+  "msan": 10.8,
+  "refc": 5.5,
   "orc-release": 4.0
  },
  "estimated": {
@@ -598,6 +604,12 @@
   "test_lcn_call-asan": "aarch64 39.7 x 1.36; cut at 79.8 on x86_64",
   "test_lcn_call-msan": "cut on x86_64: a lower bound",
   "test_lcn_call-orc": "aarch64 16.7 x 1.46; cut at 7.9 on x86_64",
-  "test_wipe_cli-orc": "aarch64 9.3 x 1.46; cut at 6.6 on x86_64"
+  "test_wipe_cli-orc": "aarch64 9.3 x 1.46; cut at 6.6 on x86_64",
+  "test_wipe_kit-asan": "new check (X0.1); test_wipe-asan's minutes, core's erasure suite beside this SDK one",
+  "test_wipe_kit-msan": "new check (X0.1); test_wipe-msan's minutes, core's erasure suite beside this SDK one",
+  "test_wipe_kit-orc": "new check (X0.1); test_wipe-orc's minutes, core's erasure suite beside this SDK one",
+  "test_wipe_kit-orc-release": "new check (X0.1); test_wipe-orc-release's minutes, core's erasure suite beside this SDK one",
+  "test_wipe_kit-refc": "new check (X0.1); test_wipe-refc's minutes, core's erasure suite beside this SDK one",
+  "test_wipe_kit-tsan": "new check (X0.1); test_wipe-tsan's minutes, core's erasure suite beside this SDK one"
  }
 }
