@@ -20,11 +20,15 @@ adds the settings itself, a control case).
   python3 tools/lint/sanitizerenv.py tests sdk/tests
   python3 tools/lint/sanitizerenv.py --self-test
 
-Prints `file:line: rule: ...` for each and exits 1 if there is any. A heuristic over the source
+Prints `file:line: rule: ...` for each and exits 1 if there is any. A root that is not a
+directory, or a run that finds no `.nim` file at all, exits 2: run from the wrong folder or with a
+mistyped path, the lint would otherwise check nothing and pass. A heuristic over the source
 text: comment lines and string contents are ignored, and a statement runs on while its brackets
 are open (at most 30 lines).
 """
 
+import contextlib
+import io
 import os
 import re
 import sys
@@ -95,7 +99,7 @@ def check_file(path, rel, out):
                     out.append(f"{rel}:{i + 1}: opt-out: a host without the sanitizer settings, unmarked")
 
 
-def run(roots, base="."):
+def run(roots, base=".", seen=None):
     out = []
     for root in roots:
         for dirpath, dirnames, filenames in os.walk(os.path.join(base, root)):
@@ -105,8 +109,26 @@ def run(roots, base="."):
                 # (the self-test's temporary directory under the Mac's dev environment), not source.
                 if name.endswith(".nim") and not name.startswith("._"):
                     path = os.path.join(dirpath, name)
+                    if seen is not None:
+                        seen.append(path)
                     check_file(path, os.path.relpath(path, base), out)
     return out
+
+
+def lint(roots, base="."):
+    """The exit status over `roots`: 0 clean, 1 a finding, 2 nothing to check."""
+    for root in roots:
+        if not os.path.isdir(os.path.join(base, root)):
+            print(f"sanitizerenv: {root}: not a directory", file=sys.stderr)
+            return 2
+    seen = []
+    found = run(roots, base, seen)
+    if not seen:
+        print(f"sanitizerenv: no .nim file under {' '.join(roots)}", file=sys.stderr)
+        return 2
+    for x in found:
+        print(x)
+    return 1 if found else 0
 
 
 CLEAN = {
@@ -165,11 +187,40 @@ def self_test():
             elif len(found) != 1:
                 failures.append(f"{rel}: wanted one finding, got {found}")
             os.remove(path)
+
+    # The two runs that check nothing, a planted finding and the clean tree, through `lint`.
+    with tempfile.TemporaryDirectory() as tmp:
+        trees = {
+            "clean": CLEAN,
+            "planted": {"tests/test_c.nim": '  result.moduleHostEnv = @["TSAN_OPTIONS"]\n'},
+        }
+        for tree, files in trees.items():
+            for rel, text in files.items():
+                path = os.path.join(tmp, tree, rel)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(text)
+        os.makedirs(os.path.join(tmp, "empty", "tests"))
+        cases = [
+            ("a missing root", "clean", ["missing"], 2),
+            ("a missing root beside a good one", "clean", ["tests", "missing"], 2),
+            ("an empty root", "empty", ["tests"], 2),
+            ("a planted finding", "planted", ["tests"], 1),
+            ("the clean tree", "clean", ["tests"], 0),
+        ]
+        for what, tree, roots, want in cases:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                got = lint(roots, os.path.join(tmp, tree))
+            if got != want:
+                failures.append(f"{what}: exit {got}, want {want}")
     for failure in failures:
         print("self-test:", failure)
     if failures:
         return 1
-    print(f"sanitizerenv self-test: a clean tree and {len(PLANTS)} planted findings caught")
+    print(
+        f"sanitizerenv self-test: a clean tree and {len(PLANTS)} planted findings caught,"
+        f" and {len(cases)} cases through the exit status"
+    )
     return 0
 
 
@@ -179,10 +230,7 @@ def main(argv):
     if not argv:
         print(__doc__)
         return 2
-    found = run(argv)
-    for x in found:
-        print(x)
-    return 1 if found else 0
+    return lint(argv)
 
 
 if __name__ == "__main__":

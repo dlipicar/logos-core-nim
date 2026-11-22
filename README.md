@@ -167,18 +167,21 @@ python3 tools/lint/sanitizerenv.py tests sdk/tests
 ```
 
 A `?` inside a half-built constructor leaks under ORC on Nim 2.2.14 (I77). The flake's
-`lint-ctor-try` check rejects it; to run it by hand:
+`lint-ctor-try` check rejects it; to run it by hand, from the repository root (its default roots
+are the flake's: `src`, `sdk/src`, `sdk/tests` and `tests`; a missing root, or no `.nim` file at all,
+exits 2):
 
 ```bash
-python3 tools/lint/ctortry.py src tests
+python3 tools/lint/ctortry.py
 ```
 
 A local declared without an initializer, first written in a branch and written again after it,
 loses the branch's value undestroyed under ORC (I92, nim-lang/Nim#26725). The flake's
-`lint-first-write` check rejects it; to run it by hand:
+`lint-first-write` check rejects it; to run it by hand, from the repository root (the same
+default roots and exit status 2):
 
 ```bash
-python3 tools/lint/firstwrite.py src tests
+python3 tools/lint/firstwrite.py
 ```
 
 Core's programs (`lcn-pkg`, `logos-module-host`, and `logosd` and `logosctl` on POSIX hosts):
