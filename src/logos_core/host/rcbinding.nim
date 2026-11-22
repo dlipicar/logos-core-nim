@@ -33,7 +33,7 @@ import results
 import logos_sdk/abi/[checks, cstatus, types]
 import logos_sdk/base/perthread
 import logos_sdk/hash/hashinput
-import ../runtime/[entryframe, hostio, subend]
+import ../runtime/[entryframe, firstfresh, hostio, subend]
 import ../transport/io/api except decodeMessage
 import ./[consumer, endpoint, selected, state]
 
@@ -81,6 +81,18 @@ type Pool = object
 
 var events, completions: ptr Pool
 
+type FrameArgs = object
+  p: ptr Pool
+  f: ptr seq[byte]
+
+proc runFrameAt(arg: pointer) =
+  let a = cast[ptr FrameArgs](arg)
+  a.p.run(a.f[])
+
+when defined(lcnTestHooks):
+  proc frameKey(f: seq[byte]): pointer
+    ## [DECISIONS G466] The module callback a frame goes to, or nil.
+
 proc poolLoop(p: ptr Pool) =
   markHostThread()
   while true:
@@ -93,7 +105,10 @@ proc poolLoop(p: ptr Pool) =
       return
     withLock p.lock:
       dec p.idle
-    p.run(f)
+    # [DECISIONS G466] Under test hooks the first frame to each module callback
+    # runs on a new thread.
+    var a = FrameArgs(p: p, f: addr f)
+    firstOnFreshThread(frameKey(f), runFrameAt, addr a, markHostThread)
     withLock p.lock:
       inc p.idle
       dec p.pending
@@ -345,6 +360,29 @@ proc runCompletion(f: seq[byte]) =
     c.phase = hcDone
     c.completer = 0
     broadcast(callCond)
+
+when defined(lcnTestHooks):
+  proc frameKey(f: seq[byte]): pointer =
+    let m = decodeMessage(f).valueOr:
+      return nil
+    case m.kind
+    of LcnCarrierMessageKind.lcn_Carrier_rc_subscription_ended:
+      {.cast(gcsafe).}:
+        result = bindingSubEnd.handlerKeyForTests
+    of LcnCarrierMessageKind.lcn_Carrier_rc_delivery:
+      let d = m.arm_lcn_Carrier_rc_delivery
+      withLock subLock:
+        let s = findLocal(d.local)
+        if s != nil and s.ready:
+          result = cast[pointer](s.handler)
+    of LcnCarrierMessageKind.lcn_Carrier_async_done:
+      let d = m.arm_lcn_Carrier_async_done
+      withLock callLock:
+        let c = findCall(d.call)
+        if c != nil:
+          result = cast[pointer](c.complete)
+    else:
+      result = nil
 
 proc callOf(call: ptr LogosAsyncCall): ptr HostCall =
   if call == nil:

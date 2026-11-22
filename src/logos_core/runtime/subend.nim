@@ -86,6 +86,15 @@ proc report*(
   discard s.word.fetchSub(Running)
   true
 
+when defined(lcnTestHooks):
+  proc handlerKeyForTests*(s: var SubscriptionEndSlot): pointer =
+    ## [DECISIONS G466] Test hook: the handler a report would run, or nil when
+    ## none is installed or the slot is suppressed.
+    if (s.word.load and StateBits) == Installed:
+      cast[pointer](s.handler)
+    else:
+      nil
+
 proc suppress*(s: var SubscriptionEndSlot) =
   ## [SPEC INTERFACE l.1484, l.1954] Release or destroy: no report begins
   ## after this. The caller then waits while `busy`.

@@ -12,6 +12,8 @@
 import std/[atomics, monotimes, os, sequtils, strutils, times, typedthreads]
 import unittest2
 import ../src/logos_core/runtime/engine
+from ../src/logos_core/runtime/firstfresh import
+  handedOverForTests, onHandoverThreadForTests
 import logos_sdk/abi/types
 import logos_sdk/cbor
 import logos_sdk/commitment
@@ -52,6 +54,7 @@ type Done = object
   inside: Atomic[int]
   code: Atomic[int]
   thread: Atomic[int]
+  handedOver: Atomic[bool] ## [DECISIONS G466] it ran on a handover thread
   hold: Atomic[bool] ## the callback waits while it is true
   keep: bool ## keep the response owner for the test
   owner: LogosResponseOwner
@@ -65,6 +68,7 @@ proc clear(d: var Done, keep = false) =
   d.inside.store(0)
   d.code.store(-1)
   d.thread.store(0)
+  d.handedOver.store(false)
   d.hold.store(false)
   d.keep = keep
   d.owner = LogosResponseOwner()
@@ -84,6 +88,7 @@ proc onComplete(
   while d.hold.load:
     sleep(1)
   d.thread.store(getThreadId())
+  d.handedOver.store(onHandoverThreadForTests())
   let n = min(int(len), MaxResponse)
   for i in 0 ..< n:
     d.bytes[i] = response[i]
@@ -103,6 +108,17 @@ proc onComplete(
   d.code.store(int(r.code))
   d.inside -= 1
   d.count += 1
+
+proc onCompleteAlone(
+    userData: pointer,
+    r: LogosResult,
+    response: ptr UncheckedArray[uint8],
+    len: csize_t,
+    owner: LogosResponseOwner,
+) {.cdecl, gcsafe, raises: [].} =
+  ## [DECISIONS G466] `onComplete` under a pointer of its own, which no other
+  ## case delivers to.
+  onComplete(userData, r, response, len, owner)
 
 var done: array[4, Done]
 
@@ -140,11 +156,13 @@ proc options(timeoutMs = -1): LogosAsyncOptions =
     timeoutMs: uint64(max(timeoutMs, 0)),
   )
 
-proc callbacks(d: ptr Done): LogosAsyncCallbacks =
+proc callbacks(
+    d: ptr Done, complete: LogosAsyncCompleteFn = onComplete
+): LogosAsyncCallbacks =
   LogosAsyncCallbacks(
     abiVersion: AsyncCallAbiVersion,
     structSize: csize_t(sizeof(LogosAsyncCallbacks)),
-    complete: onComplete,
+    complete: complete,
     userData: d,
   )
 
@@ -154,9 +172,10 @@ proc prepare(
     d: ptr Done,
     timeoutMs = -1,
     name = "read",
+    complete: LogosAsyncCompleteFn = onComplete,
 ): (ErrorCode, LogosAsyncCall) =
   var o = options(timeoutMs)
-  var cb = callbacks(d)
+  var cb = callbacks(d, complete)
   var c = LogosAsyncCall()
   let r = h.vtable.prepareCall(
     addr h,
@@ -200,9 +219,13 @@ proc release(c: var LogosAsyncCall) =
   c.vtable.release(addr c)
 
 proc started(
-    h: var LogosRouteHandle, params: openArray[byte], d: ptr Done, timeoutMs = -1
+    h: var LogosRouteHandle,
+    params: openArray[byte],
+    d: ptr Done,
+    timeoutMs = -1,
+    complete: LogosAsyncCompleteFn = onComplete,
 ): LogosAsyncCall =
-  let (code, c) = h.prepare(params, d, timeoutMs)
+  let (code, c) = h.prepare(params, d, timeoutMs, complete = complete)
   check code == ecOk
   result = c
   result.submit()
@@ -337,6 +360,25 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     check r.label == c.instance
     check r.reading.value == 0 # not cancelled
     slow.release()
+    h.release()
+    e.finish()
+
+  test "[IMPL-DECISION G466] under test hooks the first completion to a callback runs on a new thread, and the later ones on the lifecycle workers":
+    let e = fixtureEngine(config())
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    let expected = h.raw("read", req(5)).response
+    let before = handedOverForTests()
+    for i in 0 ..< 3:
+      var call = h.started(req(5), addr done[i], complete = onCompleteAlone)
+      check done[i].finished
+      check done[i].codeOf == ecOk
+      check done[i].responseOf == expected
+      check done[i].handedOver.load == (i == 0)
+      check done[i].thread.load != getThreadId()
+      call.release()
+    check handedOverForTests() >= before + 1
     h.release()
     e.finish()
 

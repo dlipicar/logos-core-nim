@@ -64,7 +64,8 @@ import logos_sdk/hash/hashinput
 import logos_sdk/iface/[accept, outcome, surface]
 import ../transport/io/api except decodeMessage
 import ../transport/io/loop
-import ../runtime/[callcheck, entryframe, hostio, subend], logos_sdk/kit/rc_types
+import
+  ../runtime/[callcheck, entryframe, firstfresh, hostio, subend], logos_sdk/kit/rc_types
 import ./state
 
 const
@@ -369,6 +370,26 @@ var
 
 proc runJob(j: Job)
 
+proc runJobAt(p: pointer) =
+  runJob(cast[ptr Job](p)[])
+
+when defined(lcnTestHooks):
+  proc jobKey(j: Job): pointer =
+    ## [DECISIONS G466] The module callback the job runs, or nil: a closed
+    ## connection's report and a submission run none.
+    withLock cl:
+      case j.kind
+      of jkDrain:
+        result = cast[pointer](j.sub.handler)
+      of jkObserver:
+        result = cast[pointer](j.link.observer)
+      of jkSubEnd:
+        result = j.link.subEnd.handlerKeyForTests
+      of jkComplete:
+        result = cast[pointer](j.call.complete)
+      of jkClosed, jkSubmit, jkQuit:
+        result = nil
+
 proc workerMain() {.thread.} =
   markHostThread()
   while true:
@@ -381,7 +402,9 @@ proc workerMain() {.thread.} =
       break
     withLock workers.lock:
       dec workers.idle
-    runJob(j)
+    # [DECISIONS G466] Under test hooks the first job to each module callback
+    # runs on a new thread.
+    firstOnFreshThread(jobKey(j), runJobAt, addr j, markHostThread)
     withLock workers.lock:
       inc workers.idle
       dec workers.pending

@@ -149,9 +149,9 @@ from ../permissions import
 import
   ./[
     asynccall, authbinding, authscopes, bell, bindings, callside, dcache, events,
-    execauth, hostlock, hostsup, inventory, invoke, loaderbinding, observe, plumbing,
-    rcevents, served, servedroots, sessionauth, settings, sidetable, statexfer, store,
-    subend, transported,
+    execauth, firstfresh, hostlock, hostsup, inventory, invoke, loaderbinding, observe,
+    plumbing, rcevents, served, servedroots, sessionauth, settings, sidetable,
+    statexfer, store, subend, transported,
   ]
 
 export plumbing
@@ -743,10 +743,16 @@ proc workerLoop(s: ptr Shared) =
       job.destroy(job.context)
       s.post(Msg(kind: mkDestroyed, job: job.id))
     of jkObserveEnd:
-      runEnd(job.handle)
+      # [DECISIONS G466] Under test hooks the first to each callback is on a
+      # new thread.
+      firstOnFreshThread(
+        endKeyForTests(job.handle), runEnd, job.handle, markRuntimeThread
+      )
       s.post(Msg(kind: mkJobDone, job: job.id))
     of jkComplete:
-      runComplete(job.call)
+      firstOnFreshThread(
+        completeKeyForTests(job.call), runComplete, job.call, markRuntimeThread
+      )
       s.post(Msg(kind: mkCompleted, job: job.id, target: job.call))
     of jkRequestCancel:
       runRequestCancel(job.deferred)

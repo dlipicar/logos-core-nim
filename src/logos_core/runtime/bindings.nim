@@ -549,3 +549,10 @@ proc runEnd*(handle: pointer) =
       h.cb = cbDone
       broadcast(h.cond)
   dropHandle(h)
+
+when defined(lcnTestHooks):
+  proc endKeyForTests*(handle: pointer): pointer =
+    ## [DECISIONS G466] Test hook: the terminal callback `runEnd` runs.
+    let h = cast[ptr HandleState](handle)
+    withLock h.lock:
+      result = cast[pointer](h.handler)
