@@ -385,7 +385,7 @@ suite "engine resolution over signed archives (G405)":
     let direct = s.w.e.cache.inspect(archive, s.w.e.input.trust)
     check direct.kind == ikIneligible
 
-  test "[PKG-0167] a source with provenance_object resolves exactly as without, and no call names it":
+  test "[PKG-0166] [PKG-0167] a source with provenance_object resolves exactly as without, and no call names it":
     var plain =
       scene([(entryOf("app", "1.0.0"), app100), (entryOf("lib", "1.0.0"), lib100)])
     var e = entryOf("lib", "1.0.0")

@@ -149,9 +149,10 @@ default = "deferred:tier-5"
 # package/trustdoc.nim, so the Package Manager refuses it too. PKG-0166: only the
 # package trust file selects; a manifest field is refused by its decoder and a
 # source's provenance_object selects nothing. Of the sources PM l.733-734 lists,
-# the Storage object arrives with 5-3b and the caller with 5-6a, and Nix metadata
-# and the provenance object only if 5-10 and 5-11 are built: each of those steps
-# adds its case under [PKG-0166]. The claim covers "select" until a profile can
+# the Storage object arrived with 5-3b-1 (tests/test_pm_driver.nim: a Storage
+# object named as provenance_object changes nothing), the caller comes with 5-6a,
+# and Nix metadata and the provenance object only if 5-10 and 5-11 are built:
+# each of those steps adds its case under [PKG-0166]. The claim covers "select" until a profile can
 # be selected; "disable" and "weaken" have no object before then.
 "PKG-0166" = "claimed"
 "PKG-0169" = "claimed"
