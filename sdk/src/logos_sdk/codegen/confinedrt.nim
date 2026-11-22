@@ -2151,13 +2151,8 @@ proc poster*(s: ModuleServices): Poster =
   ## post gate value (DECISIONS G440), read without touching the context.
   Poster(s.gateOf)
 
-proc post*(p: Poster, fn: PostFn, payload: pointer) =
-  ## [IMPL] Runs `fn(payload)` on the module thread. Any thread, one the Nim
-  ## runtime never saw included: only the C allocator, and a failure aborts. A
-  ## callback still runs while `destroyModule` runs, which may await it; one
-  ## still queued when `destroyModule` has returned is dropped without running
-  ## (DECISIONS G437), so `fn` owns `payload` only once it runs; stop posting
-  ## before `destroyModule` returns.
+proc postRaw(p: Poster, fn: PostFn, payload: pointer) =
+  ## `post` without the mark's check: `lcn_kit_post`'s, whose callers are C.
   if pointer(p) == nil or fn == nil:
     die("post: a null poster or callback")
   let n = cast[ptr PostNode](cMalloc(csize_t(sizeof(PostNode))))
@@ -2184,6 +2179,16 @@ proc post*(p: Poster, fn: PostFn, payload: pointer) =
   fire(ctx.signal)
   release(ctx.lock)
   release(slot.lock)
+
+proc post*(p: Poster, fn: Entered[PostFn], payload: pointer) =
+  ## [IMPL] Runs `fn(payload)` on the module thread. Any thread, one the Nim
+  ## runtime never saw included: only the C allocator, and a failure aborts. A
+  ## callback still runs while `destroyModule` runs, which may await it; one
+  ## still queued when `destroyModule` has returned is dropped without running
+  ## (DECISIONS G437), so `fn` owns `payload` only once it runs; stop posting
+  ## before `destroyModule` returns. `fn` is `entered(p)` of a procedure marked
+  ## `{.lcnModuleThread.}` (DECISIONS G464, G465).
+  postRaw(p, fn.fn, payload)
 
 proc postTask(context: pointer, task: ptr TaskNode): bool =
   ## [DECISIONS G339, P1] The confined dispatcher's `post`: queues a task its
@@ -2231,7 +2236,7 @@ proc lcnKitPost(
 ) {.exportc: "lcn_kit_post", cdecl, gcsafe, raises: [].} =
   ## `post` for C code linked into the module library (a Rust staticlib's
   ## threads): `void lcn_kit_post(void *poster, void (*fn)(void *), void *payload)`.
-  post(Poster(poster), fn, payload)
+  postRaw(Poster(poster), fn, payload)
 
 proc onItsModuleThread*(s: ModuleServices): bool =
   ## Whether the calling thread is the module thread of `s`'s context.

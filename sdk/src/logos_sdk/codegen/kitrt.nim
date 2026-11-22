@@ -55,10 +55,10 @@ import ../cbor
 import ../pins
 import ../iface/[accept, outcome, payload]
 import ../abi/[types, checks]
-import ../base/[libvisibility, perthread, wipe]
+import ../base/[entry, libvisibility, perthread, wipe]
 import ./[handover, nimrt]
 
-export results, outcome, types, payload, nimrt, handover
+export results, outcome, types, payload, nimrt, handover, entry
 
 proc cMalloc(size: csize_t): pointer {.importc: "malloc", header: "<stdlib.h>".}
 proc cFree(p: pointer) {.importc: "free", header: "<stdlib.h>".}
@@ -149,33 +149,20 @@ type
 
 template kitEnter*() =
   ## [IMPL] The first statement of every exported entry, in the entry's own
-  ## frame (the procedures below run in deeper frames). Registers the calling
-  ## thread with this library's Nim runtime (`setupForeignThreadGc` is
-  ## idempotent) and, under refc, raises the collector's stack bottom to this
-  ## frame: refc scans only between the stack pointer and the bottom it
-  ## recorded, and a shared library's runtime starts in a load-time constructor
-  ## deeper in the stack than the calls that come later. Without it refc takes
-  ## the entry's stack slots for heap slots.
-  setupForeignThreadGc()
-  enterThread()
-  when not defined(gcDestructors):
-    var kitStackBottom {.volatile, noinit.}: pointer
-    nimGC_setStackBottom(addr kitStackBottom)
+  ## frame (the procedures below run in deeper frames): `enterForeignThread`
+  ## (`base/entry`), which registers the calling thread with this library's
+  ## Nim runtime and, under refc, raises the collector's stack bottom to this
+  ## frame, then the thread's last failure is cleared.
+  enterForeignThread()
   clearLastFailure()
 
 template callbackEnter*() =
-  ## [IMPL] The first statement of a callback a binding runs into this library
-  ## (a typed helper's event handler, end report or completion; DECISIONS G339),
-  ## in the callback's own frame: `kitEnter` without clearing the thread's last
-  ## failure, since a callback may run nested inside one of this library's
-  ## entries (a direct provider publishing during a call, INTERFACE l.1405).
-  ## Under refc the stack bottom only ever widens, so a nested callback leaves
-  ## the outer frames scanned.
-  setupForeignThreadGc()
-  enterThread()
-  when not defined(gcDestructors):
-    var kitStackBottom {.volatile, noinit.}: pointer
-    nimGC_setStackBottom(addr kitStackBottom)
+  ## [IMPL] `kitEnter` without clearing the thread's last failure, since a
+  ## callback may run nested inside one of this library's entries (a direct
+  ## provider publishing during a call, INTERFACE l.1405). A procedure a
+  ## binding runs is marked `{.lcnCallback.}` (DECISIONS G339, G464), which
+  ## makes this its first statement.
+  enterForeignThread()
 
 # Failures --------------------------------------------------------------------------
 
@@ -281,19 +268,9 @@ proc failureResult*(f: InvocationFailure): LogosResult =
 
 # Services and the confined scope ---------------------------------------------------
 
-var
-  confinedThread {.threadvar.}: bool ## this thread is a confined kit's module thread
-  confinedScope {.threadvar.}: ptr ConfinedScope
-    ## the plain handler running on this module thread, if any (G336)
-
-proc enterConfinedThread*() =
-  ## [DECISIONS G336] Marks the calling thread as a confined kit's module
-  ## thread: from now on the invocation-scoped operations read its confined
-  ## scope, which is nil outside a plain handler (NOT_READY).
-  confinedThread = true
-
-proc onConfinedThread*(): bool =
-  confinedThread
+var confinedScope {.threadvar.}: ptr ConfinedScope
+  ## the plain handler running on this module thread, if any (G336)
+  ## (`base/entry` keeps whether this thread is one: `onConfinedThread`)
 
 proc swapConfinedScope*(scope: ptr ConfinedScope): ptr ConfinedScope =
   ## [DECISIONS G336] Sets this module thread's confined scope and returns the
@@ -679,7 +656,7 @@ proc currentContext*(s: ModuleServices): ptr LogosInvocationContext =
   s.invocationAccess.current(s.invocationAccess.state)
 
 proc currentInvocation(s: ModuleServices): ptr LogosInvocationContext =
-  if confinedThread:
+  if onConfinedThread():
     # [DECISIONS G336] A module thread acts only for the job whose plain
     # handler it runs.
     return (if confinedScope == nil: nil else: confinedScope.invocation)
@@ -690,7 +667,7 @@ proc activeInvocation(
 ): Result[ptr LogosInvocationContext, InvocationFailure] =
   let c = s.currentInvocation()
   if c == nil:
-    if confinedThread:
+    if onConfinedThread():
       return err(
         failure(
           ecNotReady,
@@ -724,7 +701,7 @@ proc publishScopedEncoded*(
   let c = ?s.activeInvocation()
   if data.len == 0:
     return err(moduleError("an event payload is one CBOR map"))
-  if confinedThread and confinedScope.publish != nil:
+  if onConfinedThread() and confinedScope.publish != nil:
     return confinedScope.publish(confinedScope.job, eventId, data)
   publishVia(c, eventId, data)
 

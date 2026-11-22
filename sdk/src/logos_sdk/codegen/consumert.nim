@@ -71,7 +71,7 @@
 ## Handlers and completions run on whatever thread the binding uses, and may run
 ## on a different thread from one delivery to the next; a delivery may be one the
 ## binding queued (l.1406-1408). Each callback registers its thread with this
-## library's Nim runtime first (`kitrt.callbackEnter`), as an exported entry
+## library's Nim runtime first (`{.lcnCallback.}`, DECISIONS G464), as an exported entry
 ## does. Under refc they must not keep GC'd values (DECISIONS I71).
 ##
 ## **A confined kit's handles** (DECISIONS G335, G339; P1, P2). A handle
@@ -681,8 +681,7 @@ proc queueEvent(
 
 proc onEventCb(
     eventName: cstring, data: ptr UncheckedArray[uint8], len: csize_t, userData: pointer
-) {.cdecl, gcsafe, raises: [].} =
-  callbackEnter()
+) {.lcnCallback.} =
   let s = cast[ptr SubObj](userData)
   let d = s.dispatcherOf
   if d.confined:
@@ -701,8 +700,7 @@ proc onEventCb(
     leaveCallback(h)
   leaveFrame(s)
 
-proc onRouteEndCb(reason: CErrorCode, userData: pointer) {.cdecl, gcsafe, raises: [].} =
-  callbackEnter()
+proc onRouteEndCb(reason: CErrorCode, userData: pointer) {.lcnCallback.} =
   let h = cast[RouteHandle](userData)
   var expected = 0'i32
   discard h.endCode.compareExchange(expected, int32(reason))
@@ -726,8 +724,7 @@ proc onRouteEndCb(reason: CErrorCode, userData: pointer) {.cdecl, gcsafe, raises
 
 proc onSubscriptionEndCb(
     id: LogosSubscriptionId, reason: CErrorCode, userData: pointer
-) {.cdecl, gcsafe, raises: [].} =
-  callbackEnter()
+) {.lcnCallback.} =
   let h = cast[RouteHandle](userData)
   let s = findLive(addr h.stateLock, h.subs, id)
   if s.isNil:
@@ -744,8 +741,7 @@ proc onSubscriptionEndCb(
 
 proc onBindingEndCb(
     id: LogosSubscriptionId, reason: CErrorCode, userData: pointer
-) {.cdecl, gcsafe, raises: [].} =
-  callbackEnter()
+) {.lcnCallback.} =
   let b = cast[BindingEvents](userData)
   let s = findLive(addr b.stateLock, b.subs, id)
   if s.isNil:
@@ -1142,8 +1138,7 @@ proc onCompleteCb(
     response: ptr UncheckedArray[uint8],
     len: csize_t,
     owner: LogosResponseOwner,
-) {.cdecl, gcsafe, raises: [].} =
-  callbackEnter()
+) {.lcnCallback.} =
   let c = cast[ptr CallObj](userData)
   if c.dispatch.confined:
     # [DECISIONS G339] Copied here, the owner cleared here (l.2052), decoded
