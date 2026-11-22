@@ -367,18 +367,22 @@ reached:
   four values. A limit that ends an operation answers `dependency-unavailable`, as a missing dependency
   does; the Package Manager's log names the limit;
   - **What raising a limit costs.** Nothing but the limits ends a resolution (PM l.1279-1280), and each
-    step of one holds the Package Manager's module thread. At the preset an honest closure holds it
-    under 1 s for each step. A package with a maximum-size manifest (4 MiB, about 80,000 dependency
-    entries) anywhere in the closure costs about 55 ms (Mac) to 75 ms (Linux) for each attempt, so
-    `assignment_attempts` sets the longest hold: about 56 to 76 s at the preset's 1,024, and about
-    14.5 h at the maximum, by extrapolation. Raising `dependency_depth` and `partial_closure_names` lets a dense
-    closure grow: 256 names take about 0.6 to 0.7 s for the longest step and about a minute in all, and
-    4,096 names about 50 min and 48 days, by extrapolation. CONFORMANCE's tables give the measured
-    figures on both machines. Any accepted signer with a package in the closure can bring these costs,
-    not only the root's, so a raised limit is the operator's choice for every package its trust admits;
+    step of one holds the Package Manager's module thread. Since 5-3c-1 (DECISIONS G454) an attempt
+    no longer scans every required name and a bind recomputes only the depths it changes. At the
+    preset the longest step is under 0.1 s for every measured shape, a package with a maximum-size
+    manifest (4 MiB, about 80,000 dependency entries) in the closure included (78 ms on the Mac and
+    87 ms on Linux, against about 56 and 76 s before). At the maximum `assignment_attempts` such a package costs about 2.4 s
+    for one run, by extrapolation (before: about 14.5 h). Raising `dependency_depth` and
+    `partial_closure_names` lets a dense closure grow: 4,096 names take about 6 to 8 s for one run
+    and 7.4 GiB of memory at peak. Until 5-3c-2 (G455) the driver reruns the resolver from the root after
+    each inspection, so a closure of n names takes n + 1 such runs in all. CONFORMANCE's tables give
+    the measured figures on both machines, before and after. Any accepted signer with a package in the
+    closure can bring these costs, not only the root's, so a raised limit is the operator's choice for
+    every package its trust admits;
 - the Package Manager's own bounds, `package_manager.limits` ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md)
   §2): one archive (`archive_bytes`, 1 GiB by default, held in memory in the Package Manager's process
-  while it is inspected), the catalog document (4 MiB) and its entries (65,536), and the verification
+  while it is inspected; one inspection peaks at about 8.2 times the archive, 8.8 GiB for 1 GiB, and
+  holds the module thread about 4 to 6 s: CONFORMANCE "The archive's inspection"), the catalog document (4 MiB) and its entries (65,536), and the verification
   cache (256 entries). A larger archive leaves its candidate unavailable; a larger catalog is refused
   and the one in use stays; the cache drops its least recently used entry.
 

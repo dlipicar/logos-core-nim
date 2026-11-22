@@ -4,7 +4,7 @@
 ## logs every source it is asked about; one test resolves real signed LGX
 ## packages through `lgxInspector`.
 
-import std/[random, sequtils, sets, strutils, tables]
+import std/[algorithm, random, sequtils, sets, strutils, tables]
 import unittest2
 import logos_sdk/[cbor, pins]
 import logos_sdk/base/hex
@@ -12,6 +12,8 @@ import logos_sdk/testing/specdata
 import logos_sdk/crypto/blake3, ../src/logos_core/crypto/slhdsa
 import ../src/logos_core/pins as core_pins
 import ../src/logos_core/package/[lgx, resolver, signing, trust]
+import ../src/logos_core/daemon/config
+import ./support/[oracle_resolver, pmshapes]
 
 proc b(s: string): seq[byte] =
   @(s.toOpenArrayByte(0, s.high))
@@ -1474,69 +1476,491 @@ suite "pkg.resolver: dependency resolution (PM §11)":
     check satisfies(rkExact, "1.0.0-rc.1", "1.0.0-rc.1")
     check not satisfies(rkExact, "1.0.0", "1.0.0-rc.1")
 
-  test "[IMPL] one cycle walk per bind gives the per-dependency walks' results, counters and inspections (the ruling of 2026-11-22, 7.2)":
-    # Seeded catalogs with cycles, self-requirements, exact pins, ineligible
-    # records and tight limits, each resolved twice: with 5-3b-1's check (one
-    # walk per bound dependency, the test hook) and with the one walk.
-    var rng = initRand(0x5_3B_2)
-    const names = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"]
-    const versions = ["1.0.0", "1.1.0", "1.2.0", "2.0.0"]
-    var outcomes: CountTable[string]
-    for round in 0 ..< 400:
-      let u = Universe()
-      let n = rng.rand(2 .. names.len)
-      for i in 0 ..< n:
-        for v in versions[0 ..< rng.rand(1 .. versions.len)]:
-          var deps: seq[string]
-          for _ in 0 ..< rng.rand(0 .. 4):
-            let target = names[rng.rand(0 ..< n)]
-            let req = versions[rng.rand(0 ..< versions.len)]
-            deps.add(target & (if rng.rand(0 .. 3) == 0: " =" else: " ^") & req)
-          if rng.rand(0 .. 9) == 0:
-            u.add(names[i], v, deps, outcome = ikIneligible)
-          else:
-            u.add(names[i], v, deps)
-      let lim = limits(
-        names = rng.rand(1 .. 16),
-        depth = rng.rand(1 .. 15),
-        candidates = rng.rand(1 .. 6),
-        attempts = rng.rand(1 .. 30),
+# The frozen oracle (Tier 5 step 5-3c; DECISIONS G454) ---------------------------------
+
+proc commitmentText(c: ManifestCommitment): string =
+  toHex(encodeCbor(c.toCbor))
+
+proc described(r: Result[Resolution, PackageError], c: ResolverCounters): seq[string] =
+  ## Everything one resolution reports, a line per item, to compare two resolvers by.
+  if r.isErr:
+    result.add("error " & $r.error.code & ": " & r.error.msg)
+  else:
+    let s = r.get
+    result.add("root " & $s.root & " unchanged=" & $s.unchanged)
+    for p in s.packages:
+      result.add(
+        $p.identity & " " & commitmentText(p.commitment) & " installed=" & $p.installed &
+          " source=" & (if p.source.isSome: toHex(p.source.get.encoded)
+        else: "none") & " depth=" & $p.depth & " edges=" &
+          p.resolvedDependencies
+          .mapIt($it.identity & "/" & commitmentText(it.commitment))
+          .join(",")
       )
-      let root = RootReference(package: Opt.some(names[rng.rand(0 ..< n)]))
-      checkpoint "round " & $round
-      perDependencyWalk = true
-      let before = u.resolveRoot(root, lim)
-      let beforeLog = u.log
-      perDependencyWalk = false
-      let after = u.resolveRoot(root, lim)
-      check after.picked == before.picked
-      check u.log == beforeLog
-      check after.counters.names == before.counters.names
-      check after.counters.depth == before.counters.depth
-      check after.counters.considered == before.counters.considered
-      check after.counters.attempts == before.counters.attempts
-      check after.counters.limit == before.counters.limit
-      if after.res.isOk:
-        check after.res.get.packages.mapIt(it.depth) ==
-          before.res.get.packages.mapIt(it.depth)
-      outcomes.inc(after.code & "/" & after.counters.limit)
-    checkpoint $outcomes
-    # The rounds reach both outcomes and every limit.
-    check outcomes.len >= 5
-    var resolved, failed = 0
-    for k, c in outcomes:
-      if k.startsWith("ok/"):
-        resolved += c
+    let k = s.counters
+    result.add(
+      "its counters " & $k.names & " " & $k.depth & " " & $k.considered & " " &
+        $k.attempts & " " & k.limit
+    )
+  result.add(
+    "counters names=" & $c.names & " depth=" & $c.depth & " considered=" & $c.considered &
+      " attempts=" & $c.attempts & " limit=" & c.limit
+  )
+
+proc resolveBy(
+    u: Universe, root: RootReference, lim: ResolverLimits, oracle: bool
+): seq[string] =
+  ## One resolution by the resolver or by the oracle: what it reports, then the sources it
+  ## inspected and the installed records whose retained bytes it checked, in order.
+  u.log.setLen(0)
+  u.checked.setLen(0)
+  var c: ResolverCounters
+  let input = ResolverInput(
+    installed: u.installed,
+    catalog: u.catalog,
+    limits: lim,
+    trust: u.trust,
+    inspect: u.inspector,
+    retained: u.retained,
+  )
+  let r =
+    if oracle:
+      oracleResolve(input, root, c)
+    else:
+      resolve(input, root, c)
+  result = described(r, c)
+  result.add("inspected " & u.log.join(" "))
+  result.add("checked " & u.checked.join(" "))
+
+type
+  Feature = enum
+    gfIneligible = "an ineligible record"
+    gfUnsupported = "a record with an unsupported schema"
+    gfPlatform = "a record for another platform"
+    gfUnavailable = "an unavailable record"
+    gfClaims = "a record whose manifest names another identity"
+    gfPrerelease = "a pre-release"
+    gfExact = "an exact requirement"
+    gfContracts = "a requirement listing a contract"
+    gfProvides = "a record providing contracts"
+    gfSelf = "a self-dependency"
+    gfBackEdge = "a dependency on an earlier name (a possible cycle)"
+    gfSources = "an identity with two equivalent sources"
+    gfTwoCommitments = "an identity with two commitments (G74)"
+    gfUnavailableSecond = "an identity whose second source is unavailable"
+    gfInstalled = "an installed record"
+    gfPinned = "an installed record with recorded edges"
+    gfPinConflict = "a recorded edge naming another commitment"
+    gfAltered = "an installed record with altered retained bytes"
+    gfWithdrawn = "an installed record whose signer is withdrawn"
+    gfB7 = "a withdrawn signer whose commitment the catalog lists (B7)"
+    gfInstalledConflict =
+      "an installed identity the catalog lists with another commitment"
+    gfInstalledUnsupported = "an installed record with an unsupported schema"
+    gfRetainedUnlisted =
+      "an installed record whose retained source the catalog does not list"
+    gfRootName = "a root by name"
+    gfRootVersion = "a root by name and version"
+    gfRootSource = "a root by source"
+    gfRootSourceName = "a root by source and name"
+    gfRootUpdate = "a root by update"
+    gfRootUpdateTarget = "an update with a target version or source"
+    gfSmallLimits = "small limits"
+
+  Round = object
+    u: Universe
+    root: RootReference
+    limits: ResolverLimits
+
+const
+  oracleNames = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"]
+  oracleVersions = ["0.1.0", "1.0.0", "1.1.0", "1.2.0-rc.1", "1.2.0", "2.0.0"]
+
+proc anyVersion(rng: var Rand): string =
+  oracleVersions[rng.rand(0 ..< oracleVersions.len)]
+
+proc requirement(
+    rng: var Rand, target: int, versionsOf: seq[seq[string]], seen: var set[Feature]
+): string =
+  ## Mostly a version the target has, so that most requirements can be met.
+  let v =
+    if rng.rand(0 .. 7) > 0:
+      versionsOf[target][rng.rand(0 ..< versionsOf[target].len)]
+    else:
+      rng.anyVersion
+  if '-' in v:
+    seen.incl gfPrerelease
+  if rng.rand(0 .. 4) == 0:
+    seen.incl gfExact
+    result = oracleNames[target] & " =" & v
+  else:
+    result = oracleNames[target] & " ^" & v
+  if rng.rand(0 .. 11) == 0:
+    seen.incl gfContracts
+    result.add(if rng.rand(0 .. 1) == 0: " +x" else: " +y")
+
+proc dependencies(
+    rng: var Rand, self: int, versionsOf: seq[seq[string]], seen: var set[Feature]
+): seq[string] =
+  ## As a verified manifest has them: each name once, in name order (`manifest.nim`). Mostly one
+  ## of the next three names, so closures grow deep; any name, an earlier one or itself, one time
+  ## in ten.
+  let n = versionsOf.len
+  var targets: seq[int]
+  for _ in 0 ..< (if self + 1 >= n: rng.rand(0 .. 2) else: rng.rand(1 .. 4)):
+    let t =
+      if rng.rand(1 .. 10) == 1 or self + 1 >= n:
+        rng.rand(0 ..< n)
       else:
-        failed += c
-    check resolved > 20 and failed > 20
+        rng.rand(self + 1 .. min(n - 1, self + 3))
+    if t == self and rng.rand(0 .. 3) > 0:
+      continue # a self-dependency, but rarely
+    if t notin targets:
+      targets.add(t)
+  targets.sort()
+  for t in targets:
+    if t == self:
+      seen.incl gfSelf
+    elif t < self:
+      seen.incl gfBackEdge
+    result.add(rng.requirement(t, versionsOf, seen))
+
+proc generated(rng: var Rand, seen: var set[Feature]): Round =
+  ## One seeded catalog, installed state, root and limits.
+  let u = Universe()
+  let n = rng.rand(2 .. oracleNames.len)
+  var versionsOf: seq[seq[string]]
+  for i in 0 ..< n:
+    var vs = @oracleVersions
+    rng.shuffle(vs)
+    versionsOf.add(vs[0 ..< rng.rand(1 .. vs.len)])
+  var listed: seq[(int, string, seq[string], seq[string])]
+    ## eligible records: name index, version, dependencies, provided contracts
+  for i in 0 ..< n:
+    let name = oracleNames[i]
+    for v in versionsOf[i]:
+      if '-' in v:
+        seen.incl gfPrerelease
+      let deps = rng.dependencies(i, versionsOf, seen)
+      var provides: seq[string]
+      case rng.rand(0 .. 3)
+      of 0:
+        provides = @["x"]
+      of 1:
+        provides = @["y"]
+      of 2:
+        provides = @["x", "y"]
+      else:
+        discard
+      if provides.len > 0:
+        seen.incl gfProvides
+      case rng.rand(0 .. 119)
+      of 0 .. 5:
+        seen.incl gfIneligible
+        u.add(name, v, deps, outcome = ikIneligible)
+      of 6, 7:
+        seen.incl gfUnsupported
+        u.add(name, v, deps, outcome = ikIneligible, code = pecUnsupportedManifest)
+      of 8, 9:
+        seen.incl gfPlatform
+        u.add(name, v, deps, outcome = ikIneligible, code = pecIncompatiblePlatform)
+      of 10:
+        seen.incl gfUnavailable
+        u.add(name, v, deps, outcome = ikUnavailable)
+      of 11:
+        seen.incl gfClaims
+        u.add(name, v, deps, claims = name & "@" & rng.anyVersion, provides = provides)
+      else:
+        u.add(name, v, deps, provides = provides)
+        listed.add((i, v, deps, provides))
+      case rng.rand(0 .. 59)
+      of 0 .. 3:
+        seen.incl gfSources
+        u.add(name, v, deps, n = 1, provides = provides)
+      of 4:
+        seen.incl gfTwoCommitments
+        u.add(name, v, deps, n = 1, seed = "other", provides = provides)
+      of 5:
+        seen.incl gfUnavailableSecond
+        u.add(name, v, deps, n = 1, outcome = ikUnavailable)
+      else:
+        discard
+  # Installed state: at most one record per name, its edges naming installed records where there
+  # are some.
+  type Kept = object
+    name, version, seed: string
+    deps, provides: seq[string]
+    withdrawn, supported: bool
+    n: int
+
+  var kept: seq[Kept]
+  if rng.rand(0 .. 1) == 0:
+    seen.incl gfInstalled
+    for _ in 0 ..< rng.rand(1 .. 4):
+      var k = Kept(supported: true)
+      var i: int
+      if listed.len > 0 and rng.rand(0 .. 2) > 0:
+        let l = listed[rng.rand(0 ..< listed.len)]
+        i = l[0]
+        k.version = l[1]
+        k.deps = l[2]
+        k.provides = l[3]
+      else:
+        i = rng.rand(0 ..< n)
+        k.version = rng.anyVersion
+        k.deps = rng.dependencies(i, versionsOf, seen)
+      k.name = oracleNames[i]
+      if kept.anyIt(it.name == k.name):
+        continue
+      case rng.rand(0 .. 15)
+      of 0, 1:
+        seen.incl gfInstalledConflict
+        k.seed = "installed"
+      of 2, 3:
+        seen.incl gfWithdrawn
+        k.withdrawn = true
+        if listed.anyIt(oracleNames[it[0]] == k.name and it[1] == k.version):
+          seen.incl gfB7
+      of 4:
+        seen.incl gfInstalledUnsupported
+        k.supported = false
+      else:
+        discard
+      if rng.rand(0 .. 4) == 0:
+        seen.incl gfRetainedUnlisted
+        k.n = 2
+      kept.add(k)
+  for k in kept:
+    var edges: seq[string]
+    if k.deps.len > 0 and rng.rand(0 .. 3) > 0:
+      seen.incl gfPinned
+      for d in k.deps:
+        let target = d.split(' ')[0]
+        var e = ""
+        for t in kept:
+          if t.name == target:
+            e = t.name & "@" & t.version & (if t.seed.len > 0: "/" & t.seed
+            else: "")
+        if e.len == 0:
+          e = target & "@" & rng.anyVersion
+        if rng.rand(0 .. 7) == 0:
+          seen.incl gfPinConflict
+          e = e.split('/')[0] & "/other"
+        edges.add(e)
+    u.install(
+      k.name,
+      k.version,
+      k.deps,
+      edges,
+      seed = k.seed,
+      provides = k.provides,
+      withdrawn = k.withdrawn,
+      supported = k.supported,
+      n = k.n,
+    )
+    if rng.rand(0 .. 5) == 0:
+      seen.incl gfAltered
+      u.altered.incl(k.name & "@" & k.version)
+  # The root.
+  var root: RootReference
+  let pick = rng.rand(0 .. 15)
+  if pick >= 13 and kept.len > 0:
+    seen.incl gfRootUpdate
+    let k = kept[rng.rand(0 ..< kept.len)]
+    root.newerThan = Opt.some(PackageIdentity(package: k.name, version: k.version))
+    if rng.rand(0 .. 3) == 0:
+      seen.incl gfRootUpdateTarget
+      root.version = Opt.some(rng.anyVersion)
+    if rng.rand(0 .. 3) == 0:
+      seen.incl gfRootUpdateTarget
+      root.source = Opt.some(source(k.name, rng.anyVersion, rng.rand(0 .. 1)))
+  elif pick >= 10:
+    # Mostly a source the catalog lists.
+    seen.incl gfRootSource
+    let i = rng.rand(0 ..< n)
+    let name = oracleNames[i]
+    if rng.rand(0 .. 3) > 0:
+      let e = u.catalog[rng.rand(0 ..< u.catalog.len)]
+      root.source = Opt.some(e.source)
+      root.package = Opt.some(e.identity.package)
+    else:
+      root.source = Opt.some(source(name, rng.anyVersion, rng.rand(0 .. 2)))
+      root.package = Opt.some(name)
+    if rng.rand(0 .. 1) == 0:
+      root.package = Opt.none(string)
+    else:
+      seen.incl gfRootSourceName
+      if rng.rand(0 .. 5) == 0:
+        root.package = Opt.some(oracleNames[rng.rand(0 ..< n)])
+  else:
+    seen.incl gfRootName
+    let i =
+      if rng.rand(0 .. 3) > 0:
+        rng.rand(0 .. min(2, n - 1))
+      else:
+        rng.rand(0 ..< n)
+    root.package = Opt.some(oracleNames[i])
+    if rng.rand(0 .. 3) == 0:
+      seen.incl gfRootVersion
+      root.version = Opt.some(
+        if rng.rand(0 .. 3) > 0:
+          versionsOf[i][rng.rand(0 ..< versionsOf[i].len)]
+        else:
+          rng.anyVersion
+      )
+  let lim =
+    if rng.rand(0 .. 2) == 0:
+      limits()
+    else:
+      seen.incl gfSmallLimits
+      limits(
+        names = rng.rand(1 .. 14),
+        depth = rng.rand(1 .. 12),
+        candidates = rng.rand(1 .. 6),
+        attempts = rng.rand(1 .. 24),
+      )
+  Round(u: u, root: root, limits: lim)
+
+proc dagRound(rng: var Rand): Round =
+  ## A seeded acyclic catalog for the depth bookkeeping: names required only by names of a lower
+  ## rank, a random order other than the names', so a name bound early is often required later
+  ## by a deeper one, which deepens it and what it requires. Some requirements no version meets
+  ## (`=2.0.0`), found only at the target's frame, so the search backtracks over binds that
+  ## deepened names, and their other versions require other names.
+  let u = Universe()
+  let n = rng.rand(5 .. oracleNames.len)
+  var rank: seq[int]
+  for i in 0 ..< n:
+    rank.add(i)
+  rng.shuffle(rank)
+  const series = ["1.0.0", "1.1.0", "1.2.0", "1.3.0"]
+  var versionsOf: seq[seq[string]]
+  for i in 0 ..< n:
+    var vs = @series
+    rng.shuffle(vs)
+    versionsOf.add(vs[0 ..< rng.rand(1 .. vs.len)])
+  for i in 0 ..< n:
+    var higher: seq[int]
+    for j in 0 ..< n:
+      if rank[j] > rank[i]:
+        higher.add(j)
+    for v in versionsOf[i]:
+      var targets: seq[int]
+      if higher.len > 0:
+        for _ in 0 ..< rng.rand(1 .. 3):
+          let t = higher[rng.rand(0 ..< higher.len)]
+          if t notin targets:
+            targets.add(t)
+      targets.sort()
+      var deps: seq[string]
+      for t in targets:
+        let name = oracleNames[t]
+        deps.add(
+          case rng.rand(0 .. 9)
+          of 0:
+            name & " =2.0.0"
+          of 1, 2:
+            name & " =" & versionsOf[t][rng.rand(0 ..< versionsOf[t].len)]
+          else:
+            name & " ^1.0.0"
+        )
+      u.add(oracleNames[i], v, deps)
+  let lim =
+    if rng.rand(0 .. 3) > 0:
+      limits()
+    else:
+      limits(
+        names = rng.rand(2 .. 12),
+        depth = rng.rand(1 .. 6),
+        candidates = rng.rand(1 .. 4),
+        attempts = rng.rand(2 .. 60),
+      )
+  Round(
+    u: u, root: RootReference(package: Opt.some(oracleNames[rank.find(0)])), limits: lim
+  )
+
+suite "pkg.resolver: the resolver gives the frozen oracle's results (G454)":
+  test "[IMPL-DECISION G454] seeded catalogs: the same outcome, closure, counters, inspections and retained checks":
+    # The oracle is the resolver as 5-3b-2 built it (`tests/support/oracle_resolver.nim`).
+    var rng = initRand(0x5_3C_1)
+    var seen: set[Feature]
+    var outcomes: CountTable[string]
+    for round in 0 ..< 2_000:
+      let g = rng.generated(seen)
+      checkpoint "round " & $round
+      let want = g.u.resolveBy(g.root, g.limits, oracle = true)
+      let got = g.u.resolveBy(g.root, g.limits, oracle = false)
+      check got == want
+      outcomes.inc(want[0].split(':')[0] & " / " & want[^3].split("limit=")[1])
+    checkpoint $outcomes
+    # Every feature occurs in some round, and so does every limit and the outcomes they lead to.
+    for f in Feature:
+      checkpoint $f
+      check f in seen
+    var keys: seq[string]
+    for k, _ in outcomes:
+      keys.add(k)
+    for want in [
+      "root", "error dependency-unavailable", "error package-unavailable",
+      "error artifact-integrity-failed", "error unsupported-manifest",
+      "error signature-verification-failed", "error incompatible-platform",
+      "error invalid-package",
+    ]:
+      checkpoint want
+      check keys.anyIt(it.startsWith(want & " "))
     for limit in [
       "partial_closure_names", "dependency_depth", "candidates_per_name",
       "assignment_attempts",
     ]:
-      var seen = false
-      for k, _ in outcomes:
-        if k.endsWith("/" & limit):
-          seen = true
       checkpoint limit
-      check seen
+      check keys.anyIt(it.endsWith("/ " & limit))
+
+  test "[IMPL-DECISION G454] seeded acyclic catalogs: names deepened by later binds, and backtracking over those binds":
+    var rng = initRand(0x5_3C_1_DA6)
+    var outcomes: CountTable[string]
+    for round in 0 ..< 1_000:
+      let g = rng.dagRound
+      checkpoint "round " & $round
+      let want = g.u.resolveBy(g.root, g.limits, oracle = true)
+      let got = g.u.resolveBy(g.root, g.limits, oracle = false)
+      check got == want
+      outcomes.inc(want[0].split(' ')[0] & " / " & want[^3].split("limit=")[1])
+    checkpoint $outcomes
+    var keys: seq[string]
+    for k, _ in outcomes:
+      keys.add(k)
+    for want in ["root / ", "error / "]:
+      checkpoint want
+      check keys.anyIt(it == want)
+    for limit in [
+      "partial_closure_names", "dependency_depth", "candidates_per_name",
+      "assignment_attempts",
+    ]:
+      checkpoint limit
+      check keys.anyIt(it.endsWith("/ " & limit))
+
+  test "[IMPL-DECISION G454] the bench's shapes, at the preset and at the maxima: the same outcome, closure and counters":
+    # `lift` binds and gives up names that deepen names bound before them.
+    let preset = resolverLimits(
+      int64(PresetPartialClosureNames),
+      int64(PresetDependencyDepth),
+      int64(PresetCandidatesPerName),
+      int64(PresetAssignmentAttempts),
+    ).get
+    for (name, size, parameter) in [
+      ("dense", 64, 0),
+      ("chain", 256, 0),
+      ("hub", 64, 4),
+      ("layered", 128, 16),
+      ("wide", 2_000, 6),
+      ("lift", 64, 4),
+    ]:
+      let s = shapeOf(name, size, parameter).get
+      for lim in [preset, MaxResolverLimits]:
+        checkpoint name & " " & $size & " limits " & $lim.names & "/" & $lim.depth & "/" &
+          $lim.candidates & "/" & $lim.attempts
+        var c, k: ResolverCounters
+        let input = s.inputOf(lim)
+        let want = described(oracleResolve(input, s.rootOf, k), k)
+        let got = described(resolve(input, s.rootOf, c), c)
+        check got == want

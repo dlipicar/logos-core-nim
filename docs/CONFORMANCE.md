@@ -959,7 +959,8 @@ one handler holds the Package Manager's module thread. The driver reruns the res
 after each inspection (DECISIONS G405), so a closure of n names takes n + 1 steps, and the thread is
 free between two steps while a retrieval runs. The figures are CPU time, orc with `-d:release`, one
 run at a time, on an Apple M1 Max (macOS) and an AMD Ryzen AI 9 HX 370 (x86_64 Linux). CI asserts
-the shapes' counts, never a time (`test_pm_driver`, ruling M6).
+the shapes' counts, never a time (`test_pm_driver`, ruling M6). The tables in this subsection are the
+resolver as 5-3b-2 built it (`10cc598`); "After the incremental search" gives 5-3c-1's.
 
 The shapes:
 - **wide**: a root with w dependency names that sort last and 20 names, each with two versions, that
@@ -1023,7 +1024,118 @@ What the figures say:
 - **The cost fix** is a step of its own after 5-3b (DECISIONS G443): incremental depths, ordered
   unresolved names, a run resumed instead of rerun, and slicing by a fixed count of work, so no
   result or counter changes. It comes before 5-5, or before the first step that lets a consumer other
-  than the operator's tools start a root operation, whichever is first.
+  than the operator's tools start a root operation, whichever is first. Its first half, the
+  incremental search, is built (5-3c-1, DECISIONS G454; below). The second, the run resumed and
+  sliced (G455), is 5-3c-2's.
+
+### After the incremental search
+
+5-3c-1 keeps the search and changes its state (DECISIONS G454): numbered names, the unresolved names
+on a heap, depths kept for bound names with a trail, versions tested as they come, and the cycle walk
+pruned by depth. The rows below are one synchronous `resolve` of each shape (`tools/pmbench.nim
+--sync`), every inspection answered at once, each run in its own process: the resolver ("new") and the
+frozen oracle, which is the search at `10cc598` (`tests/support/oracle_resolver.nim`). Both give the
+same outcome and counters in every row, and `test_resolver` compares the two on these shapes at both
+limit sets. The figures are CPU time, orc with `-d:release`, on the two machines above. Work is the
+resolver's count of units (G454), the same on both. Peak is the process's maximum resident memory:
+the resolver's, the oracle's, and that of the input alone (`--sync input`), which both start from. The
+Mac ran these with other work loaded on it (load average about 250), so its CPU times are high.
+**One run at logosd's preset** (256 / 32 / 256 / 1,024):
+
+| Shape | Ended by | New, Mac | Oracle, Mac | New, Linux | Oracle, Linux | Work | Peak MiB, Mac: new / oracle |
+|---|---|---|---|---|---|---|---|
+| chain, 33 names | resolved | 0.35 ms | 0.65 ms | 0.54 ms | 0.99 ms | 385 | 7.1 / 7.1 |
+| dense, 32 names | resolved | 0.74 ms | 2.4 ms | 0.65 ms | 4.0 ms | 4,558 | 7.8 / 7.9 |
+| layered, 256 names in 32 layers | resolved | 30.2 ms | 728 ms | 28.1 ms | 521 ms | 286,525 | 42.5 / 45.4 |
+| hub, 30 names, 256 versions of the last | no closure | 8.8 ms | 57.0 ms | 6.4 ms | 40.0 ms | 163,946 | 10.8 / 10.8 |
+| lift, 30 names, 256 versions of `y` | resolved | 9.1 ms | 54.9 ms | 2.8 ms | 35.1 ms | 127,447 | 8.6 / 8.6 |
+| wide, w = 80,000 | `assignment_attempts` | 67.0 ms | 64.4 s | 66.3 ms | 47.9 s | 328,234 | 198 / 153 |
+
+**One run at the maxima** (4,096 / 4,095 / 4,096 / 1,048,576), with `assignment_attempts` lowered where a row says. The oracle is not run past 1,024 names, where one of its runs takes minutes:
+
+| Shape | Ended by | New, Mac | Oracle, Mac | New, Linux | Oracle, Linux | Work | Peak MiB, Mac: new / oracle / input |
+|---|---|---|---|---|---|---|---|
+| dense, 256 names | resolved | 29.6 ms | 724 ms | 23.8 ms | 538 ms | 294,526 | 44.5 / 47.7 / — |
+| dense, 1,024 names | resolved | 458 ms | 43.4 s | 347 ms | 40.2 s | 4,717,054 | 511 / 534 / 84.3 |
+| dense, 2,048 names | resolved | 1.96 s | — | 1.30 s | — | 18,871,294 | 1,936 / — / 306 |
+| dense, 4,096 names | resolved | 8.29 s | — | 5.83 s | — | 75,491,326 | 7,539 / — / 1,185 |
+| chain, 2,048 names | resolved | 19.5 ms | 1.31 s | 14.9 ms | 754 ms | 24,565 | 17.7 / 19.2 / — |
+| chain, 4,095 names | resolved | 40.1 ms | 5.79 s | 31.1 ms | 3.15 s | 49,129 | 28.1 / 30.6 / 12.9 |
+| hub, 255 names, 4 versions | no closure | 28.8 ms | 700 ms | 22.5 ms | 463 ms | 460,325 | 38.7 / 39.5 / — |
+| lift, 255 names, 4 versions | resolved | 33.0 ms | 759 ms | 24.9 ms | 591 ms | 390,229 | 44.2 / 47.4 / — |
+| layered, 1,024 names in 64 layers | resolved | 439 ms | 44.7 s | 332 ms | 38.3 s | 4,648,069 | 503 / 525 / 83.1 |
+| layered, 4,096 names in 64 layers | resolved | 8.06 s | — | 5.21 s | — | 74,330,677 | 7,441 / — / 1,168 |
+| wide, w = 80,000, 1,000 attempts | `assignment_attempts` | 55.9 ms | 62.1 s | 64.4 ms | 53.9 s | 328,042 | 198 / 153 / 26.1 |
+| wide, w = 80,000, 100,000 attempts | `assignment_attempts` | 233 ms | — | 217 ms | — | 1,120,042 | 198 / — / — |
+
+**Through the driver at the preset**, which still reruns the resolver from the root after each inspection (before, from the table above → after):
+
+| Shape | Steps | Longest step, Mac | Longest step, Linux | Total, Mac | Total, Linux |
+|---|---|---|---|---|---|
+| chain, 33 names | 34 | 0.56 ms → 0.30 ms | 0.53 ms → 0.46 ms | 9.9 ms → 7.2 ms | 11.6 ms → 10.5 ms |
+| dense, 32 names | 33 | 2.0 ms → 0.66 ms | 1.8 ms → 1.00 ms | 27 ms → 12.2 ms | 21.7 ms → 18.5 ms |
+| layered, 256 names in 32 layers | 257 | 659 ms → 39.4 ms | 553 ms → 20.4 ms | 60.9 s → 3.96 s | 43.5 s → 2.56 s |
+| hub, 30 names, 256 versions of the last | 288 | 49 ms → 14.4 ms | 38 ms → 6.1 ms | 6.6 s → 1.48 s | 5.2 s → 961 ms |
+| lift, 30 names, 256 versions of `y` | 288 | — → 8.7 ms | — → 2.5 ms | — → 792 ms | — → 493 ms |
+| wide, w = 80,000 | 31 | 55.7 s → 77.5 ms | 76.0 s → 86.6 ms | 121.3 s → 1.98 s | 171.2 s → 2.28 s |
+
+What the figures say:
+- **An attempt no longer scans every required name.** The wide shape's 1,024 attempts take
+  67 ms instead of 64 s on the Mac (Linux: 66 ms instead of 48 s), about 0.06 ms each. 100,000
+  attempts take about 0.22 s, so the maximum's 1,048,576 would take about 2.4 s by extrapolation
+  (before: about 14.5 h).
+- **Depths change only where a bind changes them.** A chain of 4,095 names takes 40 ms instead of
+  5.8 s (Linux: 31 ms instead of 3.2 s). The dense and layered shapes now cost about their edges:
+  4,096 dense names (about 8.4 million edges) take 8.3 s (Linux: 5.8 s), and 4,096 names in 64 layers
+  8.1 s (Linux: 5.2 s).
+- **Writing the closure was cubic** in a dense closure: it copied each dependency's candidate, its
+  lists included, for every edge. The oracle keeps that cost, which is most of its 43 s at dense 1,024;
+  the resolver reads them in place.
+- **Through the driver** at the preset, the longest step falls from 55.7 s to 78 ms (wide) and from
+  659 ms to 39 ms (layered) on the Mac, and from 76.0 s to 87 ms and from 553 ms to 20 ms on Linux. The totals still count one rerun from the root after each inspection,
+  which 5-3c-2 removes (G455); its slicing is what bounds one turn at the maxima.
+- **Memory** is of the same order as before. At dense 1,024 the resolver peaks at 511 MiB and the
+  oracle at 534 MiB, of which 84 MiB is the input. At the maxima a dense closure of 4,096 names peaks
+  at 7.4 GiB, of which 1.2 GiB is the input (Linux: 7.3 and 1.2 GiB). The rest, about 750 bytes for each of the 8.4 million
+  edges, is held as before: each requirement in its dependent's candidate and in its name's list, the
+  inspections and catalog picks it reads, and the closure's edges. The wide shape's 80,000 names cost
+  45 MiB more than the oracle's, in the arrays kept for each numbered name.
+
+### The archive's inspection
+
+The other hold on the Package Manager's module thread is the verification cache's inspection of a
+fetched archive (DECISIONS G403; `pm/vcache.nim` `inspect`). It takes BLAKE3 of the whole archive
+and, on a miss, opens it in memory with `openLgx`: the gzip member, the USTAR entries, the manifest's
+signature, and the selected variant's artifacts against their digests. `archive_bytes` bounds the
+archive, 1 GiB by default ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) §2).
+
+It was measured for 5-3c's plan §5 and for 5-5. 5-5-3 moves the inspection off the module thread, and
+5-5-2b replaces the in-memory reader with a streaming one and measures again at the same sizes. The
+setup:
+- the archive is signed for the host, with one data artifact of pseudo-random, so incompressible,
+  bytes (`tools/pmbench.nim archive`);
+- `tools/pmbench.nim inspect` reads it and times a miss, a hit and BLAKE3 alone;
+- the figures are CPU time, orc with `-d:release`, each the median of three processes, with each
+  process's peak memory;
+- the core is 5-3c-1's, whose `lgx.nim`, `vcache.nim` and `signing.nim` are those of `10cc598`.
+
+| Archive | Bytes | Miss, Mac | Miss, Linux | Hit, Mac | Hit, Linux | BLAKE3 alone, Mac | BLAKE3 alone, Linux | Peak MiB, Mac / Linux |
+|---|---|---|---|---|---|---|---|---|
+| 1 MiB | 1,065,981 | 6.5 ms | 4.1 ms | 0.62 ms | 0.14 ms | 0.62 ms | 0.12 ms | 16 / 11 |
+| 64 MiB | 67,146,429 | 326 ms | 211 ms | 42 ms | 8.8 ms | 39 ms | 8.8 ms | 550 / 458 |
+| 1 GiB (1,023 MiB of payload) | 1,073,037,548 | 6.03 s | 4.19 s | 672 ms | 140 ms | 648 ms | 139 ms | 8,833 / 8,803 |
+
+What the figures say:
+- **A miss holds the thread** for about 4 ms per MiB on Linux and 6 ms on the Mac: 4.2 s and 6.0 s
+  for 1 GiB. BLAKE3 of the archive is 0.14 s of it on Linux. The rest is inflating, the USTAR entries
+  and their copies, and the artifacts' own digests.
+- **A hit** reads the whole archive too, for its digest: 0.14 s for 1 GiB on Linux and 0.67 s on the
+  Mac, which ran loaded (a load average of 110 to 130).
+- **Memory:** one inspection peaks at about 8.2 times the archive, 8.8 GiB for 1 GiB on both machines.
+  That includes the process's own copy of the archive, which the Package Manager also holds after a
+  retrieval. So the default `archive_bytes` needs about 9 GiB for one inspection.
+- 5-5-3's worker removes the hold from the module thread, and 5-5-2b's streaming reader is what
+  bounds the memory.
 
 ## Storage fetch limits
 
