@@ -4,12 +4,14 @@ What this implementation chooses where PACKAGE MANAGER leaves the choice to it: 
 document, how it is acquired and refreshed, catalog policy (PKG-0472, PM l.834-835), the Storage
 bindings and retrieval, and how trust is applied when a package is inspected. Each choice keeps the
 verification of PM §4.1 to §4.4 (PKG-0473): nothing here replaces a package's own signature, adds
-trust or claims freshness. The decisions are DECISIONS G399 to G406; the code is
-`src/logos_core/pm/`.
+trust or claims freshness. The decisions are DECISIONS G399 to G406 and, for installation, G445 and
+G450 to G452; the code is `src/logos_core/pm/`.
 
-Tier 5 step 5-3b builds the engine (5-3b-1) and the module that hosts it (5-3b-2). Until 5-6a, the
-Package Manager runs under a test name (`pmtest_module`); `list_packages`, installation and the
-§15 methods come in later steps (5-5, 5-6a, 5-6b).
+Tier 5 step 5-3b builds the engine (5-3b-1) and the module that hosts it (5-3b-2). Step 5-5 builds
+installation: 5-5-1 the installed records, the responses, the handoff's construction and the admission
+bound (§8, §12, §13); 5-5-2 the store's root and extraction (§8, §9); the worker and the operations
+(§10, §11) follow. Until 5-6a, the Package Manager runs under a test name (`pmtest_module`);
+`list_packages`, installation and the §15 methods come in later steps (5-5, 5-6a, 5-6b).
 
 ## 1. Placement and the data path
 
@@ -268,9 +270,82 @@ This implementation applies the mandatory package-signature and artifact-verific
 | `read_object` answers `unavailable` four times in a row | the candidate is unavailable |
 | a size over its bound, any other failure of §4's step 5 | the candidate is unavailable |
 | an archive that does not verify | the candidate is ineligible, with its error |
+| a selected module's configuration declaration that does not resolve | the candidate is ineligible: `invalid-package` (PKG-0060, §13) |
 | every candidate of a root unavailable | `package-unavailable`, never proof that a candidate is invalid |
 | a `nix` source in an LGX operation | `unsupported-source` |
 | a catalog document refused | logged; the catalog in use, if any, stays; no catalog otherwise |
 | `catalog.kept` that does not decode | set aside and logged; no catalog until one is read |
 | a trust file that selects a profile | the Package Manager does not start: `_MODULE_init` fails, and its log names the field |
 | no protected input, or no state directory | the Package Manager does not start |
+
+## 8. Installed state
+
+- **An installed record** is PM §5's `installed_package_record`: the retained signer, the identity,
+  the source, the selected variant, the manifest commitment, the selected module declarations in
+  manifest order (PM l.814-816), the selected variant's artifacts (l.1172) and one recorded edge per
+  direct dependency, in declaration order (l.1337-1341). It is built from a verified package only.
+- **`local_path`** is one artifact file's absolute location, `<record's a/ directory>/<path>`, where
+  `path` is the artifact's path in its variant. The record file keeps the relative paths, and the
+  absolute ones are rebuilt from the current state directory at each start.
+- **The record file** (`pm/installed.cddl`, `lcn.pm_installed_record`) holds `format: 1`, the record,
+  its generation (from 1; a signer replacement writes the next) and the BLAKE3-256 of the archive it
+  came from, for diagnostics. **Every load checks it** against that text and App A's record rule, then
+  against its signed manifest: the same identity and commitment, the variant's artifacts exactly as
+  signed, the selected declarations unchanged and in order, one edge per dependency (G445).
+- **The index** (`lcn.pm_installed_index`) names the committed records: `format: 1`, the count of
+  commits, and `{rid, generation, package, version}` per record, sorted by package name bytes, then
+  version text bytes, each identity and each rid once. It is read within 64 MiB, at least 200,000
+  records at the longest identities.
+
+## 12. Responses, messages and the admission bound
+
+- **Responses** (G450): one encoder per §15 response variant (`pm/responses.nim`): `{installed}` for
+  install and update, `{}` for remove, `{inspection}`, `{handoff}`, the installed-list page
+  `{packages, ?next_cursor}`, and `{error: package_error}`. A success variant holds no error; an error
+  variant holds exactly one package error (PKG-0356).
+- **Messages** (PKG-0360) are diagnostic text only, at most 512 bytes, cut at a character boundary.
+  They name the request's own fields, the identities and versions the caller named or may observe, and
+  a fixed cause. They never name a state directory, `local_path`, binding or storage name, locator,
+  trust content or limit value; those go to the operator's log.
+- **Package errors and invocation failures** (PKG-0361, PKG-0362): a package error is an operational
+  result, carried in a successful response, and never an authorization decision. What prevents a
+  valid response (the admission bound, a damaged installed state, a worker failure, a stop) is
+  `MODULE_ERROR` with no message or detail. `invalid-request` is used only for a request that would
+  fail unchanged again (PKG-0359).
+- **The admission bound** (G452; PM l.824-830): before a record is committed, and for every record at
+  start, each required result is encoded in its real Transport response envelope and must fit the
+  Core-owned 16 MiB body, whatever limit the deployment configures. The results are the install and
+  update result `{installed: R}`, a one-record page with a 512-byte cursor, and each selected module's
+  handoff with its configuration. Each envelope has the largest call id and a payload commitment, so
+  134 bytes surround the result. A failure is `MODULE_ERROR` with no detail; the operator's log names
+  the result that did not fit. A handoff from a legal package stays under 14 MiB (a manifest is at most
+  4 MiB, a schema document 1 MiB, a default 8 MiB), so in practice the record's artifacts and edges
+  are what reach the bound.
+
+## 13. The handoff's construction
+
+`get_runtime_handoff`'s record (G451; PM §12), built for one selected module of an installed record:
+
+- the retained signer (PKG-0438), the flat module name (PKG-0348), the record's identity, and the
+  implementation artifact's id and `local_path` (PKG-0340);
+- the artifact's hash as the manifest signs it, never read from the file (PKG-0341): the Loader
+  hashes its own copy against it;
+- the exact manifest commitment (PKG-0339);
+- `primary_contract`, `implements`, `extends`, `requires` and `requested_permissions`, copied from
+  the signed declaration when it has them, and never added or widened;
+- when the declaration has `configuration`, the configuration-owned declaration (PKG-0342 to
+  PKG-0344): the schema artifact's text, the root and live support copied, the declared commitment
+  with the subtree root derived for that root, and the default value when a default artifact is
+  declared. Both artifacts are checked against their signed digests before anything parses them, and
+  the result must pass the Runtime's own configuration acceptance. No artifact id or path is carried.
+
+It is refused, by cause: the package not installed (`package-not-installed`); a module the record does
+not select (`invalid-request`); the retained signer no longer accepted by the active trust
+(`signature-verification-failed`, PKG-0341, PKG-0080); a schema or default artifact absent or changed
+(`artifact-integrity-failed`); the configuration not accepted (`invalid-package`); a record that no
+longer matches its signed manifest (`MODULE_ERROR`).
+
+**At inspection** (PKG-0060): the same declaration is built from the archive's verified entries for
+each selected module of the selected variant, after every other check. Invalid CDDL, a document
+commitment mismatch, an absent or invalid root, an unresolved non-common reference and an invalid
+default are each `invalid-package`, so such a package is never installed.

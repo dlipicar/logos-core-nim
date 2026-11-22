@@ -64,13 +64,16 @@ default = "deferred:tier-5"
 "PKG-0623" = "claimed"
 "PKG-0625" = "claimed"
 "PKG-0629" = "claimed"
-# Copies of rules that 5-5 (installed artifacts, the handoff's package facts), 5-8 (the Runtime handoff)
-# and 5-6a (the service methods) build; deferred by name with their twins.
-"PKG-0618" = "deferred:tier-5"
-"PKG-0619" = "deferred:tier-5"
-"PKG-0620" = "deferred:tier-5"
-"PKG-0624" = "deferred:tier-5"
-"PKG-0628" = "deferred:tier-5"
+# Copies of rules that step 5-5-1 builds (the identity, the installed record, the source, the installed
+# artifact and the package error: G445, G450), claimed with their twins: test_pm_records checks each
+# value against the App A rule.
+"PKG-0618" = "claimed"
+"PKG-0619" = "claimed"
+"PKG-0620" = "claimed"
+"PKG-0624" = "claimed"
+"PKG-0628" = "claimed"
+# Copies of rules that 5-8 (the Runtime handoff) and 5-6a (the service methods) build; deferred by name
+# with their twins.
 "PKG-0626" = "deferred:tier-5"
 "PKG-0627" = "deferred:tier-5"
 "PKG-0630" = "deferred:tier-5"
@@ -100,9 +103,8 @@ default = "deferred:tier-5"
 # manifest must win over (PKG-0019, PKG-0021) are claimed through "§2" by step 5-3b-1:
 # tests/test_pm_driver.nim (DECISIONS G401, G405).
 "PKG-0017" = "deferred:tier-5"
-# §4: configuration schema and default artifacts reach CONFIG through the Package
-# Manager handoff (Tier 5, area 7); app-config v1 carries declarations directly (I87).
-"PKG-0060" = "deferred:tier-5"
+# §4: PKG-0060 (a package's configuration declaration that does not resolve is invalid-package) is
+# claimed through "§4" by step 5-5-1, at inspection (DECISIONS G451; tests/test_pm_vcache.nim).
 # §4: PKG-0069 (catalog entries, Storage metadata and archive names never override the
 # manifest) is claimed through "§4" by step 5-3b-1; Nix metadata adds its case with 5-10.
 # §4.1: the verification cache, rotation and what no catalog or Storage content may do
@@ -124,9 +126,9 @@ default = "deferred:tier-5"
 "PKG-0435" = "deferred:tier-5"
 # §4.3: the signer record is derived (signerRecord) but retained with installed
 # state, reported by inspections and carried by handoffs only with installation.
+# PKG-0438, the handoff's retained signer, is claimed through "§4.3" by step 5-5-1 (G451).
 "PKG-0436" = "deferred:tier-5"
 "PKG-0437" = "deferred:tier-5"
-"PKG-0438" = "deferred:tier-5"
 "PKG-0439" = "deferred:tier-5"
 "PKG-0440" = "deferred:tier-5"
 "PKG-0441" = "deferred:tier-5"
@@ -160,15 +162,12 @@ default = "deferred:tier-5"
 # by step 5-3b-1: a source's provenance_object is never read and changes no inspection or
 # resolution (DECISIONS G402; tests [PKG-0167]).
 "PKG-0167" = "claimed"
-# §5: package identity, installed records, sources and retention; the
-# admission bound needs the Runtime handoff and exact Transport overheads.
-"PKG-0172" = "deferred:tier-5"
-"PKG-0177" = "deferred:tier-5"
-"PKG-0178" = "deferred:tier-5"
+# §5: the identity, the installed record and the source (PKG-0172, PKG-0177, PKG-0178) and the
+# admission bound's check (PKG-0468, PKG-0469) are claimed through "§5" by step 5-5-1 (DECISIONS
+# G445, G452; tests/test_pm_records.nim). Retention and one commitment per identity are the store's
+# (5-5-2); the bound's failure and its keeping at start are the operations' and the store's.
 "PKG-0181" = "deferred:tier-5"
 "PKG-0182" = "deferred:tier-5"
-"PKG-0468" = "deferred:tier-5"
-"PKG-0469" = "deferred:tier-5"
 "PKG-0470" = "deferred:tier-5"
 "PKG-0471" = "deferred:tier-5"
 # §7.1: installation and extraction; Runtime and Module Loader execution.
@@ -192,7 +191,9 @@ default = "deferred:tier-5"
 "PKG-0273" = "deferred:tier-5"
 "PKG-0274" = "deferred:tier-5"
 # §10: keeping an installed path bound to its verified bytes is installation's;
-# work item 5-5 owns it (DECISIONS G362, carrying TXT-0472).
+# work item 5-5 owns it (DECISIONS G362, carrying TXT-0472). The installed artifact record
+# (PKG-0291) is claimed by step 5-5-1 (G445).
+"PKG-0291" = "claimed"
 "PKG-0293" = "deferred:tier-5"
 # §9: checking `implements` against a contract's own commitments (PKG-0287) and what the
 # Package Manager may treat as proof of a call surface (PKG-0289) belong to its inspection
@@ -225,10 +226,30 @@ default = "deferred:tier-5"
 "PKG-0514" = "deferred:tier-5"
 "PKG-0596" = "out-of-scope:a permission for package producers"
 "PKG-0335" = "deferred:tier-5"
+# §12: the handoff's construction is step 5-5-1's (planning's ruling Q-P1 (a), 2026-11-22; DECISIONS
+# G451; tests/test_pm_records.nim): the runtime artifact, the record's facts, the signed hash and active
+# trust, the configuration declaration, and the flat module name. The Runtime-side units, PKG-0345,
+# PKG-0346, PKG-0349 and PKG-0350, are 5-8's, with §12.
+"PKG-0337" = "claimed"
+"PKG-0339" = "claimed"
+"PKG-0340" = "claimed"
+"PKG-0341" = "claimed"
+"PKG-0342" = "claimed"
+"PKG-0343" = "claimed"
+"PKG-0344" = "claimed"
+"PKG-0348" = "claimed"
 # §12 l.1401, l.1434-1435, l.1441: the handoff's `extends`, which 5-5 constructs and 5-8 checks
 # (re-pin P8b, G391).
 "PKG-0338" = "deferred:tier-5"
 "PKG-0347" = "deferred:tier-5"
 "PKG-0351" = "deferred:tier-5"
-# §14: the error codes are built; method results are not.
+# §14: the error codes are built (PKG-0358). Step 5-5-1 builds the method results (DECISIONS G450;
+# tests/test_pm_records.nim): success and error variants, the package error, invalid-request,
+# messages, and package errors kept apart from authorization and from invocation failures.
+"PKG-0356" = "claimed"
+"PKG-0357" = "claimed"
 "PKG-0358" = "claimed"
+"PKG-0359" = "claimed"
+"PKG-0360" = "claimed"
+"PKG-0361" = "claimed"
+"PKG-0362" = "claimed"

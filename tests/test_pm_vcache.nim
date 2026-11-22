@@ -1,12 +1,15 @@
 ## The verification cache (Tier 5 step 5-3b; DECISIONS G403; C5;
 ## docs/PACKAGE-MANAGER.md §5): a hit, each invalidation against a second
 ## trust input, rotation, and the bound. The trust input is fixed within one
-## start (Q10), so the suite drives the cache with two inputs directly.
+## start (Q10), so the suite drives the cache with two inputs directly. Step
+## 5-5-1 adds PKG-0060 (G451): a selected module's configuration declaration
+## that does not resolve makes the archive `invalid-package`.
 
+import std/strutils
 import unittest2
 import ../src/logos_core/package/[errors, resolver]
 import ../src/logos_core/pm/vcache
-import ./support/pmfixture
+import ./support/[lgxbuild, pmfixture]
 
 let (orgKey, orgPub) = testKey(1)
 let (newKey, newPub) = testKey(2)
@@ -165,3 +168,66 @@ suite "verification cache (G403)":
     let opened = c.counters.opened
     check c.inspect(wallet1, base).eligible
     check c.counters.opened == opened + 1
+
+suite "configuration declarations at inspection (PKG-0060, G451)":
+  let zeros = Opt.some(newSeq[byte](32))
+  let tunerRoot = Opt.some(rootsOf(tunerDocument, TunerRoot)[0])
+
+  proc archiveWith(c: ConfigSpec): seq[byte] =
+    packed(modulePackage(config = Opt.some(c)), "org", orgKey)
+
+  proc invalidPackage(i: Inspection): bool =
+    if i.kind == ikIneligible:
+      checkpoint i.error.msg
+    i.kind == ikIneligible and i.error.code == pecInvalidPackage
+
+  test "[PKG-0060] invalid CDDL, a document commitment mismatch, an absent root, an unresolved reference and an invalid default are each invalid-package":
+    let cases = [
+      (
+        ConfigSpec(schema: "tuner.config = {", root: TunerRoot, schemaRoot: zeros),
+        "the configuration schema is not accepted",
+      ),
+      (
+        tunerSpec().withRoot(zeros),
+        "the configuration schema root is not the declared one",
+      ),
+      (
+        ConfigSpec(
+          schema: tunerDocument,
+          root: "tuner.absent",
+          schemaRoot: tunerRoot,
+          default: Opt.some(tunerValue()),
+        ),
+        "the configuration root tuner.absent is not a type of its schema",
+      ),
+      (
+        ConfigSpec(
+          schema: "tuner.config = { station: radio.station }\n",
+          root: TunerRoot,
+          schemaRoot: zeros,
+        ),
+        "the configuration schema is not accepted",
+      ),
+      (
+        tunerSpec(Opt.some(encodeCbor(cborMap()))),
+        "the default value is not a complete value of tuner.config",
+      ),
+    ]
+    for (c, why) in cases:
+      checkpoint c.schema & " / " & c.root
+      var cache = cacheOf()
+      let i = cache.inspect(archiveWith(c), base)
+      check i.invalidPackage
+      if i.kind == ikIneligible:
+        check i.error.msg.startsWith("module alpha_module: " & why)
+      check cache.len == 0 # an ineligible archive is not cached
+
+  test "a package with a valid configuration is eligible, and one without is unchanged":
+    var c = cacheOf()
+    let tuner = c.inspect(archiveWith(tunerSpec()), base)
+    check tuner.eligible
+    check c.inspect(archiveWith(tunerSpec(Opt.none(seq[byte]), live = true)), base).eligible
+    let plain = packed(modulePackage(config = Opt.none(ConfigSpec)), "org", orgKey)
+    check c.inspect(plain, base).eligible
+    check c.inspect(example1, base).eligible
+    check c.len == 4

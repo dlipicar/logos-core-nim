@@ -21,6 +21,10 @@
 ##   by either verifies; once the old one is removed, only the new one does.
 ## - Only an archive that verified is cached: an ineligible one is opened
 ##   again each time it is reached, so its error is always the current one.
+## - **Verified** includes PKG-0060 (step 5-5-1, G451): after `openLgx`, each
+##   selected module's configuration declaration must resolve under
+##   LOGOS-MODULE-CONFIGURATION (`handoff.checkConfigurations`), else the
+##   archive is `invalid-package`.
 
 {.push raises: [].}
 
@@ -29,6 +33,7 @@ import results
 import logos_sdk/crypto/blake3
 import ../crypto/slhdsa
 import ../package/[lgx, manifest, records, resolver, signing, trust]
+import ./handoff
 
 export results, blake3, lgx, resolver
 
@@ -115,6 +120,10 @@ proc inspect*(
     inc c.counters.dropped
   inc c.counters.opened
   let p = openLgx(data, trust, c.platform, c.limits, c.pathRules).valueOr:
+    return Inspection(kind: ikIneligible, error: error)
+  # [SPEC PM §4 l.362-364 (PKG-0060); G451] Last in G29/P7a order: each selected module's
+  # configuration declaration resolves, or the archive is `invalid-package`.
+  checkConfigurations(p).isOkOr:
     return Inspection(kind: ikIneligible, error: error)
   let answer = inspection(p)
   if c.entries.len >= c.capacity:

@@ -100,7 +100,9 @@ PKG-0274, whose LGX half is the extraction check, to 5-5 (G362). App A's 38 rule
 the sections state: ten are claimed and 28 are deferred by name with their twins, five to 5-5, two to 5-8 and 21 to 5-6a
 (G363). PKG-0568 is now deferred by name to 5-6b (G362). The count by step above is still that of 6a4dfa28, except
 that planning's rulings on step 5-3a's plan (2026-11-20, Q8, Q18, Q19) moved PKG-0083 from 5-3b to 5-3a,
-PKG-0166 and PKG-0169 from 5-11 to 5-3a, and PKG-0167 from 5-11 to 5-3b.
+PKG-0166 and PKG-0169 from 5-11 to 5-3a, and PKG-0167 from 5-11 to 5-3b. Planning's ruling on step 5-5's plan
+(2026-11-22, Q-P1 (a)) and TIER5-PLAN's row 5-5 moved PKG-0060, PKG-0337, PKG-0339 to PKG-0344 and PKG-0348 from 5-8
+to 5-5, which builds and tests them; 5-8 keeps PKG-0338, PKG-0347 and PKG-0351 (G391), built at 5-5-1.
 
 A dropped area's units that bind without it stay and are claimed in their own steps: TRN-0352, PKG-0190,
 PKG-0166, PKG-0167, PKG-0169, the `nix` and `quic` refusals (plan A1). At the close (5-13) every unit
@@ -510,6 +512,21 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
 
   Claimed: PKG-0474 (the bindings' retrieval API and locator encodings: PACKAGE-MANAGER.md §4, STORAGE-FETCH §5,
   DAEMON.md §3), and PKG-0353's hosted half, under logosd. PKG 279/279.
+
+- 2026-11-22, Tier 5 step 5-5-1 (I121; G445's files, G450, G451, G452), installed records, responses, the
+  handoff's construction and the admission bound, all pure code:
+  - `pm/installed.nim` and `pm/installed.cddl`: the installed record from a verified package, its record file
+    and the index, each checked on load against its text, App A and the signed manifest.
+  - `pm/responses.nim`: one encoder per §15 response variant, the 512-byte message cut and `MODULE_ERROR`.
+  - `pm/handoff.nim`: `runtime_handoff` for a selected module, with its configuration declaration accepted
+    under LOGOS-MODULE-CONFIGURATION; PKG-0060 at inspection in `vcache.inspect`.
+  - `pm/admission.nim`: each required result in its real Transport envelope within the 16 MiB body.
+  - Suite `test_pm_records`, and cases in `test_pm_vcache`; `tests/support/lgxbuild.nim` builds signed packages
+    with modules and configurations.
+
+  Claimed: PKG-0060, PKG-0172, PKG-0177, PKG-0178, PKG-0291, PKG-0337, PKG-0339 to PKG-0344, PKG-0348, PKG-0356,
+  PKG-0357, PKG-0359 to PKG-0362, PKG-0438, PKG-0468, PKG-0469, and App A's PKG-0618 to PKG-0620, PKG-0624 and
+  PKG-0628. 27 units; PKG-0338, PKG-0347 and PKG-0351 are built and stay deferred to 5-8. PKG 306/306.
 
 ## Tiers at f4f83471 (the original plan)
 
