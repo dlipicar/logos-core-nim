@@ -7285,7 +7285,15 @@ their history.
   does not count: residual work that existed before, not something every handler is protected from.
   A handler whose unwinding waited for a completion arriving after the 2 s bound now finishes during
   `destroyModule` instead of being abandoned; its invocation still completes once, NOT_READY, since
-  `unwindDeferred` leaves what is outstanding to teardown. A handler that ignored its cancellation can
+  `unwindDeferred` leaves what is outstanding to teardown. Its task ends too only if `destroyModule`
+  outlasts the task's tail, the route's and the kit's awaits, a few turns of the loop after the
+  handler's last statement. Otherwise teardown abandons that tail as G338 says, its frames pinned.
+  LeakSanitizer reported that from the `wait` 12 case (778 bytes in 8 indirect allocations, CI run
+  44991040073 on fef0991), whose `destroyModule` returned at its first 10 ms tick after the handler
+  ended; it now awaits 20 more turns first. With test hooks the kit counts its deferred tasks begun
+  and not ended (`liveDeferredTasks`), so every build checks what LeakSanitizer caught by chance:
+  this case and the unwound `[IFC-0769]` one leave none, the `noCancel` case leaves its one
+  (2026-11-22). A handler that ignored its cancellation can
   be woken while `destroyModule` awaits. That is memory-safe for `async` handlers and outside the
   contract (INTERFACE l.2116-2117); timers could already wake it before.
 - **For the guide** (MODULE-KIT §3): `destroyModule` may await a callback a foreign thread posts, a
@@ -7604,6 +7612,95 @@ their history.
   AddressSanitizer and once under ThreadSanitizer before the merge; CI's sanitizer groups run the
   suite.
 - **Status:** built 2026-11-21 (Tier 5 step N-1e, part D).
+
+### G442 — Sanitizer reports from child processes fail the check
+- **Kind:** IMPL · **Specs:** none (test infrastructure); the owner's rule of 2026-11-19 (no sanitizer
+  runs while building); planning's ruling of 2026-11-22; Fable's checks,
+  `tier5-plans/fable-checks/sanitizer-logpath-plan.md` (C1-C5, K1-K5, S1-S4).
+- **Found** (N-1, triaging CI run 44991040073). A report in a child process reached only the child's
+  stderr and exit status. Hosted suites classify a Module Host's end as `host-terminated` without
+  reading its status, so `test_hosted-tsan` passed 29/29 over a TSan race in a host
+  (`tests/kit/probe_impl.nim:414`), seen in every CI run from 44960968929 on, on both architectures.
+  What logosd and logosctl write to stderr goes to files (`daemonproc`) that a passing case never
+  reads.
+- **Decision.**
+  - **A report directory per check.** Every sanitizer check runs its suite through
+    `tools/sanitizer/reports.sh run`: the flake's asan, tsan and msan checks (`suiteRun` in
+    `flake.nix`; the base variants' command is unchanged), and `nimble test_asan`, `test_tsan` and
+    `test_msan`, per suite. The script empties the directory and writes a marker file in it.
+  - **The variables.** It appends `log_path=<dir>/report:log_exe_name=1` to `ASAN_OPTIONS`,
+    `LSAN_OPTIONS`, `MSAN_OPTIONS`, `TSAN_OPTIONS` and `UBSAN_OPTIONS`; the last setting wins.
+    - The compiled-in defaults and suppressions in `tests/support/sanitizers.c` stay, because the
+      runtimes read the variables after them. A suppressed report writes nothing.
+    - It also appends `external_symbolizer_path` to `MSAN_OPTIONS` when `llvm-symbolizer` is on
+      `PATH`, since a host's environment has no `PATH`. GCC's runtimes, which asan and tsan use,
+      symbolize in the process.
+    - Each process that prints anything writes `report.<program>.<pid>`, and a report is written when
+      it is found. A host's `_exit` or SIGKILL loses nothing already reported.
+  - **Strict.** The check fails in any of four cases:
+    - any file but the marker is there, an empty one included;
+    - the marker is gone (on Linux each instrumented process re-creates a removed directory, and on
+      macOS a report into a missing one is dropped);
+    - the suite failed;
+    - a canary suite has no canary.
+    A runtime warning that recurs gets the runtime option that silences it, with its own row, never a
+    filter.
+  - **Printing.** The first line names every cause. Then come each distinct `SUMMARY:` line with its
+    count, then one file in full per distinct line, at most 10, each cut at 64 KiB. The job must print
+    them, because `log_path` also takes the suite's own reports out of the log.
+  - **Every path names the variables.**
+    - The Runtime's hosts get only `module_host_env` (I91). Every hosted test configuration fills it
+      from `SanitizerEnv`, and logosd's hosts get theirs the same way from logosd's environment.
+      `daemonproc` passes that environment on whole.
+    - Transport peers, logosd, logosctl and osproc's children inherit the variables.
+    - `test_module_host`'s own hosts had none: `hostowner.startHost` now adds this process's settings
+      to the environment it is given, and H-14's allow-list names them.
+    - No product change: `module_host_env` is already how a deployment passes a sanitizer's settings
+      (HOST-CONFIG).
+  - **One list, and a lint (C1).** `SanitizerEnv` is defined once, in
+    `tests/support/sanitizerenv.nim`. `tools/lint/sanitizerenv.py` (the `lint-sanitizer-env` check)
+    fails two kinds of test:
+    - one whose host environment (`moduleHostEnv =`, `module_host_env =`, `newSupervisor(`,
+      `spawnProcess(`) does not name it;
+    - one that turns `startHost`'s `sanitizerEnv` off.
+    Either is allowed if the statement, or the comment line above it, carries
+    `# [G442] sanitizer-env: <why>`.
+  - **Delivery, in every build (K5).** Three cases set all five variables: S-2 (`test_hosted`), H-2
+    and H-14 (`test_module_host`), and a `test_logosd` case. `deliverySettings` takes the check's own
+    values, else `verbosity=0`. Each case checks that a host on its path got each variable with that
+    value: the Runtime's, a direct host, and logosd's. The probe reports through `env-of`, chatter
+    through `LCN_CHATTER_SHOW_ENV`.
+  - **Canaries, under a sanitizer only (K1-K4).**
+    - In the same three suites a host writes one stack trace with `__sanitizer_print_stack_trace()`:
+      the probe's `sanitizer-trace`, chatter's `LCN_CHATTER_SANITIZER_TRACE`.
+    - Once the host is reaped, `takeCanary` moves its file to `<dir>/canary/` if every line is a frame
+      of one trace (`#0`, `#1`, ...; no function name is needed, since MemorySanitizer's host frames
+      may have none). Anything else stays as a report.
+    - `reports.sh` needs at least one canary file, each one trace, for `test_hosted`,
+      `test_module_host` and `test_logosd` (`CANARY_SUITES`), so a canary that never ran fails.
+    - The control is a `test_module_host` host started without the settings. No file of its appears;
+      its trace goes to the suite's stderr.
+    - A canary proves only that the runtime honours `log_path` in a child. Delivery is proven in every
+      build.
+  - **What is checked without a sanitizer.**
+    - `reports.sh self-test`, the `sanitizer-reports` check, covers the causes, the printing, the cap
+      and the cut, the marker and the canaries. It also runs `run` with stub suites: a suite that
+      passes but leaves a report fails.
+    - The lint's self-test, the canary checker as a plain case, and the delivery cases.
+    - The sanitizer path itself first runs in GitHub CI's sanitizer jobs after the push. That run is
+      the inventory of reports nobody has seen, the daemon suites' `.err` files among them. Planning
+      triages it before `SANITIZERS_BLOCKING` is set for the final pass.
+- **Limits.**
+  - A process that outlives its suite can report after the script has run. Hosts end with their
+    carrier, and several suites check that none is left.
+  - A suite that hangs and is killed never reaches the script, and its own reports are no longer in
+    the log.
+  - Module Hosts end with `_exit` or SIGKILL, so LeakSanitizer never runs in a host. Running it there,
+    with `__lsan_do_recoverable_leak_check()` before a graceful `exitnow` under `-d:asan`, is a later
+    step. After a leak report AddressSanitizer's `_exit` replaces a status of 0, so cases that expect
+    0, H-14 among them, need care there.
+- **For the split (C5).** A module's or the daemon's repository that runs hosted suites under a
+  sanitizer needs the same script and helper.
 
 ### G317 — The reverse mapper's input set
 - **Kind:** IMPL (gaps Q1, Q4; reading Q6) · **Specs:** INTERFACE §3 · **Plan:** `tier5-plans/step5-1-reverse-mapper.md` §4.1. Section and Q numbers below are the plan's; `l.` cites are INTERFACE.
@@ -8187,6 +8284,7 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G438 | closing a confined kit's module-thread dispatcher, and what destroy left | IMPL | 12 |
 | G439 | a chronos variant in `kit-toolchains`: the kits under the libraries' own chronos | IMPL | 12 |
 | G440 | a post gate that outlives a confined kit's context | IMPL | 12 |
+| G442 | sanitizer reports from child processes fail the check | IMPL | 12 |
 | G468 | the lock check: an install and its own `srcDir` are one install (amends G436) | IMPL | 12 |
 
 ---

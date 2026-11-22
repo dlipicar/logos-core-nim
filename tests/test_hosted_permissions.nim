@@ -17,6 +17,7 @@
 when defined(posix):
   import std/[algorithm, atomics, monotimes, os, sequtils, strutils, times]
   import unittest2
+  import ./support/sanitizerenv
   import ../src/logos_core/runtime/engine
   import ../src/logos_core/runtime/[hostlock, hostsup, settings, store]
   import logos_sdk/abi/types
@@ -51,8 +52,6 @@ when defined(posix):
 
   const
     RuntimeId = "5d0c9a7e-3b2f-4e61-8c4d-2a9f1e7b6c30"
-    SanitizerEnv =
-      ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
     SettingsEvent = "logos.runtime_control.permission_settings_changed_event"
     Snapshot = "rc get_execution_permissions a0"
       ## the probe asks for its snapshot from `_MODULE_init`

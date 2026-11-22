@@ -30,6 +30,7 @@ when defined(posix):
   import std/[atomics, monotimes, os, strutils, times, typedthreads]
   import std/posix except Time
   import unittest2
+  import ./support/sanitizerenv
   import ../src/logos_core/runtime/engine
   import logos_sdk/abi/types
   import logos_sdk/base/perthread
@@ -58,8 +59,6 @@ when defined(posix):
   let shortBase = makeShortBase("lcnkm", "/e999/12345678/logos_ledger_module.sock")
 
   const
-    SanitizerEnv =
-      ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
     Answer = 60 * Slow ## seconds: a bound on a wait for what comes
     PosterThreads = 16
     PostsPerThread = 20
