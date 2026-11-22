@@ -8,16 +8,23 @@ level with a plain store: the value the branch gave it is never destroyed, so it
 never wiped either. Giving the local an initializer (`var x: T = default(T)`, or
 `result = ...` before the branch) makes the later write destroy the old value.
 
-  python3 tools/lint/firstwrite.py src tests
+  python3 tools/lint/firstwrite.py [root ...]   (default: src sdk/src sdk/tests tests)
+  python3 tools/lint/firstwrite.py --self-test
 
 Prints `file:line: ...` for each such local and exits 1 if there is any. A heuristic
 over the source text: scalar types are skipped, a write in a `when` branch counts at
 the `when`'s level, and a branch that ends in `return`, `raise` or `quit` is left out.
+A root that is not a directory, or a run that finds no `.nim` file at all, exits 2: run
+from the wrong folder or with a mistyped path, the lint would otherwise check nothing
+and pass.
 """
 
+import contextlib
+import io
 import os
 import re
 import sys
+import tempfile
 
 SCALAR = re.compile(
     r"^(u?int(8|16|32|64)?|float(32|64)?|bool|char|byte|Natural|Positive|csize_t|"
@@ -175,20 +182,67 @@ def findings(path):
             yield i + 1, name, hit[0] + 1, hit[1] + 1
 
 
-def main(roots):
-    count = 0
+def lint(roots):
+    """The exit status over `roots`: 0 clean, 1 a finding, 2 nothing to check."""
+    for root in roots:
+        if not os.path.isdir(root):
+            print(f"firstwrite: {root}: not a directory", file=sys.stderr)
+            return 2
+    count = scanned = 0
     for root in roots:
         for d, _, files in os.walk(root):
             for name in sorted(files):
                 if name.endswith(".nim"):
+                    scanned += 1
                     path = os.path.join(d, name)
                     for line, local, first, later in findings(path):
                         print(f"{path}:{line}: `{local}` is first written in a branch (line {first}) "
                               f"and written again at line {later}, which drops that value; "
                               f"give it an initializer")
                         count += 1
+    if not scanned:
+        print(f"firstwrite: no .nim file under {' '.join(roots)}", file=sys.stderr)
+        return 2
     return 1 if count else 0
 
 
+# The self-test: the two runs that check nothing, a planted local and its initialized form.
+PLANTED = 'proc f(c: bool): string =\n  var x: string\n  if c:\n    x = "a"\n  x = "b"\n  x\n'
+INITIALIZED = 'proc f(c: bool): string =\n  var x: string = ""\n  if c:\n    x = "a"\n  x = "b"\n  x\n'
+
+
+def self_test():
+    failures = []
+    with tempfile.TemporaryDirectory() as tmp:
+        dirs = {}
+        for name, text in (("empty", None), ("planted", PLANTED), ("initialized", INITIALIZED)):
+            dirs[name] = os.path.join(tmp, name)
+            os.mkdir(dirs[name])
+            if text is not None:
+                with open(os.path.join(dirs[name], "a.nim"), "w", encoding="utf-8") as f:
+                    f.write(text)
+        missing = os.path.join(tmp, "missing")
+        cases = [
+            ("a missing root", [missing], 2),
+            ("a missing root beside a good one", [dirs["initialized"], missing], 2),
+            ("an empty root", [dirs["empty"]], 2),
+            ("a planted local", [dirs["planted"]], 1),
+            ("its initialized form", [dirs["initialized"]], 0),
+        ]
+        for what, roots, want in cases:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                got = lint(roots)
+            if got != want:
+                failures.append(f"{what}: exit {got}, want {want}")
+    for failure in failures:
+        print("self-test:", failure)
+    if failures:
+        return 1
+    print(f"firstwrite self-test: {len(cases)} cases")
+    return 0
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:] or ["src", "sdk/src", "sdk/tests", "tests"]))
+    if sys.argv[1:] == ["--self-test"]:
+        sys.exit(self_test())
+    sys.exit(lint(sys.argv[1:] or ["src", "sdk/src", "sdk/tests", "tests"]))

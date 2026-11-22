@@ -685,6 +685,7 @@
           # No `?` inside a half-built constructor: it leaks on Nim 2.2.14 (I77).
           lint-ctor-try = s.pkgs.runCommand "lint-ctor-try" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
             cd ${s.nimSources}
+            python3 ${./tools/lint/ctortry.py} --self-test
             python3 ${./tools/lint/ctortry.py} src sdk/src sdk/tests tests
             touch $out
           '';
@@ -692,6 +693,7 @@
           # the branch's value undestroyed, so unwiped, on Nim 2.2.14 (I92; Nim#26725).
           lint-first-write = s.pkgs.runCommand "lint-first-write" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
             cd ${s.nimSources}
+            python3 ${./tools/lint/firstwrite.py} --self-test
             python3 ${./tools/lint/firstwrite.py} src sdk/src sdk/tests tests
             touch $out
           '';
