@@ -578,13 +578,9 @@ proc decodeSnapshot*(data: openArray[byte]): Result[Snapshot, string] =
   for r in x.retired:
     s.retired.add(RetiredId(instance: r.instance, stateAssignment: r.state_assignment))
   for k in x.create_keys:
+    let consumer = ?consumerOf(k.consumer, k.consumer_runtime)
     s.createKeys.add(
-      CreateKey(
-        consumer: ?consumerOf(k.consumer, k.consumer_runtime),
-        key: k.key,
-        module: k.module,
-        instance: k.instance,
-      )
+      CreateKey(consumer: consumer, key: k.key, module: k.module, instance: k.instance)
     )
   ?checkInvariants(s)
   ok(s)

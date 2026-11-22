@@ -592,14 +592,11 @@ proc remoteValue*(
   var retained = Retained()
   if seen.isSome:
     retained = ?applyRetained(x, seen.get.exposure)
+  let snapshot = ?snapshotMessage(t).encode
   ok(
     (
       Opt.some(
-        LcnAppRemote(
-          snapshot: ?snapshotMessage(t).encode,
-          listeners: x.listeners,
-          exports: x.exports,
-        )
+        LcnAppRemote(snapshot: snapshot, listeners: x.listeners, exports: x.exports)
       ),
       retained,
     )

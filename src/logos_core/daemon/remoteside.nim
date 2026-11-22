@@ -55,6 +55,9 @@ type
   RemoteSideObj = object
     ## What the hooks read. Only the remote supervisor's sign thread uses it
     ## while the Runtime runs; logosd frees it once the Runtime is destroyed.
+    ## `limits`, `relay` and `reader` are the sign thread's: made and grown
+    ## there, and emptied there by `signEndHook` before it exits, since under
+    ## refc no thread frees memory another thread's heap made.
     signing: RemoteSigning
     service: pointer ## rsLogosd: the Daemon's SignService, borrowed
     limits: Table[uint64, ProcessSigning]
@@ -63,6 +66,7 @@ type
     holderPid: cint
     asked: uint64
     reader: FrameReader
+    readerMade: bool ## `reader` made, on the sign thread
     exposure: ExposureSink ## [G412; Q4] the engine's write of durable disables
 
   RemoteSide* = ptr RemoteSideObj
@@ -211,6 +215,9 @@ when defined(posix):
   ): SignResult {.nimcall, gcsafe, raises: [].} =
     let side = cast[RemoteSide](data)
     {.cast(gcsafe).}:
+      if not side.readerMade:
+        side.reader = newRchReader()
+        side.readerMade = true
       var p = side.limits.getOrDefault(process, newProcessSigning(role))
       inc side.asked
       let m = LcnRchSign(id: side.asked, alg: alg, input: input)
@@ -228,6 +235,14 @@ when defined(posix):
       of rsProcessCopy:
         result = refused()
       side.limits[process] = p
+
+  proc signEndHook(data: pointer) {.nimcall, gcsafe, raises: [].} =
+    ## On the sign thread, as it ends: what `signHook` made there.
+    let side = cast[RemoteSide](data)
+    reset(side.limits)
+    reset(side.relay)
+    reset(side.reader)
+    side.readerMade = false
 
   proc noteHook(data: pointer, text: string) {.nimcall, gcsafe, raises: [].} =
     {.cast(gcsafe).}:
@@ -280,10 +295,10 @@ when defined(posix):
     side.service = cast[pointer](service)
     side.holderFd = holder.fd
     side.holderPid = holder.pid
-    side.reader = newRchReader()
     side.exposure = sink
     if settings.signing != rsProcessCopy:
       hooks.sign = signHook
+      hooks.signEnd = signEndHook
       hooks.signData = side
     ok((side, hooks))
 

@@ -88,6 +88,11 @@ type
     ## `process` as `role`, blocking; runs on the supervisor's one sign
     ## thread. The host applies its checks and its limit per process.
 
+  RemoteSignEnd* = proc(data: pointer) {.nimcall, gcsafe, raises: [].}
+    ## The sign thread's last call, before it exits: what `sign` made on that
+    ## thread is freed there, since under refc no thread frees memory another
+    ## thread's heap made.
+
   RemoteNote* = proc(data: pointer, text: string) {.nimcall, gcsafe, raises: [].}
     ## One line for the host's log (a process's end, a restart).
 
@@ -117,6 +122,7 @@ type
     certificate*: seq[byte] ## the Runtime's TLS certificate, DER
     sign*: RemoteSign
     signData*: pointer
+    signEnd*: RemoteSignEnd ## nil: `sign` keeps nothing between calls
     persist*: RemotePersist ## [Q4] nil: nothing is recorded across a restart
     persistData*: pointer
     note*: RemoteNote
@@ -227,6 +233,8 @@ proc signMain(s: RemoteSupervisor) {.thread.} =
   while true:
     let j = s.signJobs.recv()
     if j.stop:
+      if s.hooks.signEnd != nil:
+        s.hooks.signEnd(s.hooks.signData)
       return
     let r =
       if s.hooks.sign == nil:
