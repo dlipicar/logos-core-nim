@@ -205,7 +205,8 @@ Every call on the connection is made as that **forwarded consumer**, which logos
 - Audit records, decisions and grants name the consumer by its own address, its Runtime included.
 
 Until step 5-7a-3, `establish_route` from a forwarded consumer is authorized and then answered
-MODULE_ERROR (no remote route is established yet), and a subscription to a Runtime Control event is
+MODULE_ERROR (no remote route is established yet). Until step 5-7b, which delivers Runtime Control
+events to another Runtime with its reflected state, a subscription to a Runtime Control event is
 refused with MODULE_ERROR.
 
 An example rule letting the consumers of Runtime `0b6f3c3e-…` list and change this Runtime's listeners:

@@ -136,6 +136,7 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-7a, 5-7b | the remote process layout; facades | Runtime-owned TLS processes, a signing seam (logosd signs by default); a facade is a provider record, never served by logosd | decided (B1, B4) |
 | 5-7b | NL-07 (G355) | the `route_failure` spellings and the state table | decided (B6) |
 | 5-7b | NR-04 (G356) | resolve or fail | decided (B7) |
+| 5-7b | Runtime Control events to a consumer of another Runtime (G413's interim) | a Subscribe over remote Runtime Control is SubscriptionResult MODULE_ERROR; 5-7b, with reflected state, delivers them (R l.3184, in RUN-0600's paragraph) and extends the claimed RUN-0676 and RUN-0677 to such a subscriber | decided 2026-11-22 (planning) |
 | 5-8 | TF-44 (G351); a D9 stop | the plan's §6 wording | open (D2) |
 | 5-8 | how a package-backed instance comes to exist | configured entries with pins written offline (recommended) | open (D1) |
 | 5-8 | TF-04, TS-06, TP-07 | `requires` stays advisory; a pin is protected input; `create_module` carries none | open (D3) |
@@ -504,8 +505,8 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
     whatever ends it. logosd spawns `logos_keyholder` (G411).
   - Inbound Runtime Control: the Hello token rules, the forwarded consumer, the order of checks of
     l.1835, forwarded discovery. `get_execution_permissions` and `report_failure` are NOT_AUTHORISED for
-    a forwarded consumer. `establish_route` (until 5-7a-3) and event subscriptions are interim
-    MODULE_ERROR (G413).
+    a forwarded consumer. `establish_route` (until 5-7a-3) and event subscriptions (until 5-7b) are
+    interim MODULE_ERROR (G413).
   - `docs/REMOTE.md`, `DAEMON.md` §2, §6c (new), §10, `DEPLOYMENT.md` §4 and §5d, `AUTHORITY-POLICY.md`,
     `HOST-CONFIG.md`.
 

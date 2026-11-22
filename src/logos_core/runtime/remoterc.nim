@@ -23,7 +23,7 @@
 ##   checks the commitment and schema, then invokes it (RUNTIME l.1835,
 ##   RUN-1124). Every invocation is bound to the connection's consumer.
 ## - **Subscriptions** are refused (MODULE_ERROR) [G413 interim]: Runtime
-##   Control events are not delivered to a remote consumer yet.
+##   Control events are not delivered to a remote consumer until step 5-7b.
 ## - **Threads.** One session thread owns every connection's state and the
 ##   snapshot: the supervision thread only queues to it (`RemoteInbound`).
 ##   Workers, up to `MaxWorkers`, made as needed, run what calls into the
@@ -316,7 +316,8 @@ proc act(r: RemoteRc, k: ConnKey, c: var Conn, acts: seq[CalleeAction]) =
     of caStop:
       discard # its CANCELLED is committed; the invocation runs to its end
     of caSubscribe:
-      # [G413 interim] No Runtime Control event reaches a remote consumer yet.
+      # [G413 interim] No Runtime Control event reaches a remote consumer
+      # until step 5-7b.
       let res = c.session.subscriptionResult(
         a.subId,
         Opt.some(
