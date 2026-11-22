@@ -1,5 +1,5 @@
 ; logos-core-nim.remote-exposure.v1 (Tier 5 step 5-7a-2; DECISIONS G412; Q4 as
-; planning ruled; docs/DAEMON.md §6b): the remote listener and export fields
+; planning ruled; docs/DAEMON.md §6c): the remote listener and export fields
 ; Runtime Control turned off, kept across restarts and crashes. One Logos
 ; deterministic-CBOR lcn.remote_exposure in <session>/state/remote-exposure.cbor,
 ; owner-only. logosd writes it: a disable through Runtime Control adds or

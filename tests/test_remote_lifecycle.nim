@@ -236,7 +236,7 @@ when defined(posix):
       # As below (ISSUES.md 194).
       killAll()
 
-    test "[IMPL-DECISION G411] [IMPL-DECISION G410] logosd starts an enabled listener's process, which serves an enrolled peer with logosd's certificate and signer; SIGKILL of logosd ends it and the peer's connection within 2 s and frees its lock; a restart with the peer revoked refuses its handshake":
+    test "[TRN-0227] [IMPL-DECISION G411] [IMPL-DECISION G410] logosd starts an enabled listener's process, which serves an enrolled peer with logosd's certificate and signer; SIGKILL of logosd ends it and the peer's connection within 2 s and frees its lock; a restart with the peer revoked refuses its handshake":
       let c = newCase()
       let d = c.start()
       check c.ready(d)

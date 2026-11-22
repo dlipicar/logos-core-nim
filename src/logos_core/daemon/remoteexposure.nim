@@ -1,5 +1,5 @@
 ## Durable remote disables (Tier 5 step 5-7a-2; DECISIONS G412; Q4 as planning
-## ruled; 5-7a plan §3.8). docs/DAEMON.md §6b, docs/REMOTE.md.
+## ruled; 5-7a plan §3.8). docs/DAEMON.md §6c, docs/REMOTE.md.
 ##
 ## A listener's `enabled` or `runtime_control_enabled`, or an export's
 ## `enabled`, turned off through Runtime Control stays off across restarts and

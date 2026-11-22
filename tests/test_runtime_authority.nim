@@ -1666,7 +1666,7 @@ suite "run.authority: remote listener and export records without remote transpor
       ecNotAuthorised
     e.finish()
 
-  test "[RUN-0346] [RUN-0336] [RUN-0337] [RUN-0338] [RUN-0613] [RUN-0614] [IMPL-DECISION G412] allowed: no record at first; a disabled listener is kept, enabling one is MODULE_ERROR here; an export needs its listener's record, may be enabled while the listener is off, and is listed normalized (RUNTIME l.2723-2735, l.3289-3312, l.3412)":
+  test "[RUN-0346] [RUN-0336] [RUN-0337] [RUN-0338] [RUN-0518] [RUN-0613] [RUN-0614] [IMPL-DECISION G412] allowed: no record at first; a disabled listener is kept, enabling one is MODULE_ERROR here; an export needs its listener's record, may be enabled while the listener is off, and is listed normalized (RUNTIME l.2723-2735, l.3289-3312, l.3412)":
     let (e, orch) = ready()
     setScript()
     let pid = e.view(Meter).tryGet.providerId

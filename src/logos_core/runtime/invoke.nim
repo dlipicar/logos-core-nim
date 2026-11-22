@@ -42,7 +42,7 @@ import logos_sdk/abi/[checks, types]
 import logos_sdk/iface/[accept, outcome, payload, surface]
 import logos_sdk/kit/rc_arms
 import ../transport/boundary
-import ./[callside, events, plumbing, rcaddress]
+import ./[callside, events, forwarded, plumbing, rcaddress]
 from ./remoterecords import NoRemoteTransport
 
 const RcNamespace = "logos.runtime_control."
@@ -399,6 +399,12 @@ proc routeCall*(
 
 # Runtime Control requests ----------------------------------------------------------------
 
+proc rcDeclares(bare: string): bool =
+  ## [SPEC INTERFACE §4.3] Whether the Runtime Control contract declares the
+  ## method `bare` (its request and its response).
+  bare.len > 0 and rcSchema().declares(RcNamespace & bare & "_request") and
+    rcSchema().declares(RcNamespace & bare & "_response")
+
 proc rcRequest(
     bare: string,
     params: openArray[byte],
@@ -423,8 +429,7 @@ proc rcRequest(
   ## configuration value is taken out into `value`: it stays on this thread
   ## (I87).
   let declaration = RcNamespace & bare & "_request"
-  if bare.len == 0 or not rcSchema().declares(declaration) or
-      not rcSchema().declares(RcNamespace & bare & "_response"):
+  if not rcDeclares(bare):
     return err(InvocationFailure(code: ecMethodNotFound))
   # [IF-02, I88] Counted from the request's root, under the engine's setting.
   let v = decodePayload(params, maxDepth = depth).valueOr:
@@ -791,6 +796,8 @@ proc remoteWork(
   let w = phase1.remote
   let d = e.remote
   if not w.pending:
+    if w.close.len > 0 and d.close != nil:
+      d.close(d.data, w.close)
     if w.stop and d.stop != nil:
       d.stop(d.data, w.key)
     if w.persist and d.persist != nil:
@@ -825,17 +832,62 @@ proc remoteWork(
   reply.capture = phase1.capture
   reply
 
+proc remoteAdmit*(
+    e: Engine, listener: seq[byte], consumer: string
+): Result[string, EngineError] =
+  ## [G413] Admits a remote Runtime Control connection at the listener whose
+  ## address bytes are `listener` for the forwarded consumer `consumer`
+  ## (`forwarded.forwardedId`), once the remote judge checked its Hello: the
+  ## token its invocations go through (`rcInvoke`'s `attempt`).
+  let r = e.call(
+    Request(kind: rqRemoteHello, origin: moduleOrigin(consumer), payload: listener)
+  )
+  if r.error.isSome:
+    return err(r.error.get)
+  ok(r.id)
+
+proc remoteClosed*(e: Engine, token: string) =
+  ## [G413] The connection `remoteAdmit` gave `token` ended.
+  discard e.call(Request(kind: rqRemoteClosed, attempt: token))
+
+proc rcAuthorizeMethod*(
+    e: Engine, instance, attempt, bare: string
+): Result[void, InvocationFailure] =
+  ## [SPEC RUNTIME l.1824-1828, l.1835; RUN-1124; G413] Steps 1 and 2 of the
+  ## order of checks for Runtime Control served to another Runtime: the
+  ## method resolved, then what is authorized without the payload (the
+  ## caller's association, and the method's authority where it names no
+  ## target from the payload), before the payload is decoded or validated. A
+  ## refusal is recorded as the call's outcome; an allow is asked again, from
+  ## the cache, by the call itself.
+  if not rcDeclares(bare):
+    return err(InvocationFailure(code: ecMethodNotFound))
+  let pre = e.call(
+    Request(
+      kind: rqRcPrecheck, origin: moduleOrigin(instance), attempt: attempt, bare: bare
+    )
+  )
+  if pre.error.isSome:
+    var trail: CallTrail
+    e.record(pre.capture, trail)
+    return err(failureOf(pre.error.get))
+  ok()
+
 proc rcInvoke*(
-    e: Engine, instance, attempt, bare: string, params: seq[byte]
+    e: Engine, instance, attempt, bare: string, params: seq[byte], authorized = false
 ): Result[seq[byte], InvocationFailure] =
   ## [SPEC INTERFACE §5.2; RUNTIME §9, §9.3] One Runtime Control method through
   ## the binding of `attempt`, synchronous or on a call worker. [CA l.1172-
   ## 1174; I85] A call whose applied decision requires retention is recorded
-  ## after its outcome, here.
+  ## after its outcome, here. A forwarded consumer's call passes
+  ## `rcAuthorizeMethod` first: here, unless the caller did (`authorized`).
   var trail: CallTrail
   var value: seq[byte]
+  let forwarded = instance.isForwarded
+  if forwarded and not authorized:
+    ?e.rcAuthorizeMethod(instance, attempt, bare)
   let rc = rcRequest(bare, params, e.payloadDepth, trail, value).valueOr:
-    if error.code == ecInvalidParams:
+    if error.code == ecInvalidParams and not forwarded:
       # [SPEC RUNTIME l.1827-1828] What is authorized without the payload
       # (step 2) comes before its validation (step 3).
       let pre = e.call(

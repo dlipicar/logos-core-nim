@@ -32,7 +32,8 @@ when defined(posix):
 import results
 import logos_sdk/abi/[host, types]
 import logos_sdk/iface/outcome
-import ./[callside, engine, evidence, host_config, native, plumbing, remotesup]
+import
+  ./[callside, engine, evidence, host_config, native, plumbing, remoterc, remotesup]
 from ./remoterecords import addressKey, addressText, isQuic, tlsTcp
 from ../crypto/cose import MaxCoseKidBytes
 from ../authority/facts import SharedFacts, newSharedFacts, freeSharedFacts
@@ -111,6 +112,9 @@ type
     remote: RemoteSupervisor
       ## [G411] made at start with `runtime.remote_program`, the remote
       ## section and the hooks; closed once shutdown completed
+    remoteRc: RemoteRc
+      ## [G413] the inbound Runtime Control of `remote`'s listeners, made once
+      ## the engine exists; closed after `remote`, before the engine
 
 # Per-thread results ---------------------------------------------------------------
 
@@ -329,12 +333,17 @@ proc runtimeSetRemoteHooks*(
   answer(ecOk)
 
 proc closeRemote(h: ptr HostRuntime) =
-  ## [plan §3.1 item 5] Every remote process ended and reaped.
+  ## [plan §3.1 item 5] Every remote process ended and reaped, then the
+  ## inbound Runtime Control's workers joined (G413).
   var sup: RemoteSupervisor
+  var rrc: RemoteRc
   withLock h.lock:
     sup = h.remote
     h.remote = nil
+    rrc = h.remoteRc
+    h.remoteRc = nil
   closeRemoteSupervisor(sup)
+  closeRemoteRc(rrc)
 
 proc engineOf*(rt: ptr LogosRuntimeHandle): Engine =
   ## In-process hosts and tests: the engine, for observation; nil before
@@ -577,6 +586,12 @@ proc launch(h: ptr HostRuntime): LogosResult =
   let runtimeId = e.runtimeInstanceId()
   h.producer = copyText(runtimeId)
   if sup != nil:
+    # [G413] Inbound Runtime Control, before any listener can relay a Hello.
+    let rrc = newRemoteRc(e, sup, c.remote.get.snapshot)
+    if rrc == nil:
+      return answer(ecModule, "the remote Runtime Control cannot start")
+    withLock h.lock:
+      h.remoteRc = rrc
     # [SPEC RUNTIME l.3291-3292, l.3319-3321] The configuration's enabled
     # listeners activated before anything runs, as Runtime Control would;
     # one that cannot listen fails the start (TRANSPORT_ERROR).

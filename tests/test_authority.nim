@@ -3193,7 +3193,7 @@ suite "cap.remote: forwarded consumers [IMPL-DECISION G415]":
     check e.remoteEval("x", R3, @[callM1()]).errorOf == CaCode.Invalid_request
     e.close()
 
-  test "[IMPL-DECISION G415] a grant targets a consumer of an enrolled Runtime without the instance being checked; of any other Runtime it is invalid-request":
+  test "[TXT-0359] [IMPL-DECISION G415] the enrolled half: a grant targets a consumer of an enrolled Runtime without the instance being checked; of any other Runtime it is invalid-request":
     var e = open(
       policyBytes(
         @[

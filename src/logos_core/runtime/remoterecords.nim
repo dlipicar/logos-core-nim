@@ -194,6 +194,12 @@ func enabledListener*(rr: RemoteRecords, key: openArray[byte]): bool =
   let e = rr.listener(key)
   e.isSome and e.get.record.enabled
 
+func servesRc*(rr: RemoteRecords, key: openArray[byte]): bool =
+  ## [SPEC RUNTIME l.2738-2739; G413] The listener at `key` is enabled and
+  ## serves Runtime Control: its connections may carry Runtime Control.
+  let e = rr.listener(key)
+  e.isSome and e.get.record.enabled and e.get.record.runtime_control_enabled
+
 func usableExport*(rr: RemoteRecords, key: openArray[byte], provider: string): bool =
   ## [SPEC RUNTIME l.2733-2734, l.3311-3312] Enabled, through an enabled
   ## listener.

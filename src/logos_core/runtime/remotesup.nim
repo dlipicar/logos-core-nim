@@ -32,8 +32,11 @@
 ## - **Signing (G410).** A process's `sign` is answered by the host's signer
 ##   on the supervisor's sign thread, as a TLS server, so a slow signer never
 ##   holds the supervision loop.
-## - **Hello and Runtime Control** (G413) are judged by the engine (5-7a-2's
-##   inbound part, `RemoteHooks.judge`); until a judge is set every Hello is
+## - **Hello and Runtime Control** (G413) go to the inbound side
+##   (`RemoteInbound`, `remoterc.nim`) as they come, on this thread, which
+##   must not block; its answers come back through `post`, each to the one
+##   process run it is for, so a restarted process never gets an answer meant
+##   for its predecessor's connection. Without an inbound side every Hello is
 ##   refused and the connection closed.
 ##
 ## On Windows no supervisor is made (`newRemoteSupervisor` gives nil): logosd
@@ -88,12 +91,26 @@ type
   RemoteNote* = proc(data: pointer, text: string) {.nimcall, gcsafe, raises: [].}
     ## One line for the host's log (a process's end, a restart).
 
-  RemoteJudge* = proc(
-    data: pointer, key: seq[byte], conn: uint64, msg: seq[byte]
-  ): seq[seq[byte]] {.nimcall, gcsafe, raises: [].}
-    ## [G413] One `hello_judge`, `rc_in` or `conn_closed` frame body of the
-    ## listener at `key`, on a supervisor worker: the frame bodies to send
-    ## back (`hello_admit`, `hello_refuse`, `rc_out`, `close_conn`).
+  RemoteInbound* = object
+    ## [G413] Who takes what a listener process relays (`remoterc.nim`).
+    ## `frame` and `ended` run on the supervision thread and must not block;
+    ## answers go back through `post`.
+    data*: pointer
+    frame*: proc(data: pointer, key: seq[byte], run: uint64, body: seq[byte]) {.
+      nimcall, gcsafe, raises: []
+    .}
+      ## one `hello_judge`, `rc_in` or `conn_closed` body from the process run
+      ## `run` of the listener at `key`
+    ended*:
+      proc(data: pointer, key: seq[byte], run: uint64) {.nimcall, gcsafe, raises: [].}
+      ## that process run ended: every connection it had is gone
+    close*: proc(data: pointer, tokens: seq[string]) {.nimcall, gcsafe, raises: [].}
+      ## the engine ended these admitted connections (`RemoteDriver.close`);
+      ## on the calling thread, at once
+
+  Post = object
+    run: uint64
+    frames: seq[seq[byte]]
 
   RemoteHooks* = object
     ## What the in-process host gives (`host.runtimeSetRemoteHooks`).
@@ -175,8 +192,8 @@ type
     snapshot: seq[byte] ## one encoded `lcn.rch_snapshot`
     tls: TlsConfig
     hooks: RemoteHooks
-    judge: RemoteJudge
-    judgeData: pointer
+    inbound: RemoteInbound
+    posts: Channel[Post]
 
   RemoteSupervisor* = ptr RemoteSupervisorObj
 
@@ -407,9 +424,8 @@ when defined(posix):
     of K.lcn_Rch_hello_judge, K.lcn_Rch_rc_in, K.lcn_Rch_conn_closed:
       if p.state != psListening:
         return true # stopping: what it still reports is moot
-      if s.judge != nil:
-        for f in s.judge(s.judgeData, p.key, 0, body):
-          p.outq.add(frame(f, RchFrameLimit).get(newSeq[byte]()))
+      if s.inbound.frame != nil:
+        s.inbound.frame(s.inbound.data, p.key, p.id, body)
       elif m.kind == K.lcn_Rch_hello_judge:
         p.queue(
           toMessage(LcnRchHelloRefuse(id: m.arm_lcn_Rch_hello_judge.id, response: @[]))
@@ -440,6 +456,8 @@ when defined(posix):
     ## The process was reaped.
     p.closeCtl()
     p.pid = -1
+    if s.inbound.ended != nil:
+      s.inbound.ended(s.inbound.data, p.key, p.id)
     let how =
       if WIFEXITED(status):
         "exited with status " & $WEXITSTATUS(status)
@@ -552,6 +570,15 @@ when defined(posix):
         for p in procs.values:
           if p.id == d.procId and p.ctl >= 0:
             p.outq.add(d.frame)
+      # [G413] Answers from the inbound side, to the process run they are for.
+      while true:
+        let (got, d) = s.posts.tryRecv()
+        if not got:
+          break
+        for p in procs.values:
+          if p.id == d.run and p.ctl >= 0 and p.state == psListening:
+            for f in d.frames:
+              p.outq.add(f)
       # Wait.
       var fds = @[TPollfd(fd: s.wakeR, events: POLLIN)]
       var order: seq[RemoteProc]
@@ -653,6 +680,7 @@ proc newRemoteSupervisor*(
     s.jobs.open()
     s.signJobs.open()
     s.signed.open()
+    s.posts.open()
     s.program = program
     s.workDir = workDir
     s.snapshot = snapshot
@@ -667,11 +695,24 @@ proc newRemoteSupervisor*(
   else:
     nil
 
-proc setJudge*(s: RemoteSupervisor, judge: RemoteJudge, data: pointer) =
+proc setInbound*(s: RemoteSupervisor, inbound: RemoteInbound) =
   ## [G413] Before the first start.
   if s != nil:
-    s.judge = judge
-    s.judgeData = data
+    s.inbound = inbound
+
+proc post*(s: RemoteSupervisor, run: uint64, msgs: openArray[LcnRchMessage]) =
+  ## [G413] Control-channel messages for the process run `run`, sent after
+  ## every earlier one; dropped once that run has ended. Any thread.
+  if s == nil:
+    return
+  var frames: seq[seq[byte]]
+  for m in msgs:
+    let f = frameOf(m)
+    if f.isOk:
+      frames.add(f.get)
+  if frames.len > 0:
+    s.posts.send(Post(run: run, frames: frames))
+    s.wake()
 
 proc startListener*(
     s: RemoteSupervisor, key: seq[byte], host: string, port: uint16
@@ -711,6 +752,11 @@ proc driverStart(
 proc driverStop(data: pointer, key: seq[byte]) {.nimcall, gcsafe, raises: [].} =
   cast[RemoteSupervisor](data).stopListener(key)
 
+proc driverClose(data: pointer, tokens: seq[string]) {.nimcall, gcsafe, raises: [].} =
+  let s = cast[RemoteSupervisor](data)
+  if s.inbound.close != nil:
+    s.inbound.close(s.inbound.data, tokens)
+
 proc driverPersist(
     data: pointer,
     listener: seq[byte],
@@ -732,6 +778,7 @@ proc driver*(s: RemoteSupervisor): RemoteDriver =
     start: driverStart,
     stop: driverStop,
     persist: (if s.hooks.persist == nil: nil else: driverPersist),
+    close: driverClose,
   )
 
 proc closeRemoteSupervisor*(s: RemoteSupervisor) =
@@ -750,6 +797,7 @@ proc closeRemoteSupervisor*(s: RemoteSupervisor) =
   s.jobs.close()
   s.signJobs.close()
   s.signed.close()
+  s.posts.close()
   deinitCond(s.cond)
   deinitLock(s.lock)
   `=destroy`(s[])

@@ -432,6 +432,11 @@ type
     ## the listener `listener` (`provider` empty) or its export of
     ## `provider`; `off` empty removes the entry. May block (fsync).
 
+  RemoteClose* =
+    proc(data: pointer, tokens: seq[string]) {.nimcall, gcsafe, raises: [].}
+    ## [G413] Ends the remote Runtime Control connections the engine admitted
+    ## as `tokens` (`rqRemoteHello`); returns at once.
+
   RemoteDriver* = object
     ## [G411, G412] The engine's way to remote transport: the remote
     ## supervisor (`remotesup.nim`) and logosd's exposure store. Each
@@ -441,6 +446,7 @@ type
     start*: RemoteStart ## nil: no remote transport here (G298)
     stop*: RemoteStop
     persist*: RemotePersist ## nil: nothing is recorded across a restart
+    close*: RemoteClose ## nil: no remote Runtime Control connection exists
 
   RemoteSetup* = object
     ## [G412] The deployment configuration's listener and export records,
@@ -464,6 +470,10 @@ type
     provider*: string ## an export's provider id; empty: the listener
     off*: set[ExposureField]
     consumer*: string ## the consumer making the change, as an address text
+    close*: seq[string]
+      ## [G413] the remote Runtime Control connections the change ended (its
+      ## listener disabled, or its Runtime Control turned off): closed by the
+      ## driver once committed
 
   InitialSettings* = object
     ## [SPEC RUNTIME l.2543; G110; I93] Protected provisioning of a new
@@ -665,6 +675,12 @@ type
       ## [G412] phase 3 of a `set_remote_listener` or `set_provider_export`
       ## whose work (a listener started, a retained disable removed) the
       ## call's thread did: the record committed if the call still may
+    rqRemoteHello
+      ## [G413] a remote Runtime Control connection whose Hello passed the
+      ## remote judge's checks, for the forwarded consumer `origin` at the
+      ## listener whose address bytes are `payload`: admitted (its token in
+      ## `Reply.id`) while that listener serves Runtime Control
+    rqRemoteClosed ## [G413] the remote Runtime Control connection `attempt` ended
     rqHostedReleased
       ## [plan §2.8] a hosted handle was released
       ## [I90] an event worker draining a transported subscription asks for

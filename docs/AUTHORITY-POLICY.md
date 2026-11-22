@@ -225,10 +225,11 @@ that tells it the thing exists.
 ### Subjects and facts (G47)
 
 A subject is a set of facts that must all match; within one field, any entry matches. `{}` matches
-every Runtime-known instance.
+every local instance.
 
 | Field | Matches |
 |---|---|
+| `runtimes` | the Runtime that owns the consumer: only for a consumer of another Runtime (G415) |
 | `instances` | the instance id |
 | `modules` | the module name |
 | `signers` | the exact 48-byte signer public key of the instance's accepted selection |
@@ -249,6 +250,23 @@ through Runtime Control (CA l.107) and not through `evaluate` (l.108).
   not a missing fact.
 - **Trust.** Rules name exact signer keys, not trust anchors. Changing who is trusted is a policy
   revision, with its own `policy_changed` event.
+- **Consumers of another Runtime** (owner decision B5, item O1 (a); DECISIONS G415). A Runtime with an
+  active `logos.remote.tls-tcp` enrollment may forward Runtime Control for the consumers it owns
+  (RUNTIME l.1686-1693). The authority learns the enrolled Runtimes from logosd at its realization, never
+  from a request. **A subject that names no Runtime matches local instances only; a consumer of another
+  Runtime is matched only by a subject whose `runtimes` names that Runtime, while it is enrolled.** Its
+  facts are its instance id and its Runtime, so `{"runtimes": [R], "instances": ["m1"]}` matches the
+  consumer `m1` of R and nothing on this Runtime, and `{"instances": ["m1"]}` never matches it (an
+  instance id is scoped to its Runtime, l.2549-2550). `runtimes` holds lowercase UUIDv4s, never this
+  Runtime's own id, never beside `modules`, `signers` or `packages`, and is never empty; an id with no
+  enrollment loads, matches nothing, and the load report names it. Provider selectors and the targets
+  of `runtime-control` and `module-execution` scopes (`lcn.ap_selector`) take no `runtimes`: they name
+  this Runtime's own records (l.1829). In an `inspect` rule's `grants` and `audit`, a target naming no
+  Runtime covers every consumer's records, local and forwarded (O1 (x)); `runtimes: [R]` narrows it to
+  R's. A grant target on an enrolled Runtime is issued without its instance being checked (CA l.77); on
+  any other Runtime it is `invalid-request`. With `remote.enabled`, `policy: allow-all` refuses the
+  start (O1 (i)), and the engine never lets allow-all, test or derived rules decide for a forwarded
+  consumer.
 - **History.** A grant's target and an audit record's subject are matched with the facts as they were
   when the grant or record was made, so a retired address can still be filtered (CA l.79-80). These
   snapshots never authenticate anything (l.81). A failure recorded before the consumer's facts could be
@@ -356,7 +374,7 @@ order assigns the rest, and places the denials among the errors; the first that 
 | 1 | Wrong caller kind, or `consumer` is not the caller; for a module's `evaluate`, no rule or grant naming it, or `execution_renewal` | `not-authorised` | same | same | same | same | same |
 | 2 | Queue full, timed out before it ran, or authority closed | `authority-unavailable` | same | same | same | same | same |
 | 3 | Form: set order or duplicates, shape (a permission scope beside anything but a `start`, for `evaluate`), `expires_at` not in the future, limit, cursor, `since > until` | `invalid-request` | `invalid-request` | | | `invalid-request` | `invalid-request` |
-| 4 | Another Runtime, or `remote-enrollment` | `unsupported-scope` | same | | | | |
+| 4 | A scope naming another Runtime's provider, or `remote-enrollment` (never evaluated, G415) | `unsupported-scope` | same | | | | |
 | 5 | A permission the selected profile does not define; then constraints that do not conform to their definition | `unknown-permission`; `invalid-constraints` | same | | | | |
 | 6 | Facts unavailable, writes failing, out of ids or room, notification lost | `authority-unavailable` | same | same | same | same | same |
 | 6a | No `issue` rule matches the caller | | deny `not-granted` | | | | |
