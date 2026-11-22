@@ -608,14 +608,33 @@ The Logos blockchain node as a module (DECISIONS G419–G424; the library's `log
 
 - **Placement** (DECISIONS G421): `hosted_dynamic` with placement `process` only, one node per
   process. The library's threads outlive `_MODULE_destroy`, so a host must never unload the library and
-  must end with `_exit` after the release; logosd's Module Host does both. `direct_dynamic` would leave
-  those threads in logosd's process. Nothing refuses another placement while NP-14 is open (a module
-  cannot declare the placements it supports): the operator's daemon-config decides.
+  must end with `_exit` after the release; logosd's Module Host does both. Run it `hosted_dynamic`: in an
+  embedder's own process the library's signal handling, its HTTP API and any fault of the library all
+  belong to the embedder (below), and `direct_dynamic` would leave the library's threads in logosd's
+  process. Under an embedder with an ordinary SIGINT handler, the library's handler replaces it. Nothing
+  refuses another placement while NP-14 is open (a module cannot declare the placements it supports, and
+  its init is not told its placement): the operator's daemon-config decides, and the node profile (Tier 5
+  step N-6a) sets `hosted_dynamic`.
+- **Signals.** The node is started with the library's stock start, whose `SystemSig` service takes the
+  process's SIGINT at the start and keeps it: a SIGINT to the node's Module Host stops the node, and the
+  instance goes to `error` (`reported-by-module`) as for any stop of the inner node. It takes no other
+  signal. logosd ends a Module Host with SIGKILL, which no handler sees.
+- **The HTTP API.** The stock start always starts the library's HTTP API, and the module puts it on
+  `127.0.0.1` at a port the system picks at each start; no setting moves it or turns it off. The API has
+  no authentication. Any local process of any user, other modules' hosts included, that finds the port
+  can spend from the node's wallet, sign any payload (`/wallet/sign/ed25519`, `/wallet/sign/zk`), claim,
+  post SDP declarations, add transactions, start and stop PoW mining and auto-claim, change the log
+  filter and dial peers. None of that passes the Runtime, the policy classes or the Capability Authority.
+  The API refuses web pages by their `Origin` and `Host`, not local programs. The module's README lists
+  every route. Run the node only on a machine where every local user is trusted.
 - **Resources** (D5 for blockchain, DECISIONS G422): the module takes only its typed configuration
-  (`blockchain_config.cddl`, delivered at init). It reads no environment variable and no home
-  directory. The chain's deployment is built in, or a read-only file the configuration names, with an
-  optional SHA-256 that init checks (DECISIONS G441). Its circuits are compiled in, it serves no HTTP
-  API, and it logs to standard error, which its Module Host inherits (§23). On Linux its prover
+  (`blockchain_config.cddl`, delivered at init), and no home directory. The library reads 24 environment
+  variables of its own in place of that configuration (the README names them), so init refuses to start
+  while any of them is set, empty or not, naming it: `runtime.module_host_env` must not list them. The
+  chain's deployment is built in, or a read-only file the configuration names, with an optional SHA-256
+  that init checks (DECISIONS G441). Its circuits are compiled in, and it logs to standard error, which
+  its Module Host inherits (§23). It runs one tokio worker per CPU; `TOKIO_WORKER_THREADS` in
+  `runtime.module_host_env` sets fewer. On Linux its prover
   (rapidsnark, as the circuits' prebuilt archive ships it) also logs each proof, about 1.4 KB of phase
   names, to `MyLogFile.log` in the working directory. While the node runs, the module's process works
   in its state directory's `prover/`, and the module empties that file in place past 1 MiB (DECISIONS
@@ -645,9 +664,10 @@ The Logos blockchain node as a module (DECISIONS G419–G424; the library's `log
     turns on the library's NAT behaviour: a gateway lookup, autonat, and port mapping through PCP,
     NAT-PMP and UPnP.
   - It listens on `network.listen_host` and `network.port`, and on `blend.port` once the blend
-    membership reaches the era's minimum size; it dials `network.initial_peers`.
+    membership reaches the era's minimum size; it dials `network.initial_peers`. Its HTTP API listens on
+    a TCP port on `127.0.0.1` (above).
 - **Bootstrap period.** With `cryptarchia.prolonged_bootstrap_period` absent, the library's hour
-  applies: for that hour a fresh node's `mode` is `bootstrapping` and it does not lead. A lower value is
+  applies: for that hour a fresh node's `mode` is `bootstrapping` and it does not lead. A value set is
   logged once at start.
 
 ## Facts
