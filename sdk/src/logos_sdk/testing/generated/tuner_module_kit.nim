@@ -253,7 +253,7 @@ template exportTunerModule*(T: typedesc) =
       destroyModule(instance)
     GC_unref(instance)
 
-  proc tunerModuleKitName(): cstring {.exportc: "logos_tuner_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [].} =
+  proc tunerModuleKitName(): cstring {.exportc: "logos_tuner_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "a static string".} =
     system.cstring(moduleName)
 
   proc tunerModuleKitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: "logos_tuner_module_MODULE_init", dynlib, cdecl, gcsafe, raises: [].} =
@@ -277,7 +277,7 @@ template exportTunerModule*(T: typedesc) =
     let instance {.cursor.} = cast[T](p)
     routeTunerModule(instance, bare, params)
 
-  proc tunerModuleKitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: "logos_tuner_module_MODULE_call_surface", dynlib, cdecl, gcsafe, raises: [].} =
+  proc tunerModuleKitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: "logos_tuner_module_MODULE_call_surface", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "static bytes".} =
     if outLen != nil:
       outLen[] = csize_t(callSurfaceData.len)
     addr callSurfaceData[0]

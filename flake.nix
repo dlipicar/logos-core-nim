@@ -717,6 +717,15 @@
               python3 ${./tools/lint/packaging.py}
               touch $out
             '';
+          # [DECISIONS G464-G467] Every C-callable procedure of the SDK, core and the test kit
+          # modules registers its thread first, or carries its exemption and reason; no
+          # `Entered` value is made without `entered`. The command module repositories run.
+          lint-callbacks = s.pkgs.runCommand "lint-callbacks" { nativeBuildInputs = [ s.lcnGen ]; } ''
+            cd ${s.nimSources}
+            lcn-gen lint-callbacks --self-test
+            lcn-gen lint-callbacks sdk/src src tests/kit
+            touch $out
+          '';
           # The import direction between the SDK, core, the daemon and the CLI.
           lint-layers = s.pkgs.runCommand "lint-layers" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
             cd ${s.nimSources}

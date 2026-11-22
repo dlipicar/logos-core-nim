@@ -966,7 +966,9 @@ proc newBlock(size: int): ptr OwnedBlock =
   if result != nil:
     result.size = size
 
-proc releaseBlock(state: pointer) {.cdecl, gcsafe, raises: [].} =
+proc releaseBlock(
+    state: pointer
+) {.cdecl, gcsafe, raises: [], lcnNoNimHeap: "the C allocator only".} =
   ## [SPEC INTERFACE §2.7.1, l.2085-2091] A completion's response owner: the
   ## response, or the failure's message and detail, zeroed and freed (G276).
   ## Any thread: only the C allocator.
@@ -2233,7 +2235,13 @@ proc setDeliveryBound*(s: ModuleServices, events: int) =
 
 proc lcnKitPost(
     poster: pointer, fn: PostFn, payload: pointer
-) {.exportc: "lcn_kit_post", cdecl, gcsafe, raises: [].} =
+) {.
+    exportc: "lcn_kit_post",
+    cdecl,
+    gcsafe,
+    raises: [],
+    lcnNoNimHeap: "the C allocator, the gate's and the context's locks, and the signal"
+.} =
   ## `post` for C code linked into the module library (a Rust staticlib's
   ## threads): `void lcn_kit_post(void *poster, void (*fn)(void *), void *payload)`.
   postRaw(Poster(poster), fn, payload)

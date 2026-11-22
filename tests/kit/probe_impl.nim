@@ -187,22 +187,19 @@ proc label(t: ptr Tag): string =
 
 proc onRouteEvent(
     name: cstring, data: ptr UncheckedArray[uint8], len: csize_t, userData: pointer
-) {.cdecl.} =
-  kitEnter()
+) {.lcnCallback.} =
   let t = cast[ptr Tag](userData)
   t.probe.note("deliveries", t.label & " " & $name & " " & hex(data, len))
   if t.probe.blockHandler:
     waitGo(t.probe.dir, "go-handler")
 
-proc onRouteEnd(reason: CErrorCode, userData: pointer) {.cdecl.} =
-  kitEnter()
+proc onRouteEnd(reason: CErrorCode, userData: pointer) {.lcnCallback.} =
   let t = cast[ptr Tag](userData)
   t.probe.note("ends", t.label & " " & $int64(reason))
 
 proc onSubEnd(
     id: LogosSubscriptionId, reason: CErrorCode, userData: pointer
-) {.cdecl.} =
-  kitEnter()
+) {.lcnCallback.} =
   let t = cast[ptr Tag](userData)
   t.probe.note("subends", t.label & " " & $id & " " & $int64(reason))
   if t.probe.blockSubEnd:
@@ -214,8 +211,7 @@ proc onDone(
     response: ptr UncheckedArray[uint8],
     len: csize_t,
     owner: LogosResponseOwner,
-) {.cdecl.} =
-  kitEnter()
+) {.lcnCallback.} =
   let t = cast[ptr Tag](userData)
   let line =
     if int64(res.code) == 0:
@@ -405,8 +401,7 @@ proc serveMain(p: ptr Probe) {.thread.} =
 
 proc onEvent(
     name: cstring, data: ptr UncheckedArray[uint8], len: csize_t, userData: pointer
-) {.cdecl.} =
-  kitEnter()
+) {.lcnCallback.} =
   let p = cast[ptr Probe](userData)
   if p.inside.fetchAdd(1) != 0:
     p.note("events", "overlap")
@@ -433,7 +428,12 @@ proc onEvent(
     waitGo(p.dir, "go-handler")
   discard p.inside.fetchSub(1)
 
-proc probeName(): cstring {.exportc: "logos_probe_module_MODULE_name", dynlib, cdecl.} =
+proc probeName(): cstring {.
+    exportc: "logos_probe_module_MODULE_name",
+    dynlib,
+    cdecl,
+    lcnNoNimHeap: "a static string"
+.} =
   "probe_module"
 
 proc probeInit(

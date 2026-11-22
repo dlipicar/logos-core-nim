@@ -670,7 +670,7 @@ proc `probe`(
     destroyMode.store(10)
     note = "armed"
   of 31:
-    m.services.poster.post(Entered[PostFn](nil), nil) # dies: a null callback
+    m.services.poster.post(default(Entered[PostFn]), nil) # dies: a null callback
   else:
     discard
   ok(LedgerProbeResponse(value: request.value, thread: threadNumber(), note: note))

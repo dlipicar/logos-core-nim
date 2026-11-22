@@ -11,7 +11,8 @@
 ## which has no per-thread region.
 ##
 ## - `enterForeignThread` registers the calling thread. The kit's `kitEnter`
-##   and `callbackEnter` and the bindings' `bindingEnter` are it.
+##   (which also clears the thread's last failure) and the bindings'
+##   `bindingEnter` are it.
 ## - `{.lcnCallback.}` marks a procedure a binding runs (an event handler, an
 ##   end report, a completion): it gives the procedure the C calling convention
 ##   and makes `enterForeignThread` its first statement, in its own frame.
@@ -30,7 +31,9 @@
 {.push raises: [], gcsafe.}
 
 import std/macros
-import ./perthread
+import ./[entrymarks, perthread]
+
+export entrymarks
 
 var
   foreignEntered {.threadvar.}: bool ## `enterForeignThread` ran on this thread
@@ -77,22 +80,6 @@ proc offModuleThread(name: cstring) {.noinline.} =
   discard cFputs(name, cStderr)
   discard cFputs(" ran off its module thread (DECISIONS G465)\n", cStderr)
   cAbort()
-
-template lcnEntered*() {.pragma.}
-  ## The tag `{.lcnCallback.}` leaves; `entered` reads it.
-
-template lcnOnModuleThread*() {.pragma.}
-  ## The tag `{.lcnModuleThread.}` leaves; `entered` reads it.
-
-template lcnNoNimHeap*(reason: string) {.pragma.}
-  ## [DECISIONS G467] A C-callable procedure that uses no Nim heap at all (the
-  ## C allocator, its arguments and static data only), so it may run on a
-  ## thread that never registered. The reason says why.
-
-template lcnOwnRuntime*(reason: string) {.pragma.}
-  ## [DECISIONS G467] A C-callable procedure that only this library's own
-  ## runtime calls, on its own threads (a TLS callback during the transport's
-  ## own call, an exit procedure, a signal handler). The reason says which.
 
 type Entered*[F] = distinct F
   ## [DECISIONS G464] A procedure that registers its thread first: made only

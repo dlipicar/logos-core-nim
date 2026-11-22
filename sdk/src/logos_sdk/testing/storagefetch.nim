@@ -12,6 +12,7 @@
 import std/[locks, monotimes, os, times, typedthreads]
 import results
 import logos_sdk/abi/types
+import logos_sdk/base/entry
 import logos_sdk/crypto/blake3
 import logos_sdk/contracts/generated/lcn_NS_storage_fetch_calls
 
@@ -210,7 +211,7 @@ initLock(heard.lock)
 
 proc onReadiness(
     name: cstring, data: ptr UncheckedArray[uint8], len: csize_t, userData: pointer
-) {.cdecl, gcsafe, raises: [].} =
+) {.lcnCallback.} =
   let ev =
     if len > 0:
       LcnNSStorageFetchFetchReadinessChangedEvent.decode(

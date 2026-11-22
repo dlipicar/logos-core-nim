@@ -152,17 +152,12 @@ template kitEnter*() =
   ## frame (the procedures below run in deeper frames): `enterForeignThread`
   ## (`base/entry`), which registers the calling thread with this library's
   ## Nim runtime and, under refc, raises the collector's stack bottom to this
-  ## frame, then the thread's last failure is cleared.
+  ## frame, then the thread's last failure is cleared. A procedure a binding
+  ## runs is marked `{.lcnCallback.}` instead (DECISIONS G339, G464): it may run
+  ## nested inside one of this library's entries (a direct provider publishing
+  ## during a call, INTERFACE l.1405), whose last failure it must not clear.
   enterForeignThread()
   clearLastFailure()
-
-template callbackEnter*() =
-  ## [IMPL] `kitEnter` without clearing the thread's last failure, since a
-  ## callback may run nested inside one of this library's entries (a direct
-  ## provider publishing during a call, INTERFACE l.1405). A procedure a
-  ## binding runs is marked `{.lcnCallback.}` (DECISIONS G339, G464), which
-  ## makes this its first statement.
-  enterForeignThread()
 
 # Failures --------------------------------------------------------------------------
 

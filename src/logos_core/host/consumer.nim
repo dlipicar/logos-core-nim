@@ -1018,7 +1018,9 @@ type Owned = object
   detail: ptr UncheckedArray[uint8]
   detailLen: int
 
-proc ownedRelease(state: pointer) {.cdecl.} =
+proc ownedRelease(
+    state: pointer
+) {.cdecl, lcnNoNimHeap: "zeroes and frees C allocations only".} =
   ## [DECISIONS G276] Each copy is zeroed, then freed.
   let o = cast[ptr Owned](state)
   if o == nil:
@@ -1427,7 +1429,7 @@ proc routeCallOp(
 
 proc routeReleaseResponseOp(
     route: ptr LogosRouteHandle, response: ptr UncheckedArray[uint8], len: csize_t
-) {.cdecl.} =
+) {.cdecl, lcnNoNimHeap: "releaseGiven: zeroes and frees a C allocation".} =
   releaseGiven(response) # [DECISIONS G276]
 
 proc routeSubscribeOp(

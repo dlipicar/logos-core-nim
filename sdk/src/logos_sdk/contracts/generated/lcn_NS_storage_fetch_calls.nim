@@ -763,19 +763,19 @@ template exportLcnNSStorageFetchCalls*() =
     kitEnter()
     callInvoke0(p0, p1, p2)
 
-  proc lcnNSStorageFetchCallsClear0(p1: ptr LogosResponseOwner, p2: ptr logos_lcn_NS_storage_fetch_Readiness_t) {.exportc: "lcn_clear_lcn_NS_storage_fetch_Fetch_readiness", dynlib, cdecl, gcsafe, raises: [].} =
+  proc lcnNSStorageFetchCallsClear0(p1: ptr LogosResponseOwner, p2: ptr logos_lcn_NS_storage_fetch_Readiness_t) {.exportc: "lcn_clear_lcn_NS_storage_fetch_Fetch_readiness", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear0(p1, p2)
 
   proc lcnNSStorageFetchCallsInvoke1(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: uint32, p3: ptr logos_lcn_NS_storage_fetch_Locator_t, p4: uint64, p5: ptr logos_lcn_NS_storage_fetch_Read_object_response_t): LogosResult {.exportc: "lcn_invoke_lcn_NS_storage_fetch_Read_object", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
     callInvoke1(p0, p1, p2, p3, p4, p5)
 
-  proc lcnNSStorageFetchCallsClear1(p1: ptr LogosResponseOwner, p5: ptr logos_lcn_NS_storage_fetch_Read_object_response_t) {.exportc: "lcn_clear_lcn_NS_storage_fetch_Read_object", dynlib, cdecl, gcsafe, raises: [].} =
+  proc lcnNSStorageFetchCallsClear1(p1: ptr LogosResponseOwner, p5: ptr logos_lcn_NS_storage_fetch_Read_object_response_t) {.exportc: "lcn_clear_lcn_NS_storage_fetch_Read_object", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear1(p1, p5)
 
   proc lcnNSStorageFetchCallsInvoke2(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: ptr logos_lcn_NS_storage_fetch_Locator_t, p3: ptr logos_lcn_NS_storage_fetch_Stat_object_response_t): LogosResult {.exportc: "lcn_invoke_lcn_NS_storage_fetch_Stat_object", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
     callInvoke2(p0, p1, p2, p3)
 
-  proc lcnNSStorageFetchCallsClear2(p1: ptr LogosResponseOwner, p3: ptr logos_lcn_NS_storage_fetch_Stat_object_response_t) {.exportc: "lcn_clear_lcn_NS_storage_fetch_Stat_object", dynlib, cdecl, gcsafe, raises: [].} =
+  proc lcnNSStorageFetchCallsClear2(p1: ptr LogosResponseOwner, p3: ptr logos_lcn_NS_storage_fetch_Stat_object_response_t) {.exportc: "lcn_clear_lcn_NS_storage_fetch_Stat_object", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear2(p1, p3)

@@ -52,7 +52,7 @@ type Owned = object
   module: ptr LogosModuleContext
   buf: ptr UncheckedArray[uint8]
 
-proc releaseOwned(state: pointer) {.cdecl, gcsafe, raises: [].} =
+proc releaseOwned(state: pointer) {.lcnCallback.} =
   let o = cast[ptr Owned](state)
   if o.buf != nil:
     kitFree(o.module, o.buf)
@@ -61,6 +61,7 @@ proc releaseOwned(state: pointer) {.cdecl, gcsafe, raises: [].} =
 proc submit(
     module: ptr LogosModuleContext, inv: ptr LogosProviderInvocation
 ) {.cdecl, gcsafe, raises: [].} =
+  kitEnter()
   for i in 0 ..< MaxHeld:
     var expected: pointer = nil
     if held[i].compareExchange(expected, inv):
@@ -72,6 +73,7 @@ proc submit(
 proc requestCancel(
     module: ptr LogosModuleContext, inv: ptr LogosProviderInvocation
 ) {.cdecl, gcsafe, raises: [].} =
+  kitEnter()
   vaultCancels += 1
 
 type Parked* = object
@@ -129,7 +131,9 @@ var api = LogosAsyncProviderApi(
   requestCancel: requestCancel,
 )
 
-proc asyncApi(): ptr LogosAsyncProviderApi {.cdecl, gcsafe, raises: [].} =
+proc asyncApi(): ptr LogosAsyncProviderApi {.
+    cdecl, gcsafe, raises: [], lcnNoNimHeap: "a static descriptor"
+.} =
   addr api
 
 proc deferredVaultSymbols*(): seq[(string, pointer)] =

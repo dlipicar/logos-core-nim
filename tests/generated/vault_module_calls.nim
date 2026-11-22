@@ -374,26 +374,26 @@ template exportVaultModuleCalls*() =
     kitEnter()
     callInvoke0(p0, p1, p2, p3, p4, p5, p6)
 
-  proc vaultModuleCallsClear0(p1: ptr LogosResponseOwner, p5: ptr logos_bstr_size_0_256_t, p6: ptr csize_t) {.exportc: "lcn_clear_vault_Exchange", dynlib, cdecl, gcsafe, raises: [].} =
+  proc vaultModuleCallsClear0(p1: ptr LogosResponseOwner, p5: ptr logos_bstr_size_0_256_t, p6: ptr csize_t) {.exportc: "lcn_clear_vault_Exchange", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear0(p1, p5, p6)
 
   proc vaultModuleCallsInvoke1(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: uint32, p3: ptr bool, p4: ptr logos_tstr_size_1_64_t, p5: ptr logos_bstr_size_0_256_t, p6: ptr csize_t): LogosResult {.exportc: "lcn_invoke_vault_Fetch", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
     callInvoke1(p0, p1, p2, p3, p4, p5, p6)
 
-  proc vaultModuleCallsClear1(p1: ptr LogosResponseOwner, p3: ptr bool, p4: ptr logos_tstr_size_1_64_t, p5: ptr logos_bstr_size_0_256_t, p6: ptr csize_t) {.exportc: "lcn_clear_vault_Fetch", dynlib, cdecl, gcsafe, raises: [].} =
+  proc vaultModuleCallsClear1(p1: ptr LogosResponseOwner, p3: ptr bool, p4: ptr logos_tstr_size_1_64_t, p5: ptr logos_bstr_size_0_256_t, p6: ptr csize_t) {.exportc: "lcn_clear_vault_Fetch", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear1(p1, p3, p4, p5, p6)
 
   proc vaultModuleCallsInvoke2(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: uint32, p3: ptr uint32, p4: ptr bool): LogosResult {.exportc: "lcn_invoke_vault_Peek", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
     callInvoke2(p0, p1, p2, p3, p4)
 
-  proc vaultModuleCallsClear2(p1: ptr LogosResponseOwner, p3: ptr uint32, p4: ptr bool) {.exportc: "lcn_clear_vault_Peek", dynlib, cdecl, gcsafe, raises: [].} =
+  proc vaultModuleCallsClear2(p1: ptr LogosResponseOwner, p3: ptr uint32, p4: ptr bool) {.exportc: "lcn_clear_vault_Peek", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear2(p1, p3, p4)
 
   proc vaultModuleCallsInvoke3(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: bool, p3: logos_tstr_size_1_256_t, p4: logos_bstr_size_1_256_t, p5: csize_t, p6: uint32, p7: ptr bool): LogosResult {.exportc: "lcn_invoke_vault_Store", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
     callInvoke3(p0, p1, p2, p3, p4, p5, p6, p7)
 
-  proc vaultModuleCallsClear3(p1: ptr LogosResponseOwner, p7: ptr bool) {.exportc: "lcn_clear_vault_Store", dynlib, cdecl, gcsafe, raises: [].} =
+  proc vaultModuleCallsClear3(p1: ptr LogosResponseOwner, p7: ptr bool) {.exportc: "lcn_clear_vault_Store", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear3(p1, p7)

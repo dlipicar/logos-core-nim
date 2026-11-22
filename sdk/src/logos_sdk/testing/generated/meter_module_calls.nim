@@ -203,5 +203,5 @@ template exportMeterModuleCalls*() =
     kitEnter()
     callInvoke0(p0, p1, p2, p3, p4)
 
-  proc meterModuleCallsClear0(p1: ptr LogosResponseOwner, p3: ptr logos_tstr_size_1_64_t, p4: ptr logos_meter_Reading_t) {.exportc: "lcn_clear_meter_Read", dynlib, cdecl, gcsafe, raises: [].} =
+  proc meterModuleCallsClear0(p1: ptr LogosResponseOwner, p3: ptr logos_tstr_size_1_64_t, p4: ptr logos_meter_Reading_t) {.exportc: "lcn_clear_meter_Read", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear0(p1, p3, p4)

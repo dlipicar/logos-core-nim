@@ -118,7 +118,7 @@ from std/os import
   walkDir, PathComponent
 import results
 import logos_sdk/abi/types
-import logos_sdk/base/[perthread, testhooks, wipe]
+import logos_sdk/base/[entrymarks, perthread, testhooks, wipe]
 from logos_sdk/base/logtext import oneLine, supplied
 import logos_sdk/cbor/[decode, utf8]
 import logos_sdk/commitment
@@ -1904,7 +1904,9 @@ when defined(lcnTestHooks):
     ## lifecycle table does not list; every test binary exits 1 when any did.
     offTable.load
 
-  proc offTableReport() {.noconv.} =
+  proc offTableReport() {.
+      noconv, lcnOwnRuntime: "an exit procedure: the exiting thread"
+  .} =
     let n = offTable.load
     if n > 0:
       let f = firstOffTable.load - 1

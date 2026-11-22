@@ -285,7 +285,9 @@ proc copyOut(b: openArray[byte]): ptr UncheckedArray[uint8] =
   for i, x in b:
     result[i] = x
 
-proc ownedRelease(state: pointer) {.cdecl.} =
+proc ownedRelease(
+    state: pointer
+) {.cdecl, lcnNoNimHeap: "zeroes and frees C allocations only".} =
   let o = cast[ptr Owned](state)
   if o == nil:
     return
@@ -432,7 +434,7 @@ proc rcReleaseResponseOp(
     binding: ptr LogosRuntimeControlBinding,
     response: ptr UncheckedArray[uint8],
     responseLen: csize_t,
-) {.cdecl.} =
+) {.cdecl, lcnNoNimHeap: "releaseGiven: zeroes and frees a C allocation".} =
   releaseGiven(response) # [DECISIONS G276]
 
 proc rcSubscribeOp(
@@ -545,7 +547,9 @@ proc rcConnectRemoteOp(
   )
   statusOf(a)
 
-proc rcReleaseOp(binding: ptr LogosRuntimeControlBinding) {.cdecl.} =
+proc rcReleaseOp(
+    binding: ptr LogosRuntimeControlBinding
+) {.cdecl, lcnNoNimHeap: "does nothing".} =
   ## [SPEC INTERFACE §5.2 l.3864] Borrowed; a release is ignored, as direct.
   discard
 
