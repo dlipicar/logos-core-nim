@@ -241,6 +241,9 @@ The same file serves plain and confined modules.
   user, timeoutMs)` returns a prepared call that completes `onDone`; a nonzero `timeoutMs` is its
   deadline (TIMEOUT). In confined mode, `await invokeAsync(route, request, timeoutMs)` gives the
   outcome as a future, on the module thread.
+- **Runtime Control calls.** `prepareRc(set, "get_self", request, <Response>, onDone, user,
+  timeoutMs)` prepares a Runtime Control method's call through the set's binding the same way: the set
+  holds it, and `onDone` gets the decoded response where a route's completion would run (G464).
 - **Events.** `subscribe(route, <Event>, onEvent, onEnd, onInvalid, user)` delivers each event decoded
   and checked; one that does not decode goes to `onInvalid`. A subscription the Runtime ends reaches
   `onEnd` with NOT_AUTHORISED (an authority withdrew it) or MODULE_ERROR, after the events already
@@ -371,3 +374,52 @@ under the configured Nimble directory, `~/.nimble` by default, in local-dependen
 `--nimbleDir` moves `pkgcache/` and not `buildtemp/`. A run can reuse an earlier run's clones without a
 git call, so a check that must fetch nothing looks there too, or runs with `HOME`, `XDG_CONFIG_HOME` and
 `XDG_CACHE_HOME` pointed at a fresh directory outside every checkout (G436).
+
+## 10. Code that runs on a thread your library never started
+
+Each library carries its own Nim runtime (§7). A thread that another runtime or C code started is
+foreign to it. Under orc, the first allocation on such a thread faults until the thread registers
+(DECISIONS I77 (7)). Under refc, the collector has no stack bottom for it. Once a thread has run the
+library's code it stays registered, so a missing registration shows only on a thread the library
+never saw, such as a Runtime worker's first delivery to you. It never shows in a sanitizer build:
+`useMalloc` has no per-thread region.
+
+- **The kit's exported entries** register themselves: each starts with `kitEnter()`.
+- **A procedure you hand to a binding** (an event handler, an end report, a completion) is marked
+  `{.lcnCallback.}` (G464). The mark gives it the C calling convention and makes registration its
+  first statement. The SDK's helpers that take such a procedure (`rcclient`'s `prepare`,
+  `prepareBytes` and `subscribe`, a confined kit's `post`) take an `Entered[F]`, which only `entered(p)`
+  of a marked procedure makes. An unmarked one does not compile:
+
+  ```nim
+  proc onSelf(user: pointer, status: LogosResult, response: ptr UncheckedArray[uint8],
+              len: csize_t, owner: LogosResponseOwner) {.lcnCallback.} =
+    let (code, copy) = readCompletion(status, response, len, owner)
+    ...
+  discard rc.prepare("get_self", LogosNSRuntimeControlGetSelfRequest(), entered(onSelf), nil, call)
+  ```
+
+- **Prefer the typed helpers** of §6, which hand the binding none of your procedures:
+  `prepareInvoke`, `subscribe` and `prepareRc`. Their `onDone` and handlers are ordinary Nim
+  procedures.
+- **A procedure a confined kit's module thread runs** (one you `post`) is marked
+  `{.lcnModuleThread.}` (G465). It registers in the same way. In the SDK's test builds it also aborts
+  with its name when something calls it directly instead of posting it.
+- **Exemptions** (G467). A C-callable procedure that uses no Nim heap (a static getter, a release that
+  frees C memory) is marked `{.lcnNoNimHeap: "why".}`. One that only your library's own runtime calls
+  is marked `{.lcnOwnRuntime: "why".}`.
+- **The lint.** `lcn-gen lint-callbacks PATH...` checks every C-callable procedure in the `.nim` files
+  under each path. Each must be marked, exempt with a reason, or start with `kitEnter()` or
+  `bindingEnter()`. `--self-test` runs the lint's own fixtures first. Run it over your sources in CI,
+  as this repository's `lint-callbacks` flake check does over `sdk/src`, `src` and `tests/kit`.
+- **Testing it.** `logos_sdk/testing/freshthread` (POSIX) runs one call on a new C thread that no Nim
+  runtime started, and tells you whether the call registered that thread (G466).
+  - `freshEvent`, `freshRouteEnd`, `freshSubscriptionEnd`, `freshCompletion` and `freshRelease`
+    deliver as a binding does; `onFreshThread` runs anything else.
+  - The procedure must be compiled into the test program, since the probe is that program's.
+  - Run an unmarked procedure, which faults, in a child process, with `defaultSignals()` first.
+  - In this repository's test builds, the Runtime's and the Module Host's workers also hand the
+    first delivery to each callback to a new thread.
+- **Under refc the probe is the only detector.** A missing registration faults under refc only if a
+  collection runs on that thread, so a green refc run proves nothing about it, and neither does a
+  sanitizer run. Under orc without `useMalloc` the fault is certain.
