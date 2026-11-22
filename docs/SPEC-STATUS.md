@@ -469,6 +469,20 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   Claimed: PKG-0083, PKG-0166, PKG-0169 and PKG-0418 to PKG-0421 (seven units; planning's rulings moved PKG-0083 from
   5-3b and PKG-0166 and PKG-0169 from 5-11). TXT-0463 cleared by test with PKG-0418. PKG-0167 goes to 5-3b.
 
+- 2026-11-22, Tier 5 restructure step R9 with R10b (W2-X X0.1; R8): each claimed unit belongs to the package
+  that implements its rule, and its evidence is in that package's own tree (a tagged test there, or an item
+  in its `conformance/inspection/`). `spectrace gate`, `owners` and `deploydoc` count only the owner's tree.
+  - INTERFACE's ledger, main claims file and inspection file are under `sdk/conformance/`. Core claims the
+    Runtime's 143 IFC units in `conformance/claims/IFC.toml`, 13 of them by inspection
+    (`conformance/inspection/IFC.toml`).
+  - The SDK claims 124 RUN units and 7 CFG units in `sdk/conformance/claims/`: the Runtime Control schema and
+    header, and the kit's side of configuration delivery.
+  - The SDK's tests now carry the 11 IFC units whose only evidence was in core's suites: ten in `test_kit`,
+    `test_kit_confined` and `test_calls`, and IFC-0577 in a new audit-build suite, `sdk/tests/test_wipe_kit.nim`
+    (the ledger's marked `seal`, with no Runtime). IFC-0518's inspection item is reworded and the unit tested too.
+  - No unit changes status. The claimed set is unchanged, unit for unit (`tools/restructure/claim_split.py
+    --compare`, 3572 units). Per package: IFC core 143, SDK 665; RUN core 767, SDK 124; CFG core 119, SDK 7.
+
 ## Tiers at f4f83471 (the original plan)
 
 | Tier | Area | Verdict |
