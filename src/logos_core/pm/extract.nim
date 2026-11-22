@@ -19,6 +19,8 @@
 ## - **Reading below a record** (`hashBelow`, `readBelow`): each component is opened relative to
 ##   its parent with `O_NOFOLLOW`, and the last must be a regular file. A link anywhere below the
 ##   record's `a/` fails, as an absent or unreadable file does (`efRead`).
+## - **A file in pieces** (`createFile`, `append`, `closeFile`; step 5-5-2b): the extraction pass
+##   writes each artifact as it is inflated, 1 MiB at a time (DECISIONS G446).
 ## - **The stop flag** is checked between chunks and between files (5-5's W2).
 
 {.push raises: [].}
@@ -52,6 +54,11 @@ type
     root: cint
     made: HashSet[string]
     order: seq[string] ## creation order
+
+  FileWriter* = object
+    ## One new file, written in pieces (`createFile`, `append`, `closeFile`).
+    fd: cint
+    path: string
 
 func stopped*(f: StopFlag): bool =
   not f.isNil and f[].load(moRelaxed)
@@ -177,15 +184,12 @@ when defined(posix):
       off += n
     ok()
 
-  proc extractFile*(
-      t: var DirTree,
-      path: string,
-      data: openArray[byte],
-      sync: bool,
-      stop: StopFlag = nil,
-  ): Result[void, ExtractError] =
-    ## [SPEC PM §7.1 l.926-933] Writes `data` as the new file `path` (a checked relative path)
-    ## below the tree's root, mode 0400, its directories made as needed.
+  proc createFile*(
+      t: var DirTree, path: string, stop: StopFlag = nil
+  ): Result[FileWriter, ExtractError] =
+    ## [SPEC PM §7.1 l.926-933] The new file `path` (a checked relative path) below the tree's
+    ## root, mode 0400, its directories made as needed, open for `append` (step 5-5-2b: the
+    ## extraction pass writes each artifact as it is inflated).
     if stop.stopped:
       return err(fail(efStopped, "stopped before " & path))
     let segs = path.split('/')
@@ -204,15 +208,50 @@ when defined(posix):
       if e in [EEXIST, ELOOP]:
         return err(fail(efExists, describe("already exists:", path, e)))
       return err(fail(efWrite, describe("cannot create", path, e)))
-    let written = writeAll(fd, data, path, stop)
+    ok(FileWriter(fd: fd, path: path))
+
+  proc append*(
+      w: var FileWriter, data: openArray[byte], stop: StopFlag = nil
+  ): Result[void, ExtractError] =
+    ## `data` at the file's end, in chunks of at most `ChunkBytes`, the stop flag checked
+    ## before each.
+    writeAll(w.fd, data, w.path, stop)
+
+  proc closeFile*(w: var FileWriter, sync: bool): Result[void, ExtractError] =
+    ## With `sync`, `fsync`ed first; the descriptor is closed either way.
+    if w.fd < 0:
+      return ok()
     let synced =
-      if written.isOk and sync:
-        syncAt(fd, path)
+      if sync:
+        syncAt(w.fd, w.path)
       else:
-        written
+        Result[void, ExtractError].ok()
+    let fd = w.fd
+    w.fd = -1
     if posix.close(fd) != 0 and synced.isOk:
-      return err(fail(efWrite, describe("cannot close", path, errno)))
+      return err(fail(efWrite, describe("cannot close", w.path, errno)))
     synced
+
+  proc abandon*(w: var FileWriter) =
+    ## Closed, unsynced, after a failure: what it holds is removed with its directory.
+    if w.fd >= 0:
+      discard posix.close(w.fd)
+      w.fd = -1
+
+  proc extractFile*(
+      t: var DirTree,
+      path: string,
+      data: openArray[byte],
+      sync: bool,
+      stop: StopFlag = nil,
+  ): Result[void, ExtractError] =
+    ## [SPEC PM §7.1 l.926-933] Writes `data` as the new file `path` (a checked relative path)
+    ## below the tree's root, mode 0400, its directories made as needed.
+    var w = ?t.createFile(path, stop)
+    let written = w.append(data, stop)
+    let closed = w.closeFile(written.isOk and sync)
+    ?written
+    closed
 
   proc finish*(t: var DirTree, sync: bool): Result[void, ExtractError] =
     ## With `sync`: each directory the tree made, deepest first, then its root.

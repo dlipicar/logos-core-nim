@@ -67,7 +67,7 @@ when defined(posix):
     createDir(result)
 
   proc staged(s: var InstalledStore, a: Archive, stop: StopFlag = nil): Staged =
-    s.stage(a.opened, a.pkg.sourceOf, @[], blake3(a.bytes), stop).get
+    s.stage(a.opened, bytesSource(a.bytes), a.pkg.sourceOf, @[], blake3(a.bytes), stop).get
 
   proc installed(s: var InstalledStore, a: Archive): Installed =
     let st = s.staged(a)
@@ -130,7 +130,13 @@ when defined(posix):
       check entries(dir / "install") == @["index", "lock", "r"]
       # [SPEC PM l.924] a selected variant whose paths collide under the root's rules
       s.rules.ignoreCase = true
-      let collides = s.stage(cased.opened, cased.pkg.sourceOf, @[], blake3(cased.bytes))
+      let collides = s.stage(
+        cased.opened,
+        bytesSource(cased.bytes),
+        cased.pkg.sourceOf,
+        @[],
+        blake3(cased.bytes),
+      )
       check collides.isErr
       check collides.error.fault == sfPaths
       check "data/Notes" in collides.error.detail
@@ -227,11 +233,56 @@ when defined(posix):
         s.close()
       var flag: Atomic[bool]
       flag.store(true)
-      let r =
-        s.stage(plain.opened, plain.pkg.sourceOf, @[], blake3(plain.bytes), addr flag)
+      let r = s.stage(
+        plain.opened,
+        bytesSource(plain.bytes),
+        plain.pkg.sourceOf,
+        @[],
+        blake3(plain.bytes),
+        addr flag,
+      )
       check r.isErr
       check r.error.fault == sfStopped
       check entries(dir / "install" / "r").len == 0
+
+    test "[IMPL-DECISION G446] staging reads a spool file judged by inspection; a file changed after it fails, and leaves nothing":
+      let spool = work / "spool.lgx"
+      writeFile(spool, textOf(deep.bytes))
+      let judged = inspectLgx(
+        fileSource(spool), trust, linuxHost, DefaultLgxLimits, PathRules()
+      ).get
+      check judged.artifacts.allIt(it.data.len == 0) # inspection keeps no file's bytes
+      block:
+        var s = openStore(fresh("spool")).get
+        defer:
+          s.close()
+        let st = s.stage(
+          judged, fileSource(spool), deep.pkg.sourceOf, @[], blake3(deep.bytes)
+        ).get
+        discard s.commit([st], []).get
+        let i = s.records[s.find(st.file.record.identity).get]
+        check checkRetained(i).isOk
+        check readFile(i.base & "tree/d6/e2/f272") == textOf(treeFiles[272][1])
+        check fileBytes(i.base & "big/blob") == big
+      var flipped = deep.bytes
+      flipped[flipped.len div 2] = flipped[flipped.len div 2] xor 0x10
+      for (name, changed) in [
+        ("another archive", later.bytes),
+        ("the same size, a byte flipped", flipped),
+        ("truncated", deep.bytes[0 ..< deep.bytes.len div 2]),
+      ]:
+        checkpoint name
+        let dir = fresh("spool-changed")
+        var s = openStore(dir).get
+        defer:
+          s.close()
+        writeFile(spool, textOf(changed))
+        let r =
+          s.stage(judged, fileSource(spool), deep.pkg.sourceOf, @[], blake3(deep.bytes))
+        check r.isErr
+        check r.error.fault == sfSource
+        check entries(dir / "install" / "r").len == 0
+      removeFile(spool)
 
   suite "the commit (G445)":
     test "[PKG-0610] a committed record is there after a restart, its paths rebuilt, in each sync mode":
@@ -264,8 +315,13 @@ when defined(posix):
       var s = openStore(dir).get
       # After the files, before the sync.
       s.crashAt = cpAfterFiles
-      check s.stage(plain.opened, plain.pkg.sourceOf, @[], blake3(plain.bytes)).error.fault ==
-        sfStopped
+      check s.stage(
+        plain.opened,
+        bytesSource(plain.bytes),
+        plain.pkg.sourceOf,
+        @[],
+        blake3(plain.bytes),
+      ).error.fault == sfStopped
       check entries(rdir).len == 1
       s.close()
       s = openStore(dir).get

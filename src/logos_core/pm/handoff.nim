@@ -10,8 +10,9 @@
 ##   `runtime/configcheck.acceptConfiguration`, which recomputes both roots and checks the default
 ##   as one complete value of the root (PKG-0344).
 ## - **PKG-0060** is the same construction at inspection (`checkConfigurations`): an archive whose
-##   selected module's declaration does not resolve is `invalid-package`. It runs after `openLgx`,
-##   so last in G29/P7a order, on the selected variant's selected modules only.
+##   selected module's declaration does not resolve is `invalid-package`. It runs after `openLgx`
+##   or `inspectLgx`, so last in G29/P7a order, on the selected variant's selected modules only,
+##   from the documents the reader kept (G446).
 ## - **`buildHandoff`** builds `runtime_handoff` for one selected module of an installed record:
 ##   the retained signer (PKG-0438), the flat module name (PKG-0348), the record's identity and the
 ##   implementation artifact's id and `local_path` (PKG-0340), its hash from the signed manifest
@@ -26,6 +27,7 @@
 
 {.push raises: [].}
 
+import std/tables
 import results
 import logos_sdk/cbor
 import logos_sdk/commitment
@@ -128,11 +130,13 @@ proc resolveConfiguration*(
   discard ?acceptConfiguration(decl)
   ok(decl)
 
-func selectedData(p: LgxPackage, id: string): Opt[seq[byte]] =
-  for a in p.artifacts:
-    if a.artifact.id == id:
-      return Opt.some(a.data)
-  Opt.none(seq[byte])
+func document(p: LgxPackage, id: string): Opt[seq[byte]] =
+  ## A configuration artifact the reader kept: one of the selected variant's, whose hash it
+  ## checked (G446).
+  if id in p.documents:
+    Opt.some(p.documents.getOrDefault(id))
+  else:
+    Opt.none(seq[byte])
 
 proc checkConfigurations*(p: LgxPackage): Result[void, PackageError] =
   ## [SPEC PM §4 l.362-364 (PKG-0060); G451] Each selected module's configuration declaration
@@ -142,8 +146,8 @@ proc checkConfigurations*(p: LgxPackage): Result[void, PackageError] =
       continue
     let c = d.configuration.get
     # The manifest places both artifacts, with their kinds, wherever the module's artifact
-    # occurs, and `openLgx` verified every selected artifact's hash.
-    let schema = p.selectedData(c.schemaArtifact).valueOr:
+    # occurs; the reader verified their hashes and kept them as documents (G446).
+    let schema = p.document(c.schemaArtifact).valueOr:
       return err(
         packageError(
           pecArtifactIntegrity,
@@ -152,7 +156,7 @@ proc checkConfigurations*(p: LgxPackage): Result[void, PackageError] =
       )
     var default = Opt.none(seq[byte])
     if c.defaultArtifact.isSome:
-      default = p.selectedData(c.defaultArtifact.get)
+      default = p.document(c.defaultArtifact.get)
       if default.isNone:
         return err(
           packageError(

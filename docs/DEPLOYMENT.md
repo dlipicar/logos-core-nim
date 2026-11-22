@@ -413,7 +413,14 @@ reached:
   §2): one archive (`archive_bytes`, 1 GiB by default, held in memory in the Package Manager's process
   while it is inspected), the catalog document (4 MiB) and its entries (65,536), and the verification
   cache (256 entries). A larger archive leaves its candidate unavailable; a larger catalog is refused
-  and the one in use stays; the cache drops its least recently used entry.
+  and the one in use stays; the cache drops its least recently used entry;
+- the LGX reader's table (DECISIONS G75, `DefaultLgxLimits`): compressed 1 GiB, decompressed 4 GiB,
+  65,536 entries, one entry 1 GiB, the selected variant's files 4 GiB, and its kept contract and
+  configuration documents 64 MiB in all (fixed, not derived from `archive_bytes`; G446). A package past
+  any of them is `invalid-package`. The reader reads an archive in 1 MiB pieces, so over a file its
+  memory does not grow with the archive: 11 to 13 MiB at 1 GiB (CONFORMANCE, "The streaming reader").
+  Until 5-5-3 moves inspection to a spool file, the Package Manager still holds each archive in memory
+  while it is inspected, as above.
 
 ### Admission pools
 

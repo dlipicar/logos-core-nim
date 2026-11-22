@@ -331,7 +331,7 @@ This implementation applies the mandatory package-signature and artifact-verific
 
 ## 9. Extraction
 
-Part 5-5-2 builds the writing; the spool (Q2) is 5-5-3's and the reader's ranges (Q4) 5-5-2b's (G446).
+Part 5-5-2 builds the writing and part 5-5-2b the reader; the spool (Q2) is 5-5-3's (G446).
 
 - **Descriptor-relative** (`pm/extract.nim`; PKG-0204, PKG-0274): the record directory is made with
   `mkdirat` under the `install/r/` descriptor; each directory below it with `mkdirat` and opened
@@ -347,6 +347,27 @@ Part 5-5-2 builds the writing; the spool (Q2) is 5-5-3's and the reader's ranges
 - **The stop flag** is checked between chunks and between files.
 - **Reads below a record** (the retained hash, the handoff's schema and default) open each component
   with `O_NOFOLLOW` and require a regular file at the end.
+
+**The reader** (`package/lgx.nim`; 5-5-2b, G446). An archive is read in one pass of 1 MiB pieces, from
+a file or from bytes, and never inflated whole:
+- **Inspection** (`inspectLgx`) keeps the two manifest files, each entry's path, kind and size, the
+  digest of each of the selected variant's files and that variant's contract and configuration
+  documents, and no artifact's bytes. So its memory does not grow with the archive: 11 to 13 MiB for an
+  archive of 1 GiB (CONFORMANCE). The format checks run in stream order, the content checks after them
+  in the order DECISIONS G29 states, and every result is the earlier reader's but one: the documents'
+  total below. Four kinds of message can differ (G29).
+- **The documents' total:** the selected variant's kept contract and configuration documents are at
+  most 64 MiB in all, a fixed bound of the LGX table (G75), not derived from `archive_bytes`. Past it
+  the package is `invalid-package`; nothing over the bound is read into memory. A contract document is a
+  few kilobytes.
+- **Extraction** (`extractLgx`) reads the same source again with the same checks, writes each of the
+  selected variant's files as it is inflated, and checks each against its signed hash at its end. The
+  record's manifest, signature and fields come from the inspection, not from the file. A source that no
+  longer gives the judged package (another file, a changed byte, a truncation) fails the staging, and
+  its directory is removed; the operation will answer `package-unavailable` (5-5-4).
+- **Until 5-5-3,** the verification cache still inspects the archive it holds in memory (`openLgx`), so
+  `archive_bytes` (§2) is still held while it is inspected; the spool and the worker move the reading
+  to a file.
 
 ## 12. Responses, messages and the admission bound
 

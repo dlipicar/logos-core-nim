@@ -1032,6 +1032,40 @@ bytes, and a provider refuses any other `length` with `invalid-length` before it
 response holds at most 1 MiB of data, far below the 16 MiB frame body (TRANSPORT l.372). A locator is 1
 to 4,096 bytes, as a package source's `object` is (PACKAGE MANAGER l.789-801).
 
+## The streaming reader
+
+Step 5-5-2b (DECISIONS G446, G75's sixth row, G29's note of 2026-11-22). `package/lgx.nim` reads an archive in
+one pass of 1 MiB pieces. Over a file (`inspectLgx(fileSource(path), …)`) one inspection keeps the manifest
+files, the path table, a digest per selected file and the selected variant's documents (at most 64 MiB), so its
+peak does not grow with the archive. Over bytes the caller already holds the archive, and `openLgx` also keeps the
+selected artifacts' bytes. The verification cache inspects that way until 5-5-3 moves inspection to the spool.
+An installed package is inflated twice, once to judge it and once to extract it.
+
+- **Tested:** `test_lgx_peak` runs each inspection in a child process and reads its peak resident size. Over a
+  file the peaks at 64 MiB and 256 MiB of incompressible content differ by at most 8 MiB and stay under 96 MiB.
+  The control, the reader before 5-5-2b (`tests/support/lgxoracle.nim`) on the 64 MiB archive, passes 96 MiB.
+  `test_lgx_equiv` compares every reading with that reader's results (G29's note).
+- **Measured** (a scratch program, not committed: 5-3c-1's `pmbench archive` and `pmbench inspect`, with
+  `inspectLgx` over the file beside them; one signed archive whose one data artifact is incompressible; CPU time
+  of the inspection and the process's peak, each the median of three processes; Mac, `-d:release`). "In memory" is
+  the verification cache's inspection, BLAKE3 of the archive and then `openLgx`, the archive read into the
+  process first; 5-3c-1 measured the same with the reader before 5-5-2b.
+
+  | Archive | Over a file, orc | Over a file, refc | In memory, orc | In memory, refc | In memory before 5-5-2b, orc (5-3c-1) |
+  |---|---|---|---|---|---|
+  | 1 MiB (1,065,982 bytes) | 2.7 ms, 10.6 MiB | 3.4 ms, 13.2 MiB | 4.3 ms, 11.6 MiB | 5.0 ms, 14.3 MiB | 6.5 ms, 16 MiB |
+  | 64 MiB (67,146,429) | 57 ms, 10.6 MiB | 54 ms, 13.2 MiB | 166 ms, 138 MiB | 187 ms, 267 MiB | 326 ms, 550 MiB |
+  | 256 MiB (268,534,430) | 205 ms, 10.6 MiB | 211 ms, 13.2 MiB | 675 ms, 522 MiB | 757 ms, 1,035 MiB | not measured |
+  | 1 GiB (1,073,037,548; 1,023 MiB of content) | 793 ms, 10.6 MiB | 844 ms, 13.2 MiB | 2.90 s, 2,056 MiB | 3.04 s, 4,104 MiB | 6.03 s, 8,833 MiB |
+
+  Reading a file costs about 0.8 s of CPU per GiB, all of it inflating and hashing. The in-memory figures also
+  hash the whole archive (5-3c-1: about 0.65 s per GiB on the Mac), and 5-3c-1's Mac ran at a load average of 110
+  to 130. In memory the peak is about twice the archive under orc and four times under refc: the archive and the
+  selected artifact's bytes, where the reader before 5-5-2b took about 8.2 times. `test_lgx_peak` with
+  `LCN_LGX_PEAK_GIB=1` gives the same bound under orc in a debug build: 11.3 MiB for an archive of 1,057,314,997
+  bytes, the largest the default compressed limit admits for its shape, and 1.82 GiB for the reader before 5-5-2b
+  at 256 MiB.
+
 ## Event output overflow
 
 TRANSPORT §5.2 (TRN-0309, TRN-0310) as built in `io/callee.nim` and `io/loop.nim`:

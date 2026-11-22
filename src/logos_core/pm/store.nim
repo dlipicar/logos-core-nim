@@ -14,8 +14,11 @@
 ##   them before anything is written.
 ## - **Staging** writes a record's directory in full and syncs it, before anything names it
 ##   (PKG-0219): the admission bound first (G452), then the files descriptor-relative
-##   (`extract.nim`, PKG-0204), the manifest's signed bytes and `m/record.1`. A failure deletes
-##   the directory, which nothing names.
+##   (`extract.nim`, PKG-0204), the manifest's signed bytes and `m/record.1`. The files come from
+##   the extraction pass over the judged archive's source (`lgx.extractLgx`, step 5-5-2b, G446),
+##   each written as it is inflated and checked against its signed hash at its end; a source
+##   that no longer gives the judged package is `sfSource`. A failure deletes the directory,
+##   which nothing names.
 ## - **The commit** (PKG-0610) replaces `install/index` with `writeAtomic`. Before it, the staged
 ##   files are on the medium: Linux from 5.8 on ext4 takes one `syncfs` on the `install/r/`
 ##   descriptor opened at start (`smSyncfs`); elsewhere each file and each directory is `fsync`ed,
@@ -36,7 +39,7 @@
 
 {.push raises: [].}
 
-import std/[algorithm, os, sets, strutils, sysrand]
+import std/[algorithm, os, sets, strutils, sysrand, tables]
 import results
 import logos_sdk/base/hex
 import ../durable
@@ -62,7 +65,6 @@ const
   ProbeFolded = "lcn-probe"
   MaxRecordFileBytes* = 16 * 1024 * 1024
     ## [G445] a record file's bounded read: its record fits the 16 MiB admission bound
-  MaxSignatureBytes* = 1024 * 1024 ## [IMPL] `manifest.cose`'s bounded read
   MaxConfigArtifactBytes* = 8 * 1024 * 1024
     ## [SPEC CONFIGURATION; G451] the largest configuration artifact a handoff reads: a
     ## default value (a schema is at most 1 MiB)
@@ -78,6 +80,8 @@ type
     sfAdmission = "a required result does not fit the admission bound"
     sfIndexBound = "the index would pass its bound"
     sfConflict = "the identity is already installed"
+    sfSource = "the archive's source no longer gives the judged package"
+      ## [G446] the extraction pass met a difference: `package-unavailable` (PM §8 l.1094)
     sfStopped = "stopped"
 
   StoreError* = object
@@ -261,14 +265,52 @@ when defined(posix):
       )
 
   proc packageReader(p: ptr LgxPackage): ArtifactReader =
-    ## An archive's verified entries, by id: the admission bound before anything is written.
+    ## An archive's kept documents, by id: the admission bound before anything is written. The
+    ## handoff reads configuration artifacts only, which the reader keeps (G446).
     result = proc(
         a: InstalledArtifact
     ): Result[seq[byte], string] {.gcsafe, raises: [].} =
-      for s in p[].artifacts:
-        if s.artifact.id == a.id:
-          return ok(s.data)
-      err("artifact " & a.id & " is not in the archive's selected variant")
+      if a.id in p[].documents:
+        return ok(p[].documents.getOrDefault(a.id))
+      err("artifact " & a.id & " is not a document the reader kept")
+
+  type StoreSink = object
+    ## `extractLgx`'s sink: each artifact a new file below the record's `a/` (G446).
+    tree: ptr DirTree
+    writer: FileWriter
+    open: bool
+    sync: bool
+    stop: StopFlag
+    failure: ExtractError
+
+  proc sinkBegin(k: var StoreSink, path: string): bool =
+    let w = k.tree[].createFile(path, k.stop)
+    if w.isErr:
+      k.failure = w.error
+      return false
+    k.writer = w.get
+    k.open = true
+    true
+
+  proc sinkWrite(k: var StoreSink, data: openArray[byte]): bool =
+    let r = k.writer.append(data, k.stop)
+    if r.isErr:
+      k.failure = r.error
+      return false
+    true
+
+  proc sinkEnd(k: var StoreSink): bool =
+    k.open = false
+    let r = k.writer.closeFile(k.sync)
+    if r.isErr:
+      k.failure = r.error
+      return false
+    true
+
+  proc sinkAbort(k: var StoreSink) =
+    if k.open:
+      k.writer.abandon()
+      k.open = false
 
   proc admit(
       r: InstalledRecord,
@@ -479,21 +521,29 @@ when defined(posix):
   proc writeRecord(
       s: InstalledStore,
       p: LgxPackage,
+      archive: LgxSource,
       fileBytes: seq[byte],
       dirFd: cint,
       aFd, mFd: var cint,
       stop: StopFlag,
   ): Result[void, StoreError] =
-    ## The record directory's contents: `a/` with the selected variant's files, then `m/` with
-    ## the signed manifest and `m/record.1`; then the sync.
+    ## The record directory's contents: `a/` with the selected variant's files, from the
+    ## extraction pass over `archive`, then `m/` with the signed manifest and `m/record.1`; then
+    ## the sync.
     let m = p.verified.manifest
     let sync = s.syncMode == smEachFile
     aFd = makeDirAt(dirFd, ArtifactsDir).valueOr:
       return err(error.toStore(m.identity))
     var tree = initTree(aFd)
-    for a in p.artifacts:
-      tree.extractFile(a.artifact.path, a.data, sync, stop).isOkOr:
-        return err(error.toStore(m.identity))
+    var sink = StoreSink(tree: addr tree, sync: sync, stop: stop)
+    extractLgx(archive, p, sink, stop).isOkOr:
+      case error.fault
+      of xfSink:
+        return err(sink.failure.toStore(m.identity))
+      of xfStopped:
+        return err(storeError(sfStopped, error.detail, Opt.some(m.identity)))
+      of xfDiffers:
+        return err(storeError(sfSource, error.detail, Opt.some(m.identity)))
     tree.finish(sync).isOkOr:
       return err(error.toStore(m.identity))
     mFd = makeDirAt(dirFd, MetaDir).valueOr:
@@ -513,6 +563,7 @@ when defined(posix):
   proc stage*(
       s: var InstalledStore,
       p: LgxPackage,
+      archive: LgxSource,
       source: PackageSource,
       edges: seq[ResolvedDependency],
       archiveDigest: Blake3Digest,
@@ -520,7 +571,8 @@ when defined(posix):
   ): Result[Staged, StoreError] =
     ## [SPEC PM §7.1 l.926-933, l.963] The record of the opened archive `p` (selected for
     ## installation, verified under the current trust), written in full in a new directory and
-    ## synced. Nothing names it until `commit`.
+    ## synced. Its files come from the extraction pass over `archive`, the source `p` was judged
+    ## from (G446). Nothing names it until `commit`.
     ?s.usable()
     let m = p.verified.manifest
     let id = Opt.some(m.identity)
@@ -551,7 +603,7 @@ when defined(posix):
     let dirFd = makeDirAt(s.rFd, rid).valueOr:
       return err(error.toStore(m.identity))
     var aFd, mFd = -1.cint
-    let r = s.writeRecord(p, fileBytes, dirFd, aFd, mFd, stop)
+    let r = s.writeRecord(p, archive, fileBytes, dirFd, aFd, mFd, stop)
     closeFd(aFd)
     closeFd(mFd)
     closeFd(dirFd)
