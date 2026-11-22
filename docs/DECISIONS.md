@@ -6605,8 +6605,12 @@ their history.
         libssl's tables and their code alive (ASan's per-object global registration, the other
         sanitizers' per-object constructors);
       - as the flake check `logosd-no-ssl`, beside `no-test-hooks`, on the deployed logosd. The probe
-        that compiles the objects is linked too, without dead stripping, and must fail the check, so
-        the search is not vacuous. Nothing runs it; it is linked because Nim 2.2.14 links under
+        that compiles the objects is built with logosd's switches, one flake variable for both
+        (`logosdSwitches`). logosd adds only `lcnVersion` and `lcnCallArtifactHash`, constants of its
+        own Nim code. The binding reads platform defines and its own `BORINGSSL_USE_ASM` and
+        `BORINGSSL_ZERO_RECORD_BUFFERS`, so the probe compiles the objects logosd links, under the
+        same names. The probe is linked too, without dead stripping, and must fail the check, so the
+        search is not vacuous. Nothing runs it; it is linked because Nim 2.2.14 links under
         `--noLinking:on` too (upstream ISSUES 196).
     - *Measured* (global symbols only):
       - macOS: 1174 counted. The test and release builds hold none of them, and the probe linked whole

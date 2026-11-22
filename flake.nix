@@ -360,6 +360,12 @@
           # store file, and the library is copied after the fixup, so no strip or patchelf
           # changes the bytes the Module Loader checks against that digest.
           daemonVersion = "0.0.1";
+          # [DECISIONS G409] logosd's switches, which the flake check `logosd-no-ssl` builds its
+          # probe with, so the same BoringSSL objects compile under the same nimcache names.
+          # logosd adds only `lcnVersion` and `lcnCallArtifactHash`, constants of its own Nim
+          # code. The binding reads platform defines, BORINGSSL_USE_ASM and
+          # BORINGSSL_ZERO_RECORD_BUFFERS, and neither of these.
+          logosdSwitches = "--mm:orc -d:release";
           logosd = nimDerivation {
             pname = "logosd";
             version = daemonVersion;
@@ -368,7 +374,7 @@
               runHook preBuild
               nim c -d:release --outdir:build/bin tools/artifact_hash.nim
               cliHash=$(build/bin/artifact_hash ${lcnCallLib}/lib/logos-core/liblcn_call${sharedLib})
-              nim c --mm:orc -d:release -d:lcnVersion=${daemonVersion} \
+              nim c ${logosdSwitches} -d:lcnVersion=${daemonVersion} \
                 -d:lcnCallArtifactHash=$cliHash --outdir:build/bin src/logosd.nim
               runHook postBuild
             '';
@@ -533,6 +539,7 @@
             lcnPkg
             logosModuleHost
             logosd
+            logosdSwitches
             logosctl
             logosdSmoke
             android
@@ -672,17 +679,18 @@
           logosd-smoke = s.logosdSmoke;
           # [DECISIONS G409] The shipped logosd holds no libssl code (Fable's check of logosd's
           # link and planning's ruling, 2026-11-22). A probe that imports the BoringSSL binding
-          # is built with logosd's switches; none of the symbols that only libssl's objects in
-          # its nimcache define may be in the deployed binary (tests/support/nossl.nim). The
-          # probe itself, linked without dead stripping, must fail the check, so the search is
-          # not vacuous. The test build's check is in test_logosd.
+          # is built with logosd's switches (`logosdSwitches`); none of the symbols that only
+          # libssl's objects in its nimcache define may be in the deployed binary
+          # (tests/support/nossl.nim). The probe itself, linked without dead stripping, must
+          # fail the check, so the search is not vacuous. The test build's check is in
+          # test_logosd.
           logosd-no-ssl = s.nimDerivation {
             name = "logosd-no-ssl";
             src = s.nimSources;
             buildPhase = ''
               runHook preBuild
-              nim c --hints:off --mm:orc -d:release --nimcache:build/sslprobe -o:build/sslprobe-bin \
-                tests/support/sslprobe.nim
+              nim c --hints:off ${s.logosdSwitches} --nimcache:build/sslprobe \
+                -o:build/sslprobe-bin tests/support/sslprobe.nim
               nim c --hints:off -d:release --outdir:build tests/support/nosslcheck.nim
               build/nosslcheck build/sslprobe ${s.logosd}/bin/logosd
               if build/nosslcheck build/sslprobe build/sslprobe-bin; then
