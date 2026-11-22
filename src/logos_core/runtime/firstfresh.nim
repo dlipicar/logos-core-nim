@@ -17,8 +17,9 @@
 ## shares its Nim runtime, which registered the thread, so there it proves
 ## nothing; the probe (`logos_sdk/testing/freshthread`) covers that case.
 ## Events a direct route delivers on the publishing thread stay there
-## (INTERFACE l.1961-1967). Outside test hooks `firstOnFreshThread` is the call
-## itself, and the callers' key procedures (`...KeyForTests`) do not exist.
+## (INTERFACE l.1918-1920, RUNTIME l.1100-1103). Outside test hooks
+## `firstOnFreshThread` is the call itself, and the callers' key procedures
+## (`...KeyForTests`) do not exist.
 
 {.push raises: [], gcsafe.}
 

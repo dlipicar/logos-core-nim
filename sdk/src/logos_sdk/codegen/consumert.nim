@@ -1351,7 +1351,7 @@ proc prepareRc*[R](
     marked = false,
 ): Result[PreparedCall, InvocationFailure] =
   ## [DECISIONS G339, G464] A Runtime Control method's asynchronous call through
-  ## the module's binding (INTERFACE §2.9, l.3868), as `prepareTyped` is a
+  ## the module's binding (INTERFACE l.1969), as `prepareTyped` is a
   ## route's: `bare` is the method's name, `params` its request bytes, and the
   ## completion, decoded with `R.decode`, goes to `onDone`, on the kit's module
   ## thread when `b` has a confined kit's dispatcher. No completion procedure of

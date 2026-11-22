@@ -419,7 +419,10 @@ never saw, such as a Runtime worker's first delivery to you. It never shows in a
   - The procedure must be compiled into the test program, since the probe is that program's.
   - Run an unmarked procedure, which faults, in a child process, with `defaultSignals()` first.
   - In this repository's test builds, the Runtime's and the Module Host's workers also hand the
-    first delivery to each callback to a new thread.
+    first delivery to each callback to a new thread. Events on a direct route are not moved: the
+    spec has them run on the publishing thread (INTERFACE l.1918-1920). To test your subscriber on
+    one, publish from `onFreshThread`, with the subscriber built as a library of its own (as
+    `test_hosted_routes`' C-15 does).
 - **Under refc the probe is the only detector.** A missing registration faults under refc only if a
   collection runs on that thread, so a green refc run proves nothing about it, and neither does a
   sanitizer run. Under orc without `useMalloc` the fault is certain.
