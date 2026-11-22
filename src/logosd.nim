@@ -18,6 +18,19 @@
 
 {.push raises: [].}
 
+# [IMPL-DECISION G409] The link drops what nothing reaches. logosd signs with
+# the Runtime's TLS key through `transport/tls/p256.nim`, which calls BoringSSL's
+# libcrypto only, but the binding compiles libssl's sources into every program
+# that imports it. Dead stripping leaves logosd with no libssl code (checked on
+# the binary: test_logosd and the flake check `logosd-no-ssl`), while its link
+# line still names libssl's objects. Nothing resolves symbols from logosd: it is
+# linked without -rdynamic or -export_dynamic. Not on Windows, where logosd is
+# not built.
+when defined(macosx):
+  {.passl: "-Wl,-dead_strip".}
+elif defined(linux):
+  {.passl: "-Wl,--gc-sections".}
+
 import std/[os, parseopt, strutils]
 import results
 import ./logos_core/daemon/version

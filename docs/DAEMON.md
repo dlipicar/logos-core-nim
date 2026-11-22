@@ -833,6 +833,12 @@ refusal, which fails that handshake.
   across its runs, written every 60 s while it changes and at its exit), which logosd neither writes nor
   reads. logosd starts the holder from step 5-7a-2, with the remote processes.
 
+**logosd holds no TLS code** (G409). It signs through BoringSSL's libcrypto
+(`transport/tls/p256.nim`) and imports no libssl binding (lint `daemon-no-ssl`). The binding compiles
+libssl's sources into every program that imports it. logosd's link drops them by dead stripping, and
+the binary is checked to hold none of their symbols: `test_logosd` checks plain builds, and the flake
+check `logosd-no-ssl` checks the deployed logosd. The link line still names libssl's objects.
+
 ## 7. The logosctl instance and its socket
 
 The `logosctl` module is a consumer-only module linked into logosd (`direct_static`), realized by the

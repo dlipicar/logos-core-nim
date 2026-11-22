@@ -482,8 +482,9 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   - The remote control channel's CDDL, logosd's signing service, the relay to `logos_keyholder` with its
     own checks, limit and count, and the test-only process copy (G410, G411). Handshakes signed all
     three ways in `test_remote_tls`. logosd spawning the holder, and the remote processes, are 5-7a-2's.
-  - `libcrypto` is split from `libssl` (`transport/tls/p256.nim`), so logosd links no `SSL_` code
-    (lint `daemon-no-ssl`).
+  - `libcrypto` is split from `libssl` (`transport/tls/p256.nim`), and logosd imports no libssl binding
+    (lint `daemon-no-ssl`). Its link drops libssl's objects, and its binary is checked to hold no libssl
+    code (G409: `test_logosd` on plain builds, the flake check `logosd-no-ssl` on the deployed logosd).
   - `docs/REMOTE.md` (new), `docs/DAEMON.md` §2, §3, §6a, §6b, `docs/DEPLOYMENT.md` §2 and §5 (row 5d
     Supported), `docs/HOST-CONFIG.md` (the host's argv).
 

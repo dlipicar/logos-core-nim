@@ -670,6 +670,28 @@
               '';
             };
           logosd-smoke = s.logosdSmoke;
+          # [DECISIONS G409] The shipped logosd holds no libssl code (Fable's check of logosd's
+          # link and planning's ruling, 2026-11-22). A probe that imports the BoringSSL binding
+          # is built with logosd's switches; none of the symbols that only libssl's objects in
+          # its nimcache define may be in the deployed binary (tests/support/nossl.nim). The
+          # probe itself, linked without dead stripping, must fail the check, so the search is
+          # not vacuous. The test build's check is in test_logosd.
+          logosd-no-ssl = s.nimDerivation {
+            name = "logosd-no-ssl";
+            src = s.nimSources;
+            buildPhase = ''
+              runHook preBuild
+              nim c --hints:off --mm:orc -d:release --nimcache:build/sslprobe -o:build/sslprobe-bin \
+                tests/support/sslprobe.nim
+              nim c --hints:off -d:release --outdir:build tests/support/nosslcheck.nim
+              build/nosslcheck build/sslprobe ${s.logosd}/bin/logosd
+              if build/nosslcheck build/sslprobe build/sslprobe-bin; then
+                echo "the probe, which links libssl's objects whole, passes the check"
+                exit 1
+              fi
+              runHook postBuild
+            '';
+          };
           # No `?` inside a half-built constructor: it leaks on Nim 2.2.14 (I77).
           lint-ctor-try = s.pkgs.runCommand "lint-ctor-try" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
             cd ${s.nimSources}
