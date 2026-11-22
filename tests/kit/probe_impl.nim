@@ -60,7 +60,9 @@
 ## exists), `quit-init <n>` (exit from
 ## module code), `quit-handler` (exit from the first event handler),
 ## `rc-destroy <method> <hex params>` (a Runtime Control call from
-## `_MODULE_destroy`, its result in `rc-destroy`).
+## `_MODULE_destroy`, its result in `rc-destroy`). The four flags
+## (`block-destroy`, `block-handler`, `block-subend`, `quit-handler`) take
+## effect before every other command, wherever they are in the file.
 ## `_MODULE_apply_configuration` answers by what its input contains: `reject`
 ## (a failure status), `bad` (an invalid status), `block` (waits until
 ## `<state_dir>/go-apply` exists, then OK), `quit` (exits); anything else OK.
@@ -454,6 +456,25 @@ proc probeInit(
       commands = readFile(p.dir / "probe.cmd").splitLines
     except IOError, OSError:
       discard
+  # [SPEC INTERFACE l.1397-1398] The flags the handlers and destroy read are set
+  # before any other command: once a subscription is active another thread may
+  # run its handler, even before `subscribe` returns and while this init still
+  # runs (a data race under ThreadSanitizer, CI run 44991040073 on fef0991).
+  for c in commands:
+    let w = c.splitWhitespace
+    if w.len == 0:
+      continue
+    case w[0]
+    of "block-destroy":
+      p.blockDestroy = true
+    of "block-handler":
+      p.blockHandler = true
+    of "block-subend":
+      p.blockSubEnd = true
+    of "quit-handler":
+      p.quitHandler = true
+    else:
+      discard
   for c in commands:
     let w = c.splitWhitespace
     if w.len == 0:
@@ -472,14 +493,8 @@ proc probeInit(
       return
     of "block-init":
       waitGo(p.dir)
-    of "block-destroy":
-      p.blockDestroy = true
-    of "block-handler":
-      p.blockHandler = true
-    of "block-subend":
-      p.blockSubEnd = true
-    of "quit-handler":
-      p.quitHandler = true
+    of "block-destroy", "block-handler", "block-subend", "quit-handler":
+      discard # set above
     of "quit-init":
       quit(
         if w.len > 1:
