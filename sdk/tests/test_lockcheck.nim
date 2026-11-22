@@ -150,6 +150,77 @@ suite "testing.lockcheck: installs against nimble.lock (DECISIONS G436) [IMPL]":
     check found.len == 1
     check found[0].startsWith("results: nimble.paths names 2 installs")
 
+  test "[IMPL-DECISION G468] an install and its own srcDir, both named, are one install; another directory under it is not":
+    let
+      whole = "/p/pkgs2/results-0.5.1-" & shaA
+      chronos = "/p/pkgs2/chronos-4.4.1-" & shaB
+      paths = pathsOf([whole, whole & "/src", chronos])
+    check lockMismatches(goodLock, paths, srcDirs = [(whole, whole & "/src")]).len == 0
+    # Without the srcDir its nimble file declares, the two are two installs, as before.
+    let unpaired = lockMismatches(goodLock, paths)
+    check unpaired.len == 1
+    check unpaired[0].startsWith("results: nimble.paths names 2 installs")
+    # A directory under the install that is not its srcDir does not pair.
+    let other = lockMismatches(
+      goodLock,
+      pathsOf([whole, whole & "/tools", chronos]),
+      srcDirs = [(whole, whole & "/src")],
+    )
+    check other.len == 1
+    check other[0].startsWith("results: nimble.paths names 2 installs")
+    # Another install's srcDir does not pair with this one.
+    let crossed = lockMismatches(
+      goodLock,
+      pathsOf([whole, chronos & "/src", chronos]),
+      srcDirs = [(whole, chronos & "/src")],
+    )
+    check crossed.len == 1
+    check crossed[0].startsWith("chronos: nimble.paths names 2 installs")
+    let windows = "C:\\p\\pkgs2\\results-0.5.1-" & shaA
+    check lockMismatches(
+      goodLock,
+      pathsOf([windows, windows & "\\src", "C:\\p\\pkgs2\\chronos-4.4.1-" & shaB]),
+      srcDirs = [(windows, windows & "\\src")],
+    ).len == 0
+    const inVm = lockMismatches(
+      lockOf([("results", "0.5.1", repeat('a', 40))]),
+      "--path:\"/p/pkgs2/results-0.5.1-" & repeat('a', 40) & "\"\n" &
+        "--path:\"/p/pkgs2/results-0.5.1-" & repeat('a', 40) & "/src\"\n",
+      srcDirs = [
+        (
+          "/p/pkgs2/results-0.5.1-" & repeat('a', 40),
+          "/p/pkgs2/results-0.5.1-" & repeat('a', 40) & "/src",
+        )
+      ],
+    )
+    check inVm.len == 0
+
+  test "[IMPL-DECISION G468] two installs of one package, each with its srcDir, are still two installs":
+    let
+      a = "/p/pkgs2/results-0.5.1-" & shaA
+      c = "/p/pkgs2/results-0.5.1-" & shaC
+    let found = lockMismatches(
+      goodLock,
+      pathsOf([a, a & "/src", c, c & "/src", "/p/pkgs2/chronos-4.4.1-" & shaB]),
+      srcDirs = [(a, a & "/src"), (c, c & "/src")],
+    )
+    checkpoint $found
+    check found.len == 1
+    check found[0] == "results: nimble.paths names 2 installs of it: " & a & ", " & c
+
+  test "[IMPL-DECISION G468] an install and its srcDir under a checksum not the lock's are one finding":
+    let c = "/p/pkgs2/results-0.5.1-" & shaC
+    let found = lockMismatches(
+      goodLock,
+      pathsOf([c, c & "/src", "/p/pkgs2/chronos-4.4.1-" & shaB]),
+      srcDirs = [(c, c & "/src")],
+    )
+    checkpoint $found
+    check found.len == 1
+    check found[0].startsWith(
+      "results: nimble.paths names " & c & ", but nimble.lock records"
+    )
+
   test "[IMPL-DECISION G436] a directory name is read from the right: a dashed name parses":
     var install: Install
     check installOf("/p/pkgs2/nim-foo_bar-1.2.3-" & shaA & "/src", install)
@@ -213,6 +284,31 @@ suite "testing.lockcheck: installs against nimble.lock (DECISIONS G436) [IMPL]":
     checkpoint $unlisted
     check unlisted.len == 2
     check "a develop link of chronos, which is not listed" in unlisted[0]
+
+  test "[IMPL-DECISION G468] from a root: an install and the srcDir its nimble file declares pass as one":
+    let root = getTempDir() / ("lcn-lockcheck-pair-" & $getCurrentProcessId())
+    removeDir(root)
+    createDir(root)
+    defer:
+      removeDir(root)
+    writeFile(root / "nimble.lock", goodLock)
+    writeFile(root / "proj.nimble", "version = \"0.1.0\"\nsrcDir = \"src\"\n")
+    let
+      results = root / "nimbledeps" / "pkgs2" / ("results-0.5.1-" & shaA)
+      chronos = root / "nimbledeps" / "pkgs2" / ("chronos-4.4.1-" & shaB)
+    for dir in [results, chronos / "src", root / "src"]:
+      createDir(dir)
+    writeFile(chronos / "chronos.nimble", "version = \"4.4.1\"\nsrcDir = \"src\"\n")
+    writeFile(
+      root / "nimble.paths", pathsOf([results, chronos, chronos / "src", root / "src"])
+    )
+    check installMismatches(root).len == 0
+    # Its nimble file declares another srcDir: the two directories are two installs.
+    writeFile(chronos / "chronos.nimble", "version = \"4.4.1\"\nsrcDir = \"lib\"\n")
+    let found = installMismatches(root)
+    checkpoint $found
+    check found.len == 1
+    check found[0].startsWith("chronos: nimble.paths names 2 installs")
 
   test "[IMPL-DECISION G436] the repository's own lock: installs named from it pass, and a changed one fails":
     let lockText = readFile("nimble.lock")
