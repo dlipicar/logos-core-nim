@@ -542,6 +542,11 @@ when defined(posix):
     a.kind ==
       LogosNSRuntimeControlRemoteListenerAddressKind.logos_NS_runtime_control_Quic_runtime_address
 
+  proc cborEach(ls: seq[LogosNSRuntimeControlRemoteListenerRecord]): seq[seq[byte]] =
+    ## Each record's bytes, in the list's order.
+    for l in ls:
+      result.add(encodeCbor(toCbor(l)))
+
   proc listenerAt(
       r: var Rc, port: uint16
   ): Opt[LogosNSRuntimeControlRemoteListenerRecord] =
@@ -1064,16 +1069,20 @@ when defined(posix):
           inc quics
           check not l.enabled
       check quics == 1
-      # [RUN-0987, RUN-0614] A port another socket holds.
+      # The records the failures touched are as before, plus the quic one and
+      # the one with a server name.
+      let beforeBind = r.listeners
+      check beforeBind.len == before.len + 2
+      # [RUN-0987, RUN-0614] A port another socket holds: TRANSPORT_ERROR and
+      # the records unchanged. Its port may be one a record above names, so
+      # the lists are compared whole.
       let (held, hport) = boundListener()
       let t = r.setListener(hport, true, true)
       check t.code == ecTransport
+      check r.listeners.cborEach == beforeBind.cborEach
       let l = r.listenerAt(hport)
       check l.isNone or not l.get.enabled
       discard close(held)
-      # The records the failures touched are as before, plus the quic one and
-      # the one with a server name.
-      check r.listeners.len == before.len + 2 + (if l.isSome: 1 else: 0)
       r.close()
       c.down(d)
 
