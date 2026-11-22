@@ -139,7 +139,7 @@ Items 1, 5b, 5c, 10b, 12b and 16a.
   LGX parser and the resolver are also tools (DECISIONS I49, I69).
 - **The installation root** (PM l.924-934; DECISIONS G444). Step 5-5-2 builds it and step 5-5-4's
   operations use it, so until then no root exists. Its scope is choice (a) of the owner's question Q5,
-  not yet answered; this text stands until the answer.
+  answered on 2026-11-22.
   - **Place and scope:** `install/` in the Package Manager instance's own state directory
     (`state/modules/<assignment>/install/`, [§9](#9-directories-and-state)). The inventory is the service
     instance's (PM l.927): one per Package Manager instance, and two instances never share one, since

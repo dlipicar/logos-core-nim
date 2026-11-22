@@ -181,7 +181,7 @@ default = "deferred:tier-5"
 # §7.1: shared installation state and the deployment profile's documentation. Step 5-5-2 claims through
 # "§7.1" the refused shared root (PKG-0487) and the documented root and path rules (PKG-0489), tested in
 # tests/test_pm_store.nim, and shared artifact storage (PKG-0488), which does not arise (an inspection
-# item). All three rest on the owner's Q5, recommended (a) and not yet answered (DECISIONS G444). The
+# item). All three rest on the owner's Q5 (a), answered 2026-11-22 (DECISIONS G444). The
 # platform profile (PKG-0493) is 5-5-4's.
 "PKG-0493" = "deferred:tier-5"
 # §8: materialization through a source profile.

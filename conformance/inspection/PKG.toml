@@ -30,10 +30,10 @@ reason = "A permission not taken (PM l.457, PKG-0085) and a deployment duty met 
 ids = ["PKG-0089"]
 reason = "A conditional duty whose condition never arises (PM l.467). The trust input cannot require revocation, a minimum accepted version or fresh external-anchor evidence: the package trust file (lcn.package_trust, src/logos_core/package/trustdoc.cddl) is closed and has no such field, and a catalog or provenance selection is refused (G398, G404; tests [PKG-0086] and [PKG-0090] in tests/test_pm_input.nim). The only active requirement is the package's own signature under the accepted anchors, checked on every use, cached or not (G403; tests [PKG-0077] in tests/test_pm_vcache.nim). docs/PACKAGE-MANAGER.md §6 states it."
 
-# pm-install-root-not-shared (step 5-5-2, DECISIONS G444, I121; waits on the owner's Q5)
+# pm-install-root-not-shared (step 5-5-2, DECISIONS G444, I121; the owner's Q5 (a))
 [[item]]
 ids = ["PKG-0488"]
-reason = "A conditional duty whose condition never arises (PM l.931): no installed record depends on shared artifact storage. Each record's artifacts are its own files, in its own random directory below the instance's installation root, <state_dir>/install/r/<rid>/a/ (src/logos_core/pm/store.nim; DECISIONS G444), and no setting of daemon-config or the protected input names another root or a shared store. A second store on the same root is refused by the root's lock, so the instance does not start (test [PKG-0487] in tests/test_pm_store.nim). docs/DEPLOYMENT.md §1 documents the scope. The answer is choice (a) of the owner's Q5 (plan tier5-plans/step5-5-plan.md §14), which is not yet answered; under (b) this item is redone."
+reason = "A conditional duty whose condition never arises (PM l.931): no installed record depends on shared artifact storage. Each record's artifacts are its own files, in its own random directory below the instance's installation root, <state_dir>/install/r/<rid>/a/ (src/logos_core/pm/store.nim; DECISIONS G444), and no setting of daemon-config or the protected input names another root or a shared store. A second store on the same root is refused by the root's lock, so the instance does not start (test [PKG-0487] in tests/test_pm_store.nim). docs/DEPLOYMENT.md §1 documents the scope. The scope is choice (a) of the owner's Q5 (plan tier5-plans/step5-5-plan.md §14 and §15), answered on 2026-11-22."
 
 # pm-resource-access (step 5-5-2, DECISIONS G444, C8 / G93, I121)
 [[item]]

@@ -540,7 +540,7 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
 
   Claimed: PKG-0181, PKG-0182, PKG-0204, PKG-0219, PKG-0274, PKG-0292, PKG-0293 (with TXT-0472), PKG-0471,
   PKG-0487, PKG-0489, PKG-0499, PKG-0500, PKG-0610 and PKG-0611 by test; PKG-0488 and PKG-0498 by inspection.
-  16 units. PKG-0487 to PKG-0489 rest on the owner's Q5, recommended (a) and not yet answered. PKG 322/322.
+  16 units. PKG-0487 to PKG-0489 rest on the owner's Q5 (a), answered 2026-11-22. PKG 322/322.
 
 ## Tiers at f4f83471 (the original plan)
 

@@ -301,8 +301,8 @@ This implementation applies the mandatory package-signature and artifact-verific
 
 ### The root and the store (5-5-2; `pm/store.nim`)
 
-- **The root** is `<state_dir>/install/`, in the instance's own state directory (G444; its scope waits
-  on the owner's Q5, recommended (a)). `lock` is held for the store's life, so a second instance on the
+- **The root** is `<state_dir>/install/`, in the instance's own state directory (G444; its scope is
+  the owner's Q5 (a)). `lock` is held for the store's life, so a second instance on the
   same root does not start (PKG-0487). `index` is the committed set. `r/<rid>/` is one record:
   `a/<path>`, the selected variant's files; `m/manifest.cbor` and `m/manifest.cose`, the signed bytes;
   `m/record.<g>`. `spool/` is the running operations' (5-5-3). `rid` is 128 random bits, never reused.
