@@ -20,6 +20,11 @@
 #   reports.sh self-test
 #     The cases above over made-up directories and stub suites, without a sanitizer.
 #
+# DIR, and for the self-test TMPDIR, must not be on a FAT or exFAT volume: macOS writes a `._name`
+# AppleDouble file beside each file there, and each counts as a report. That fails closed, never
+# passing over one. On the Mac, give the self-test a TMPDIR on APFS; a suite's DIR is under the
+# checkout's build/.
+#
 # Canaries: the suites in CANARY_SUITES each have a case whose child writes one stack trace with
 # `__sanitizer_print_stack_trace()` and that moves the child's file into DIR/canary/ once the
 # child is reaped (tests/support/sanitizerenv.nim). A sanitizer check of such a suite needs at
@@ -314,8 +319,10 @@ self_test() {
 
   # `run` with stub suites in place of the suite.
   local stub="$t/stub.sh"
-  cat > "$stub" << 'STUB'
-#!/usr/bin/env bash
+  # Run as a suite's binary is, through its own first line: the bash running this, since a Nix
+  # build's sandbox has no /usr/bin/env.
+  printf '#!%s\n' "$BASH" > "$stub"
+  cat >> "$stub" << 'STUB'
 # A stand-in suite: $1 is what it does.
 path=${TSAN_OPTIONS##*log_path=}
 path=${path%%:*}
