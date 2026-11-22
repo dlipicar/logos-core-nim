@@ -16,6 +16,7 @@
 when defined(posix):
   import std/[atomics, monotimes, os, sequtils, strutils, times, typedthreads]
   import unittest2
+  import ./support/sanitizerenv
   import ../src/logos_core/runtime/engine
   import logos_sdk/abi/types
   import logos_sdk/cbor
@@ -46,8 +47,6 @@ when defined(posix):
   const
     RuntimeId = "5d0c9a7e-3b21-4f68-a0d4-9e1f7c2b6a85"
       ## every engine: a caller's address is the same in each placement
-    SanitizerEnv =
-      ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
     Depth = MinMaxDepth ## `max_payload_depth`: the depth cases stay small
     Answer = 60 * Slow
       ## [IMPL] seconds: bounds a wait for the probe's answer or a note, which

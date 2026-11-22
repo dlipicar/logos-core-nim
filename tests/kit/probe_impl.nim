@@ -10,6 +10,8 @@
 ##
 ## - `inits`, `destroyed`: one line per `_MODULE_init` and `_MODULE_destroy`;
 ## - `env`: with `env`, the names of its environment, sorted;
+## - `envof`: with `env-of <name>...`, `<name>=<value>` for each, or
+##   `<name> unset` (DECISIONS G442: what a host was given);
 ## - `rc`: with `rc <method> <hex params>`, `<code> <hex value or message>`;
 ## - `events`: with `subscribe <event>`, `<name> <hex data>` per delivery,
 ##   the code of one `get_readiness` call made from the first handler, and
@@ -64,12 +66,20 @@
 ## `_MODULE_apply_configuration` answers by what its input contains: `reject`
 ## (a failure status), `bad` (an invalid status), `block` (waits until
 ## `<state_dir>/go-apply` exists, then OK), `quit` (exits); anything else OK.
+##
+## `sanitizer-trace` (DECISIONS G442, the canary) writes one stack trace with
+## `__sanitizer_print_stack_trace()` in a sanitizer build, which the sanitizer
+## check's `log_path` sends to the process's report file, then appends
+## `sanitizer-trace` to `inits` (`sanitizer-trace none` in any other build).
 
 {.push raises: [].}
 
 import std/[algorithm, atomics, os, strutils]
 import logos_sdk/abi/types
 import logos_sdk/codegen/kitrt
+
+when defined(asan) or defined(tsan) or defined(msan):
+  proc sanitizerPrintStackTrace() {.importc: "__sanitizer_print_stack_trace", cdecl.}
 
 type
   Tag = object ## What a route callback reports under, with its probe.
@@ -499,6 +509,20 @@ proc probeInit(
       names.sort()
       for n in names:
         p.note("env", n)
+    of "env-of":
+      for n in w[1 .. ^1]:
+        let given =
+          if existsEnv(n):
+            n & "=" & getEnv(n)
+          else:
+            n & " unset"
+        p.note("envof", given)
+    of "sanitizer-trace":
+      when defined(asan) or defined(tsan) or defined(msan):
+        sanitizerPrintStackTrace()
+        p.note("inits", "sanitizer-trace")
+      else:
+        p.note("inits", "sanitizer-trace none")
     of "rc":
       p.rcCall(w[1], (if w.len > 2: w[2] else: ""))
     of "subscribe":

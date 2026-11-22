@@ -11,6 +11,7 @@ import
   ]
 import std/posix except Time
 import unittest2
+import ./sanitizerenv
 import logos_sdk/cbor
 import logos_sdk/crypto/blake3
 from logos_sdk/base/perthread import releasePerThread
@@ -57,8 +58,6 @@ const
   HelloMs = Timeout
     ## `transport.hello_timeout_ms`: a hosted provider's Hello asks the
     ## Runtime about the ticket over the carrier (test_hosted_routes' `roomy`)
-  SanitizerEnv =
-    ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
   MeterInstance = "meter-1"
   ShapesInstance = "shapes-1"
   VaultInstance = "vault-1"
