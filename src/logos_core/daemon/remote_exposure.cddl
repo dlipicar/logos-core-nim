@@ -1,0 +1,32 @@
+; logos-core-nim.remote-exposure.v1 (Tier 5 step 5-7a-2; DECISIONS G412; Q4 as
+; planning ruled; docs/DAEMON.md §6b): the remote listener and export fields
+; Runtime Control turned off, kept across restarts and crashes. One Logos
+; deterministic-CBOR lcn.remote_exposure in <session>/state/remote-exposure.cbor,
+; owner-only. logosd writes it: a disable through Runtime Control adds or
+; replaces an entry, an enable through Runtime Control removes its fields, a
+; start drops an entry whose configuration entry changed or is gone. Offline,
+; logosctl remote exposure reset removes entries. Absent, nothing is kept.
+lcn.remote_exposure = {
+  format: "logos-core-nim.remote-exposure.v1",
+  entries: [* lcn.remote_exposure_entry],
+}
+
+; One per key. listener: a listener record's address, as its deterministic-CBOR
+; bytes (logos.runtime_control.remote_listener_address); with provider, the
+; export of that provider (its module_provider_id) on that listener. off: the
+; fields turned off, ascending, at least one. by: the consumer that turned them
+; off, as its address text; at_ms: when, Unix milliseconds. config: the
+; BLAKE3-256 of the deterministic CBOR of the configuration's entry for that key
+; as that run started; absent when no configuration entry named the key, and
+; such an entry is dropped at the next start. Entries ascend by listener, then
+; provider (absent first), with no key twice.
+lcn.remote_exposure_entry = {
+  listener: bstr .size (1..4096),
+  ? provider: tstr .size (1..128),
+  off: [* lcn.remote_exposure_field],
+  by: tstr .size (1..1024),
+  at_ms: uint64,
+  ? config: bstr .size 32,
+}
+
+lcn.remote_exposure_field = "enabled" / "runtime_control_enabled"

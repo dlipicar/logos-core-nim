@@ -42,12 +42,11 @@ from ../runtime/authscopes import AuthorityModule
 from ../authority/scopes import rcContractInfo
 from ../runtime/host_config import parseHostConfig
 from ../permissions import HostAmbient
-from ../transport/tls/trust import TrustSnapshot, newTrustSnapshot
-from ../remote/carrier import snapshotMessage
-import ../remote/carrier_types
+from ../transport/tls/trustsnap import TrustSnapshot, newTrustSnapshot
+import ../remote/carrier
 import ../orchestration/[settings, needs]
 import ../cli/callsettings
-import ./[config, session, trustfile]
+import ./[config, remoteexposure, session, trustfile]
 
 when defined(posix):
   import std/posix
@@ -87,11 +86,16 @@ type
     appConfig*: LcnAppConfig ## the derived `lcn.app_config`
     bytes*: seq[byte] ## its deterministic CBOR
     orchestrator*: OrchestratorSettings ## the orchestration instance's value
+    retained*: Retained
+      ## [G412; Q4] the durable disables applied to the records, and those
+      ## dropped, which the start removes from the file
 
   RemoteSeen* = object
     ## [G408, G412] What this start read of the remote inputs, for compose:
-    ## the trust snapshot the remote processes take.
+    ## the trust snapshot the remote processes take, and the durable disables
+    ## (`state/remote-exposure.cbor`, Q4).
     snapshot*: TrustSnapshot
+    exposure*: seq[LcnRemoteExposureEntry]
 
   Prepared* = object ## A daemon-config that passed DAEMON.md §3's five checks.
     config*: DaemonConfig
@@ -570,25 +574,34 @@ func staticModule(instance, module, binding: string): LcnAppModule =
 
 proc remoteValue*(
     c: DaemonConfig, seen: Opt[RemoteSeen]
-): Result[Opt[LcnAppRemote], string] =
+): Result[(Opt[LcnAppRemote], Retained), string] =
   ## [G408, G412] The host configuration's `remote`, with `remote.enabled`:
   ## this start's trust snapshot, as the remote processes take it, and the
-  ## deployment's records. Without what the start read (a check before it,
-  ## `logosctl daemon config check`) the snapshot is an empty one, so the
-  ## records are still checked.
+  ## deployment's records with the retained disables whose configuration
+  ## entry is unchanged applied (Q4). Without what the start read (a check
+  ## before it, `logosctl daemon config check`) the snapshot is an empty one
+  ## and nothing is retained, so the records are still checked.
   if not c.remote.enabled:
-    return ok(Opt.none(LcnAppRemote))
+    return ok((Opt.none(LcnAppRemote), Retained()))
   let t =
     if seen.isSome:
       seen.get.snapshot
     else:
       ?newTrustSnapshot(0, [], [])
-  let x = c.value.remote.get
+  var x = c.value.remote.get
+  var retained = Retained()
+  if seen.isSome:
+    retained = ?applyRetained(x, seen.get.exposure)
   ok(
-    Opt.some(
-      LcnAppRemote(
-        snapshot: ?snapshotMessage(t).encode, listeners: x.listeners, exports: x.exports
-      )
+    (
+      Opt.some(
+        LcnAppRemote(
+          snapshot: ?snapshotMessage(t).encode,
+          listeners: x.listeners,
+          exports: x.exports,
+        )
+      ),
+      retained,
     )
   )
 
@@ -669,9 +682,10 @@ proc compose*(
         Opt.some(LcnAppCallAudit(call_records: a.call_records, evidence: a.evidence))
     else:
       app.call_audit = Opt.some(LcnAppCallAudit())
-  app.remote = ?remoteValue(c, remote)
+  let (remoteApp, retained) = ?remoteValue(c, remote)
+  app.remote = remoteApp
   let bytes = ?app.encode
-  ok(Composition(appConfig: app, bytes: bytes, orchestrator: orch))
+  ok(Composition(appConfig: app, bytes: bytes, orchestrator: orch, retained: retained))
 
 proc prepareDaemon*(
     s: Session,

@@ -12,9 +12,9 @@ namedBin["lcn_pkg"] = "lcn-pkg"
 namedBin["logos_module_host"] = "logos-module-host"
 # logosd and logosctl need unix-stream sockets, peer credentials and signals: POSIX hosts
 # only (DECISIONS I95; docs/DAEMON.md). The Module Host lands beside logosd, where its
-# default lookup finds it.
+# default lookup finds it, and so does the remote program (DECISIONS G411).
 when not defined(windows):
-  bin.add ["logosd", "logosctl"]
+  bin.add ["logosd", "logosctl", "logos_remote"]
 
 # Dependencies
 #

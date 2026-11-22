@@ -277,6 +277,23 @@ proc generatedRemoteTrustTypes*(): Result[string, string] =
   )
 
 const
+  remoteExposureTypesPath* = "src/logos_core/daemon/remote_exposure_types.nim"
+  remoteExposurePrimary* = "src/logos_core/daemon/remote_exposure.cddl"
+
+proc generatedRemoteExposureTypes*(): Result[string, string] =
+  ## The durable remote disables (G412, Q4), for `daemon/remoteexposure.nim`.
+  try:
+    let set =
+      ?acceptContractSet(readFile(remoteExposurePrimary), [], [], AcceptOptions())
+    nimModule(
+      set,
+      NimOptions(importPrefix: SdkImportRoot, schemaAccessor: "remoteExposureSchema"),
+      false,
+    )
+  except IOError as e:
+    err(e.msg)
+
+const
   trustdocTypesPath* = "src/logos_core/package/trustdoc_types.nim"
   trustdocPrimary* = "src/logos_core/package/trustdoc.cddl"
 
