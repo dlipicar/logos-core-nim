@@ -367,7 +367,9 @@ when defined(posix):
         )
       )
       l.hold(22)
-      let busy = l.run(meterRead(7), timeoutMs = 1_500 * Slow)
+      # The timeout bounds lcn_call's first answer; any `busy` within it is the
+      # failure, even one a retry's wait ends (the launcher's order of events).
+      let busy = l.run(meterRead(7), timeoutMs = 1_500 * Slow * Load)
       checkpoint busy.said
       check busy.exit == 2
       check "busy" in busy.failure
