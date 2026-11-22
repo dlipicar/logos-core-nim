@@ -754,7 +754,14 @@ suite "run.rc: the events (RUNTIME §9.3 l.3496-3511, l.3715-3735)":
     e.finish()
 
   test "[RUN-0363] [IFC-0181] [IFC-0182] [IFC-0183] 200 quick transitions of one instance arrive in commit order, one handler at a time per subscription; two subscriptions run at once":
-    let e = fixtureEngine(rcConfig())
+    # The 50 cycles take a few milliseconds and queue 300 `execution_state_changed`
+    # entries, one per exposure, intent changes included. On a loaded host whose
+    # event workers start late, the queue passes the default bound of 256 and the
+    # subscription is lost (G225; CI run 44978149107 saw 43 entries). This case is
+    # about order, so it gives the burst room; the bound has its own case (TXT-0086).
+    var cfg = rcConfig()
+    cfg.limits.rcQueue = 512
+    let e = fixtureEngine(cfg)
     let (_, rc) = e.startClient("c")
     let (_, other) = e.startClient("d")
     var a, b, x: LogosSubscriptionId
@@ -771,8 +778,11 @@ suite "run.rc: the events (RUNTIME §9.3 l.3496-3511, l.3715-3735)":
       ["unloaded>loaded", "loaded>ready", "ready>stopping", "stopping>unloaded"]
     for i in 0 ..< ts.len:
       check ts[i] == cycle[i mod 4]
+    # Each exposure that changes the state gives an `execution_state_changed` too.
+    check watches[1].reached(200)
     let n = watches[1].quiet()
     check n >= 200
+    check not e.diagnostics().anyIt("G225" in it)
     var last = 0'u64
     for i in 0 ..< min(n, LogCap):
       let ev = watches[1].execEv(i)
@@ -790,6 +800,39 @@ suite "run.rc: the events (RUNTIME §9.3 l.3496-3511, l.3715-3735)":
     check watches[2].reached(2)
     check watches[0].held.load == 1
     watches[0].hold.store(false)
+    e.finish()
+
+  test "[RUN-0363] [IMPL-DECISION G178] [IMPL-DECISION G225] the 300 `execution_state_changed` entries of 50 quick cycles, all queued behind one held handler, fit a bound with room for them and then arrive in commit order":
+    # The case above, with its event workers as late as they can be: every
+    # entry after the first waits in the queue, on a host of any speed.
+    var cfg = rcConfig()
+    cfg.limits.rcQueue = 512
+    let e = fixtureEngine(cfg)
+    let (_, rc) = e.startClient("c")
+    var b: LogosSubscriptionId
+    check rc.subscribe(ExecutionState, addr watches[0], b) == ecOk
+    watches[0].hold.store(true)
+    e.slows("s")
+    for i in 0 ..< 50:
+      check e.start("s").tryGet.state == msReady
+      check e.stop("s").tryGet.state == msUnloaded
+    check waitUntil(
+      proc(): bool =
+        watches[0].held.load == 1
+    )
+    check watches[0].count.load == 0
+    check not e.diagnostics().anyIt("G225" in it)
+    watches[0].hold.store(false)
+    check watches[0].reached(300)
+    check watches[0].quiet() == 300
+    var last = 0'u64
+    for i in 0 ..< 300:
+      let ev = watches[0].execEv(i)
+      check ev.instance == "s"
+      check ev.execution.revision > last
+      last = ev.execution.revision
+    check watches[0].overlaps.load == 0
+    check not e.diagnostics().anyIt("G225" in it)
     e.finish()
 
   test "[IFC-0184] each payload is one deterministic CBOR value of its event's type":
