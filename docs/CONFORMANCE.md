@@ -714,6 +714,30 @@ marker) and the catalog and provenance selections. Its schema and rules are core
 - **Key separation** (PM l.533): no anchor may use a call-evidence key of the session, retired ones
   included. It supplies evidence to PKG-0435, which stays with step 5-7a until the TLS key exists.
 
+### What Tier 5 step 5-3b-1 changes
+
+The Package Manager's engine (DECISIONS I116; G399's value, G401 to G406 as built in 5-3b-1; G90 amended,
+G150 replaced), documented in `docs/PACKAGE-MANAGER.md`. It is a library in `src/logos_core/pm/` with no
+I/O of its own; the module that hosts it, the daemon's end and the channel come with 5-3b-2, so logosd
+still deploys no Package Manager.
+
+- **Claimed:** PM §4.2 and §4.4 as the mandatory baseline (G404): no catalog profile exists, a trust input
+  that selects one is refused by the Package Manager's input check as at logosd's start, and the catalog
+  document is closed (PKG-0085 to PKG-0093, PKG-0114, PKG-0115, PKG-0449). §13's retrieval through
+  `lcn.storage_fetch` (PKG-0353). The verification cache and what it may answer (PKG-0076, PKG-0077),
+  rotation (PKG-0079), what no catalog or Storage content may do (PKG-0019, PKG-0021, PKG-0069, PKG-0081,
+  PKG-0082), no freshness from a signature or the catalog's sequence (PKG-0112), the baseline applied with
+  no provenance profile (PKG-0167), and the catalog document and its acquisition (PKG-0472, PKG-0473).
+  PKG-0085, PKG-0089 and PKG-0449 are claimed by inspection. PKG 278/278, with 308 units left for Tier 5.
+- **Limits of the claim.** The engine is tested in one process over scripted providers; the hosted case
+  over a real route is 5-3b-2's (`test_pm_hosted`), and so is PKG-0474 (the bindings and the locator
+  encodings). PKG-0080 (a removed anchor never used for an installation, update or handoff) is 5-5's; the
+  inspection half is tagged here. The resolver's limits are a parameter of the engine with no configured
+  source yet.
+- **Bounds.** An archive at most 1 GiB, held in memory while it is checked; a catalog at most 4 MiB and
+  65,536 entries; at most 4,096 cached verifications (256 by default); one call at most a day
+  (300 s by default). Each is a protected input field (`docs/PACKAGE-MANAGER.md` §2).
+
 ## Properties not claimed
 
 - A complete Logos module system (BCP §5.1; owner decision 10 (a), K18; DECISIONS G310, I97): there

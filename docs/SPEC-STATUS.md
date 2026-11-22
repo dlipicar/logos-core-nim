@@ -119,9 +119,9 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-2, 5-7a | marked payloads on remote paths (G277; 5-2's G327) | `tls-tcp` and `quic` carry no marked payload (TRANSPORT l.1188-1189; RUNTIME l.1808, l.2939): re-pin P4d built the refusal (`runtime/remotemarked`), which 5-7a calls, and took 5-2d's opt-in `BORINGSSL_ZERO_RECORD_BUFFERS` off again; the carrier erases its own copies (G276) | decided 2026-11-17 (owner); settled by spec text at 6cac8335 (re-pin P4d) |
 | 5-3a | the package trust file; provenance continuity | the package trust file v2: anchors with exact names, the development marker and the catalog and provenance selections under one revision, a selection refused until a profile is built; administered offline by `logosctl trust` (G396 to G398) | decided (C2, C3); built in 5-3a-2 (I114) |
 | 5-3a | the `lcn.storage_fetch` contract has no readiness signal (G91, G136) | 5-3a adds one | built (5-3a-1, G395): `fetch_readiness` and `fetch_readiness_changed_event`; N-4 builds the phases |
-| 5-3b | NP-12 | no platform tag in the catalog document | open (C7) |
-| 5-3b | TF-07 (G166) | the plan's §6 wording; the answer to PM l.408 stays *no* | open (C5); recovery by re-install is PM l.1675 at 6cac8335 (PKG-0608, 5-5) |
-| 5-3b | no §4.2 freshness profile is defined | claim the baseline; a configuration that asks for a profile is refused | open (C9) |
+| 5-3b | NP-12 | no platform tag in the catalog document | decided (C7); built in 5-3b-1 (I116): the catalog document has no platform field, and a catalog with one package per platform resolves, each candidate judged in order (G401, G405) |
+| 5-3b | TF-07 (G166) | the plan's §6 wording; the answer to PM l.408 stays *no* | decided (C5); built for inspection in 5-3b-1 (G403): a cached verification is judged again against the trust input in use; recovery by re-install is PM l.1675 at 6cac8335 (PKG-0608, 5-5) |
+| 5-3b | no §4.2 freshness profile is defined | claim the baseline; a configuration that asks for a profile is refused | decided (C9); built in 5-3b-1 (G404): §4.2 and §4.4 claimed as the baseline, a selection refused at logosd's start and by the Package Manager's input check |
 | 5-5 | PM-11 (G93) | `local_path` per artifact; one self-contained module library | open (C8) |
 | 5-5 | NP-15 (G156), PKG-0275 | keep G156; PKG-0275 by reading | settled by PM l.1096-1101 at 6cac8335 (re-pin P7a): PKG-0275 is stale |
 | 5-5 | TF-12, TF-14 | keep I69's interims; exclude an installed candidate whose signer is no longer accepted | TF-12 settled by PM l.1304-1307 at 6cac8335 (G167); the signer exclusion built at re-pin P7b (I110) |
@@ -468,6 +468,23 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
 
   Claimed: PKG-0083, PKG-0166, PKG-0169 and PKG-0418 to PKG-0421 (seven units; planning's rulings moved PKG-0083 from
   5-3b and PKG-0166 and PKG-0169 from 5-11). TXT-0463 cleared by test with PKG-0418. PKG-0167 goes to 5-3b.
+
+- 2026-11-21, Tier 5 step 5-3b-1 (I116; G399's value, G401, G402's retrieval, G403, G404, G405's driver and engine,
+  G406; G90 amended, G150 replaced), the Package Manager's engine:
+  - `src/logos_core/pm/`: the protected input `lcn.pm_input` and its check; the catalog document
+    `logos-core-nim.catalog.v1` (canonical order, bounds, pinned by its digest), the kept catalog and sequence
+    continuity, with no refresh; one retrieval over `lcn.storage_fetch` (`stat_object`, then 1 MiB reads, the
+    retries and the 300 s deadline); the verification cache, each hit judged again against the trust input; the
+    resolution driver over a memo; the sans-I/O engine with its routes, fresh request keys and renewal.
+  - `lcn-pkg catalog` writes the canonical document and prints its digest.
+  - No storage library: `tools/lint/nostorage.py` (flake check `lint-nostorage`) and `layers.toml`'s
+    `pm_external_allowlist`.
+  - `docs/PACKAGE-MANAGER.md`, all but the channel and the daemon's section (5-3b-2).
+
+  Claimed: §4.2 (PKG-0085 to PKG-0093) and §4.4 (PKG-0114, PKG-0115, PKG-0449) as the baseline; PKG-0353 through §13
+  (PKG-0354 deferred to 5-8, PKG-0513 and PKG-0514 to 5-6a); PKG-0019, PKG-0021, PKG-0069, PKG-0076, PKG-0077,
+  PKG-0079, PKG-0081, PKG-0082, PKG-0112, PKG-0167, PKG-0472 and PKG-0473. 25 units, PKG-0085, PKG-0089 and
+  PKG-0449 by inspection. PKG-0474 waits for 5-3b-2; PKG-0080 stays with 5-5, its inspection half tagged here.
 
 ## Tiers at f4f83471 (the original plan)
 
