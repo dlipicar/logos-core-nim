@@ -1148,6 +1148,45 @@ whitespace, comments, declaration placement permitted by §2.1, include layout a
     `invalid-package`: the Package Manager side of r6.
 - **Status:** decided 2026-11-20 (re-pin P8a).
 
+### G478 — `CborValue` is acyclic
+- **Kind:** IMPL (Tier 5 step sdk-acyclic, merged before 5-3c-3; found while measuring 5-3c-3, planning's note
+  `5-3c3-orc-pauses.md`; Fable's review `fable-checks/step5-3c3-orc-pauses.md` and planning's ruling of 2026-11-22) ·
+  **Specs:** RFC 8949 §2 (the data model: a data item nests data items); INTERFACE §4.4 (the deterministic encoding of
+  such an item).
+- **Description:** `CborValue` is `ref CborValueObj`, and an array, a map or a tag holds other `CborValue`s, so ORC and
+  refc's cycle collector treated the type as possibly cyclic. A reference dropped while its count stays above zero is
+  registered as a possible cycle root: each step of the encoder's walk, and each element of every destroyed copy of a
+  `seq[CborValue]` (an inspection supplied by copy, a cached record, a copied `PackageDependency`). Once enough are
+  registered the collector traces them and everything they reach, on the thread that dropped the last one. On a module
+  thread holding 1.15 million contracts, in 5-3c-3's `contracts` shape, that held one resume for 166 ms. 5-3c-1 met
+  the type from the other side: `Resolver` is `{.acyclic.}` because ORC traced it through `CborValue` (G455).
+- **Decision:** `CborValueObj` is `{.acyclic.}` (`sdk/src/logos_sdk/cbor/value.nim`).
+  - **What it states is already true.** A value that contains itself cannot be encoded, sized or compared, so no use of
+    the type allows a cycle. A shared subtree (a DAG) is fine.
+  - **How it works** (Nim 2.2.14's sources): `types.canFormAcycle` is false for a type marked acyclic, so a reference
+    to it is decremented by the plain path; only the cyclic decrements call `rememberCycle` (`lib/system/orc.nim`).
+  - **What it costs.** A cycle built by hand is never freed, under orc and refc alike, and memory stays safe (the Nim
+    manual's `acyclic` pragma, as Fable's review cites it). The type's fields hold no other reference type, so such a
+    cycle leaks only itself. MODULE-KIT §2 says so to module authors, who build these values too.
+  - **Nothing builds one.** Every write of a value's `items`, `entries` or `content` in `sdk/src`, `src`, `tests` and
+    `tools` was checked. The decoder, the diagnostic parser, the commitment construction, the generated encoders and the
+    helpers build children bottom up. `compose.canonical` (the authority policy's sets) and one `test_package` case
+    reuse an existing subtree, which makes a DAG. `wipe` only empties containers.
+  - **Every user gains**, not only the resolver: any module thread holding many values could meet the pause. The layout
+    is unchanged, so a module gets the mark when it moves to an SDK that has it, and nothing has to move with it.
+  - **Not taken:** the encoder walking by cursors and pointers (B). It adds risk to the SDK, and measured, it leaves
+    the pauses where they were.
+- **Measured** (framework.lan, x86_64, load about 2, two runs of each; `build/scratch/turnprobe.nim` over 5-3c-3's
+  `contracts` shape driven at `ResolverTurnWork`, orc `-d:release`):
+  - 288,000 contracts (2,009 resumes): before, 7 resumes over 1.5 ms, the longest 46 ms; after, none over 1.5 ms;
+  - 1.15 million contracts (8,023 resumes): before, 8 over 1.5 ms, the longest 166 ms; after, none over 1.5 ms;
+  - B alone: the same resumes as before, the longest 47.6 ms and 166 ms.
+  - Each slow resume fell on the same resume number in every run and counted no more work than its neighbours: the
+    collector's threshold, not load.
+- **Tests:** no new test. The SDK's and core's suites run under orc, refc and orc-release. The leak check is the final
+  sanitizer run (planning's end-of-work list).
+- **Status:** decided 2026-11-22 (planning's ruling after Fable's review); built sdk-acyclic.
+
 ## 4. Error codes the specs require but do not assign
 
 Background: INTERFACE §5.1 fixes a closed registry (0 OK, 1 METHOD_NOT_FOUND, 2 INVALID_PARAMS,
@@ -8523,6 +8562,7 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G440 | a post gate that outlives a confined kit's context | IMPL | 12 |
 | G442 | sanitizer reports from child processes fail the check | IMPL | 12 |
 | G468 | the lock check: an install and its own `srcDir` are one install (amends G436) | IMPL | 12 |
+| G478 | `CborValue` is acyclic | IMPL | 3 |
 
 ---
 
