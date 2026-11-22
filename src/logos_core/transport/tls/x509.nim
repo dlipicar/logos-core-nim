@@ -6,7 +6,7 @@
 {.push raises: [].}
 
 import results
-import ./[boring, credential]
+import ./p256
 
 export results
 

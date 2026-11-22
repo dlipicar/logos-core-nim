@@ -26,6 +26,9 @@ daemon_tls_forbidden = [
   "src/logos_core/transport/tls/boring.nim",
   "src/logos_core/transport/tls/engine.nim",
 ]
+# [Q2 (a), Tier 5 step 5-7a-1] Within that closure, the only modules that import the BoringSSL
+# binding: `p256` signs and makes credentials with libcrypto and names no libssl function.
+daemon_binding_importers = ["src/logos_core/transport/tls/p256.nim"]
 
 # The core modules the daemon and the CLI may import directly, relative to src/logos_core/.
 daemon_allowlist = [

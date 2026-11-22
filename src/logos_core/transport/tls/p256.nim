@@ -1,17 +1,69 @@
-## TRANSPORT §8.4.1 l.1238-1239; RUNTIME l.2682-2683; I99: the P-256
-## credential of `logos.remote.tls-tcp`: a key, its PKCS#8 form, a self-signed
-## X.509 v3 certificate, the DER `SubjectPublicKeyInfo` an enrollment holds, and
-## `ecdsa_secp256r1_sha256` signing for whoever holds the key (the signing
-## service of 5-7a; tests). B2's offline command (5-7a) decides validity, usage
-## and where the files live; nothing here writes a file.
+## TRANSPORT §8.4.1 l.1238-1239; RUNTIME l.2599-2621; I99; Q2 (a) of the 5-7a
+## plan (DECISIONS G409, G410): the P-256 credential of `logos.remote.tls-tcp`
+## in BoringSSL's libcrypto only: a key, its PKCS#8 form, a self-signed X.509
+## v3 certificate, the DER `SubjectPublicKeyInfo` an enrollment holds, and
+## `ecdsa_secp256r1_sha256` signing for whoever holds the key (logosd's signing
+## service, the key holder, tests). B2's offline command (`logosctl remote
+## credential`) decides validity, usage and where the files live; nothing here
+## writes a file.
+##
+## Split from the TLS engine's `boring.nim` (Tier 5 step 5-7a-1) so that logosd
+## can sign and make credentials while staying out of libssl: this module calls
+## no `SSL_` function, and the layers lint (`daemon-no-ssl`) keeps every module
+## logosd and logosctl reach that way. It imports the pinned binding itself,
+## with the link rules every BoringSSL build needs; `boring.nim` imports it.
 
 {.push raises: [].}
 
+import boringssl
 import results
 import logos_sdk/base/wipe
-import ./boring
 
-export results
+export boringssl, results
+
+# BoringSSL is C++. Nim links a mixed C/C++ build through the C++ driver, which
+# brings the C++ runtime in, unless the configuration pins the linker: nixpkgs'
+# Nim sets `gcc.linkerexe = $CC`, so on Linux the C driver links and the runtime
+# must be named. macOS builds link without it. Nim's `linux` includes Android,
+# whose NDK has only libc++; it is linked statically, so a binary needs no
+# libc++_shared.so beside it (DECISIONS I44, I46).
+when defined(android):
+  {.passl: "-lc++_static -lc++abi".}
+elif defined(linux):
+  {.passl: "-lstdc++".}
+
+# macOS sanitizer builds compile with Xcode's clang (`config.nims`), but the Nix shell's SDKROOT
+# is nixpkgs' apple-sdk, which has no libc++ headers, and that clang links no C++ runtime by
+# itself. Only builds that compile BoringSSL's C++ need the Xcode SDK and libc++ [IMPL].
+when defined(macosx) and (defined(asan) or defined(tsan)):
+  const xcodeSdk =
+    staticExec("env -u DEVELOPER_DIR -u SDKROOT /usr/bin/xcrun --show-sdk-path")
+  {.passc: "-isysroot " & xcodeSdk.}
+  {.passl: "-isysroot " & xcodeSdk & " -lc++".}
+
+const
+  KuDigitalSignature* = 0x0080'u32 ## `KU_DIGITAL_SIGNATURE` (not in the binding)
+  MbstringAsc* = 0x1001.cint ## `MBSTRING_ASC` (not in the binding)
+
+proc sslErrors*(): string =
+  ## The thread's queued BoringSSL errors (libcrypto's `ERR_` queue, which
+  ## libssl shares) as text, oldest first; the queue is emptied.
+  result = ""
+  while true:
+    let e = ERR_get_error()
+    if e == 0:
+      break
+    var buf: array[256, char]
+    discard ERR_error_string_n(e, cast[cstring](addr buf[0]), csize_t(buf.len))
+    if result.len > 0:
+      result.add("; ")
+    result.add($cast[cstring](addr buf[0]))
+
+proc copyBytes*(p: ptr uint8, n: int): seq[byte] =
+  ## `n` bytes at `p` as a new sequence.
+  result = newSeq[byte](n)
+  if n > 0:
+    copyMem(addr result[0], p, n)
 
 type
   P256Key* = ref object
