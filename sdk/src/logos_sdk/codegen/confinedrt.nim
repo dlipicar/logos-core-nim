@@ -1325,6 +1325,16 @@ when defined(lcnTestHooks):
     if result:
       failInitAt = 0
 
+  proc blockOwnerForTests*(bytes: openArray[byte]): LogosResponseOwner =
+    ## [DECISIONS G467] Test hook: a completion's response owner holding a
+    ## copy of `bytes`, as `completeDeferred` makes one, so that a test can run its
+    ## release (`lcnNoNimHeap`) on a thread that never registered.
+    let b = newBlock(bytes.len)
+    doAssert b != nil
+    for i, x in bytes:
+      blockBytes(b)[i] = x
+    LogosResponseOwner(state: b, release: releaseBlock)
+
 when defined(posix):
   proc cDirfd(d: ptr DIR): cint {.importc: "dirfd", header: "<dirent.h>".}
 
