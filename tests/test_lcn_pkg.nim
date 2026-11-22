@@ -7,6 +7,7 @@ import logos_sdk/base/hex
 import logos_sdk/crypto/blake3
 import logos_sdk/pins
 import ../src/logos_core/package/lgx
+import ../src/logos_core/pm/catalog
 import ../src/lcn_pkg
 
 const work = "build" / "scratch" / "test_lcn_pkg"
@@ -198,3 +199,70 @@ suite "pkg.cli: lcn-pkg producer commands":
         narrowTrust,
         Platform(os: "linux", architecture: "x86_64", abi: Opt.some("gnu")),
       ).error.code == pecSignature
+
+suite "pkg.cli: lcn-pkg catalog (G401)":
+  test "[PKG-0472] catalog writes the canonical document of its entries and prints the digest":
+    let src = work / "catalog.edn"
+    put(
+      src,
+      """
+[
+  {"identity": {"package": "logos.wallet", "version": "1.0.0"},
+   "source": {"kind": "lgx", "storage": "main", "object": h'0102'}},
+  {"identity": {"package": "logos.example", "version": "1.0.0"},
+   "source": {"kind": "lgx", "storage": "main", "object": h'0a0b'}},
+  {"identity": {"package": "logos.example", "version": "1.10.0"},
+   "source": {"kind": "lgx", "storage": "main", "object": h'0c0d'}},
+]
+""",
+    )
+    let output = work / "catalog.cbor"
+    check catalogCmd(src, "7", output) == 0
+    let bytes = b(readFile(output))
+    let c = decodeCatalog(bytes)
+    check c.isOk
+    check c.get.sequence == 7
+    var order: seq[string]
+    for e in c.get.entries:
+      order.add($e.identity)
+    check order == @[
+      "logos.example@1.10.0", "logos.example@1.0.0", "logos.wallet@1.0.0"
+    ]
+    check c.get.digest == blake3(bytes)
+
+  test "catalog refuses a repeated entry, an entry the PM §6 rule refuses, and a bad sequence":
+    let dup = work / "dup.edn"
+    put(
+      dup,
+      """
+[
+  {"identity": {"package": "logos.example", "version": "1.0.0"},
+   "source": {"kind": "lgx", "storage": "main", "object": h'01'}},
+  {"identity": {"package": "logos.example", "version": "1.0.0"},
+   "source": {"kind": "lgx", "storage": "main", "object": h'01'}},
+]
+""",
+    )
+    check catalogCmd(dup, "1", work / "dup.cbor") == 1
+    check not fileExists(work / "dup.cbor")
+    let bad = work / "bad.edn"
+    put(
+      bad,
+      """
+[{"identity": {"package": "logos.example", "version": "1.0"},
+  "source": {"kind": "lgx", "storage": "main", "object": h'01'}}]
+""",
+    )
+    check catalogCmd(bad, "1", work / "bad.cbor") == 1
+    let extra = work / "extra.edn"
+    put(
+      extra,
+      """
+[{"identity": {"package": "logos.example", "version": "1.0.0"},
+  "source": {"kind": "lgx", "storage": "main", "object": h'01'}, "signer": h'00'}]
+""",
+    )
+    check catalogCmd(extra, "1", work / "extra.cbor") == 1
+    check catalogCmd(dup, "-1", work / "neg.cbor") == 1
+    check catalogCmd(dup, "", work / "none.cbor") == 1
+    check catalogCmd(work / "absent.edn", "1", work / "absent.cbor") == 1
