@@ -220,8 +220,15 @@ when defined(posix):
   var
     wl: Live
     since: int ## host ends before this session's
+    wlFailed: bool ## a case that shared `wl` failed
 
   suite "wipe: logosctl call through lcn_call, marked payloads (W-13) [IMPL-DECISION G349]":
+    teardown:
+      # `wl`'s directory is the cases' together: W-13g's `finish` gives it to
+      # W-13g, and it is kept if any of them failed (`shortdir`).
+      wlFailed = wlFailed or testStatusIMPL == TestStatus.FAILED
+      endCaseBases(wlFailed)
+
     when ChannelsMove:
       test "[IFC-0575] W-13a: a marked request from files and from a pipe, slot from a file too, leaves no copy":
         live = addr wl
@@ -232,6 +239,7 @@ when defined(posix):
           wipe(p)
         since = hostEnds().len
         wl = boot(newSession())
+        holdShortBase(wl.s.dir.parentDir) # the next cases share it
         # lcn_call starts at its first command: its host's `init`, which
         # carries the patterns, is released here before the scan is armed.
         let first = wl.run(callOf("vault_module", "peek", [("slot", "0")]))

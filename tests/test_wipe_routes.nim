@@ -222,17 +222,9 @@ proc absentFrom(e: Engine): bool =
 # Set-up -----------------------------------------------------------------------------
 
 when unixStream:
-  # The endpoints go under a short private base (sun_path).
-  proc removeAtExit(dir: string) =
-    ## The closure keeps its own copy: the main module's globals are destroyed
-    ## before exit procedures run.
-    addExitProc(
-      proc() =
-        removeDir(dir)
-    )
-
+  # The endpoints go under a short private base (sun_path), removed at the
+  # exit (`shortdir`).
   let shortBase = makeShortBase("lcnwr", "/e999/12345678/logos_vault_module.sock")
-  removeAtExit(shortBase)
 
 proc wipeConfig(transported = false): EngineConfig =
   result = config(extra = @[vaultStatic, dvaultStatic])

@@ -51,6 +51,9 @@ when defined(posix):
         release(live[], testStatusIMPL == TestStatus.FAILED)
       live = nil
       stderr.writeLine(costLine(testName))
+      # The case's session directories, and a shared one it ended: kept if it
+      # failed (`shortdir`).
+      endCaseBases(testStatusIMPL == TestStatus.FAILED)
 
     test "[BCP-0086] [BCP-0088] L-1: the first command starts lcn_call, later ones reuse it and its route; a restarted Runtime resumes it; after module stop the next command starts it again":
       let s = newSession(Shape(providers: @[MeterInstance]))
