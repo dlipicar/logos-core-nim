@@ -401,28 +401,39 @@ when defined(posix):
           Shape(validityMs: validity, routeIdleMs: idle, providers: @[MeterInstance])
         )
       )
-      let began = getMonoTime()
+      # The first command starts lcn_call and establishes the route.
       check l.run(meterRead(7)).exit == 0
-      var cost = msSince(began)
+      let made = nowWallMs()
       let first = l.cliRoutes
       check first.len == 1 and first[0].expires_at.isSome
       if first.len == 1 and first[0].expires_at.isSome:
         # Six workers call on the one route at once.
+        let together = getMonoTime()
         var threads: array[6, Thread[(ptr Live, int)]]
         for i in 0 ..< threads.len:
           concurrent[i].store(-1)
           createThread(threads[i], reader, (addr l, i))
         joinThreads(threads)
+        # `callsUntil` leaves room for the longest command that reuses the
+        # route: none of these six took longer than all six together. Not the
+        # first command's time: lcn_call's start and the establishment took
+        # about 29 s under TSan in CI, more than two thirds of `idle`, so
+        # `callsUntil`'s last gap could outlast `idle`, and the route closed
+        # idle before the renewal (CI run 44991040073).
+        var cost = msSince(together)
         for i in 0 ..< threads.len:
           check concurrent[i].load == 0
         check l.cliRoutes.mapIt(it.route) == @[first[0].route]
         # [G348] A command that leases the route with less than 5 s of its
         # decision left (or a tenth of the validity, if that is more) renews it
-        # onto a new handle, before the decision ends. This one starts 4.5 s
-        # before the first decision ends: inside that, and early enough for the
-        # renewal, whatever a command costs on this build.
+        # onto a new handle, before the decision ends. lcn_call counts the
+        # validity from when the route reached it, before `made`, so its
+        # window is at least `window`. This command starts just inside it,
+        # which leaves the renewal all the time the rule gives: 4.75 s, or
+        # about 7 s under TSan, where a renewal took 3 s.
         let ends = int64(first[0].expires_at.get)
-        l.callsUntil(ends - 4_500, idle, cost)
+        let window = max(RenewMarginMs, (ends - made) div 10)
+        l.callsUntil(ends - window + 250, idle, cost)
         let renewing = l.run(meterRead(7))
         checkpoint renewing.said
         check renewing.exit == 0
