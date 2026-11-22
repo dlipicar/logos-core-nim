@@ -669,6 +669,37 @@ suite "ifc.kit: dispatch (INTERFACE §2.6, §2.7, §4.5, App A.3) [IMPL]":
         check checkOutcome(r, bufferShape(buf, len)).error.code == ecMethodNotFound
     beaconDestroy(ctx)
 
+var contextUses: Atomic[int] ## operations through `countedVtable`'s context
+
+proc countedCaller(
+    invocation: ptr LogosInvocationContext, outCaller: ptr LogosCallerView
+): LogosResult {.cdecl, gcsafe, raises: [].} =
+  contextUses += 1
+  callerOp(invocation, outCaller)
+
+proc countedCancelled(
+    invocation: ptr LogosInvocationContext
+): bool {.cdecl, gcsafe, raises: [].} =
+  contextUses += 1
+  cancelledOp(invocation)
+
+proc countedPublish(
+    invocation: ptr LogosInvocationContext,
+    eventName: cstring,
+    cborData: ptr UncheckedArray[uint8],
+    cborDataLen: csize_t,
+): LogosResult {.cdecl, gcsafe, raises: [].} =
+  contextUses += 1
+  scopedPublishOp(invocation, eventName, cborData, cborDataLen)
+
+var countedVtable = LogosInvocationContextVtable(
+  abiVersion: 1,
+  structSize: csize_t(sizeof(LogosInvocationContextVtable)),
+  caller: countedCaller,
+  isCancelled: countedCancelled,
+  publish: countedPublish,
+)
+
 suite "ifc.kit: events and the invocation context (INTERFACE §2.5, §2.9.3, App A.4) [IMPL]":
   test "[IFC-0220] [IFC-0522] a typed publish helper encodes the event; a null callback is never called":
     ## A module whose call surface declares events refuses a null callback at
@@ -730,6 +761,30 @@ suite "ifc.kit: events and the invocation context (INTERFACE §2.5, §2.9.3, App
       check published == @[("meter.changed_event", diag("{\"value\": 170}"), "scoped")]
       published.setLen(0)
     meterDestroy(ctx)
+
+  test "[IFC-0776] the kit keeps no context `current` returned once its provider entry ends":
+    withLock publishedLock:
+      published.setLen(0)
+    let ctx = newMeter(input())
+    var invocation =
+      LogosInvocationContext(vtable: addr countedVtable, state: addr contextState)
+    contextUses.store(0)
+    activeContext = addr invocation
+    let c = meterCall(ctx, "read", read(17))
+    activeContext = nil
+    check c.status.isOk and c.decoded.label == consumerId
+    let during = contextUses.load
+    check during >= 3 # its caller, its scoped publication and its cancellation
+    # The next entry has no current context: NOT_READY, and the earlier one is
+    # never reached again.
+    check meterCall(ctx, "read", read(17)).code == ecNotReady
+    check meterCall(ctx, "read", read(17)).code == ecNotReady
+    check contextUses.load == during
+    withLock publishedLock:
+      check published.len == 1 # the first entry's only
+      published.setLen(0)
+    meterDestroy(ctx)
+    check contextUses.load == during
 
 # Concurrency ---------------------------------------------------------------------------
 
@@ -1193,6 +1248,26 @@ proc tallyBinding(): ModuleBinding =
     [mirror("IFC/3.9.2.interface.cddl")],
   )
 
+const moduleEntries = [
+  "name", "init", "destroy", "apply_configuration", "call_surface", "free", "dispatch",
+  "async_api",
+]
+
+func abiOnly(names: openArray[string], module: string): bool =
+  ## [SPEC INTERFACE §2.4, §2.6] Each name is one of `module`'s `_MODULE_`
+  ## entries or a `_CALL_` provider function: none sets a callback after
+  ## initialization (l.1566).
+  let stem = "logos_" & module & "_"
+  for n in names:
+    if not n.startsWith(stem):
+      return false
+    let rest = n[stem.len .. ^1]
+    if rest.startsWith("CALL_") and rest.len > "CALL_".len:
+      continue
+    if not rest.startsWith("MODULE_") or rest["MODULE_".len .. ^1] notin moduleEntries:
+      return false
+  names.len > 0
+
 proc declaredFunctions(header, module: string): seq[string] =
   ## The functions `header` declares for `module`: each `logos_<module>_…(`.
   let stem = "logos_" & module & "_"
@@ -1322,7 +1397,7 @@ suite "ifc.kit: interface-only providers and earlier contracts (INTERFACE §2.6,
     check idleInits.load == inits + 1 and idleDestroys.load == destroys + 1
     check not bindingOf("idle_module").isProvider
 
-  test "[IMPL-DECISION G339] [IFC-0878] each kit exports exactly the functions the header of its binding declares":
+  test "[IMPL-DECISION G339] [IFC-0210] [IFC-0878] each kit exports exactly the functions the header of its binding declares, and no callback setter":
     for (b, table) in [
       (metricsOnlyBinding(), metricsOnlyModuleStaticSymbols()),
       (gaugeBinding(), gaugeModuleStaticSymbols()),
@@ -1335,6 +1410,11 @@ suite "ifc.kit: interface-only providers and earlier contracts (INTERFACE §2.6,
       check declared.len >= 3
       check sorted(table.names) == sorted(declared)
       check kitSymbols(b).get == table.names
+      check abiOnly(table.names, b.module)
+    # The kits with a configuration hook, an implemented interface and events.
+    check abiOnly(meterModuleStaticSymbols().names, "meter_module")
+    check abiOnly(sensorModuleStaticSymbols().names, "sensor_module")
+    check abiOnly(tunerModuleStaticSymbols().names, "tuner_module")
     # A confined, deferred interface-only kit exports the same and
     # `_MODULE_async_api` (DECISIONS G338).
     let b = metricsOnlyBinding()
@@ -1347,6 +1427,7 @@ suite "ifc.kit: interface-only providers and earlier contracts (INTERFACE §2.6,
         metricsOnlyModuleStaticSymbols().names &
           "logos_metrics_only_module_MODULE_async_api"
       )
+    check abiOnly(confined.get, "metrics_only_module")
     let text = kitModule(
       b, KitOptions(importPrefix: SdkImportRoot, confined: true, asyncApi: true)
     )
