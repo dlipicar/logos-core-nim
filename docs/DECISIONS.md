@@ -6603,6 +6603,58 @@ their history.
   libp2p active, rln/lez_rln installed but idle under the logos.test preset *(recommended)*; (b) also
   enable RLN in the live run. **Decision:** (a).
 
+### G441 — The blockchain module's deployment digest: BearSSL, on the bytes the library reads
+- **Kind:** IMPL, refining G422 · **Specs:** none (the module's own configuration,
+  `blockchain_config.cddl` `deployment.sha256`, stepN-3 plan §3.3); planning's rulings of 2026-11-22 (b)
+  and (4), Fable agreeing, with Fable's correction to (4).
+- **Found.** N-3.2's first build (logos-blockchain c77ce98cf) hashed `deployment.file` with a SHA-256
+  written in the module's C glue, then gave the library the path, which it read again: a file changed
+  between the check and the library's read was never checked. The library resolves `!include` relative to
+  the including file (utils/src/yaml.rs), so a copy of the checked bytes alone would break the relative
+  includes, and the digest of the main file pins none of the files it includes (the era schedule, the
+  chain parameters).
+- **Decision.**
+  - **The hash** is BearSSL's `br_sha256` through nim-bearssl (`logos_module/digest.nim`), importing only
+    `bearssl/abi/bearssl_hash`: BearSSL's hash sources (about 15 files) are new code in the module
+    library, but no new package. nim-bearssl is chronos's own dependency; the module requires
+    `bearssl >= 0.2.13 & < 0.3.0`, which holds core's locked 0.2.13, and a scratch lock of the module
+    against core's installed packages is byte-identical with and without that line, each entry equal to
+    core's `nimble.lock`'s. The kit's export list keeps BearSSL's symbols private (T1: the 10 kit
+    exports; every `_br_*` local). The glue's own SHA-256 is deleted.
+  - **With `sha256` set, the file must be self-contained** (`logos_module/deployment.nim`): no include,
+    directive, verbatim tag, escaped tag, BOM or NUL. `_init` opens the file (`O_NONBLOCK`), bounds it by
+    `fstat` on that descriptor ([IMPL] 4 MiB; not a regular file is refused) and reads it from the same
+    descriptor, once. Before hashing it refuses bytes holding `!include` anywhere, a line that starts with
+    `%` (a directive: `%TAG` builds tags from handles), `!<` (a verbatim tag), a `%` in a tag (`!`
+    followed by non-space characters containing `%`: escapes), a UTF-8 byte order mark anywhere, a 0xFE or
+    0xFF byte (UTF-16 and UTF-32 marks; never in UTF-8) or a NUL byte. No YAML parsing: the library matches
+    the tag as serde_yaml resolved it (yaml.rs:199, `INCLUDE_TAG`), and YAML can spell it without the text
+    `!include` (Fable). A missed relative include could climb out with `..` into the state directory,
+    where the keystore is; a missed absolute one reads any file (yaml.rs:208-212). Other tags, such as the
+    era schedule's `!V1`, stay allowed.
+  - **Hash the bytes the library gets** (Fable). The bytes that match are written to
+    `<state_dir>/run/deployment.yaml` (0600 in the 0700 `run/`, through a temporary name, fsync and rename)
+    and the library starts from that copy, so a file changed after the check never reaches it. The digest
+    stays a plain file digest that `sha256sum` reproduces, and it now covers the whole deployment.
+  - **Without `sha256`** nothing changes: the library reads the file named, includes and all; nothing is
+    copied, and a copy an earlier start left is removed.
+  - **The fixture.** `logos_module/fixtures/standalone-deployment-flat.yaml`: the library's standalone
+    deployment with `era/schedule/0.yaml` inlined under `eras: 0:`, made by `fixtures/flatten.nim` from the
+    files as of library commit 47f87124c; `test_units` keeps it equal to that output. N-6a's node profile
+    pins this kind of file.
+- **Tests:** `logos_module/tests/test_units.nim`: FIPS 180-4's four examples on `digest.sha256`; each
+  refused spelling and the allowed ones; the size bound on the descriptor read (and a directory, a missing
+  file, a FIFO); the fixture against `flatten`. `test_lifecycle`: the copy (0600, its bytes and the
+  system tool's digest), a mismatch refused, the library's own deployment with sha256 refused (its
+  include), the size bound, a source swapped after the check (test hook `swap_deployment`: the node
+  starts from the checked bytes), and no copy kept without sha256. Library side (documentation only:
+  the refusal applies either way), `utils/tests/lcn_deployment.rs`, Nix check
+  `logos-blockchain-utils-lcn-tests`: the loader resolves as the include a plain `!include`, a `%TAG`
+  handle, a verbatim `!<!include>`, an escaped `!incl%75de` and one after a UTF-8 BOM; `!!include` is a
+  different tag; a UTF-16 file does not load; the flattened fixture loads to the value the original
+  loads to.
+- **Status:** built 2026-11-22 (Tier 5 step N-3.2, logos-blockchain 56192e5e4 on `lcn/n3-2-sha`).
+
 ---
 
 ## 12. Platforms, build, CI and tooling
@@ -7944,6 +7996,7 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G438 | closing a confined kit's module-thread dispatcher, and what destroy left | IMPL | 12 |
 | G439 | a chronos variant in `kit-toolchains`: the kits under the libraries' own chronos | IMPL | 12 |
 | G440 | a post gate that outlives a confined kit's context | IMPL | 12 |
+| G441 | the blockchain module's deployment digest: BearSSL, on the bytes the library reads | IMPL, refining G422 | 11 |
 
 ---
 
