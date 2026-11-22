@@ -3270,7 +3270,11 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   again. **Fallback:** a call worker that never takes a job would then leave queued calls with no answer,
   so once the pool has its 128 workers, calls are queued and no call worker has taken or finished a job
   for 10 × `refuseDelay` (`CallStallFactor`; 10 s by default), the oldest queued call is refused anyway,
-  one each such period, with the diagnostic "a call worker did not take a queued call". **Spawning** still
+  one each such period, with the diagnostic "a call worker did not take a queued call". While other call
+  workers still take or finish jobs, the long bound keeps starting again, so a worker that never starts
+  beside 127 that do makes the fallback refuse nothing: queued calls are served in order as long as some
+  call worker takes or finishes a job within each 10 × `refuseDelay`, and no call waits forever while the
+  pool makes progress. **Spawning** still
   counts a spawned worker busy, in the call pool and the lifecycle pool alike: once refusing needs every
   worker inside a job, a pool at its bound with a worker not yet started refuses nothing, and below the
   bound a stalled worker is covered by the next overflow spawn. Its cost: a slow-starting worker can bring
