@@ -6317,6 +6317,10 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
     closure. No fixture of 5-3b's carries a configuration, so no earlier result changes.
   - **Units:** PKG-0060, 0337, 0339 to 0344, 0348 and 0438 are claimed here. PKG-0338, 0347 and 0351 are built here
     and stay 5-8's (G391); PKG-0345, 0346, 0349 and 0350 are 5-8's.
+  - **A returned handoff holds no files** (Fable's recheck of draft 2, R1.3). The Loader reads `local_path` later,
+    in logosd. A remove or an update that commits in between can retire and delete the record's directory first
+    (G445's deferred deletion counts only holders inside the Package Manager). That load then fails, and a new
+    handoff, from the record installed then, succeeds. 5-6a and 5-8 must not read that failure as damage.
 - **Status:** built in part 5-5-1 (I121).
 
 ### G452 — The admission bound

@@ -345,6 +345,10 @@ not select (`invalid-request`); the retained signer no longer accepted by the ac
 (`artifact-integrity-failed`); the configuration not accepted (`invalid-package`); a record that no
 longer matches its signed manifest (`MODULE_ERROR`).
 
+A returned handoff holds no files. The Loader reads `local_path` later, in logosd; a remove or an update
+that commits first can delete the directory. That load fails, and a new handoff succeeds: a race, not
+damage.
+
 **At inspection** (PKG-0060): the same declaration is built from the archive's verified entries for
 each selected module of the selected variant, after every other check. Invalid CDDL, a document
 commitment mismatch, an absent or invalid root, an unresolved non-common reference and an invalid
