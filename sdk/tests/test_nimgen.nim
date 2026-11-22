@@ -371,7 +371,7 @@ suite "ifc.nim-types: lcn-gen kit with a configuration (DECISIONS I87) [IMPL]":
           "--hints:off",
           "--nimcache:build/nimcache/lcn_gen_cli",
           "-o:" & exe,
-          "src/lcn_gen.nim",
+          "sdk/src/lcn_gen.nim",
         ]
       )
     )
@@ -427,6 +427,33 @@ suite "ifc.nim-types: lcn-gen kit with a configuration (DECISIONS I87) [IMPL]":
       check run(bad) == 1
     check not dirExists(dir / "x")
 
+  test "[IMPL-DECISION G433] lcn-gen --version prints the SDK's version from its nimble file":
+    let exe = "build/tools/lcn_gen_cli"
+    if not fileExists(exe):
+      let (built, code) = execCmdEx(
+        quoteShellCommand(
+          [
+            getCurrentCompilerExe(),
+            "c",
+            "--hints:off",
+            "--nimcache:build/nimcache/lcn_gen_cli",
+            "-o:" & exe,
+            "sdk/src/lcn_gen.nim",
+          ]
+        )
+      )
+      checkpoint built
+      require code == 0
+    var want = ""
+    for line in readFile("sdk/logos_sdk.nimble").splitLines:
+      if line.startsWith("version"):
+        want = line.split('"')[1]
+        break
+    let (output, code) = execCmdEx(quoteShellCommand([exe, "--version"]))
+    check code == 0
+    check want.len > 0
+    check output.strip == "lcn-gen " & want
+
   test "[IMPL-DECISION G339] [IFC-0880] the command line writes the interface-only, events-only, types-only and lifecycle-only kits as committed, an interface-only one only with --module":
     let exe = "build/tools/lcn_gen_cli"
     let (built, code) = execCmdEx(
@@ -437,7 +464,7 @@ suite "ifc.nim-types: lcn-gen kit with a configuration (DECISIONS I87) [IMPL]":
           "--hints:off",
           "--nimcache:build/nimcache/lcn_gen_cli",
           "-o:" & exe,
-          "src/lcn_gen.nim",
+          "sdk/src/lcn_gen.nim",
         ]
       )
     )

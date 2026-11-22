@@ -126,22 +126,29 @@ Decisions the specs leave open are recorded in [docs/DECISIONS.md](docs/DECISION
 
 Dependencies are declared once, in `logos_core.nimble` and `nimble.lock`. Both paths below use them.
 
-With Nimble (Nim 2.2.14 and nimble ≥ 0.20 on `PATH`):
+With Nimble (Nim 2.2.14 and Nimble 0.26.2 or later on `PATH`; the dev shell has both). Every
+Nimble command passes `--useSystemNim`, so Nimble uses the Nim on `PATH` and never installs or locks
+one; that Nim must be `logos_core.nimble`'s pin (DECISIONS G436). Remove any `nim-*` tree that
+Nimble 0.20.1 left in `nimbledeps/pkgs2/`: a command without the flag would compile with it instead.
 
 ```bash
-nimble setup -l
+nimble --useSystemNim setup -l
 ```
 
 ```bash
-nimble test && nimble test_refc
+nimble --useSystemNim test && nimble --useSystemNim test_refc
 ```
+
+Nimble checks none of the lock's checksums, so every `nimble test*` task, `build_runtime_lib` and
+`nimble build` first run `tools/check_installs.nim`, which stops them unless each install in
+`nimble.paths` carries the checksum `nimble.lock` records (DECISIONS G436).
 
 Under the sanitizers (DECISIONS I77): AddressSanitizer with UndefinedBehaviorSanitizer,
 ThreadSanitizer, and on Linux with clang MemorySanitizer. On macOS they build with the Xcode
 toolchain; on Linux `nix flake check` runs all three:
 
 ```bash
-nimble test_asan && nimble test_tsan
+nimble --useSystemNim test_asan && nimble --useSystemNim test_tsan
 ```
 
 Each sanitizer suite runs through `tools/sanitizer/reports.sh` (DECISIONS G442): every report,
@@ -174,11 +181,17 @@ loses the branch's value undestroyed under ORC (I92, nim-lang/Nim#26725). The fl
 python3 tools/lint/firstwrite.py src tests
 ```
 
-`lcn-gen` and `lcn-pkg` build with `--useSystemNim`. On macOS, nimble 0.20.1 crashes without it
-while looking up the Nim that `nimble.lock` names; on Linux the flag changes nothing:
+Core's programs (`lcn-pkg`, `logos-module-host`, and `logosd` and `logosctl` on POSIX hosts):
 
 ```bash
 nimble build --useSystemNim
+```
+
+`lcn-gen` is the SDK's program (`sdk/logos_sdk.nimble`, DECISIONS G433), and that file needs Nimble
+0.26. In this checkout, build it with Nim, or take the flake package below:
+
+```bash
+nim c -o:build/lcn-gen sdk/src/lcn_gen.nim
 ```
 
 On Windows (x86_64, MinGW-w64; DECISIONS G126, G334), the same two commands run from `cmd` or
@@ -269,15 +282,15 @@ The generated Nim modules (`sdk/src/logos_sdk/codegen/common_types.nim`,
 `sdk/src/logos_sdk/testing/generated/`, `sdk/tests/generated/`, `tests/generated/`) are committed, and a test fails when they are stale. To rewrite them:
 
 ```bash
-nimble regen
+nimble --useSystemNim regen
 ```
 
-After changing a requirement in `logos_core.nimble`, regenerate the lock from scratch. With nimble
-0.20.1, `nimble lock` over an existing lock empties its package list or crashes. Locking runs each
-dependency's `.nimble` script, so we lock on a separate Linux host (DECISIONS I35).
+After changing a requirement in `logos_core.nimble`, regenerate the lock from scratch, as CI's
+check does. The lock has no `nim` entry (G436). Locking runs each dependency's `.nimble` script, so
+we lock on a separate Linux host (DECISIONS I35).
 
 ```bash
-rm nimble.lock && nimble -y lock
+rm nimble.lock && nimble --useSystemNim -y lock
 ```
 
 Then:
@@ -298,7 +311,7 @@ are in [docs/HOST-CONFIG.md](docs/HOST-CONFIG.md). To build the library and `log
 `build/lib/`:
 
 ```bash
-nimble build_runtime_lib
+nimble --useSystemNim build_runtime_lib
 ```
 
 ## Running logosd
@@ -334,12 +347,18 @@ cdCDDLe, hashing, commitments and INTERFACE), the generators, the module kit and
 tests share (`logos_sdk/testing`). Core, under `src/logos_core/`, is built on it, and the daemon and
 the CLI on core. `tools/lint/layers.py` holds that direction: nothing in `sdk/` imports core.
 
+Each layer is a nimble package: `sdk/logos_sdk.nimble` (`logos_sdk`) and `logos_core.nimble`
+(`logos_core`), both at `0.1.0` (DECISIONS G433). Inside this repository core does not require the SDK:
+its exact pins hold every SDK requirement, and `tools/lint/packaging.py` (the `lint-packaging` check)
+keeps the SDK's ranges, install lists and versions in step with them (G434, G435). A module repository
+requires the SDK by name ([sdk/docs/MODULE-KIT.md](sdk/docs/MODULE-KIT.md) §9).
+
 | Path | What |
 |---|---|
 | `src/logos_core/` | The library, on `logos_sdk`. The slhdsa-c (FIPS 205) C sources are vendored under `crypto/slhdsa/` (`tools/update-slhdsa.sh`), and the BLAKE3 ones under `sdk/src/logos_sdk/crypto/blake3/` (`tools/update-blake3.sh`). |
 | `sdk/src/logos_sdk/iface/` | INTERFACE: acceptance, names, the C type mapping and its reverse (`clex`, `cliteral`, `cparse`, `cinput`, `creject`, `rmap`), call surfaces and the provider call-surface descriptor, payloads, outcomes. |
 | `sdk/src/logos_sdk/abi/` | The INTERFACE §5.2 native ABI structs as Nim types (layout checked against `logos_types.h`) and the checks each side applies to the other's structs, results and outputs. |
-| `sdk/src/logos_sdk/codegen/`, `src/lcn_gen.nim` | The Nim type generator (`nimgen`), the module kit generator (`kitgen`), the typed call helper generator (`callsgen`) and their C converter generator (`cmirror`), with their runtimes (`nimrt`, `kitrt`, `callrt`, `invokert`) and the common schema's generated mirrors (`common_mirrors`); the `lcn-gen` CLI. |
+| `sdk/src/logos_sdk/codegen/`, `sdk/src/lcn_gen.nim` | The Nim type generator (`nimgen`), the module kit generator (`kitgen`), the typed call helper generator (`callsgen`) and their C converter generator (`cmirror`), with their runtimes (`nimrt`, `kitrt`, `callrt`, `invokert`) and the common schema's generated mirrors (`common_mirrors`); the `lcn-gen` CLI. |
 | `src/logos_core/runtime/`, `src/liblogos_runtime.nim` | The Runtime: the Loader, the engine (instances, lifecycle, Runtime Control, routes, events, asynchronous calls), transported routes (`routing`, `tport`, `sessionauth`, `served`, `ports`), the host configuration and the Host Embedding API; the `liblogos_runtime` exports. |
 | `src/logos_core/daemon/`, `src/logosd.nim`, `src/logosctl.nim` | logosd and logosctl: `daemon-config.v1` and its checks, the session and trust file, the composition, the `logosctl` instance and its socket protocol, the call-evidence store and its export, the shell's output. |
 | `src/logos_core/cli/`, `src/lcn_call.nim` | The CLI module `lcn_call` (`liblcn_call`, hosted): the launcher protocol `cli.v1` and descriptor passing, arguments typed from the request rule, output, routes, the commands and the launcher `logosctl` runs. |

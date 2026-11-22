@@ -13,7 +13,7 @@
 ## (its test hooks) and its state file. Spacing is asserted with lower bounds;
 ## upper bounds are `Slow`-scaled ceilings.
 
-import std/[algorithm, atomics, locks, monotimes, os, strutils, tables, times]
+import std/[algorithm, atomics, locks, monotimes, os, sequtils, strutils, tables, times]
 import unittest2
 import ../src/logos_core/runtime/[configcheck, engine]
 from ../src/logos_core/runtime/rcevents import setRcDrainDelayForTests
@@ -289,6 +289,16 @@ proc settled(id: string): proc(): bool =
   ## probe (x86_64 orc-release CI, 2026-11-15).
   result = proc(): bool =
     diagText().count("recover_module " & id & ": answered") >= recovers(id)
+
+proc recoverAnswers(id: string): seq[string] =
+  ## How each answered `recover_module` call on `id` was answered (the
+  ## module's diagnostics), in order: the state an accepted call reached, or the
+  ## refusal.
+  let marker = "recover_module " & id & ": answered "
+  for line in diagText().splitLines:
+    let at = line.find(marker)
+    if at >= 0:
+      result.add(line[at + marker.len .. ^1])
 
 proc explain(e: Engine) =
   ## What the module and the engine reported, printed if a later check fails.
@@ -758,10 +768,27 @@ suite "orch: the reference orchestration module (RUNTIME §10.1) [IMPL-DECISION 
     let e = boot(value(defaults = starts(0), resync = 200))
     check waitUntil(e.isReady(flakyInstance(0)))
     e.reportFailure(flakyInstance(0))
-    check waitUntil(
+    # [SPEC RUNTIME l.3538] The failed realization's cleanup runs on after the
+    # report. A recovery made before it ends is NOT_READY, and one guarding the
+    # revision its commit replaced is stale; each is refunded and made again.
+    # How many there are depends on how long the cleanup takes: a check for
+    # exactly one call waited 30 s on a loaded x86_64 orc-release CI runner (run
+    # 44991040073). Exactly one is accepted.
+    let recovered = waitUntil(
       proc(): bool =
-        recovers(flakyInstance(0)) == 1 and e.state(flakyInstance(0)) == msReady
+        e.state(flakyInstance(0)) == msReady and recovers(flakyInstance(0)) >= 1 and
+          settled(flakyInstance(0))()
     )
+    let answers = recoverAnswers(flakyInstance(0))
+    if not recovered or answers.countIt(it == "ready") != 1:
+      checkpoint "recover_module calls: " & $recovers(flakyInstance(0)) & "; state: " &
+        $e.state(flakyInstance(0)) & "; answered: " & answers.join(", ")
+      e.explain()
+    check recovered
+    check answers.len == recovers(flakyInstance(0))
+    check answers.countIt(it == "ready") == 1
+    for a in answers:
+      check a == "ready" or a == "NOT_READY" or a.startsWith("stale-revision")
     e.finish()
 
   test "[RUN-1065] [RUN-0696] [TXT-0582] [IMPL-DECISION G288] a missing configuration: blocked with `configuration-missing`, the configuration event brings the probe forward":

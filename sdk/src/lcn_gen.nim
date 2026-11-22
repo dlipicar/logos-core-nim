@@ -11,9 +11,26 @@ import logos_sdk/base/hex
 import logos_sdk/iface/[accept, rmap]
 import logos_sdk/codegen/[callsgen, hostgen, kitgen, nimgen, sdkroot]
 
+const sdkVersion = block:
+  ## [DECISIONS G433] The SDK's version, read from its nimble file when lcn-gen is
+  ## compiled: beside `src/` in the repository and in Nimble's build at install,
+  ## beside this file in an installed package. `lcn-gen --version` prints it, so a
+  ## module repository can check that the program is the SDK its lock names.
+  let here = currentSourcePath().parentDir
+  var found = ""
+  for file in [here.parentDir / "logos_sdk.nimble", here / "logos_sdk.nimble"]:
+    if found.len == 0 and fileExists(file):
+      for line in staticRead(file).splitLines:
+        if line.startsWith("version"):
+          found = line.split('"')[1]
+          break
+  doAssert found.len > 0, "no version in the SDK's nimble file"
+  found
+
 const usage =
   """
 Usage:
+  lcn-gen --version
   lcn-gen logos-types [--out:DIR]
   lcn-gen logos-runtime [--out:DIR]
   lcn-gen types [--out:DIR] [--system] [--module:NAME] [PRIMARY.cddl]
@@ -265,6 +282,9 @@ proc main(): int =
         asyncApi = true
       of "help", "h":
         echo usage
+        return 0
+      of "version":
+        echo "lcn-gen " & sdkVersion
         return 0
       else:
         return fail("unknown option " & key & "\n" & usage)

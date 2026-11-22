@@ -24,7 +24,7 @@ when defined(posix):
   from ../src/logos_core/cli/launcher import
     Act, ActKind, Answer, nextAct, answerOf, Launch, LaunchFailure, launch
   import ../src/logos_core/cli/hops
-  import ./support/shortdir
+  import ./support/[shortdir, slowdown]
   import std/posix except Stat
 
   discard signal(SIGPIPE, SIG_IGN) # as the Module Host does
@@ -896,10 +896,18 @@ cliargs.multi_response = {}
   type Fake = object
     listener: cint
     busyFor: int
+    holdMs: int ## how long an unanswered connection is held: past the timeout
+    ready: Atomic[bool]
     seen: Atomic[int]
     stop: Atomic[bool]
 
   proc fakeMain(f: ptr Fake) {.thread.} =
+    # A thread's first encode loads its schema (`perThread`): under MSan that
+    # took longer than a case's whole timeout (CI run 44978149107). lcn_call's
+    # workers pay it once in a long life; this thread pays it before `ready`,
+    # outside the launch the case times.
+    discard cliSchema()
+    f.ready.store(true)
     while not f.stop.load:
       var p = TPollfd(fd: f.listener, events: POLLIN)
       if poll(addr p, 1, 20) <= 0:
@@ -908,27 +916,33 @@ cliargs.multi_response = {}
       if c < 0:
         continue
       let n = f.seen.fetchAdd(1)
-      var req = readRequest(c, 2_000)
+      var req = readRequest(c, 2_000 * Slow)
       if req.isOk:
         closeAll(req.value.fds)
       if n < f.busyFor:
-        discard writeReply(c, refusedReply(LcnCliRefusedReasonChoiceKind.Busy), 1_000)
+        discard
+          writeReply(c, refusedReply(LcnCliRefusedReasonChoiceKind.Busy), 1_000 * Slow)
       else:
-        discard atEof(c, 10_000)
+        discard atEof(c, f.holdMs)
       discard posix.close(c)
 
   proc launchAgainst(busyFor, timeoutMs: int): (Result[int, LaunchFailure], int) =
-    ## The launcher against a `Fake` that refuses `busyFor` connections;
-    ## also how many connections it made.
+    ## The launcher against a `Fake` that refuses `busyFor` connections,
+    ## started once the fake is ready; also how many connections it made.
     let dir = makeShortBase("lcnb", "/c.sock") # exFAT TMPDIRs hold no sockets
     defer:
       removeDir(dir)
-    var f = Fake(listener: unixSocket(), busyFor: busyFor)
+    var f = Fake(listener: unixSocket(), busyFor: busyFor, holdMs: 2 * timeoutMs)
     doAssert f.listener >= 0
     doAssert sockBind(f.listener, cstring(dir / "c.sock")) == 0
     doAssert sockListen(f.listener, 4) == 0
     var t: Thread[ptr Fake]
     createThread(t, fakeMain, addr f)
+    for _ in 0 ..< 10_000 * Slow:
+      if f.ready.load:
+        break
+      sleep(1)
+    doAssert f.ready.load, "the fake lcn_call did not start"
     let o = mkpipe()
     let e = mkpipe()
     let r = launch(
@@ -948,8 +962,10 @@ cliargs.multi_response = {}
     (r, f.seen.load)
 
   suite "cli.launch: busy is retried until the timeout (G344; plan §3.3) [IMPL]":
+    # Each timeout only has to outlast the fake's answers, so it is scaled; the
+    # cases are about the launcher's message at it, not its length.
     test "busy throughout is refused busy until the timeout (2)":
-      let (r, _) = launchAgainst(busyFor = 1_000, timeoutMs = 300)
+      let (r, _) = launchAgainst(busyFor = high(int), timeoutMs = 300 * Slow)
       check r.isErr
       if r.isErr:
         check r.error.exit == ExitUnreachable
@@ -959,7 +975,7 @@ cliargs.multi_response = {}
       # The first attempt is refused busy; the retry gets no answer in what is
       # left. CI's loaded refc run (44960968929) ended L-8 so: the launcher
       # said "did not take the command", though busy was the last answer.
-      let (r, seen) = launchAgainst(busyFor = 1, timeoutMs = 400)
+      let (r, seen) = launchAgainst(busyFor = 1, timeoutMs = 400 * Slow)
       check seen == 2
       check r.isErr
       if r.isErr:
@@ -967,13 +983,13 @@ cliargs.multi_response = {}
         check r.error.message == "lcn_call refused (busy) until the timeout"
 
     test "no answer at all is no reply within the timeout (2)":
-      let (r, seen) = launchAgainst(busyFor = 0, timeoutMs = 300)
+      let (r, seen) = launchAgainst(busyFor = 0, timeoutMs = 300 * Slow)
       check seen == 1
       check r.isErr
       if r.isErr:
         check r.error.exit == ExitUnreachable
         check r.error.message ==
-          "lcn_call did not take the command: no reply within 300 ms"
+          "lcn_call did not take the command: no reply within " & $(300 * Slow) & " ms"
 
   func failed(code: ErrorCode, prepared = true, cancelled = false): CallResult =
     CallResult(

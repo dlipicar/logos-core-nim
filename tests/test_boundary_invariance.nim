@@ -60,8 +60,7 @@ when defined(posix):
   let
     hostProgram = moduleHostProgram()
     probeLib = buildKitLibrary("probe_impl.nim", "probe")
-    shapesSet =
-      acceptContractSet(readFile(repo / fixtureDir / "shapes_module.cddl")).tryGet
+    shapesSet = acceptContractSet(readFile(fixtureDir / "shapes_module.cddl")).tryGet
     shapesRoot = shapesSet.primary.root
     shapesSchema = encodeCbor(schemaResponse(shapesSet, shapesRoot).tryGet)
 
