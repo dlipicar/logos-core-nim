@@ -979,9 +979,17 @@ suite "ifc.kit: what a confined kit's destroy leaves registered (DECISIONS G438)
         echo "    threads: ",
           threads, " after the warm-up, ", after, " after 200 cycles"
       check threads > 0 and after == threads
+      check resident > 0
       # DECISIONS G438: under 1 MiB (Mac 2026-11-21: 16 KiB orc, 0 refc, 16 KiB
-      # orc-release); resident memory rarely returns to the byte.
-      check resident > 0 and grown < 1024 * 1024
+      # orc-release); resident memory rarely returns to the byte. Under a
+      # sanitizer the growth is only printed: a sanitizer build allocates with
+      # malloc (-d:useMalloc), so every free goes to the sanitizer's runtime.
+      # ASan's quarantine (256 MB by default) keeps each freed chunk resident
+      # and unreused, and TSan's and MSan's allocators and shadow memory are
+      # not bounded by this either. CI run 44960968929 on 1ae98a2, ASan: 16880
+      # KiB (x86_64) and 34108 KiB (arm64), with no LeakSanitizer report.
+      when not (defined(asan) or defined(tsan) or defined(msan)):
+        check grown < 1024 * 1024
 
 suite "ifc.kit: a kit fixture built from an installed SDK (DECISIONS G435) [IMPL]":
   test "[IMPL-DECISION G435] a fixture no configuration gives search paths builds with the host's, and fails without them":
