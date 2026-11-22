@@ -24,6 +24,7 @@ lcn.daemon_config = {
   ? call_audit: lcn.dc_call_audit,
   ? routing: [* lcn.app_routing_rule],
   ? transport: lcn.app_transport,
+  ? remote: lcn.dc_remote,
   ? permissions: lcn.dc_permissions,
   ? state_transfers: [* lcn.app_state_transfer],
   ? ctl: lcn.dc_ctl,
@@ -31,7 +32,7 @@ lcn.daemon_config = {
   ? test_hooks: lcn.dc_test_hooks,
 }
 
-; runtime_instance_id: assigned by logosctl init (RUNTIME l.2665) and fixed for
+; runtime_instance_id: assigned by logosctl init (RUNTIME l.2586) and fixed for
 ; the session's life. The directories come from the session layout.
 lcn.dc_runtime = {
   runtime_instance_id: tstr .size (1..128),
@@ -146,3 +147,18 @@ lcn.dc_test_diagnostics = {
   text: tstr .size (1..1024),
   count: uint32,
 }
+
+; remote: the remote profile logos.remote.tls-tcp (G407-G410; REMOTE.md).
+; enabled: logosd starts its remote side, which needs runtime_instance_id to be
+; a lowercase UUID version 4 (RUNTIME l.2592-2593) and the remote trust input
+; (section 6a). signing: what signs the TLS handshakes with the Runtime's key;
+; absent is "logosd". key-holder needs key_holder, the logos_keyholder program,
+; and key_holder needs key-holder; "process-copy" is accepted only by a logosd
+; built with -d:logosTestSigning.
+lcn.dc_remote = {
+  enabled: bool,
+  ? signing: lcn.dc_remote_signing,
+  ? key_holder: lcn.app_path,
+}
+
+lcn.dc_remote_signing = "logosd" / "key-holder" / "process-copy"

@@ -16,6 +16,7 @@ import logos_sdk/cbor
 import ../loader/contract
 from ../runtime/authscopes import AuthorityModule
 from ../orchestration/settings import OrchestratorModule
+from ../runtime/host_config import checkProgramFile
 import ./[daemon_config_types, evkey, session, trustfile]
 
 export results, daemon_config_types
@@ -24,6 +25,9 @@ const
   DaemonConfigFormat* = "logos-core-nim.daemon-config.v1"
   HooksBuild* = defined(lcnTestHooks)
     ## [G300] This build holds test hooks; a packaged logosd never does.
+  TestSigningBuild* = defined(logosTestSigning)
+    ## [G410] This build accepts `remote.signing` "process-copy"; a packaged
+    ## logosd never does.
   OrchestratorInstance* = "orchestrator" ## [G294] the system instances' fixed ids
   AuthorityInstance* = "authority"
   CtlInstance* = "logosctl"
@@ -77,6 +81,16 @@ type
     maxAgeDays*: int
     queue*: int
 
+  RemoteSigning* = enum ## [G410] what signs the remote TLS handshakes
+    rsLogosd ## logosd itself (the default)
+    rsKeyHolder ## `logos_keyholder`, relayed through logosd
+    rsProcessCopy ## each TLS process with its own copy: test builds only
+
+  RemoteSettings* = object ## [G407, G410] `remote`
+    enabled*: bool
+    signing*: RemoteSigning
+    keyHolder*: string ## `rsKeyHolder`: the program's absolute path
+
   HookSelection* = object ## [G300] what `test_hooks` selects, in a hook build
     ctlCommandDelayMs*: Opt[uint32]
     loaderFailureAfterMs*: Opt[uint32]
@@ -90,6 +104,7 @@ type
     production*: bool ## the trust file's development switch is off
     store*: Opt[StoreSettings]
     hooks*: HookSelection
+    remote*: RemoteSettings
 
 func isReservedInstance*(id: string): bool =
   id in ReservedInstances
@@ -303,6 +318,53 @@ proc checkAudit(
       return err("call_audit.store.queue must be 16 to 1048576")
   ok(Opt.some(r))
 
+func isUuidV4*(s: string): bool =
+  ## [SPEC RUNTIME l.2592-2593] A lowercase canonical UUID version 4 (RFC
+  ## 9562): 8-4-4-4-12 lowercase hex digits, version 4, variant `10`.
+  if s.len != 36:
+    return false
+  for i, c in s:
+    if i in [8, 13, 18, 23]:
+      if c != '-':
+        return false
+    elif c notin {'0' .. '9', 'a' .. 'f'}:
+      return false
+  s[14] == '4' and s[19] in {'8', '9', 'a', 'b'}
+
+proc checkRemote*(
+    dc: LcnDaemonConfig, testSigningBuild = TestSigningBuild
+): Result[RemoteSettings, string] =
+  ## [IMPL-DECISION G407, G410] `remote`: who signs, and with `enabled` the
+  ## Runtime id the remote profiles require. `testSigningBuild` is this
+  ## build's: a test passes `false` to check a packaged logosd's refusal.
+  var r = RemoteSettings(signing: rsLogosd)
+  if dc.remote.isNone:
+    return ok(r)
+  let x = dc.remote.get
+  r.enabled = x.enabled
+  if x.signing.isSome:
+    r.signing =
+      case x.signing.get.kind
+      of LcnDcRemoteSigningKind.Logosd: rsLogosd
+      of LcnDcRemoteSigningKind.Key_holder: rsKeyHolder
+      of LcnDcRemoteSigningKind.Process_copy: rsProcessCopy
+  if r.signing == rsProcessCopy and not testSigningBuild:
+    return err(
+      "remote.signing \"process-copy\" is accepted only by a logosd built for tests"
+    )
+  if x.key_holder.isSome:
+    if r.signing != rsKeyHolder:
+      return err("remote.key_holder needs remote.signing \"key-holder\"")
+    ?checkProgramFile("remote.key_holder", x.key_holder.get)
+    r.keyHolder = x.key_holder.get
+  elif r.signing == rsKeyHolder:
+    return err("remote.signing \"key-holder\" needs remote.key_holder")
+  if r.enabled and not isUuidV4(dc.runtime.runtime_instance_id):
+    return err(
+      "runtime.runtime_instance_id must be a lowercase UUID version 4 with remote.enabled"
+    )
+  ok(r)
+
 proc checkDaemonConfig*(
     dc: LcnDaemonConfig, trust: TrustFileState, hooksBuild = HooksBuild, checkKey = true
 ): Result[DaemonConfig, string] =
@@ -315,6 +377,7 @@ proc checkDaemonConfig*(
   let ctl = ?checkCtl(dc)
   let cli = ?checkCli(dc)
   let store = ?checkAudit(dc, checkKey)
+  let remote = ?checkRemote(dc)
   ok(
     DaemonConfig(
       value: dc,
@@ -323,6 +386,7 @@ proc checkDaemonConfig*(
       production: not trust.file.development,
       store: store,
       hooks: hooks,
+      remote: remote,
     )
   )
 

@@ -115,7 +115,7 @@ const
     "lcn.daemon_config", "lcn.dc_runtime", "lcn.dc_policy", "lcn.dc_orchestration",
     "lcn.dc_restart", "lcn.dc_override", "lcn.dc_call_audit", "lcn.dc_evidence_store",
     "lcn.dc_permissions", "lcn.dc_ctl", "lcn.dc_cli", "lcn.dc_test_hooks",
-    "lcn.dc_test_diagnostics",
+    "lcn.dc_test_diagnostics", "lcn.dc_remote", "lcn.dc_remote_signing",
   ]
   TrustRules = ["lcn.trust_mark", "lcn.ev_key_binding"]
   TrustdocRules = [
@@ -488,6 +488,93 @@ suite "dc.checks: DAEMON.md §3, checks 1 to 4 [IMPL-DECISION G293] [IMPL-DECISI
     let ctlAndStore =
       dcText(extra = "\"ctl\": {\"workers\": 0}, \"call_audit\": {\"store\": {}}")
     check refusal(ctlAndStore) == "ctl.workers must be 1 to 32"
+
+# dc.remote --------------------------------------------------------------------------
+
+const RemoteId = "1b4e28ba-2fa1-4d3b-a3f5-ef19a2b0c0de" ## a lowercase UUID version 4
+
+proc remoteText(remote: string, id = RemoteId): string =
+  ## A daemon-config for Runtime `id` with `remote` as its `remote` field.
+  dcText(extra = "\"remote\": " & remote).replace("\"rt-1\"", "\"" & id & "\"")
+
+suite "dc.remote: the remote section, DAEMON.md §3 check 4 [IMPL-DECISION G407] [IMPL-DECISION G410]":
+  test "[RUN-0492] with remote.enabled the Runtime id must be a lowercase canonical UUID version 4; without it, any id":
+    let on = checked(remoteText("{\"enabled\": true}"))
+    check on.isOk
+    if on.isOk:
+      check on.get.remote.enabled and on.get.remote.signing == rsLogosd
+    const Refused = "runtime.runtime_instance_id must be a lowercase UUID version 4"
+    for id in [
+      "rt-1", # not a UUID
+      "1B4E28BA-2FA1-4D3B-A3F5-EF19A2B0C0DE", # upper case
+      "1b4e28ba-2fa1-1d3b-a3f5-ef19a2b0c0de", # version 1
+      "1b4e28ba-2fa1-4d3b-c3f5-ef19a2b0c0de", # variant 110
+      "1b4e28ba2fa14d3ba3f5ef19a2b0c0de", # not canonical: no hyphens
+      "{1b4e28ba-2fa1-4d3b-a3f5-ef19a2b0c0de}", # not canonical: braces
+      "1b4e28ba-2fa1-4d3b-a3f5-ef19a2b0c0dg", # not hex
+    ]:
+      checkpoint id
+      check Refused in refusal(remoteText("{\"enabled\": true}", id))
+      # The same id without remote, or with it off, is accepted (RUN-0490: any id).
+      check checked(remoteText("{\"enabled\": false}", id)).isOk
+      check checked(dcText().replace("\"rt-1\"", "\"" & id & "\"")).isOk
+    let off = checked(dcText())
+    check off.isOk and not off.get.remote.enabled
+    for v in ["8", "9", "a", "b"]:
+      check isUuidV4("1b4e28ba-2fa1-4d3b-" & v & "3f5-ef19a2b0c0de")
+    # init's ids qualify.
+    for _ in 0 ..< 32:
+      check isUuidV4(newRuntimeId().get)
+
+  posixTest "[IMPL-DECISION G410] signing: logosd by default; key-holder with a checked key_holder program and only then; process-copy in a test build only":
+    let holder = freshDir("kh")
+    createDir(holder)
+    let program = holder / "logos_keyholder"
+    writeFile(program, "#!/bin/sh\n")
+    setFilePermissions(program, {fpUserRead, fpUserWrite, fpUserExec})
+    let kh = checked(
+      remoteText(
+        "{\"enabled\": true, \"signing\": \"key-holder\", \"key_holder\": \"" &
+          dq(program) & "\"}"
+      )
+    )
+    check kh.isOk
+    if kh.isOk:
+      check kh.get.remote.signing == rsKeyHolder and kh.get.remote.keyHolder == program
+    check checked(remoteText("{\"enabled\": true, \"signing\": \"logosd\"}")).isOk
+    check "remote.signing \"key-holder\" needs remote.key_holder" in
+      refusal(remoteText("{\"enabled\": true, \"signing\": \"key-holder\"}"))
+    check "remote.key_holder needs remote.signing \"key-holder\"" in
+      refusal(
+        remoteText("{\"enabled\": true, \"key_holder\": \"" & dq(program) & "\"}")
+      )
+    # Checked as runtime.module_host is (checkProgramFile).
+    for (path, why) in [
+      ("relative/logos_keyholder", "must be an absolute path"),
+      (holder / "missing", "does not exist"),
+      (holder, "is not a regular file"),
+    ]:
+      checkpoint path
+      check ("remote.key_holder " & why) in
+        refusal(
+          remoteText(
+            "{\"enabled\": true, \"signing\": \"key-holder\", \"key_holder\": \"" &
+              dq(path) & "\"}"
+          )
+        )
+    setFilePermissions(program, {fpUserRead, fpUserWrite, fpUserExec, fpGroupWrite})
+    check "remote.key_holder is writable by its group or others" in
+      refusal(
+        remoteText(
+          "{\"enabled\": true, \"signing\": \"key-holder\", \"key_holder\": \"" &
+            dq(program) & "\"}"
+        )
+      )
+    let copy = dcOf(remoteText("{\"enabled\": true, \"signing\": \"process-copy\"}"))
+    check "accepted only by a logosd built for tests" in
+      checkRemote(copy, testSigningBuild = false).error
+    let accepted = checkRemote(copy, testSigningBuild = true)
+    check accepted.isOk and accepted.get.signing == rsProcessCopy
 
 # dc.compose -------------------------------------------------------------------------
 

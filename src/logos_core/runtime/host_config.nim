@@ -562,31 +562,39 @@ proc checkRouting(
     return err(configError("routing: " & error))
   ok()
 
-proc checkHostProgram(path: string): Result[void, ConfigError] =
-  ## [plan §2.2; G264] The program is protected deployment input (LOADER
-  ## l.107-108): a regular executable file, owned by the daemon's user or by
-  ## root, writable by its owner only, and no symbolic link at its last
-  ## component. Its directories are the deployment's.
-  ?checkPath("module_host", path)
+proc checkProgramFile*(field, path: string): Result[void, string] =
+  ## [plan §2.2; G264; G410] A program the Runtime's host starts is protected
+  ## deployment input (LOADER l.107-108): an absolute path to a regular
+  ## executable file, owned by the daemon's user or by root, writable by its
+  ## owner only, and no symbolic link at its last component. Its directories
+  ## are the deployment's. `field` names the setting in each message.
+  if not path.isAbsolute:
+    return err(field & " must be an absolute path")
   when defined(posix):
     var st: posix.Stat
     if posix.lstat(cstring(path), st) != 0:
-      return err(configError("module_host does not exist"))
+      return err(field & " does not exist")
     if posix.S_ISLNK(st.st_mode):
-      return err(configError("module_host is a symbolic link"))
+      return err(field & " is a symbolic link")
     if not posix.S_ISREG(st.st_mode):
-      return err(configError("module_host is not a regular file"))
+      return err(field & " is not a regular file")
     if st.st_uid != posix.geteuid() and st.st_uid != 0:
-      return err(configError("module_host is owned by another user"))
+      return err(field & " is owned by another user")
     let mode = uint32(st.st_mode)
     if (mode and 0o022'u32) != 0:
-      return err(configError("module_host is writable by its group or others"))
+      return err(field & " is writable by its group or others")
     if (mode and 0o100'u32) == 0:
-      return err(configError("module_host is not executable"))
+      return err(field & " is not executable")
     ok()
   else:
-    # [plan §2.1] The host is a stub here: nothing is hosted.
-    err(configError("module_host is not supported on this platform"))
+    # [plan §2.1] Nothing is started as a separate program here.
+    err(field & " is not supported on this platform")
+
+proc checkHostProgram(path: string): Result[void, ConfigError] =
+  ## The Module Host's program (`checkProgramFile`).
+  checkProgramFile("module_host", path).isOkOr:
+    return err(configError(error))
+  ok()
 
 proc checkModuleHost(c: var HostConfig, r: LcnAppRuntime): Result[void, ConfigError] =
   ## [plan §2.2, §3; R4] `module_host`, `module_host_env`, and no hosted

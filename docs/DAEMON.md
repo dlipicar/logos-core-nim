@@ -125,6 +125,7 @@ lcn.daemon_config = {
   ? call_audit: lcn.dc_call_audit,
   ? routing: [* lcn.app_routing_rule],
   ? transport: lcn.app_transport,
+  ? remote: lcn.dc_remote,
   ? permissions: lcn.dc_permissions,
   ? state_transfers: [* lcn.app_state_transfer],
   ? ctl: lcn.dc_ctl,
@@ -132,7 +133,7 @@ lcn.daemon_config = {
   ? test_hooks: lcn.dc_test_hooks,
 }
 
-; runtime_instance_id: assigned by logosctl init (RUNTIME l.2665) and fixed for
+; runtime_instance_id: assigned by logosctl init (RUNTIME l.2586) and fixed for
 ; the session's life. The directories come from the session layout.
 lcn.dc_runtime = {
   runtime_instance_id: tstr .size (1..128),
@@ -247,6 +248,21 @@ lcn.dc_test_diagnostics = {
   text: tstr .size (1..1024),
   count: uint32,
 }
+
+; remote: the remote profile logos.remote.tls-tcp (G407-G410; REMOTE.md).
+; enabled: logosd starts its remote side, which needs runtime_instance_id to be
+; a lowercase UUID version 4 (RUNTIME l.2592-2593) and the remote trust input
+; (section 6a). signing: what signs the TLS handshakes with the Runtime's key;
+; absent is "logosd". key-holder needs key_holder, the logos_keyholder program,
+; and key_holder needs key-holder; "process-copy" is accepted only by a logosd
+; built with -d:logosTestSigning.
+lcn.dc_remote = {
+  enabled: bool,
+  ? signing: lcn.dc_remote_signing,
+  ? key_holder: lcn.app_path,
+}
+
+lcn.dc_remote_signing = "logosd" / "key-holder" / "process-copy"
 ```
 
 The rules named `lcn.app_*` and `lcn.ap_*` are the host configuration's and the authority policy's, with
@@ -267,6 +283,7 @@ the meaning those pages give them.
 | `orchestration` | `start`: the operator instances the orchestrator starts, in order; `restart`, `overrides`, `resync_ms`: its restart policy ([HOST-CONFIG.md](HOST-CONFIG.md), "The reference orchestration module"). An override may name `logosctl` or `authority`. |
 | `call_audit` | `call_records` and `evidence` as in the host configuration; `store` (§9) needs `evidence`. |
 | `routing`, `transport` | As in the host configuration. |
+| `remote` | The remote profile `logos.remote.tls-tcp` ([REMOTE.md](REMOTE.md); DECISIONS G407-G410). `enabled`: logosd starts its remote side, which reads the remote trust input (§6a) and needs `runtime.runtime_instance_id` to be a lowercase UUID version 4 (RUNTIME l.2592-2593). `signing`: what signs the TLS handshakes with the Runtime's key, `logosd` (the default) or `key-holder`, the `logos_keyholder` program at `key_holder` (an absolute path, checked as `runtime.module_host` is); `process-copy` is refused except by a logosd built for tests. |
 | `permissions` | `profile`: absent selects the reference profile `logos-core-nim.permission-profile.v1`, since logosd always selects one; `initial`: the operator instances' settings. An entry naming a system instance or module is refused: logosd provisions those itself (§5). |
 | `state_transfers` | As in the host configuration: an operator instance's replacement continues from its state, applied once at the next start (§11, "Replacing an instance"). Neither side may be a system instance. |
 | `ctl` | The socket (§7): `socket_dir` (absolute; default `<session>/run`), `workers` (1–32, default 4), `idle_timeout_ms` (100–600000, default 30000). |
@@ -288,6 +305,8 @@ reported with the field it concerns, and logosd exits 1.
 3. The development switch: `allow-all` and `test_hooks` need it (§6).
 4. `ctl`'s and `cli`'s bounds and absolute paths; `call_audit.store` needs `call_audit.evidence`; the evidence key's file, its `kid`
    and its binding name this Runtime (§9).
+   `remote`: `key_holder` with `signing` `key-holder` only, and the reverse; `process-copy` only in a
+   test build; with `enabled`, the Runtime id is a lowercase UUID version 4.
 5. The derived host configuration passes the library's own checks (`logos_runtime_create`'s), and the
    orchestrator's value passes the module's.
 
