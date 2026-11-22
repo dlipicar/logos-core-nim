@@ -52,6 +52,11 @@ daemon_allowlist = [
   "runtime/store",
   "transport/io/peercred",
   "transport/io/sock",
+  # [G408, Tier 5 step 5-7a-1] the remote trust input: anchors checked with libcrypto, and the
+  # snapshot the tls-tcp verifier takes
+  "transport/tls/p256",
+  "transport/tls/trustsnap",
+  "transport/tls/x509",
 ]
 
 # Besides the test trees, what may import logos_sdk/testing.

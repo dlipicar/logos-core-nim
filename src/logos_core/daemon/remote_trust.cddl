@@ -1,0 +1,48 @@
+; logosd's remote trust input and its continuity mark (Tier 5 step 5-7a-1;
+; DECISIONS G408; RUNTIME §9.3.7, l.2590-2682). Each is one Logos
+; deterministic-CBOR value in a file of its own; docs/DAEMON.md §6a documents
+; them. The enrollment records are RUNTIME's published supporting schema,
+; logos.runtime_enrollment (l.2599-2632), held unchanged: lcn-gen appends the
+; mirrored rules (spec/mirrors/RNT/9.3.7.runtime-enrollment.cddl) to this
+; document, each name logos.runtime_enrollment.x renamed lcn.enrollment_x, since
+; a supporting document imports nothing (COMMITMENT §3.1 step 6). The names
+; below that start lcn.enrollment_ are those rules.
+
+; logos-core-nim.remote-trust.v1, <session>/remote/trust.cbor: the complete
+; trust-anchor set and the enrollment records, under one revision (l.2673)
+; that every offline change raises by one. Each anchor is a direct anchor
+; (owner decision B2; G324): the DER certificate the Runtime enrolled under it
+; presents.
+lcn.remote_trust = {
+  format: "logos-core-nim.remote-trust.v1",
+  revision: uint64,
+  anchors: [* lcn.remote_anchor],
+  enrollments: [* lcn.enrollment_remote_runtime_enrollment],
+}
+
+lcn.remote_anchor = {
+  id: lcn.enrollment_trust_anchor_id,
+  certificate: bstr .size (1..16384),
+}
+
+; logos-core-nim.remote-trust-mark.v1, <session>/state/remote-trust-mark.cbor:
+; the highest revision used, the BLAKE3-256 of that file's bytes, its anchor
+; set, and for each enrollment key (runtime_instance_id, profile) the newest
+; record accepted, or every record of a conflict at that revision (l.2650-2654,
+; l.2664, l.2674).
+lcn.remote_trust_mark = {
+  format: "logos-core-nim.remote-trust-mark.v1",
+  revision: uint64,
+  digest: bstr .size 32,
+  anchors: [* lcn.remote_anchor],
+  enrollments: [* lcn.enrollment_remote_runtime_enrollment],
+}
+
+; logos-core-nim.remote-peer.v1: what logosctl remote credential writes for the
+; operator to give each peer, and logosctl remote trust import reads there:
+; one Runtime's anchor and its enrollment record, which names that anchor.
+lcn.remote_peer = {
+  format: "logos-core-nim.remote-peer.v1",
+  anchor: lcn.remote_anchor,
+  enrollment: lcn.enrollment_remote_runtime_enrollment,
+}

@@ -59,7 +59,9 @@ proc newTrustSnapshot*(
 ): Result[TrustSnapshot, string] =
   ## Checks and freezes protected input: anchor identifiers unique and
   ## non-empty, each Runtime once, its id a lowercase UUIDv4, an `active` record
-  ## naming a known anchor and one or two distinct keys.
+  ## holding one or two distinct keys. An `active` record may name an anchor
+  ## outside the set, after a withdrawal (RUNTIME l.2677): it is kept, and the
+  ## verifier fails it at step 5, closed (G408, Tier 5 step 5-7a-1).
   let snap = TrustSnapshot(anchorRevision: anchorRevision)
   for (id, der) in anchors:
     if id.len == 0 or id.len > 128:
@@ -76,8 +78,6 @@ proc newTrustSnapshot*(
       return err("Runtime " & r.runtime & " has two current records")
     case r.status
     of rsActive:
-      if r.anchor notin snap.anchors:
-        return err("Runtime " & r.runtime & " names unknown trust anchor " & r.anchor)
       if r.spkis.len notin 1 .. 2:
         return err("Runtime " & r.runtime & " must hold one or two keys")
       if r.spkis.len == 2 and r.spkis[0] == r.spkis[1]:

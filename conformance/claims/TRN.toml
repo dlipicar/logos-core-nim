@@ -94,6 +94,9 @@ default = "claimed"
 # Step 5-2a: the trust snapshot and the enrollment checks (G324, G325). What needs routes,
 # tickets, provider sessions and the trust input stays tier 5 for 5-7a, as does QUIC (§8.4.2).
 "TRN-0216" = "claimed"
+# Step 5-7a-1 (DECISIONS G408): the anchors and enrollments come only from the protected remote trust
+# input, provisioned offline and accepted at logosd's start, before any connection.
+"TRN-0217" = "claimed"
 "TRN-0219" = "claimed"
 "TRN-0220" = "claimed"
 "TRN-0221" = "claimed"

@@ -883,9 +883,14 @@ suite "tls.trust":
     var upper = activeRecord(a)
     upper.runtime = IdA.toUpperAscii
     check newTrustSnapshot(1, anchors, [upper]).isErr
+    # [IMPL-DECISION G408] A record whose anchor was withdrawn is kept, and
+    # fails closed at step 5.
     var unknownAnchor = activeRecord(a)
     unknownAnchor.anchor = "nope"
-    check newTrustSnapshot(1, anchors, [unknownAnchor]).isErr
+    let withdrawn = newTrustSnapshot(1, anchors, [unknownAnchor])
+    check withdrawn.isOk
+    check verdict(withdrawn.get, a, tlsServer, IdA).reason ==
+      "5 anchor: not trust anchor nope (complete DER)"
     check newTrustSnapshot(
       1, anchors, [activeRecord(a, keys = @[a.spki, b.spki, c.spki])]
     ).isErr

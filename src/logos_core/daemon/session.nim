@@ -6,7 +6,9 @@
 ##     daemon-config.cbor       0600  lcn.daemon_config
 ##     trust.cbor               0600  lcn.package_trust (absent: the compiled-in floor)
 ##     keys/                    0700  evidence keys and their bindings
-##     state/                   0700  trust-mark.cbor, store/, modules/, evidence/
+##     remote/                  0700  with remote.enabled: trust.cbor (lcn.remote_trust)
+##     state/                   0700  trust-mark.cbor, remote-trust-mark.cbor, store/,
+##                                    modules/, evidence/
 ##     work/                    0700  runtime.work_dir; never emptied (restart locks)
 ##     run/                     0700  recreated at each start: logosctl.sock, ep/
 ##
@@ -40,6 +42,8 @@ const
   RunName* = "run"
   SocketName* = "logosctl.sock"
   EndpointName* = "ep"
+  RemoteName* = "remote" ## [G408] Tier 5 step 5-7a
+  RemoteTrustMarkName* = "remote-trust-mark.cbor" ## [G408] under `state/`
   MaxConfigBytes* = 64 * 1024 * 1024 ## [IMPL] daemon-config.cbor's bound
   SessionBusy* = "another logosd or an offline logosctl command holds this session"
 
@@ -75,6 +79,16 @@ func runDir*(s: Session): string =
 
 func endpointDir*(s: Session): string =
   s.dir / RunName / EndpointName
+
+func remoteDir*(s: Session): string =
+  s.dir / RemoteName
+
+func remoteTrustPath*(s: Session): string =
+  ## [G408] `remote/trust.cbor`, the remote trust input.
+  s.dir / RemoteName / TrustName
+
+func remoteTrustMarkPath*(s: Session): string =
+  s.dir / StateName / RemoteTrustMarkName
 
 func socketPath*(s: Session, socketDir = ""): string =
   ## The logosctl instance's socket: `run/logosctl.sock`, or in `ctl.socket_dir`.

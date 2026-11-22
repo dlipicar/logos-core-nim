@@ -1867,6 +1867,7 @@ suite "dc.docs: docs/DAEMON.md carries the schemas and the system rules verbatim
     for name in [
       "daemon/daemon_config.cddl", "daemon/trust.cddl", "package/trustdoc.cddl",
       "daemon/ctl.cddl", "daemon/logosctl.cddl", "daemon/evstore.cddl", "cli/cli.cddl",
+      "daemon/remote_trust.cddl",
     ]:
       checkpoint name
       let schema = readFile(root / "src/logos_core" / name)

@@ -57,7 +57,8 @@ marked field, as the library does (G277).
   daemon-config.cbor       0600  lcn.daemon_config (§3)
   trust.cbor               0600  lcn.package_trust (§6; absent: the compiled-in floor)
   keys/                    0700  evidence keys and their bindings (§9)
-  state/                   0700  trust-mark.cbor, store/, modules/, evidence/
+  remote/                  0700  with remote.enabled: trust.cbor, lcn.remote_trust (§6a)
+  state/                   0700  trust-mark.cbor, remote-trust-mark.cbor, store/, modules/, evidence/
   work/                    0700  runtime.work_dir; never emptied (restart locks)
   run/                     0700  recreated at each start: logosctl.sock, lcn_call.sock, ep/
 ```
@@ -66,7 +67,8 @@ marked field, as the library does (G277).
   path component that is a link where a directory is expected.
 - `lock` is an advisory lock (`flock`). logosd holds it for its whole life. Every offline `logosctl`
   command that writes (`init`, `daemon config set`, `trust anchor …`, `trust development`,
-  `trust reestablish`, `trust evidence-keys rotate`, `state purge`), and `state list`, which reads the
+  `trust reestablish`, `trust evidence-keys rotate`, `remote trust …` except `show`, `state purge`), and
+  `state list`, which reads the
   Runtime's store under the store's own lock, takes it, and is refused while logosd runs: "another logosd
   or an offline logosctl command holds this session" (exit 1). Other offline reads take no lock.
 - `run/` is emptied and recreated at each start while logosd holds the lock, so a socket left by a killed
@@ -82,8 +84,8 @@ marked field, as the library does (G277).
   sets the endpoint directory itself; there is no setting for it.
 - `work/` is the Runtime's `work_dir`. It keeps the Module Hosts' restart locks (`work/hosts/`), so it is
   never emptied.
-- `state/` holds the Runtime's persistent state (`state/store`, `state/modules`), the trust mark and the
-  call-evidence store (`state/evidence/`, §9).
+- `state/` holds the Runtime's persistent state (`state/store`, `state/modules`), the trust mark, the
+  remote trust mark (§6a) and the call-evidence store (`state/evidence/`, §9).
 - **The store is made by `init`, never by logosd.** `logosctl init` writes `state/store/runtime-state.cbor`
   holding the session's Runtime id and no instance. A start that finds no such file is refused (exit 1):
   "the Runtime state store is missing …; restore state/ from a backup, or make a new session with
@@ -634,6 +636,140 @@ switch turned off, is withdrawn from that start on, and nothing running is affec
   digits, another kid). A writer's result carries `revision` and `changed`, an anchor command's `kid`, and
   `trust development`'s `development` and `development_anchors`, the number of anchors the file marks
   `development`, whether or not anything changed.
+
+## 6a. The remote trust input
+
+With `remote.enabled` (§3), `<session>/remote/trust.cbor` is the remote trust input (RUNTIME §9.3.7,
+l.2590-2682; DECISIONS G408): the complete remote trust-anchor set and the enrollment records, under one
+revision of its own, apart from the package trust file. `state/remote-trust-mark.cbor` records the highest
+revision used, the BLAKE3-256 digest of that file's bytes, its anchor set, and for each enrollment key
+(`runtime_instance_id`, `profile`) the record accepted, or every record of a conflict. Without
+`remote.enabled` logosd reads neither file, so a session that never enables it needs neither.
+
+The enrollment records are RUNTIME's published supporting schema, `logos.runtime_enrollment`
+(l.2599-2632), held unchanged: a record another implementation writes reads as it is. A supporting schema
+imports nothing (COMMITMENT §3.1 step 6), so lcn-gen appends the mirrored rules
+(`spec/mirrors/RNT/9.3.7.runtime-enrollment.cddl`) to the document below, each name
+`logos.runtime_enrollment.x` renamed `lcn.enrollment_x`; nothing else changes, and CBOR carries no rule
+name. Each anchor is a direct anchor (G324): the DER certificate the Runtime enrolled under it presents.
+The peer file is what `logosctl remote credential` writes for each peer and `remote trust import`
+reads.
+
+```cddl
+; logosd's remote trust input and its continuity mark (Tier 5 step 5-7a-1;
+; DECISIONS G408; RUNTIME §9.3.7, l.2590-2682). Each is one Logos
+; deterministic-CBOR value in a file of its own; docs/DAEMON.md §6a documents
+; them. The enrollment records are RUNTIME's published supporting schema,
+; logos.runtime_enrollment (l.2599-2632), held unchanged: lcn-gen appends the
+; mirrored rules (spec/mirrors/RNT/9.3.7.runtime-enrollment.cddl) to this
+; document, each name logos.runtime_enrollment.x renamed lcn.enrollment_x, since
+; a supporting document imports nothing (COMMITMENT §3.1 step 6). The names
+; below that start lcn.enrollment_ are those rules.
+
+; logos-core-nim.remote-trust.v1, <session>/remote/trust.cbor: the complete
+; trust-anchor set and the enrollment records, under one revision (l.2673)
+; that every offline change raises by one. Each anchor is a direct anchor
+; (owner decision B2; G324): the DER certificate the Runtime enrolled under it
+; presents.
+lcn.remote_trust = {
+  format: "logos-core-nim.remote-trust.v1",
+  revision: uint64,
+  anchors: [* lcn.remote_anchor],
+  enrollments: [* lcn.enrollment_remote_runtime_enrollment],
+}
+
+lcn.remote_anchor = {
+  id: lcn.enrollment_trust_anchor_id,
+  certificate: bstr .size (1..16384),
+}
+
+; logos-core-nim.remote-trust-mark.v1, <session>/state/remote-trust-mark.cbor:
+; the highest revision used, the BLAKE3-256 of that file's bytes, its anchor
+; set, and for each enrollment key (runtime_instance_id, profile) the newest
+; record accepted, or every record of a conflict at that revision (l.2650-2654,
+; l.2664, l.2674).
+lcn.remote_trust_mark = {
+  format: "logos-core-nim.remote-trust-mark.v1",
+  revision: uint64,
+  digest: bstr .size 32,
+  anchors: [* lcn.remote_anchor],
+  enrollments: [* lcn.enrollment_remote_runtime_enrollment],
+}
+
+; logos-core-nim.remote-peer.v1: what logosctl remote credential writes for the
+; operator to give each peer, and logosctl remote trust import reads there:
+; one Runtime's anchor and its enrollment record, which names that anchor.
+lcn.remote_peer = {
+  format: "logos-core-nim.remote-peer.v1",
+  anchor: lcn.remote_anchor,
+  enrollment: lcn.enrollment_remote_runtime_enrollment,
+}
+```
+
+**At start**, before any remote process starts, logosd applies the input's rules (schema and the 16 MiB
+bound; anchor ids distinct; each enrollment key once; each Runtime id a lowercase UUID version 4,
+l.2592; an active record's keys distinct), reads it twice as the package trust file is read (a change in
+between refuses the start), and decides against the mark:
+
+| Mark | File | Decision |
+|---|---|---|
+| absent | any | refused: re-establish (l.2680-2682) |
+| revision r | revision > r, the enrollment rules pass | mark written, then used |
+| revision r | revision = r, same digest | accepted (identical replay; l.2676) |
+| revision r | revision = r, other digest | refused (l.2675) |
+| revision r | revision < r | refused (l.2675) |
+
+- **The enrollment rules**, for a file above the mark, key by key against the mark's record
+  (l.2650-2656): a higher revision replaces it; the same record keeps it; a different record at the same
+  revision is a **conflict**: logosd starts, that identity is rejected (G324: the verifier holds it as
+  conflicting, with every key either record names) until a later file carries a higher revision for the
+  key, and the start logs `remote-trust-report: Runtime … has 2 conflicting records …`. A `revoked`
+  record supersedes lower revisions and admits no session (l.2655), from the next start (B3).
+- **Two rules are stricter than the text** (G408): a **stale record** (a lower revision than the mark's
+  for its key) refuses the whole start, not only that peer, since the file as a whole is then older than
+  what this node accepted; and a **key the mark holds that the file omits** refuses the start, since the
+  text has no deletion, only revocation, so records are kept for good. REMOTE.md gives their cost.
+- **Refused** means logosd does not start (exit 1) and names the cause; the mark is unchanged. Both
+  inputs' checks are done before either mark moves, so nothing is refused after a mark moved except a
+  failed write (G299).
+- **The loader report** (G324 extended): the start logs `remote-trust-report:` lines, and the offline
+  commands print the same, for (1) an active `tls-tcp` record whose anchor is not in the set, or whose
+  anchor's key is not among its keys; (2) a record's key no anchor can match (under a direct anchor only
+  the anchor certificate's key can); (3) an anchor that cannot be a direct anchor (not a self-issued
+  P-256 certificate signed by its own key; a CA; Key Usage without digitalSignature; Extended Key Usage
+  without both serverAuth and clientAuth, since a Runtime is both; a critical extension validation does
+  not process) or that no active record names. Records stay unchanged and fail closed in the verifier;
+  `anchor add` refuses (3) up front. A record whose anchor was withdrawn stays in force as data and fails
+  every handshake at the anchor check.
+- **The snapshot** the remote processes take at spawn (`transport/tls/trustsnap.nim`): every anchor by its
+  id in lowercase hex at the input's revision, and the current record of each `logos.remote.tls-tcp`
+  key. Records of `logos.remote.quic` are held and unused.
+
+### The remote trust commands
+
+Every command is offline; every writer holds the session lock and is refused while logosd runs. Every
+change applies at the next start of logosd (B3), and the command says so.
+
+| Command | What it does |
+|---|---|
+| `remote trust init` | an empty input at revision 1 and its mark. Refused where either exists, which would roll back |
+| `remote trust show` | the revision, the mark, what continuity would decide (or the refusal a start would give), each anchor with its check, each record, and the report |
+| `remote trust reestablish --revision N` | after loss of the mark: a new one from the current file, when N is the file's revision and the file passes the start's rules. A conflict the lost mark held is gone (l.2680-2682) |
+| `remote trust anchor add CERT [--id HEX]` | a direct anchor from a DER certificate file, its id the certificate's BLAKE3-256 unless `--id` names one. The same anchor again changes nothing; the same id with another certificate is refused |
+| `remote trust anchor remove --id HEX` | a withdrawal (l.2677). Records that name the anchor stay, and fail closed |
+| `remote trust enroll add @RECORD` | one record, `.cbor` or `.diag`, in the published schema: a new key, or a higher revision than the record held. The same record changes nothing; a lower revision, or another record at the same revision, is refused, so no command makes a stale record or a conflict |
+| `remote trust enroll revoke RUNTIME [--profile tls-tcp\|quic]` | a `revoked` record one revision above the record held; it adds that the restart is what closes that Runtime's connections |
+| `remote trust import @PEER` | a peer file's anchor and record as one change; the record must name that anchor. `--node` and `--address`, which add the peer to `lcn_call`'s nodes, come with the nodes (5-7a-4) |
+
+- **Every writer** builds the next file with one edit and checks it as a start would, against the mark
+  when there is one, so it never writes a file logosd refuses. It writes revision + 1, or nothing when the
+  edit changes nothing ("unchanged", `"changed": false`).
+- Provisioning errors are printed locally, exit 1; no command reports through the Logos error registry
+  (RUNTIME l.2646-2649).
+- JSON: `remote trust show`'s result carries `file`, `revision`, `digest`, `mark`, `continuity`,
+  `refusal`, `anchors` (`id`, `certificate_bytes`, `problems`), `enrollments` (`runtime`, `profile`,
+  `revision`, `status`, and for an active one `anchor` and `keys`, in hex), `report` and `conflicts`. A
+  writer's result carries `revision`, `changed`, `report` and `conflicts`.
 
 ## 7. The logosctl instance and its socket
 

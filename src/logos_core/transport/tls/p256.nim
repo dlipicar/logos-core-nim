@@ -90,7 +90,8 @@ proc raw*(k: P256Key): ptr EVP_PKEY =
   ## The key for BoringSSL calls in this tree; nil once freed.
   k.pkey
 
-proc isP256(pkey: ptr EVP_PKEY): bool =
+proc isP256*(pkey: ptr EVP_PKEY): bool =
+  ## An EC key on P-256.
   if pkey == nil or EVP_PKEY_id(pkey) != EVP_PKEY_EC.cint:
     return false
   let ec = EVP_PKEY_get0_EC_KEY(pkey)

@@ -19,6 +19,7 @@ suite "core.nim-types: core's generated modules (D29)":
     check generatedHostConfigTypes().get == readFile(hostConfigTypesPath)
     check generatedDaemonConfigTypes().get == readFile(daemonConfigTypesPath)
     check generatedTrustTypes().get == readFile(trustTypesPath)
+    check generatedRemoteTrustTypes().get == readFile(remoteTrustTypesPath)
     check generatedTrustdocTypes().get == readFile(trustdocTypesPath)
     check generatedEvstoreTypes().get == readFile(evstoreTypesPath)
     check generatedCtlTypes().get == readFile(ctlTypesPath)
@@ -58,9 +59,9 @@ suite "core.nim-types: core's generated modules (D29)":
     for path in [
       caTypesPath, caKitPath, ldrTypesPath, ldrKitPath, policyTypesPath, stateTypesPath,
       orchTypesPath, orchConfigTypesPath, orchKitPath, orchStateTypesPath,
-      daemonConfigTypesPath, trustTypesPath, trustdocTypesPath, evstoreTypesPath,
-      ctlTypesPath, logosctlTypesPath, logosctlKitPath, cliTypesPath, lcnCallTypesPath,
-      lcnCallConfigTypesPath, lcnCallKitPath,
+      daemonConfigTypesPath, trustTypesPath, remoteTrustTypesPath, trustdocTypesPath,
+      evstoreTypesPath, ctlTypesPath, logosctlTypesPath, logosctlKitPath, cliTypesPath,
+      lcnCallTypesPath, lcnCallConfigTypesPath, lcnCallKitPath,
     ]:
       checkpoint path
       check stamp in readFile(path)
