@@ -1,6 +1,6 @@
 ## lcn-gen's typed call helpers [IMPL] (INTERFACE §2.7.2, §5.2, App A.5): a
 ## consumer calls the kit modules of `tests/kit` through a route handle whose
-## direct binding dispatches into them (`support/testroute`). Nim callers use
+## direct binding dispatches into them (`logos_sdk/testing/testroute`). Nim callers use
 ## `invoke`. C callers use the helpers of the generated `<stem>_calls.h`, which
 ## the typed harness drives through the shims in `sdk/tests/kit/calls_shims.c`, so
 ## every variant of the provider tests (`sdk/tests/test_kit.nim`) runs again
@@ -10,7 +10,8 @@
 import std/[strutils, typedthreads]
 import unittest2
 from logos_sdk/codegen/callrt import arenaBlocks, failArenaAllocation
-import ./support/[testroute, typedharness]
+import logos_sdk/testing/testroute
+import ./support/typedharness
 import
   logos_sdk/testing/generated/
     [meter_module_calls, sensor_module_calls, shapes_module_calls]

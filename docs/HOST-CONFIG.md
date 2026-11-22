@@ -1175,7 +1175,7 @@ this file; the others are fixed (tests set the engine limits smaller).
 | lifecycle workers (`MaxWorkers`): bind, init, destroy, completion callbacks, `observe_end` handlers, apply hooks | 64, started on demand | fixed |
 | overflow lifecycle workers (`MaxNestedWorkers`) | 64 more, one per `starvationDelay` (50 ms) while jobs wait behind 64 busy workers and none finishes; nothing is ever refused (DECISIONS G242) | fixed |
 | call workers for asynchronous calls (`MaxCallWorkers`) | 64, started on demand | fixed |
-| overflow call workers (`MaxNestedCallWorkers`) | 64 more, the same way; when calls still wait for `refuseDelay` (1 s) with all 128 busy, the oldest call that has not started completes `LOGOS_ERR_MODULE` "no call worker is available" through its callback (G242) | fixed |
+| overflow call workers (`MaxNestedCallWorkers`) | 64 more, the same way; when calls still wait for `refuseDelay` (1 s) with all 128 busy, the oldest call that has not started completes `LOGOS_ERR_MODULE` "no call worker is available" through its callback (G242). For a refusal, a call worker is busy while it runs a job: one started but not yet running one is not. If no call worker takes or finishes a job for 10 × `refuseDelay` (10 s) while calls wait at the bound, the oldest is refused anyway, one each such period | fixed |
 | asynchronous calls prepared and not released (`MaxAsyncCalls`) | 4096; one more is `LOGOS_ERR_MODULE` (INTERFACE l.1998) | fixed |
 | evaluation workers and queue (`EvalWorkers`, `EvalQueue`) | 4 threads, 256 waiting | fixed |
 | handler passes per operation (`MaxPasses`) | 8; more is an evaluation failure | fixed |

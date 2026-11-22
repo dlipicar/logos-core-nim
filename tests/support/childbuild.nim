@@ -17,8 +17,11 @@ const repoDir = currentSourcePath().parentDir.parentDir.parentDir
 proc buildChild*(
     source, name, subdir: string, defines: seq[string] = @[], mm = kitMm
 ): string =
-  ## `source` (relative to the repository) as `build/<subdir>/<variant>/<name>`;
-  ## `mm` another memory manager than the suite's (give it its own `subdir`).
+  ## `source` (relative to the repository, or absolute) as
+  ## `build/<subdir>/<variant>/<name>`; `mm` another memory manager than the
+  ## suite's (give it its own `subdir`). A source that no configuration file
+  ## covers, in an installed package, gets this build's search paths
+  ## (`hostPathArgs`, DECISIONS G435).
   let dir = repoDir / "build" / subdir / kitVariant
   createDir(dir)
   let exe = dir / name
@@ -31,7 +34,13 @@ proc buildChild*(
   for d in defines:
     args.add("-d:" & d)
   args.add(kitAuditFlags(true))
-  args.add(["--nimcache:" & dir / "nimcache", "-o:" & fresh, repoDir / source])
+  let path =
+    if source.isAbsolute:
+      source
+    else:
+      repoDir / source
+  args.add(hostPathArgs(path))
+  args.add(["--nimcache:" & dir / "nimcache", "-o:" & fresh, path])
   let lock =
     posix.open(cstring(dir / "build.lock"), O_RDWR or O_CREAT or O_CLOEXEC, 0o644)
   doAssert lock >= 0, "build.lock: " & osErrorMsg(osLastError())
@@ -40,5 +49,6 @@ proc buildChild*(
   if code == 0:
     moveFile(fresh, exe)
   discard posix.close(lock) # releases the lock
-  doAssert code == 0, "building " & name & " failed:\n" & output
+  doAssert code == 0,
+    "building " & name & " failed:\n" & output & withheldPathsNote(path)
   exe

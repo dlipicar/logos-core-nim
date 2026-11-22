@@ -2251,7 +2251,7 @@ proc cli(args: openArray[string]): (string, int) =
           "--hints:off",
           "--nimcache:build/nimcache/lcn_gen_rmap",
           "-o:" & lcnGen,
-          "src/lcn_gen.nim",
+          "sdk/src/lcn_gen.nim",
         ]
       )
     )
