@@ -80,6 +80,8 @@ const
     ## [lcnTestHooks builds] the variables a test passes to the program
   SanitizerVars = ["ASAN_OPTIONS", "UBSAN_OPTIONS", "TSAN_OPTIONS", "LSAN_OPTIONS"]
 
+const ReplyMessageMax = 512 ## [IMPL] a start's message is cut there
+
 type
   RemoteSign* = proc(
     data: pointer, process: uint64, role: TlsRole, alg: uint16, input: seq[byte]
@@ -136,9 +138,14 @@ type
     jkStop
 
   StartReply = object
-    done: bool
+    ## A start's answer, which the supervision thread writes and the caller
+    ## reads and frees. [refc] No GC'd field: under refc no thread may free
+    ## memory another thread's heap made, so the message is copied into the
+    ## reply's own bytes (`answer`).
+    done: Atomic[bool] ## set last, with release; read with acquire
     code: ErrorCode
-    message: string
+    messageLen: int
+    message: array[ReplyMessageMax, char]
 
   Job = object
     kind: JobKind
@@ -324,11 +331,18 @@ when defined(posix):
     if f.isOk:
       p.outq.add(f.get)
 
+  proc answer(r: ptr StartReply, code: ErrorCode, message: string) =
+    ## On the supervision thread: the waiting caller's answer.
+    r.code = code
+    let n = min(message.len, r.message.len)
+    if n > 0:
+      copyMem(addr r.message[0], unsafeAddr message[0], n)
+    r.messageLen = n
+    r.done.store(true, moRelease)
+
   proc reply(p: RemoteProc, code: ErrorCode, message: string) =
     if p.waiter != nil:
-      p.waiter.code = code
-      p.waiter.message = message
-      p.waiter.done = true
+      p.waiter.answer(code, message)
       p.waiter = nil
 
   proc spawnProc(
@@ -510,36 +524,29 @@ when defined(posix):
         of jkStart:
           var p = procs.getOrDefault(j.key)
           if p != nil and p.state in {psStarting, psListening}:
-            j.reply.code = ecOk
-            j.reply.done = true
+            j.reply.answer(ecOk, "")
             continue
           if shutting:
-            j.reply.code = ecNotReady
-            j.reply.message = "the Runtime is closing"
-            j.reply.done = true
+            j.reply.answer(ecNotReady, "the Runtime is closing")
             continue
           if p != nil and p.state == psWaiting:
             # Ended while enabled and waiting for its restart: now.
             let spawned = s.spawnProc(p, nextId)
             if spawned.isErr:
-              j.reply.code = ecTransport
-              j.reply.message = spawned.error
-              j.reply.done = true
+              j.reply.answer(ecTransport, spawned.error)
             else:
               p.waiter = j.reply
             continue
           if p != nil and p.pid > 0:
             # Still ending from a stop: the address is free, but its lock
             # is held until the process is reaped.
-            j.reply.code = ecTransport
-            j.reply.message = "the listener's previous process is still ending"
-            j.reply.done = true
+            j.reply.answer(
+              ecTransport, "the listener's previous process is still ending"
+            )
             continue
           let fd = bindListener(j.host, j.port)
           if fd.isErr:
-            j.reply.code = ecTransport
-            j.reply.message = fd.error
-            j.reply.done = true
+            j.reply.answer(ecTransport, fd.error)
             continue
           p = RemoteProc(
             key: j.key,
@@ -553,9 +560,7 @@ when defined(posix):
           let spawned = s.spawnProc(p, nextId)
           if spawned.isErr:
             discard posix.close(p.listenFd)
-            j.reply.code = ecTransport
-            j.reply.message = spawned.error
-            j.reply.done = true
+            j.reply.answer(ecTransport, spawned.error)
             continue
           p.waiter = j.reply
           procs[j.key] = p
@@ -734,12 +739,13 @@ proc startListener*(
   s.jobs.send(Job(kind: jkStart, key: key, host: host, port: port, reply: r))
   s.wake()
   acquire(s.lock)
-  while not r.done:
+  while not r.done.load(moAcquire):
     wait(s.cond, s.lock)
   release(s.lock)
   let code = r.code
-  let message = r.message
-  `=destroy`(r[])
+  var message = newString(r.messageLen)
+  if r.messageLen > 0:
+    copyMem(addr message[0], addr r.message[0], r.messageLen)
   freeShared(r)
   if code != ecOk:
     return err(engineError(code, message))
