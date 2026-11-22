@@ -1207,6 +1207,13 @@ What the figures say:
   catalog of 65,532 entries.
 - **CI asserts counts:** `test_pm_driver` gives each shape the same outcome, counters, work and
   retrievals under budgets of 32,768, 1,000, 64, 17 and 1 units and under none (M6).
+- **Not yet within the bound: contracts** (G455's exception; 5-3c-3 is the fix, before 5-6a). The
+  bench's shapes list no contracts. With them (`build/scratch/memprobe2.nim`, orc `-d:release`, the
+  loaded Mac, at 32,768 units), one dependency entry listing contracts on a name that has a record
+  makes one turn of 12 ms at 1,000 contracts, 0.69 s at 4,000, 1.6 s at 8,000 and 5.2 s at 18,000,
+  about what one entry of a 4 MiB manifest can list; eight manifests of ten entries listing 8,000
+  each, on names that never bind, make turns of 0.15 s. The run counts no work for a contract, and
+  the deduplication of a name's listed contracts is quadratic in them.
 
 ### The operation bound
 

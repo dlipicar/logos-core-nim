@@ -546,6 +546,8 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
     operation with `package-unavailable` (PM l.1308-1309), the four limits untouched. The synchronous API runs with
     none; 5-5-3 adds the protected key `operation_entries` and weighs its cache over the same walk. No unit changes
     status.
+  - Not yet within the turn bound: records whose dependency entries list contracts (G455's exception; one entry of
+    18,000 held the thread 5.2 s in one turn). 5-3c-3 is the fix, before 5-6a.
   - `test_resolver` drives 2,000 seeded catalogs through the run under six turn budgets against the oracle;
     `test_pm_driver` gains the engine's turns (alternation, stop, cancel, release) and each shape under every
     budget; `test_pm_hosted` a sliced operation with a second operation and a readiness event between its turns.

@@ -6390,6 +6390,18 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
       scan of one name's requirements (`pinsFor`, `needed`), one re-entered `evaluate`, one sort (the names, one
       name's versions out of order, one identity's records) and one table's growth. The bench reports the longest
       turn.
+    - **The exception: contracts** (found while measuring G477; Fable's review `fable-checks/step5-3c2-contract-turns.md`
+      and planning's ruling of 2026-11-22). A record whose dependency entries list contracts, or that provides
+      many, is not yet within the turn bound. One manifest with one dependency entry listing 18,000 contracts (PM
+      l.295), on a name that has a record, held the module thread for 5.2 s in one turn on the Mac (1,000
+      contracts: 12 ms; 4,000: 0.69 s; 8,000: 1.6 s), inside the preset and G477's proposed default; ten entries
+      of 8,000 on names that never bind gave turns of 0.15 s. The work count reads 80 for it: no contract is
+      counted. The causes: `needed` deduplicates a name's listed contracts by a scan of the list it builds
+      (quadratic in them; on master since 7e88549); contracts are encoded outside any sliced step (`fresh`, the
+      picks' and the installed candidates' provided contracts, `provided`); and they are compared under one
+      unit for an entry (`meets`, the pick filter). **5-3c-3 is the fix** (each contract interned once in a sliced
+      step, at G477's read point, as a number; the comparisons counted by the steps walked), and it is to be in
+      before 5-6a.
   - **The setup is the run's first steps** (found by the bench, not in the plan). G454's setup (the names numbered,
     each name's versions in precedence order, each identity's records in source order) ran before the first turn,
     linear in the catalog: about 0.4 s at the catalog's 65,536 entries (`package_manager.limits`) on the Mac, and
@@ -6435,7 +6447,8 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
     while a second operation, a readiness event and status calls go through, which fails with a continue that is
     only posted.
   - **Costs:** CONFORMANCE "The resumable run"; DEPLOYMENT §12.
-- **Status:** decided 2026-11-22 (planning's rulings on the 5-3c plan); built 5-3c-2 (I122).
+- **Status:** decided 2026-11-22 (planning's rulings on the 5-3c plan); built 5-3c-2 (I122). Contracts are
+  outside the turn bound until 5-3c-3 (the exception above).
 
 ---
 
@@ -6515,7 +6528,9 @@ their history.
   - `test_pm_driver`: each shape at its count and one below, under three budgets; dense(10)'s and chain(10)'s counts.
 - **Not here:** the key, its check and the log line (5-5-3); the cache's weights over the walk (5-5-3); the compact
   representation (B, next in 5-3c, by measurement; its first target is a requirement's 192 bytes, 144 of them an
-  inline `Opt[ManifestCommitment]`).
+  inline `Opt[ManifestCommitment]`). 5-3c-3 (G455's contract exception) interns each contract once per run as a
+  number, after this bound's check at the same read point, so it measures the figures above again; the count does
+  not change.
 
 ### G78 — Authority inside the CLI's embedded Runtime
 - **Kind:** FREE · **Specs:** RUNTIME §9 l.1490-1493 (internal policy allowed for local trusted
