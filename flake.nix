@@ -188,6 +188,18 @@
             }
           ];
           testVariants = baseVariants ++ sanitizerVariants;
+          # [DECISIONS G442] Under a sanitizer the suite runs through tools/sanitizer/reports.sh: every
+          # report, the suite's own and any child's (a Module Host's included), goes to a file in
+          # the check's own directory, and the check fails on any, prints them, and fails if the
+          # directory's marker is gone or a canary suite's canary is missing. A base variant's
+          # command is the bare `nim c -r`, so its derivation does not change.
+          sanitizerReports = ./tools/sanitizer/reports.sh;
+          suiteRun =
+            variant: file:
+            if variant.sanitizer or false then
+              "bash ${sanitizerReports} run --suite ${lib.removeSuffix ".nim" (baseNameOf file)} --dir \"$TMPDIR/sanitizer-reports\" -- "
+            else
+              "";
           testChecks = lib.listToAttrs (
             lib.concatMap (
               file:
@@ -205,7 +217,7 @@
                       buildPhase = ''
                         runHook preBuild
                         ${variant.setup or ""}
-                        nim c -r ${variant.flags} --outdir:build ${file}
+                        ${suiteRun variant file}nim c -r ${variant.flags} --outdir:build ${file}
                         runHook postBuild
                       '';
                     }
@@ -717,6 +729,20 @@
               python3 ${./tools/lint/packaging.py}
               touch $out
             '';
+          # [DECISIONS G442] Every environment a test gives a Module Host names the sanitizer
+          # variables (tests/support/sanitizerenv.nim), so a sanitizer check sees its hosts' reports.
+          lint-sanitizer-env = s.pkgs.runCommand "lint-sanitizer-env" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
+            cd ${s.nimSources}
+            python3 -I ${./tools/lint/sanitizerenv.py} --self-test
+            python3 -I ${./tools/lint/sanitizerenv.py} tests sdk/tests
+            touch $out
+          '';
+          # [DECISIONS G442] The sanitizer checks' report script over made-up directories and stub
+          # suites, without a sanitizer: the causes, the printing, the marker, the canaries.
+          sanitizer-reports = s.pkgs.runCommand "sanitizer-reports" { } ''
+            bash ${./tools/sanitizer/reports.sh} self-test
+            touch $out
+          '';
           # The import direction between the SDK, core, the daemon and the CLI.
           lint-layers = s.pkgs.runCommand "lint-layers" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
             cd ${s.nimSources}
