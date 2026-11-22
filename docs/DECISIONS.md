@@ -3263,6 +3263,29 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   failed, so 128 lifecycle jobs that each wait for work queued behind them can still stall. Overflow
   workers are joined by `close` like the others.
 - **Status:** decided and built 2026-11-13 (I88, part 11a). `[IMPL-DECISION G242]` in `test_async`.
+- **Revised 2026-11-22 (CI run 44978149107; ruled (b) with Fable):** for a refusal, "busy" means inside a
+  job. A call worker is inside a job from taking it off the queue until its completion message is sent, a
+  refused call it only discards included (`Shared.callInJob`); a worker spawned but not yet running one is
+  not. While a spawned call worker is not inside a job, nothing is refused and the refusal clock starts
+  again. **Fallback:** a call worker that never takes a job would then leave queued calls with no answer,
+  so once the pool has its 128 workers, calls are queued and no call worker has taken or finished a job
+  for 10 × `refuseDelay` (`CallStallFactor`; 10 s by default), the oldest queued call is refused anyway,
+  one each such period, with the diagnostic "a call worker did not take a queued call". While other call
+  workers still take or finish jobs, the long bound keeps starting again, so a worker that never starts
+  beside 127 that do makes the fallback refuse nothing: queued calls are served in order as long as some
+  call worker takes or finishes a job within each 10 × `refuseDelay`, and no call waits forever while the
+  pool makes progress. **Spawning** still
+  counts a spawned worker busy, in the call pool and the lifecycle pool alike: once refusing needs every
+  worker inside a job, a pool at its bound with a worker not yet started refuses nothing, and below the
+  bound a stalled worker is covered by the next overflow spawn. Its cost: a slow-starting worker can bring
+  an overflow spawn that was not needed, within the pool's bound. **Reason:** the Runtime counted a call
+  worker busy from its spawn (`callBusy > callSpawned` only shows that calls are queued). On an arm ASan
+  runner the 128th call worker started more than `refuseDelay` after its spawn, so the call it was about to
+  take was the oldest not begun and was refused, and it took the next. A refused call's job stays queued
+  and counted until a worker takes it, so a worker started later than twice `refuseDelay` found every
+  queued call refused and had none: a call was refused while a worker was free, which is not the capacity
+  limit MODULE_ERROR stands for. `test_async` finds the refused calls by outcome; a test hook
+  (`setLateCallWorkerForTests`, under `lcnTestHooks`) starts the 128th worker late or never.
 
 ### G243 — A static record that names a binding the host never registered
 - **Kind:** FREE · **Specs:** RUNTIME §13 (static registration, `start`), l.3442.
