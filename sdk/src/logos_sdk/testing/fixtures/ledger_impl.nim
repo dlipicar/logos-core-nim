@@ -179,7 +179,8 @@ var
     ## posts 50 ms later; 2 `meter.read` of channel 7 through `invokeAsync`; 3
     ## `publishAsync`; 4 nothing, after two foreign threads posted 10 callbacks
     ## each; 5 as 1, 300 ms later, then reads what its handlers saw; 6 until a
-    ## `wait` 12 handler finished; 7 as 1, 100 ms later. Each wait is bounded by
+    ## `wait` 12 handler finished, then 20 more turns of the loop, so its task
+    ## ends too; 7 as 1, 100 ms later. Each wait is bounded by
     ## 5 s. Every mode then stops `probe` 24's stream. [DECISIONS G440] Two
     ## modes break the module's duty on purpose: 8 leaves its wrapped route
     ## handle, subscription and prepared call unreleased (in `leftRoute` and
@@ -360,6 +361,18 @@ proc destroyModule(m: Ledger) {.async: (raises: []).} =
       except CancelledError:
         break
       waited += 10
+    # [DECISIONS G437, G338] The handler's last statement is not its task's end:
+    # its route and the kit's deferred task still await, each step a callback
+    # ready on a later turn of the loop. Had destroy ended first, teardown would
+    # complete the invocation and abandon that tail, its frames pinned
+    # (LeakSanitizer, CI run 44991040073 on fef0991). Each await below takes at
+    # least one turn and every turn runs one step of the tail, so 20 outlast its
+    # 8 or so steps however this thread is scheduled.
+    for _ in 0 ..< 20:
+      try:
+        await sleepAsync(1.milliseconds)
+      except CancelledError:
+        break
     note = "residual=" & $residualDone.load
   of 7:
     note = "woke=" & $(await m.awaitWake(100))

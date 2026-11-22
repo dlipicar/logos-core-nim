@@ -16,6 +16,7 @@
 when defined(posix):
   import std/[json, monotimes, os, sequtils, strutils, times]
   import unittest2
+  import ./support/sanitizerenv
   import logos_sdk/cbor
   import logos_sdk/crypto/blake3
   import
@@ -55,13 +56,15 @@ when defined(posix):
     StopMs = 3 * StopDeadlineMs
       ## how long a case waits for logosd to exit: past both deadlines
     HostsGoneMs = 10_000 * Slow
-    SanitizerEnv =
-      ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
-      ## the Module Host's environment allow-list here: the sanitizers' settings
     ChatterLine = "chatter: beacon_module initialized in process "
       ## `tests/kit/chatter_impl.nim`'s line, which ends with the writer's pid
     ChatterInstance = "chatter-1"
     ChatterDelayVar = "LCN_CHATTER_INIT_DELAY_MS" ## `chatter_impl`'s init delay
+    ChatterShowEnvVar = "LCN_CHATTER_SHOW_ENV"
+      ## [G442] names `chatter_impl` writes as `chatter: env <name>=<value>`
+    ChatterEnvLine = "chatter: env "
+    ChatterTraceVar = "LCN_CHATTER_SANITIZER_TRACE"
+      ## [G442] set: one sanitizer stack trace from `chatter_impl`, the canary
     MeterInstance = "meter-1" ## a hosted provider `lcn_call` is granted
     LedgerInstance = "ledger-1" ## the confined ledger, `lcn_call`'s provider
     LedgerShells = 8 ## concurrent `logosctl call`s: `cli.workers`' default
@@ -78,13 +81,13 @@ when defined(posix):
     hostExe = moduleHostProgram()
     chatterLib = buildKitLibrary("chatter_impl.nim", "lgdchatter")
     beaconRoot = @(
-      acceptContractSet(readFile(repoDir / fixtureDir / "beacon_module.cddl"))
+      acceptContractSet(readFile(fixtureDir / "beacon_module.cddl"))
       .expect("the beacon_module contract set").primary.root
     ) ## so `chatter-1` provides it: a hosted provider's endpoint is made in `run/ep`
     cliArt = cliArtifact()
     meterLib = buildKitLibrary("meter_impl.nim", "lgdmeter")
     meterRoot = @(
-      acceptContractSet(readFile(repoDir / "spec/mirrors/IFC/3.9.1.module.cddl"))
+      acceptContractSet(readFile("spec/mirrors/IFC/3.9.1.module.cddl"))
       .expect("the meter_module contract set").primary.root
     )
     # [DECISIONS G342, G335] The thread-confined ledger built with the other
@@ -98,7 +101,7 @@ when defined(posix):
           "ledger_lib.nim", "lgdledger", otherMm, exports = "ledger_module"
         )
     ledgerRoot = @(
-      acceptContractSet(readFile(repoDir / fixtureDir / "ledger_module.cddl"))
+      acceptContractSet(readFile(fixtureDir / "ledger_module.cddl"))
       .expect("the ledger_module contract set").primary.root
     )
 
@@ -1141,6 +1144,38 @@ when defined(posix):
       check hostsGone()
       check heldLocks(c.s.workDir).len == 0
       check c.lockFree
+
+    test "[IMPL-DECISION G442] a daemon's Module Host gets the five sanitizer variables with logosd's values; under a sanitizer, its stack trace lands in the check's report directory (the canary)":
+      let want = deliverySettings()
+      let c = newCase()
+      let ran =
+        c.initHosted(start = true, hostEnv = @[ChatterShowEnvVar, ChatterTraceVar])
+      check ran.code == 0
+      let d = c.start(
+        env = [(ChatterShowEnvVar, SanitizerEnv.join(",")), (ChatterTraceVar, "1")]
+      )
+      c.expectReady(d)
+      check c.reaches(ChatterInstance, "ready")
+      let pids = d.chatterLogged(1)
+      check pids.len == 1
+      let shown = want.mapIt(ChatterEnvLine & it[0] & "=" & it[1])
+      let until = getMonoTime() + initDuration(milliseconds = ReadyMs)
+      while not shown.allIt(it in d.errText) and getMonoTime() < until:
+        sleep(20)
+      let log = d.errText
+      for line in shown:
+        check line in log
+      check d.stopped == 0
+      # Its host ended: nothing more can land in its file.
+      check hostsGone()
+      when Sanitized:
+        let reports = reportsDir()
+        if reports.len == 0:
+          checkpoint(
+            "no log_path here: this suite was not run by tools/sanitizer/reports.sh"
+          )
+        elif pids.len == 1:
+          check takeCanary(reports, pids[0]) == coMoved
 
     test "[RUN-0998] [RUN-0925] [RUN-1000] [IMPL-DECISION I96] a hosted operator module replaced by state_transfers move: the next start retires it and gives its directory to the replacement, which the orchestrator starts":
       let c = newCase()

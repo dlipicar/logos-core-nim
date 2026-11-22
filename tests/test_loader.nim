@@ -65,6 +65,10 @@ var
   seenInput: LogosModuleInitInput
   seenStateDir: Recorded
   seenConfiguration: Recorded
+  seenProtected: Recorded
+    ## [G400] the protected realization input's file during `_MODULE_init`
+  seenProtectedPresent: bool
+  protectedA, protectedB: array[16, byte] ## plain memory a handoff points at
   seenTargetContext, seenLoaderContext: ptr LogosInvocationContext
   applyResult: LogosResult
   seenApply: Recorded
@@ -91,6 +95,17 @@ proc plainInit(
     if input.stateDir != nil:
       let dir = input.stateDir
       seenStateDir.record(toOpenArrayByte(dir, 0, int(dir.len) - 1))
+    seenProtected.len = 0
+    seenProtectedPresent = false
+    if input.stateDir != nil:
+      let p = $input.stateDir / ".lcn-protected-input"
+      try:
+        if getFileInfo(p, followSymlink = false).kind == pcFile:
+          let b = readFile(p)
+          seenProtectedPresent = true
+          seenProtected.record(b.toOpenArrayByte(0, b.high))
+      except IOError, OSError:
+        discard
     seenConfiguration.len = 0
     if input.configurationCbor != nil:
       seenConfiguration.record(
@@ -141,6 +156,8 @@ proc reset() =
   seenInput = default(LogosModuleInitInput)
   seenStateDir.len = 0
   seenConfiguration.len = 0
+  seenProtected.len = 0
+  seenProtectedPresent = false
   holdInit.store(false)
   holdApply.store(false)
   entered.store(false)
@@ -352,6 +369,53 @@ suite "ldr.module: realize (LOADER §6, §7, §10)":
     check h.release(a.idOf, "c1").released
     let b = h.realize("c1", "plain_consumer", "plain")
     check b.idOf != a.idOf and inits.load == 2 and destroys.load == 1
+
+  proc withProtected(buf: var array[16, byte], text: string): InboundHandoff =
+    ## A target's handoff carrying `text` as its protected realization input (G400).
+    result = targetServices()
+    for i, c in text:
+      buf[i] = byte(c)
+    result.protectedInput = cast[ptr UncheckedArray[byte]](addr buf[0])
+    result.protectedInputLen = text.len
+
+  test "[IMPL-DECISION G400] the protected realization input is written before _MODULE_init and removed when it returns, failed or not, and at release; an attempt without one removes a leftover":
+    h = open()
+    let req =
+      realizeRequest("c1", staticDescriptor("plain_consumer", "plain"), Opt.some("c1"))
+    let a = h.realizeAs(req, Opt.some(withProtected(protectedA, "input-one")))
+    check a.response.get.active.isSome
+    check seenProtectedPresent and seenProtected.text == "input-one"
+    let reserved = seenStateDir.text / ".lcn-protected-input"
+    check not fileExists(reserved)
+    writeFile(reserved, "left over")
+    check h.release(a.idOf, "c1").released
+    check not fileExists(reserved)
+    initMode = imFail
+    let failed = h.realizeAs(req, Opt.some(withProtected(protectedA, "input-one")))
+    check failed.codeOf == lecRealizationFailed
+    check seenProtectedPresent
+    check not fileExists(reserved)
+    initMode = imOk
+    writeFile(reserved, "left over")
+    let b = h.realize("c1", "plain_consumer", "plain", state = Opt.some("c1"))
+    check b.response.get.active.isSome
+    check not seenProtectedPresent
+    check not fileExists(reserved)
+    check h.release(b.idOf, "c1").released
+
+  test "[LDR-0062] [LDR-0065] [IMPL-DECISION G400] the protected input's digest is part of the request: the same bytes return the realization, other bytes or none are instance-conflict":
+    h = open()
+    let req =
+      realizeRequest("c1", staticDescriptor("plain_consumer", "plain"), Opt.some("c1"))
+    let a = h.realizeAs(req, Opt.some(withProtected(protectedA, "input-one")))
+    let again = h.realizeAs(req, Opt.some(withProtected(protectedA, "input-one")))
+    check again.idOf == a.idOf and inits.load == 1
+    let other = h.realizeAs(req, Opt.some(withProtected(protectedB, "input-two")))
+    check other.codeOf == lecInstanceConflict
+    check "input-two" notin $other.response.get.errorOf
+    check h.realizeAs(req, Opt.some(targetServices())).codeOf == lecInstanceConflict
+    check "input-one" notin $h.status("c1")
+    check h.release(a.idOf, "c1").released
 
   test "[LDR-0044] [LDR-0045] [LDR-0149] [LDR-0062] [LDR-0065] the configuration handoff reaches _MODULE_init as the same bytes; another handoff is instance-conflict; a live one needs apply_configuration":
     h = open()

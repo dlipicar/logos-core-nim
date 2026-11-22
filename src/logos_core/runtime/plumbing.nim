@@ -510,6 +510,9 @@ type
     initialSettings*: seq[InitialSettings]
       ## [SPEC RUNTIME l.2543; I93] with `permissions`: the protected initial
       ## settings of new instances; unused without it
+    protectedInputs*: seq[(string, seq[byte])]
+      ## [IMPL-DECISION G400] `protected_inputs`: each instance's protected
+      ## realization input, copied into the side table when the engine is made
     when defined(lcnTestHooks):
       loaderFaults*: LoaderFaultBox
         ## [D27 revised] a test's own fault box, armed before the open and
@@ -1126,6 +1129,11 @@ type
     calls*: Channel[CallJob]
     callWorkers*: array[MaxCallWorkers + MaxNestedCallWorkers, Thread[ptr Shared]]
     callSpawned*: int ## written by the Runtime thread only
+    callInJob*: Atomic[int]
+      ## [G242 revised] call workers inside a job, from taking it until its
+      ## completion message is sent; a worker spawned but not yet running one
+      ## is not. A refusal needs all of them inside one
+    callTaken*: Atomic[int] ## [G242 revised] call jobs taken so far
     evals*: Channel[EvalJob] ## the ordinary evaluation lane
     evalWorkers*: array[EvalWorkers, Thread[ptr Shared]]
     evalSpawned*: int ## written by the Runtime thread only

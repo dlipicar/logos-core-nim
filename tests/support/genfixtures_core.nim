@@ -2,11 +2,12 @@
 ## tests/test_gen_current.nim: the types and kits of its system contracts, its configuration and
 ## state formats, and the fixtures only core's suites use.
 
-import std/[sequtils, strutils]
+import std/[os, sequtils, strutils]
 import results
 import logos_sdk/iface/accept
 import logos_sdk/codegen/[kitgen, nimgen, sdkroot]
 import logos_sdk/testing/fixturegen
+import logos_core/schemas
 
 export fixturegen
 
@@ -58,6 +59,26 @@ const
       primary: "tests/kit/flaky_module.cddl",
       kit: true,
     ),
+    # [DECISIONS G405] The Package Manager's shell under a test name (Tier 5
+    # step 5-3b, F5): a confined kit, since the shell runs on its module thread.
+    NimFixture(
+      home: coreGeneratedDir,
+      module: "pmtest_module_types.nim",
+      primary: "tests/kit/pmtest_module.cddl",
+    ),
+    NimFixture(
+      home: coreGeneratedDir,
+      module: "pmtest_module_kit.nim",
+      primary: "tests/kit/pmtest_module.cddl",
+      kit: true,
+      confined: true,
+    ),
+    NimFixture(
+      home: coreGeneratedDir,
+      module: "pmtest_module_calls.nim",
+      primary: "tests/kit/pmtest_module.cddl",
+      calls: true,
+    ),
   ]
   coreHeaderFixtures* = [
     HeaderFixture(
@@ -75,8 +96,8 @@ const
 
 const
   hostConfigTypesPath* = "src/logos_core/runtime/host_config_types.nim"
-  hostConfigPrimary* = "src/logos_core/runtime/host_config.cddl"
-  policyPrimary* = "src/logos_core/authority/policy.cddl"
+  hostConfigPrimary* = coreSchemaDir / "runtime" / "host_config.cddl"
+  policyPrimary* = coreSchemaDir / "authority" / "policy.cddl"
 
 proc hostConfigDocument*(): string {.raises: [IOError].} =
   ## The host configuration schema, then the authority policy schema its
@@ -102,12 +123,16 @@ const
   daemonConfigPrimary* = "src/logos_core/daemon/daemon_config.cddl"
   trustTypesPath* = "src/logos_core/daemon/trust_types.nim"
   trustPrimary* = "src/logos_core/daemon/trust.cddl"
+  pmInputTypesPath* = "src/logos_core/pm/input_types.nim"
+  pmInputPrimary* = "src/logos_core/pm/input.cddl"
 
 proc daemonConfigDocument*(): string {.raises: [IOError].} =
-  ## logosd's configuration schema, then the host configuration and authority
-  ## policy schemas whose rules it reuses (DECISIONS G293): one primary
-  ## document, since all three use the `lcn` namespace.
-  readFile(daemonConfigPrimary) & "\n" & hostConfigDocument()
+  ## logosd's configuration schema, then the host configuration, authority
+  ## policy and Package Manager input schemas whose rules it reuses
+  ## (DECISIONS G293, G399): one primary document, since all four use the
+  ## `lcn` namespace.
+  readFile(daemonConfigPrimary) & "\n" & hostConfigDocument() & "\n" &
+    readFile(pmInputPrimary)
 
 proc generatedDaemonConfigTypes*(): Result[string, string] =
   ## `logos-core-nim.daemon-config.v1`'s types (G293), for `daemon/`.
@@ -119,6 +144,23 @@ proc generatedDaemonConfigTypes*(): Result[string, string] =
         importPrefix: SdkImportRoot,
         schemaAccessor: "daemonConfigSchema",
         documentsAccessor: "daemonConfigDocuments",
+      ),
+      false,
+    )
+  except IOError as e:
+    err(e.msg)
+
+proc generatedPmInputTypes*(): Result[string, string] =
+  ## The Package Manager's protected input, `logos-core-nim.pm-input.v1` (G399),
+  ## for `pm/input.nim`.
+  try:
+    let set = ?acceptContractSet(readFile(pmInputPrimary), [], [], AcceptOptions())
+    nimModule(
+      set,
+      NimOptions(
+        importPrefix: SdkImportRoot,
+        schemaAccessor: "pmInputSchema",
+        documentsAccessor: "pmInputDocuments",
       ),
       false,
     )

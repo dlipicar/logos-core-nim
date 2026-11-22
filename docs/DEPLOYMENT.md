@@ -42,7 +42,7 @@ CONFORMANCE and `conformance/`.
 | Item | BCP | Part | Verdict | Changes in | Answer | Section | Units |
 |---|---|---|---|---|---|---|---|
 | 0 | l.360-361 | this document, its two tables, every applicable choice indexed | Supported | — | this page; the second table sweeps the other specifications | [§0](#0-this-document) | BCP-0038, BCP-0039 |
-| 1 | l.363 | Package Manager source kinds; provenance profiles | None | Tier 5 | no Package Manager is deployed; no source kind, no provenance profile | [§1](#1-package-manager) | BCP-0040 |
+| 1 | l.363 | Package Manager source kinds; provenance profiles | None | Tier 5 | no packaged Package Manager (a test build until step 5-6a); no source kind for package-backed creation, no provenance profile | [§1](#1-package-manager) | BCP-0040 |
 | 2 | l.364 | protected inputs: representations, provisioning, validation, replacement, revocation | Supported | — | owner-only session files, checked at start, replaced offline for the next start | [§2](#2-protected-inputs) | BCP-0074 |
 | 3 | l.365 | authority-policy format, administration, permissions of bootstrap and system instances | Supported | — | `authority-policy.v1` in daemon-config; system rules S1–S5, and S6–S8 with the CLI module; host-ambient for system instances | [§3](#3-authority-policy) | BCP-0075 |
 | 4a | l.366 | local transport profile | Supported | — | `logos.local.unix-stream` | [§4](#4-transport) | BCP-0041 |
@@ -62,11 +62,11 @@ CONFORMANCE and `conformance/`.
 | 11 | l.373 | attribute-source integration | Supported | — | the Runtime's registry, in process: instance id and module name | [§11](#11-the-attribute-source) | BCP-0077 |
 | 24 | l.374 | Credential Store: credential, format and sealing profiles; backend durability and recovery; operation-record retention; protected delivery and activation | None | — | no Credential Store is deployed or claimed | [§25](#25-credential-store) | BCP-0101 |
 | 12a | l.375 | bounds of the Runtime, Transport, Module Loader and schema processing | Supported | — | finite, listed with their scope and exhaustion behaviour; the CLI module's in DAEMON.md §7a | [§12](#12-resource-bounds) | BCP-0047 |
-| 12b | l.375 | Package Manager bounds, dependency resolution | None | Tier 5 | no Package Manager | [§12](#12-resource-bounds) | BCP-0047 |
+| 12b | l.375 | Package Manager bounds, dependency resolution | None | Tier 5 | no packaged Package Manager; the hosted one's bounds and resolver limits are listed | [§12](#12-resource-bounds) | BCP-0047 |
 | 13 | l.376 | deadlines: start points, phases, effects, escalation, shared-process limits | Supported | — | five deadlines; a Module Host may be ended by force; a direct realization never | [§13](#13-deadlines) | BCP-0078 |
 | 14 | l.377 | configuration-preserving upgrade; verified defaults | Supported | — | the operator carries configuration; defaults come from accepted declarations | [§14](#14-upgrade-and-verified-defaults) | BCP-0079 |
 | 15 | l.378 | presentation profile | None | — | none selected (BCP l.346); the CLI writes to the launcher's terminal, which is not a presentation profile | [§15](#15-presentation) | BCP-0048 |
-| 16a | l.380 | Package Manager installation, inventory, shared state | None | Tier 5 | no Package Manager | [§1](#1-package-manager) | BCP-0080 |
+| 16a | l.380 | Package Manager installation, inventory, shared state | None | Tier 5 | no installation, inventory or shared package state | [§1](#1-package-manager) | BCP-0080 |
 | 16b | l.380 | operating-system integration material | Supported | — | a systemd user unit and a launchd agent, owner-installed | [§16](#16-facilities-that-cannot-be-supplied) | BCP-0080 |
 | 17 | l.380-382 | a facility or constraint that cannot be supplied fails | Supported | — | the dependent realization fails; nothing falls back | [§16](#16-facilities-that-cannot-be-supplied) | BCP-0081 |
 | 25 | l.383 | each finite admission pool shared by consumers or providers: whether a per-consumer or per-provider limit applies | Supported | — | each pool with its total and its per-consumer or per-provider limit, or none | [§12](#admission-pools) | BCP-0102 |
@@ -113,9 +113,10 @@ over the lines the revision changed: it added IF l.1473 and PM l.1727, the Crede
 | CFG | l.266 | the configuration-preserving upgrade workflow | [§14](#14-upgrade-and-verified-defaults) | CFG-0134, CFG-0135 |
 | PM | l.408 | whether continued execution depends on current package-signing trust | no ([§1](#1-package-manager)) | PKG-0422 |
 
-The Package Manager's own documentation duties (PM l.834 catalogs, l.857 retrieval, l.931
-installation scope, l.1183 resource access, l.1727 the storage failure model, l.1731 retention) belong
-to a Package Manager, which this deployment does not have; they come with it in Tier 5. The Credential
+The Package Manager's catalogs (PM l.834) and its bindings' retrieval and locators (PM l.854-857) are
+documented in [PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) §3 and §4, with the locator encodings in
+`sdk/docs/STORAGE-FETCH.md` §5. Its other documentation duties (l.931 installation scope, l.1183
+resource access, l.1727 the storage failure model, l.1731 retention) come with later steps of Tier 5. The Credential
 Store's (CS l.319, l.370, l.476) belong to a Credential Store, which it does not have either (§25).
 The other hits of the search are duties of a specification, a record or a message (for example HASH
 l.35, R l.3265, T l.564), not choices of a deployment.
@@ -124,23 +125,32 @@ l.35, R l.3265, T l.564), not choices of a deployment.
 
 Items 1, 5b, 5c, 10b, 12b and 16a.
 
-- **None is deployed.** `lcn-pkg`, the LGX parser and the dependency resolver are tools (DECISIONS
-  I49, I69): nothing in logosd installs, inventories or selects a package. There is no source kind, no
-  provenance profile, no installation scope, no inventory and no shared package state. A module comes
-  from daemon-config as an artifact path with its digest (§10); no package-backed creation exists.
+- **Hosted, when configured.** With a `package_manager` section in daemon-config ([DAEMON.md](DAEMON.md)
+  §3; DECISIONS G399), logosd designates one operator instance, `hosted_dynamic`, as the Package
+  Manager and hands it its `lcn.pm_input` as protected realization input (G400): the bindings to its
+  Storage providers, the protected catalog, the resolver limits and a copy of the trust file the start
+  accepted. It acquires the catalog over its own routes (G401, G402) and resolves roots against it
+  ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md)). Until step 5-6a its module is a test build
+  (`pmtest_module`), so a packaged deployment has none, and nothing installs, inventories or selects a
+  package: there is no package-backed creation, installation scope, inventory or shared package state.
+  A module still comes from daemon-config as an artifact path with its digest (§10). `lcn-pkg`, the
+  LGX parser and the resolver are also tools (DECISIONS I49, I69).
+- **The baseline only** (G404). The Package Manager applies the package-signature and
+  artifact-verification baseline (PM §4.1, §4.3, §4.4) and selects no catalog or provenance profile: it
+  provides no authenticated catalog ordering, freshness or external anchoring, and claims no package
+  provenance ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) §6).
 - **Does continued execution depend on current package-signing trust acceptance** (PM l.408)? **No.**
-  1. Nothing uses package-signing trust. The trust file holds anchors since Tier 5 step 5-3a
-     ([DAEMON.md](DAEMON.md) §6; DECISIONS G396), and logosd accepts them at each start, but no Package
-     Manager is deployed: no package is verified, installed or selected, and the accepted input logosd
-     keeps for the Package Manager (step 5-3b) is read by nothing.
+  1. No instance runs from a package. The trust file's anchors ([DAEMON.md](DAEMON.md) §6; DECISIONS
+     G396) are used by the Package Manager to verify the packages it inspects, and by nothing that
+     decides whether a module runs.
   2. No instance has a signer or package fact, direct or hosted: the Runtime's registry, the only
      source of the facts the authority reads, records an instance's id and module name and no
      selection (§11). A policy rule naming a signer or package matches nothing, and no execution
      decision depends on one.
-  3. A change of the trust file takes effect only at the next start ([DAEMON.md](DAEMON.md) §6), so
-     nothing running is affected by one.
-  4. Tier 5 (the Package Manager, its anchors and package-backed selection) is expected to change
-     this answer (DECISIONS G137, amended 2026-11-16).
+  3. A change of the trust file takes effect only at the next start ([DAEMON.md](DAEMON.md) §6), the
+     Package Manager's copy included, so nothing running is affected by one.
+  4. Package-backed selection (Tier 5) is expected to change this answer (DECISIONS G137, amended
+     2026-11-16).
 
 ## 2. Protected inputs
 
@@ -168,8 +178,9 @@ command says so.
 ## 3. Authority policy
 
 Item 3. The format is `logos-core-nim.authority-policy.v1` ([AUTHORITY-POLICY.md](AUTHORITY-POLICY.md)).
-logosd merges the operator's rules with its system rules S1–S5, and S6–S8 when it composes the CLI
-module `lcn_call`, which are derived and not configurable ([DAEMON.md](DAEMON.md) §5). Administration is
+logosd merges the operator's rules with its system rules S1–S5, S6–S8 when it composes the CLI
+module `lcn_call`, and S9–S11 with a `package_manager` section (the Package Manager's routes to its
+Storage providers), which are derived and not configurable ([DAEMON.md](DAEMON.md) §5). Administration is
 the offline path of §17. The explicit permissions of the bootstrap and system instances: host-ambient for
 `orchestrator`, `logosctl`, `authority` and `lcn_call`, written by logosd; the Module Loader holds it by construction ([PERMISSIONS.md](PERMISSIONS.md), "What BCP asks to
 be documented"). `allow-all` is accepted only with the development switch on (§20).
@@ -198,7 +209,8 @@ Items 5a–5d.
   `logos.package-signing.cose-sign1-slh-dsa-sha2-192s` and each anchor's kid, 48-byte key, exact package
   names and development marker, all under one revision with its continuity mark. It is written offline
   by `logosctl trust anchor …`, checked at every start and by every writer, and replaced at the next
-  start. No anchor may use a call-evidence key. No Package Manager reads it yet (§1).
+  start. No anchor may use a call-evidence key. The Package Manager receives a copy at every start (§1;
+  [DAEMON.md](DAEMON.md) §6), so a change applies to it at the next start.
 - **Package provenance and source evidence** (5c): none selected. The trust file's `provenance` section
   is empty, and a file that selects a profile is refused until step 5-11 (DECISIONS G398). Tier 5.
 - **Remote Runtime enrollment** (5d): the remote trust input, `<session>/remote/trust.cbor`
@@ -255,12 +267,17 @@ a separate process: its own address space, a process group of its own that is ki
 of the host, an environment of only `module_host_env`, and the descriptors listed in
 [HOST-CONFIG.md](HOST-CONFIG.md), "Module Hosts". Every process runs as logosd's user. The CLI module
 `lcn_call` is such a module; the terminal descriptors a launcher hands it are its own for the command.
+The Package Manager and its Storage providers are such modules too: logosd refuses a `package_manager`
+section whose instances are not `hosted_dynamic` (DECISIONS G399), so no archive enters logosd's process.
 
 **Not supported (8b).** Placement `process` is a separate address space, **not a sandbox** (DECISIONS
 G265): a hosted module has the filesystem, network, device, process and credential access of logosd's
 user, and no operating-system resource control is applied. A process the module moves out of its
 group or session outlives the host. Processes of the same user can reach each other's sockets and
-files (CONFORMANCE, "Properties not claimed"). Outside Tier 5: DECISIONS D16 leaves sandbox and container
+files (CONFORMANCE, "Properties not claimed"). So it is with the Package Manager's protected input: its
+file is written by logosd's Runtime, owner-only, which keeps other users out; any process of logosd's
+user can replace it between the write and the Package Manager's read ([HOST-CONFIG.md](HOST-CONFIG.md),
+`protected_inputs`). Outside Tier 5: DECISIONS D16 leaves sandbox and container
 placements and their controls out, and so does the Tier 5 plan (its area K).
 
 **The data path.**
@@ -282,6 +299,9 @@ placements and their controls out, and so does the Tier 5 plan (its area K).
   module configuration values (stored by the Runtime, handed to a host at init and apply), a provider's
   call surface, call-record roots, and reported failure text in diagnostics (attributed, §23). A Module
   Host's stdout and stderr are inherited descriptors and do not pass through logosd's memory.
+- **The Package Manager's data path** (G402): the catalog and the archives travel over its own routes
+  from the Storage provider's process to the Package Manager's; logosd issues the routes and decides
+  their Hello, and never carries a catalog, an archive or the trust input.
 - **The trust in the host program** (DECISIONS G273, G274): a hosted provider's host checks and
   commits its calls and reports its call records' roots; what it sends a consumer and those roots rest
   on the host program. CONFORMANCE, "Properties not claimed", says so.
@@ -296,6 +316,13 @@ Item 9.
   mapped are the bytes verified. `run/` is recreated at each start; `work/` is never emptied.
 - **State realization.** An instance with persistent state gets `state/modules/<assignment>`, keyed by
   its state assignment, not its instance id (DECISIONS G143).
+- **Reserved names.** `.lcn-protected-input` and its temporary names `.lcn-protected-input.<32 hex>`
+  are reserved in every state directory (DECISIONS G400): the protected realization input's file,
+  written before each realization attempt's initialization and removed when it returns, at release
+  and at retirement. A state transfer by `copy` skips them; a backup of the state directory does
+  not, so it may hold the input while an attempt runs ([HOST-CONFIG.md](HOST-CONFIG.md)). The Package
+  Manager's own state is `catalog.kept`, the last catalog it accepted, under its state assignment
+  ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) §3).
 - **Retention.** Retiring an instance keeps its state directory ("retired; its state directory is
   kept"). Nothing removes it but `logosctl state purge` (§19).
 - **Cleanup.** At start the Runtime removes the `+transfer-…` and `+purge-…` names an interrupted
@@ -349,7 +376,27 @@ reached:
 - schema processing: the INTERFACE §5.3 limits (`MaxSchemaNodes` and the others in `iface/accept.nim`);
 - the daemon: [DAEMON.md](DAEMON.md) §7 "Limits" and §9 "Limits";
 - the Package Manager's resolver: [CONFORMANCE.md](CONFORMANCE.md), "Resolver limits" (the protected
-  policy supplies the values; these are their maxima).
+  policy supplies the values; these are their maxima). logosd supplies `package_manager.resolver_limits`,
+  or its preset when the section names none ([DAEMON.md](DAEMON.md) §3; DECISIONS G443: 256 names,
+  depth 32, 256 candidates per name, 1,024 attempts). A new preset changes the results of a
+  configuration that names no limits, so an operator who needs results fixed across upgrades writes the
+  four values. A limit that ends an operation answers `dependency-unavailable`, as a missing dependency
+  does; the Package Manager's log names the limit;
+  - **What raising a limit costs.** Nothing but the limits ends a resolution (PM l.1279-1280), and each
+    step of one holds the Package Manager's module thread. At the preset an honest closure holds it
+    under 1 s for each step. A package with a maximum-size manifest (4 MiB, about 80,000 dependency
+    entries) anywhere in the closure costs about 55 ms (Mac) to 75 ms (Linux) for each attempt, so
+    `assignment_attempts` sets the longest hold: about 56 to 76 s at the preset's 1,024, and about
+    14.5 h at the maximum, by extrapolation. Raising `dependency_depth` and `partial_closure_names` lets a dense
+    closure grow: 256 names take about 0.6 to 0.7 s for the longest step and about a minute in all, and
+    4,096 names about 50 min and 48 days, by extrapolation. CONFORMANCE's tables give the measured
+    figures on both machines. Any accepted signer with a package in the closure can bring these costs,
+    not only the root's, so a raised limit is the operator's choice for every package its trust admits;
+- the Package Manager's own bounds, `package_manager.limits` ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md)
+  §2): one archive (`archive_bytes`, 1 GiB by default, held in memory in the Package Manager's process
+  while it is inspected), the catalog document (4 MiB) and its entries (65,536), and the verification
+  cache (256 entries). A larger archive leaves its candidate unavailable; a larger catalog is refused
+  and the one in use stays; the cache drops its least recently used entry.
 
 ### Admission pools
 
@@ -387,7 +434,8 @@ block lists each pool's total and per-consumer limit (`admission_pools`; the aud
   by default). A subscription's own event queue is not shared.
 - **The `logosctl` socket's workers** (`ctl.workers`, [DAEMON.md](DAEMON.md) §7) serve shell clients,
   which reach the Runtime as one consumer, the `logosctl` instance.
-- **No Package Manager** is deployed, so it has no pool.
+- **The Package Manager** has no pool: its bounds (above) are its own, and it reaches its providers
+  as one consumer, through the routes and Transport totals above.
 
 ## 13. Deadlines
 
@@ -413,6 +461,12 @@ Item 13. Five deadlines, in milliseconds, each 1 to 3,600,000 where configurable
   the host process must end"). At shutdown logosd retries the Runtime's destruction for `shutdown_grace_ms` plus 5 s; ending
   the process is the remaining escalation, which a service manager's stop timeout (90 s) performs.
 - **Loader loss** ends logosd with exit 4 ([DAEMON.md](DAEMON.md) §15).
+- **The Package Manager's read deadline** (`package_manager.limits.read_deadline_ms`, 300000 by
+  default, 1 to 86400000): it bounds one call to a Storage provider (`stat_object`, `read_object`,
+  `fetch_readiness`) and the wait for `ready` after `not-ready`. It sits above the provider's own bound
+  for one call (storage_module's longest is 180 s at its defaults), so it catches a provider that broke
+  its bound; availability comes from the provider's `unavailable`, never from the deadline
+  ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) §4).
 
 ## 14. Upgrade and verified defaults
 

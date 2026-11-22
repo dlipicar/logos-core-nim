@@ -29,6 +29,7 @@ lcn.daemon_config = {
   ? state_transfers: [* lcn.app_state_transfer],
   ? ctl: lcn.dc_ctl,
   ? cli: lcn.dc_cli,
+  ? package_manager: lcn.dc_package_manager,
   ? test_hooks: lcn.dc_test_hooks,
 }
 
@@ -128,6 +129,23 @@ lcn.dc_cli = {
   ? streams: uint8,
   ? idle_timeout_ms: uint32,
   ? route_idle_ms: uint32,
+}
+
+; The Package Manager (DECISIONS G399; DAEMON.md §3; docs/PACKAGE-MANAGER.md):
+; instance names an operator entry of modules, hosted_dynamic with placement
+; process, with a state_assignment and no configuration; storage holds at
+; least one binding, each naming another hosted_dynamic entry, with unique
+; names; catalog.storage names one of them. resolver_limits, when present,
+; holds all four limits; absent, logosd's preset applies (DAEMON.md §3). The
+; lcn.pm_* rules are pm/input.cddl's, resolved in one document as lcn.app_*
+; are. logosd composes the instance's lcn.pm_input from this section and the
+; trust file the start accepted.
+lcn.dc_package_manager = {
+  instance: lcn.app_instance_id,
+  storage: [* lcn.pm_binding],
+  catalog: lcn.pm_catalog_ref,
+  ? resolver_limits: lcn.pm_resolver_limits,
+  ? limits: lcn.pm_limits,
 }
 
 ; Accepted only by a logosd built with lcnTestHooks, with the development

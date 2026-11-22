@@ -1,0 +1,60 @@
+; The Package Manager's protected input (Tier 5 step 5-3b; DECISIONS G399,
+; G400; docs/PACKAGE-MANAGER.md §2). One Logos deterministic-CBOR value that
+; the embedding host writes (logosd's compose) and the hosted Package Manager
+; reads at initialization through the protected realization input, never
+; through configuration (CONFIGURATION l.58). Closed: an unknown field is
+; refused. The rules the schema cannot say are pm/input.nim's.
+lcn.pm_input = {
+  format: "logos-core-nim.pm-input.v1",
+  trust: bstr .size (1..1048576),   ; the session trust file's accepted bytes
+  storage: [* lcn.pm_binding],      ; at least one, by rule
+  catalog: lcn.pm_catalog_ref,
+  resolver_limits: lcn.pm_resolver_limits,
+  ? limits: lcn.pm_limits,
+}
+
+; One Storage binding: the name an LGX source's `storage` names
+; (PACKAGE MANAGER l.854-857), and the lcn.storage_fetch provider instance
+; that serves it. Names are unique, by rule.
+lcn.pm_binding = {
+  binding: tstr .size (1..128),
+  instance: tstr .size (1..128),
+}
+
+; The protected catalog (G401): the catalog document's binding, locator and
+; BLAKE3-256 digest. `storage` names one of the bindings, by rule.
+lcn.pm_catalog_ref = {
+  storage: tstr .size (1..128),
+  object: bstr .size (1..4096),
+  digest: bstr .size 32,
+}
+
+; The resolver limits (PACKAGE MANAGER l.1241-1254; G399 as ruled on
+; 2026-11-22): protected policy input, required, with all four keys; each a
+; positive integer no greater than its maximum (package/resolver.nim's
+; MaxResolverLimits, docs/CONFORMANCE.md). The Package Manager has no default:
+; the embedding host resolves them (logosd: the operator's values, or its
+; preset, docs/DAEMON.md). Not in `limits`, where an absent key is a default.
+lcn.pm_resolver_limits = {
+  partial_closure_names: uint64,
+  dependency_depth: uint64,
+  candidates_per_name: uint64,
+  assignment_attempts: uint64,
+}
+
+; The bounds, each checked by rule as written here; an absent one is its
+; default.
+; archive_bytes: 1..1073741824, default 1073741824 (1 GiB): one archive,
+;   held in memory while it is inspected.
+; catalog_bytes: 1..4194304, default 4194304 (4 MiB): the catalog document.
+; catalog_entries: 1..65536, default 65536.
+; cache_entries: 1..4096, default 256: the verification cache.
+; read_deadline_ms: 1..86400000, default 300000: one call, and the wait for
+;   `ready` after `not-ready` (G402).
+lcn.pm_limits = {
+  ? archive_bytes: uint64,
+  ? catalog_bytes: uint32,
+  ? catalog_entries: uint32,
+  ? cache_entries: uint16,
+  ? read_deadline_ms: uint32,
+}

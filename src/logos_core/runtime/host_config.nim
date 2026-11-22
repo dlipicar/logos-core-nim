@@ -94,6 +94,17 @@ type
       ## [SPEC RUNTIME l.3411-3418; I96; G306] `state_transfers`, checked as
       ## far as the configuration alone allows; bootstrap checks the rest
       ## against the store
+    protectedInputs*: seq[ProtectedInput]
+      ## [IMPL-DECISION G400] `protected_inputs`, in configuration order: each
+      ## names a listed instance with a state assignment, at most once
+
+  ProtectedInput* = object
+    ## [IMPL-DECISION G400] One instance's protected realization input: the
+    ## Loader writes `input` to `<state_dir>/.lcn-protected-input` at each
+    ## realization attempt (`protinput`). Never in a record, an error, a log
+    ## line or an event.
+    instance*: string
+    input*: seq[byte]
 
   ConfigError* = object
     message*: string
@@ -701,6 +712,32 @@ proc checkTransfers(
   # is both, and one start never reads a state it has just moved.
   ok()
 
+proc checkProtectedInputs(
+    c: var HostConfig, entries: Opt[seq[LcnAppProtectedInput]]
+): Result[void, ConfigError] =
+  ## [IMPL-DECISION G400] Each entry names a listed instance with a state
+  ## assignment, and no instance has two. Messages name the instance, never
+  ## the bytes.
+  if entries.isNone:
+    return ok()
+  if entries.get.len == 0:
+    return err(configError("protected_inputs is present but empty"))
+  var listed = initTable[string, ModuleRecord]()
+  for m in c.modules:
+    listed[m.instance] = m.record
+  var seen = initHashSet[string]()
+  for e in entries.get:
+    let what = "protected_inputs: " & e.instance
+    if e.instance notin listed:
+      return err(configError(what & " is not listed in modules"))
+    if listed.getOrDefault(e.instance).stateAssignment.isNone:
+      return err(configError(what & " has no state_assignment"))
+    if e.instance in seen:
+      return err(configError(what & " has two entries"))
+    seen.incl(e.instance)
+    c.protectedInputs.add(ProtectedInput(instance: e.instance, input: e.input))
+  ok()
+
 proc decodeHostConfig*(
     format: string, data: openArray[byte]
 ): Result[HostConfig, ConfigError] =
@@ -879,6 +916,7 @@ proc decodeHostConfig*(
   ?checkPath("endpoint_dir", c.endpointDir)
   ?checkModuleHost(c, cfg.runtime)
   ?checkTransfers(c, cfg.state_transfers)
+  ?checkProtectedInputs(c, cfg.protected_inputs)
   ok(c)
 
 proc parseHostConfig*(

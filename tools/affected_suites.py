@@ -28,6 +28,11 @@ each one the tool follows every file the suite builds or reads:
   inputs, documents and contracts read by path, `{.compile.}` sources and kit sources built at run
   time. A path naming a directory reaches every file under it, except the trees too broad to name
   a fixture (`BROAD`). A Nim or C file reached that way is followed in turn;
+- in a file that walks a directory (`walkDir`, `walkDirRec`, `walkFiles`, `walkDirs`,
+  `walkPattern`), each `BROAD` tree a run ends at (`"src"`, `"sdk" / "src"`, `repo / "src"`):
+  every file under it, read and not followed, since such a suite reads the whole tree
+  (test_deployment, test_orchestration, test_transport). A run that goes on past the tree with a
+  name chosen at run time (`root / "src/logos_core" / name`) reads one file there, not the tree;
 - `#include "..."` in C sources and headers;
 - for each main module, a suite or a Nim source a suite builds at run time: `X.nims` beside it and
   each `config.nims` in its directory and the directories above.
@@ -36,9 +41,10 @@ A change to a build input (`EVERYTHING`: the Nimble files, the lock, the flake a
 dependency files) reaches every suite. Paths inside comments do not count, so a doc comment that
 names a document does not tie its suite to it. A path deleted by the change still matches the
 literals that name it. What the tool cannot see: a path built at run time from parts that are not
-literals or path constants. The result can be wider than what a suite reads: a module that uses a
-directory, such as kitbuild's kit source directories, ties every suite that imports it to every
-file there.
+literals or path constants, and a walk in one module of a tree another module names. The result
+can be wider than what a suite reads: a module that uses a directory, such as kitbuild's kit source
+directories, ties every suite that imports it to every file there, and a file that walks ties to
+each whole tree it names even where it walks only part of it (test_package's layers).
 """
 
 import argparse
@@ -81,6 +87,8 @@ BROAD = {
     "tests",
     "tools",
 }
+# The iterators that walk a directory: a file calling one reads whole trees it names (see `walked`).
+WALKS = {"walkDir", "walkDirRec", "walkFiles", "walkDirs", "walkPattern"}
 NIM = (".nim", ".nims")
 C = (".c", ".h", ".cc", ".cpp", ".hpp", ".m")
 PATHLIKE = re.compile(r"^[A-Za-z0-9_.+/-]+$")
@@ -97,6 +105,8 @@ class Tree:
         self._cache = {}
         self._parsed = {}
         self._named = {}
+        self._ends = {}
+        self._walks = {}
         self._exported = None
 
     @staticmethod
@@ -158,10 +168,11 @@ class Tree:
             out |= self.evaluate(self.parsed(f)[1][name][1], f, busy | {(f, name)})
         return out
 
-    def evaluate(self, terms, where, busy=frozenset()):
+    def evaluate(self, terms, where, busy=frozenset(), end_only=False):
         """The strings a run of terms makes. An identifier that stands for nothing splits the run,
         and each part counts alone: `repoDir / fixtureDir / "x.cddl"` gives fixtureDir's value
-        joined with "x.cddl"."""
+        joined with "x.cddl". With `end_only`, only the last part, and only when nothing that stands
+        for nothing follows it: `repo / "src"` gives "src", `root / "src" / name` nothing."""
         out, acc, sep = set(), {""}, None
         for kind, text in terms + [("id", None)]:
             if kind == "sep":
@@ -169,6 +180,8 @@ class Tree:
                 continue
             vals = {text} if kind == "str" else (self.value(text, where, busy) if text else set())
             if not vals:
+                if end_only and text is None:
+                    return {a for a in acc if a}
                 out |= {a for a in acc if a}
                 acc, sep = {""}, None
                 continue
@@ -177,17 +190,27 @@ class Tree:
                 acc = set(sorted(acc)[:256])
         return out
 
-    def paths_named(self, path):
-        """Every path-shaped string a Nim file's runs make, once per tree."""
-        if path not in self._named:
+    def paths_named(self, path, end_only=False):
+        """Every path-shaped string a Nim file's runs make (with `end_only`, at their ends), once
+        per tree."""
+        cache = self._ends if end_only else self._named
+        if path not in cache:
             out = set()
             for terms in self.parsed(path)[2]:
-                for text in self.evaluate(terms, path):
+                for text in self.evaluate(terms, path, end_only=end_only):
                     text = text.strip("/")
                     if len(text) <= 200 and PATHLIKE.match(text) and text.strip("./"):
                         out.add(text)
-            self._named[path] = sorted(out)
-        return self._named[path]
+            cache[path] = sorted(out)
+        return cache[path]
+
+    def walks(self, path):
+        """Whether a Nim file calls an iterator that walks a directory (comments do not count)."""
+        if path not in self._walks:
+            self._walks[path] = any(
+                tok[0] == "id" and tok[1] in WALKS for tok in layers.tokenize(self.read(path))
+            )
+        return self._walks[path]
 
 
 def git(repo, *args):
@@ -368,6 +391,21 @@ class Graph:
         self._edges[f] = out
         return out
 
+    def walked(self, f):
+        """The files a Nim file that walks reads through each `BROAD` tree a run of it ends at:
+        every file under the tree (`for root in ["src", "sdk" / "src"]: walkDirRec(root)`)."""
+        if f not in self.tree.files or not f.endswith(".nim") or not self.tree.walks(f):
+            return set()
+        out = set()
+        for text in self.tree.paths_named(f, end_only=True):
+            for base in (os.path.dirname(f), ""):
+                p = os.path.normpath(os.path.join(base, text))
+                if p in BROAD and p not in ("", ".") and p in self.dirs:
+                    out |= self.dirs[p]
+                    break
+        out.discard(f)
+        return out
+
     def main_configs(self, main):
         """What configures a main module's build (a suite, or a kit source a suite builds at run
         time): `X.nims` beside it and each `config.nims` in its directory and those above."""
@@ -390,6 +428,12 @@ class Graph:
                 if target not in seen:
                     seen[target] = current
                     queue.append(target)
+        # The trees the reached files walk: read, so reached, but not followed (a file read as
+        # text builds nothing). After the imports, so a walked file that is also imported is
+        # followed all the same.
+        for current in sorted(seen):
+            for target in sorted(self.walked(current)):
+                seen.setdefault(target, current)
         return seen
 
 
@@ -474,16 +518,39 @@ SELF_TREE = {
     "tests/test_e.nim": 'discard readFile("docs/gone.md")\n',
     "tests/test_e.nims": "",
     "sdk/tests/test_d.nim": 'discard build("k_impl.nim")\n',
+    # Whole-tree readers: the roots in a list, and a helper that walks the tree it is given.
+    "tests/test_w.nim": (
+        "import std/os\n"
+        'for root in ["src", "sdk" / "src"]:\n'
+        "  for f in walkDirRec(root): discard readFile(f)\n"
+    ),
+    "tests/test_x.nim": (
+        "import std/os\n"
+        "proc sites(dir: string): int =\n"
+        "  for f in walkDirRec(dir): inc result\n"
+        'discard sites(repo / "src")\n'
+    ),
+    # A walk of somewhere else, and one file under a broad tree named at run time.
+    "tests/test_y.nim": (
+        'import std/os\nfor f in walkDir(tmp): discard\ndiscard readFile(root / "src/logos_core" / name)\n'
+    ),
+    "tests/test_z.nim": '# for f in walkDirRec(root) is only named in a comment\ndiscard "src"\n',
 }
 
+ALL_SELF = {"test_a", "test_b", "test_c", "test_d", "test_e", "test_f", "test_g", "test_h"}
+ALL_SELF |= {"test_w", "test_x", "test_y", "test_z"}
 SELF_CASES = [
-    (["sdk/src/logos_sdk/y.nim"], {"test_a", "test_f", "test_g"}),  # support module, then core
+    # Support module, then core; and test_w's walk of sdk/src. test_x walks src/ only, and the
+    # walked a.nim, which imports y.nim, is read, not followed.
+    (["sdk/src/logos_sdk/y.nim"], {"test_a", "test_f", "test_g", "test_w"}),
     (["docs/B.md"], {"test_b"}),  # literals joined by `/`
     (["docs/C.md"], set()),  # a comment is not a read
-    (["src/logos_core/daemon/trust.cddl"], {"test_b"}),  # the end of a path
-    (["src/logos_core/other.nim"], set()),  # `"src"` and `"src/logos_core"` are too broad
+    (["src/logos_core/daemon/trust.cddl"], {"test_b", "test_w", "test_x"}),  # the end of a path
+    # `"src"` and `"src/logos_core"` are too broad to name a fixture (test_b, test_z), unless the
+    # file walks (test_w, test_x); test_y's run goes on past the tree to one file named at run time.
+    (["src/logos_core/other.nim"], {"test_w", "test_x"}),
     (["docs/D.md"], {"test_c"}),  # staticRead, relative to the file
-    (["sdk/src/logos_sdk/z.nim"], {"test_d"}),  # a kit source built at run time, followed
+    (["sdk/src/logos_sdk/z.nim"], {"test_d", "test_w"}),  # a kit source built at run time, followed
     # A path constant ties only the suites that use it: test_a imports x.nim and uses none.
     (["sdk/tests/fx/a.json"], {"test_f", "test_g"}),  # a constant joined with a literal; a directory
     (["sdk/tests/fx/b.cddl"], {"test_f", "test_g"}),  # a constant made with `&`
@@ -493,14 +560,19 @@ SELF_CASES = [
     (["tests/test_e.nims"], {"test_e"}),
     (["docs/gone.md"], {"test_e"}),  # a deleted path still matches its literal
     # A directory's config.nims configures the suites there, not the modules they import from it.
-    (["tests/config.nims"], {"test_a", "test_b", "test_c", "test_e"}),
-    (["nimble.lock"], {"test_a", "test_b", "test_c", "test_d", "test_e", "test_f", "test_g", "test_h"}),
+    (["tests/config.nims"], ALL_SELF - {"test_d", "test_f", "test_g", "test_h"}),
+    (["nimble.lock"], ALL_SELF),
 ]
 
 # On this repository's own tree (wave 2 plan §3, rule 1): (changed, suites that must be reached).
 REPO_CASES = [
     (["sdk/tests/support/genfixtures.nim"], {"test_rmap"}),
     (["docs/DAEMON.md"], {"test_daemon_config"}),
+    # Whole-tree readers, through a file none of them imports (5-5-1's BCP-0104 on pm/installed.nim).
+    (
+        ["src/logos_core/package/resolver.nim"],
+        {"test_deployment", "test_orchestration", "test_package", "test_transport"},
+    ),
 ]
 NEARLY_ALL = "sdk/src/logos_sdk/commitment/choice.nim"
 

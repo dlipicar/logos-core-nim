@@ -211,7 +211,7 @@ reason = "A negative over route readiness (RUNTIME l.922). There is one commitme
 # R-mode (DECISIONS I88)
 [[item]]
 ids = ["RUN-0190"]
-reason = "A rule across execution modes (RUNTIME l.941). Only direct mode exists, so the route-handle surface has one implementation (runtime/bindings.nim routeCallOp, routeSubscribeOp, routeUnsubscribeOp, routeObserveEndOp) and there is no second mode to compare. Its behaviour is tested in tests/test_events.nim (tests [RUN-0191] and [RUN-0193]) and tests/test_routes.nim. The plan's hint (sdk/tests/test_calls.nim) does not fit: that file tests typed call helpers through tests/support/testroute, with no subscriptions and no second mode."
+reason = "A rule across execution modes (RUNTIME l.941). Only direct mode exists, so the route-handle surface has one implementation (runtime/bindings.nim routeCallOp, routeSubscribeOp, routeUnsubscribeOp, routeObserveEndOp) and there is no second mode to compare. Its behaviour is tested in tests/test_events.nim (tests [RUN-0191] and [RUN-0193]) and tests/test_routes.nim. The plan's hint (sdk/tests/test_calls.nim) does not fit: that file tests typed call helpers through logos_sdk/testing/testroute (sdk/src/logos_sdk/testing/testroute.nim), with no subscriptions and no second mode."
 
 [[item]]
 ids = ["RUN-0173", "RUN-0179"]

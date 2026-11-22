@@ -23,7 +23,9 @@ sit above it. Nine rules keep that shape:
   python3 tools/lint/layers.py [--config tools/lint/layers.toml]
   python3 tools/lint/layers.py --self-test
 
-Prints `file:line: rule: ...` for each violation and exits 1 if there is any. The layer map,
+Prints `file:line: rule: ...` for each violation and exits 1 if there is any. A root that is not a
+directory, or one with no `.nim` file under the scanned trees, exits 2: from the wrong folder the
+lint would otherwise check nothing, and pass under a config that is not strict. The layer map,
 the allowlist and the recorded exceptions are in `layers.toml`. An exception or an allowlist
 entry that no import needs any more is itself a failure, so neither can go stale. With
 `strict = true` no exception is accepted and every layer must exist.
@@ -34,6 +36,8 @@ with bracket lists on later lines and with the prefix on the line before its bra
 """
 
 import argparse
+import contextlib
+import io
 import os
 import re
 import sys
@@ -292,6 +296,13 @@ def is_chronos(module):
     return name == "chronos" or name.startswith("chronos/")
 
 
+def external_name(module):
+    """The package a raw import names, or None for the standard library."""
+    if module.startswith(("std/", ".")):
+        return None
+    return module.removeprefix("pkg/").split("/")[0]
+
+
 def covers(entry, path):
     return path.startswith(entry) if entry.endswith("/") else path == entry
 
@@ -403,6 +414,37 @@ def check(root, config):
         elif strict:
             findings.append((facade, 0, "kit-facade", "the facade does not exist"))
 
+    # [G406] The external packages the Package Manager's import closure may reach.
+    pm_roots = config.get("pm_roots", [])
+    if pm_roots:
+        starts = [p for p in files if any(covers(r, p) for r in pm_roots)]
+        if not starts:
+            findings.append(("tools/lint/layers.toml", 0, "pm-external", "pm_roots name no file"))
+        seen = closure(starts, edges)
+        allowed_ext = set(config.get("pm_external_allowlist", []))
+        used_ext = set()
+        for reached in sorted(seen):
+            for module, line in raw.get(reached, ()):
+                name = external_name(module)
+                if name is None or resolve(root, reached, module) is not None:
+                    continue
+                if name in allowed_ext:
+                    used_ext.add(name)
+                else:
+                    findings.append(
+                        (
+                            reached,
+                            line,
+                            "pm-external",
+                            f"imports {module}, a package not on pm_external_allowlist: "
+                            + chain(seen, reached),
+                        )
+                    )
+        for name in sorted(allowed_ext - used_ext):
+            findings.append(
+                ("tools/lint/layers.toml", 0, "pm-external", f"stale entry: nothing reaches {name}")
+            )
+
     seen = closure([p for p in files if place[p] == "daemon_cli"], edges)
     for target in config["daemon_tls_forbidden"]:
         if target in seen:
@@ -473,6 +515,8 @@ SELF_CONFIG = {
     "daemon_binding_importers": ["src/logos_core/transport/tls/p256.nim"],
     "daemon_allowlist": ["runtime/host", "transport/tls/p256"],
     "testing_importers": [],
+    "pm_roots": ["src/logos_core/pm/", "src/logos_core/package/"],
+    "pm_external_allowlist": ["results"],
     "layers": {
         "sdk_base": ["sdk/src/logos_sdk/"],
         "sdk_binding": [
@@ -512,6 +556,8 @@ CLEAN_TREE = {
     "src/logos_core/cli/main.nim": "import ../daemon/main\n",
     "src/logosd.nim": "import ./logos_core/daemon/main\n",
     "tests/test_engine.nim": "import ../src/logos_core/daemon/main\nimport logos_sdk/testing/helper\n",
+    "src/logos_core/pm/engine.nim": "import std/tables\nimport results\nimport ../package/lgx\n",
+    "src/logos_core/package/lgx.nim": "import logos_sdk/base/hex\n",
 }
 
 PLANTS = [
@@ -544,6 +590,9 @@ PLANTS = [
     ("testing-test-only", "src/logos_core/runtime/bad.nim", "import logos_sdk/testing/helper\n"),
     ("testing-test-only", "sdk/src/logos_sdk/kit/bad.nim", "import ../testing/helper\n"),
     ("unresolved", "src/logos_core/runtime/bad.nim", "import ../no/such/module\n"),
+    ("pm-external", "src/logos_core/pm/engine.nim", "import results\nimport libstorage\n"),
+    ("pm-external", "src/logos_core/package/lgx.nim", "import pkg/codex/node\n"),
+    ("pm-external", "sdk/src/logos_sdk/base/hex.nim", "import storage/client\n"),
 ]
 
 PARSED = [
@@ -621,6 +670,10 @@ def self_test():
     if not any("stale entry" in f[3] for f in run(CLEAN_TREE, stale)):
         failures.append("a stale allowlist entry was accepted")
 
+    stale_ext = dict(SELF_CONFIG, pm_external_allowlist=["results", "zlib"])
+    if not any("stale entry: nothing reaches zlib" in f[3] for f in run(CLEAN_TREE, stale_ext)):
+        failures.append("a stale pm_external_allowlist entry was accepted")
+
     for root in SELF_CONFIG["kit_facade"]:
         no_facade = {k: v for k, v in CLEAN_TREE.items() if k != root}
         if run(no_facade, SELF_CONFIG):
@@ -628,12 +681,47 @@ def self_test():
         if not any(f[2] == "kit-facade" for f in run(no_facade, strict)):
             failures.append(f"strict accepted a missing facade root: {root}")
 
+    # The two runs that check nothing, under the config that would pass them (not strict, no
+    # allowlist), and the clean tree through the same entry.
+    loose = dict(SELF_CONFIG, daemon_allowlist=[])
+
+    def status(root, config):
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return lint(root, config)
+
+    with tempfile.TemporaryDirectory() as root:
+        if status(os.path.join(root, "missing"), loose) != 2:
+            failures.append("a missing root did not exit 2")
+        if status(root, loose) != 2:
+            failures.append("an empty root did not exit 2")
+        plant_tree(root, CLEAN_TREE)
+        if status(root, SELF_CONFIG) != 0:
+            failures.append("the clean tree did not exit 0 through lint")
+
     for failure in failures:
         print("self-test:", failure)
     if failures:
         return 1
-    print(f"layers self-test: {len(PARSED)} parses and {len(PLANTS)} planted violations caught")
+    print(
+        f"layers self-test: {len(PARSED)} parses and {len(PLANTS)} planted violations caught,"
+        " a missing and an empty root refused"
+    )
     return 0
+
+
+def lint(root, config):
+    """The exit status over `root`: 0 clean, 1 a finding, 2 nothing to check."""
+    if not os.path.isdir(root):
+        print(f"layers: {root}: not a directory", file=sys.stderr)
+        return 2
+    findings, (files, edges, excused) = check(root, config)
+    if not files:
+        print(f"layers: no .nim file under {root} ({', '.join(SCANNED)})", file=sys.stderr)
+        return 2
+    for path, line, rule, message in findings:
+        print(f"{path}:{line}: {rule}: {message}")
+    print(f"layers: {files} files, {edges} project imports, {excused} recorded exceptions")
+    return 1 if findings else 0
 
 
 def main():
@@ -646,11 +734,7 @@ def main():
         return self_test()
     with open(args.config, "rb") as f:
         config = tomllib.load(f)
-    findings, (files, edges, excused) = check(args.root, config)
-    for path, line, rule, message in findings:
-        print(f"{path}:{line}: {rule}: {message}")
-    print(f"layers: {files} files, {edges} project imports, {excused} recorded exceptions")
-    return 1 if findings else 0
+    return lint(args.root, config)
 
 
 if __name__ == "__main__":

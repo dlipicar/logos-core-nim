@@ -136,6 +136,7 @@ lcn.daemon_config = {
   ? state_transfers: [* lcn.app_state_transfer],
   ? ctl: lcn.dc_ctl,
   ? cli: lcn.dc_cli,
+  ? package_manager: lcn.dc_package_manager,
   ? test_hooks: lcn.dc_test_hooks,
 }
 
@@ -237,6 +238,23 @@ lcn.dc_cli = {
   ? route_idle_ms: uint32,
 }
 
+; The Package Manager (DECISIONS G399; DAEMON.md §3; docs/PACKAGE-MANAGER.md):
+; instance names an operator entry of modules, hosted_dynamic with placement
+; process, with a state_assignment and no configuration; storage holds at
+; least one binding, each naming another hosted_dynamic entry, with unique
+; names; catalog.storage names one of them. resolver_limits, when present,
+; holds all four limits; absent, logosd's preset applies (DAEMON.md §3). The
+; lcn.pm_* rules are pm/input.cddl's, resolved in one document as lcn.app_*
+; are. logosd composes the instance's lcn.pm_input from this section and the
+; trust file the start accepted.
+lcn.dc_package_manager = {
+  instance: lcn.app_instance_id,
+  storage: [* lcn.pm_binding],
+  catalog: lcn.pm_catalog_ref,
+  ? resolver_limits: lcn.pm_resolver_limits,
+  ? limits: lcn.pm_limits,
+}
+
 ; Accepted only by a logosd built with lcnTestHooks, with the development
 ; switch on (G300); a packaged logosd refuses the field. The Module Loader
 ; reports its failure loader_failure_after_ms after the start, or once the
@@ -271,8 +289,9 @@ lcn.dc_remote = {
 lcn.dc_remote_signing = "logosd" / "key-holder" / "process-copy"
 ```
 
-The rules named `lcn.app_*` and `lcn.ap_*` are the host configuration's and the authority policy's, with
-the meaning those pages give them.
+The rules named `lcn.app_*` and `lcn.ap_*` are the host configuration's and the authority policy's, and
+those named `lcn.pm_*` the Package Manager's input's (`pm/input.cddl`), with the meaning those pages give
+them ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) for the last).
 
 ### Fields
 
@@ -294,6 +313,7 @@ the meaning those pages give them.
 | `state_transfers` | As in the host configuration: an operator instance's replacement continues from its state, applied once at the next start (§11, "Replacing an instance"). Neither side may be a system instance. |
 | `ctl` | The socket (§7): `socket_dir` (absolute; default `<session>/run`), `workers` (1–32, default 4), `idle_timeout_ms` (100–600000, default 30000). |
 | `cli` | The CLI module (§7a): `artifact` (`lcn.app_artifact`, an absolute path; default the library installed with logosd, with the hash compiled into logosd), `socket_dir` (absolute, owner-only; default `<session>/run`), `workers` (1–32, default 8), `streams` (1–64, default 8), `idle_timeout_ms` (100–600000, default 30000), `route_idle_ms` (1000–86400000, default 600000). |
+| `package_manager` | The Package Manager (DECISIONS G399; [PACKAGE-MANAGER.md](PACKAGE-MANAGER.md)): `instance`, the operator instance that runs it; `storage`, its bindings, each a name and the operator instance that provides `lcn.storage_fetch` under it; `catalog`, the binding, object locator and BLAKE3-256 digest of the catalog it acquires; `resolver_limits`, all four limits or none; `limits`, its bounds. Absent `resolver_limits` is logosd's preset (DECISIONS G443): `partial_closure_names` 256, `dependency_depth` 32, `candidates_per_name` 256 and `assignment_attempts` 1024, the same on every platform and build and never computed from the machine (PM l.1279-1280). An operator may write up to the maxima ([CONFORMANCE.md](CONFORMANCE.md), "Resolver limits"), at the cost [DEPLOYMENT.md](DEPLOYMENT.md) §12 states. A changed preset changes the results of an unchanged configuration (PM l.1314-1315), so it comes with a recorded decision and a release note. Each start logs the limits it composed and their origin, as `package_manager: <instance> gets resolver limits partial_closure_names N, dependency_depth N, candidates_per_name N, assignment_attempts N (logosd's preset)`, or `(package_manager.resolver_limits)` when the section names them. |
 | `test_hooks` | Refused by a packaged logosd (§6). `ctl_command_delay_ms` holds each socket command; `loader_failure_after_ms` has the Module Loader report its failure that long after the start, and `loader_failure_on_file` once the file it names exists, whichever comes first; `diagnostics` has the Runtime record `count` diagnostics holding `text`, as text it did not write, after the start's own are logged (§12). |
 
 ### The checks
@@ -308,6 +328,12 @@ reported with the field it concerns, and logosd exits 1.
    `orchestration.start` name operator instances, each once; `permissions.initial` names no system one;
    `state_transfers` names no system instance on either side, and no `orchestration.start` entry is
    the source of a transfer (the transfer retires it).
+   With `package_manager`: its `instance` is an operator entry of `modules`, `hosted_dynamic` (no
+   archive enters logosd's process), with a `state_assignment` and no configuration; `storage` holds
+   at least one binding, each name once, each naming another `hosted_dynamic` operator entry; and
+   `catalog.storage` names one of them. Then the `lcn.pm_input` composed from the section, the
+   resolver limits and the trust file passes the Package Manager's own decoder, which the instance
+   runs again at its initialization. A refusal names the field and quotes no bytes.
 3. The development switch: `allow-all` and `test_hooks` need it (§6).
 4. `ctl`'s and `cli`'s bounds and absolute paths; `call_audit.store` needs `call_audit.evidence`; the evidence key's file, its `kid`
    and its binding name this Runtime (§9).
@@ -317,6 +343,10 @@ reported with the field it concerns, and logosd exits 1.
    orchestrator's value passes the module's.
 
 ### The derived host configuration
+
+With `package_manager`, the value also carries one `protected_inputs` entry: the Package Manager's
+instance and its `lcn.pm_input`, its protected realization input (G400; [HOST-CONFIG.md](HOST-CONFIG.md)).
+No other instance gets one.
 
 logosd hands one `logos-core-nim.app-config.v1` value to `logos_runtime_create`. It supplies the bootstrap
 inputs through it: `work_dir`, `state_root`, `store_dir` and `endpoint_dir` from the session layout, the
@@ -359,7 +389,8 @@ open, not logosd's at assembly.
 Under `capability-authority`, logosd merges the operator's rules with its own system rules into one
 `logos-core-nim.authority-policy.v1` value for the `authority` instance. The system rules are derived
 from the reserved ids and the orchestrator's start list; they are not configurable. With `init`'s
-default configuration they are, one per line (S1–S5; S6–S8 below come with `lcn_call`):
+default configuration they are, one per line (S1–S5; S6–S8 below come with `lcn_call`; S9–S11 with
+`package_manager`):
 
 ```text
 {"kind": "allow", "subject": {"modules": ["logos_capability_authority"]}, "scopes": [{"kind": "provider-access", "contract": "capability-authority", "actions": ["publish-event"], "access": {"publish_events": ["observed_change"]}}]}
@@ -422,6 +453,38 @@ When logosd composes the CLI module `lcn_call` (§7a), it adds four more:
   `capability-authority` policy; under the development switch (allow-all) nothing is denied to any
   module, and neither `lcn_call` nor the `logosctl` instance calls a method outside its list.
 - **Codes:** S7 denies the consumer (`consumer-denied`), S8 protects its target (`target-denied`).
+
+With a `package_manager` section (§3), logosd adds five more, here for the instance `package_manager`
+with one binding to the instance `storage` (G402):
+
+```text
+{"kind": "allow", "subject": {"instances": ["package_manager"]}, "scopes": [{"kind": "runtime-control", "methods": ["close_route", "establish_route", "list_modules", "renew_route"]}]}
+{"kind": "deny", "subject": {"instances": ["package_manager"]}, "scopes": [{"kind": "runtime-control", "methods": []}], "code": "consumer-denied"}
+{"kind": "allow", "subject": {"instances": ["package_manager"]}, "scopes": [{"kind": "provider-access", "contract": {"commitment_model": "logos.commitment-model.2026-10", "schema_root": h'09f784c92559ee90dcbf3a47248fdaaf64abbfc29b766dc511edbd9587e72429', "hash_profile": "logos.hash-profile.2026-08.choice-index", "hash_suite": "logos.hash-suite.blake3-256"}, "actions": ["call", "establish-route", "renew-route"], "providers": {"instances": ["storage"]}, "access": {"methods": [h'418d34e832ad67e1cd8d7005849c23c7d999bbe7fed23bcb21699af2f5eea306', h'57c99cdac774cfd30bdd6b4b660accab99880c88f92cadbcbfeabd176ae117bc', h'cc09befbc412829dec5ec07657e71a51de1cf8497daafb99bec73568550d95b6']}}]}
+{"kind": "allow", "subject": {"instances": ["package_manager"]}, "scopes": [{"kind": "provider-access", "contract": {"commitment_model": "logos.commitment-model.2026-10", "schema_root": h'09f784c92559ee90dcbf3a47248fdaaf64abbfc29b766dc511edbd9587e72429', "hash_profile": "logos.hash-profile.2026-08.choice-index", "hash_suite": "logos.hash-suite.blake3-256"}, "actions": ["subscribe-event"], "providers": {"instances": ["storage"]}, "access": {"subscribe_events": [h'41073cd8d01b1dc9f3a6eca873f2b9e41969984b89163e2f5761d538435f3389']}}]}
+{"kind": "allow", "subject": {"instances": ["storage"]}, "scopes": [{"kind": "provider-access", "contract": {"commitment_model": "logos.commitment-model.2026-10", "schema_root": h'09f784c92559ee90dcbf3a47248fdaaf64abbfc29b766dc511edbd9587e72429', "hash_profile": "logos.hash-profile.2026-08.choice-index", "hash_suite": "logos.hash-suite.blake3-256"}, "actions": ["publish-event"], "access": {"publish_events": [h'41073cd8d01b1dc9f3a6eca873f2b9e41969984b89163e2f5761d538435f3389']}}]}
+```
+
+- **S9** (the first three): the Package Manager may call the three Runtime Control methods that hold
+  a route, and `list_modules`. A route names a provider record, whose id the Runtime assigns, so the
+  Package Manager looks up its binding's instance before each establishment: one `list_modules` with
+  an `instance` filter per binding. It subscribes to no Runtime Control event (as S3). It may establish
+  and renew routes to `lcn.storage_fetch` at its providers and call the contract's three methods
+  (`stat_object`, `read_object`, `fetch_readiness`; their roots, in byte order).
+- **What S9 does not narrow** (DECISIONS G402). Its Runtime Control rule names no `targets`:
+  `establish_route` and a list are decided with no target, `renew_route` and `close_route` name a
+  route, and the Capability Authority never narrows an allow ([AUTHORITY-POLICY.md](AUTHORITY-POLICY.md);
+  CA l.124 permits narrowing and does not require it), so a rule with `targets` would allow none of
+  them. So the Package Manager can read every module record of the Runtime: module names, instances,
+  provider addresses, states, contracts, and failure classes with their reasons. Listing a provider
+  grants no authority to call it (RUNTIME l.3217); the provider-access rule names the providers.
+- **S10**: it may subscribe to `fetch_readiness_changed` on those routes.
+- **S11**: the providers may publish that event (STORAGE-FETCH §8).
+- **The providers** are the bindings' instances, each once and in byte order, in S9's and S10's
+  `providers` and S11's subject; the contract is `lcn.storage_fetch`'s pinned
+  commitment.
+- **Codes:** S9's event deny denies the consumer (`consumer-denied`). A rule cannot give the Package
+  Manager a Runtime Control event, since a deny wins; it needs no other method.
 
 The operator's rules follow, sorted and deduplicated with the system ones. An operator rule may grant
 more to operator instances, and may grant the `logosctl` instance access to operator providers; it
@@ -589,6 +652,12 @@ on, so revision 1 keeps the floor's content. With the switch on:
 The switch weakens nothing else. Continuity still applies (a rollback is refused with the switch on), the
 other anchors and every rule of the file are unchanged, and under capability-authority the system rules still
 deny, for example, `module stop logos_module_loader`.
+
+**The Package Manager's copy** (G399, G400). With `package_manager` (§3), each start puts the trust state
+it accepted, as the trust file's deterministic bytes, into the Package Manager's `lcn.pm_input`. The
+instance reads its copy once, at initialization, and checks it again. A trust command therefore applies
+to it at the next start, never to a running instance. The copy is protected input, not configuration
+(CONFIGURATION l.58): no Runtime Control method reads or changes it.
 
 ### The trust commands
 
