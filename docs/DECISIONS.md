@@ -7618,6 +7618,13 @@ their history.
   memory grown by under 1 MiB (it rarely returns to the byte; Mac 2026-11-21: 16 KiB orc, 0 refc,
   16 KiB orc-release). It is the regression check for the wake-up descriptor: without this decision
   each cycle leaks one (Linux) or two (macOS).
+  - **Under a sanitizer** (`-d:asan`, `-d:tsan`, `-d:msan`) the resident bound is not asserted, and
+    the growth is only printed. The descriptor and thread checks still run. A sanitizer build
+    allocates with malloc, so every free goes to the sanitizer's runtime. ASan's quarantine (256 MB
+    by default) keeps freed chunks resident and unreused, and TSan's and MSan's allocators and shadow
+    memory are not bounded by this either. CI run 44960968929 on 1ae98a2 failed the bound under ASan
+    on both architectures: 16880 KiB on x86_64 and 34108 KiB on arm64, with no LeakSanitizer report.
+    The same logic grows by at most 16 KiB without a sanitizer (branch `ci-fix-kit-rss`).
   - **The amendment's cases.** Every child now runs under a bound (`leftoverRun`, 120 s by default);
     one that outlives it is killed and fails its case.
     - In `test_kit_dylib`, `probe` 30 has the next destroy replace the dispatcher (destroy mode 10,
