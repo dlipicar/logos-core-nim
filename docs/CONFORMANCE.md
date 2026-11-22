@@ -7,8 +7,8 @@ of its units. `tools/spectrace/spectrace.py` does the bookkeeping. In the dev sh
 
 ## Requirement ledger
 
-Each spec's files sit under the conformance tree of the package that owns them: `conformance/` for core
-and `sdk/conformance/` for the SDK (CDE, CMT and HSH). `<tree>/requirements/<PFX>.jsonl` holds one line per unit. The first line records the spec file,
+Each spec's ledger sits under the conformance tree of the package that owns it: `sdk/conformance/` for the
+SDK (CDE, CMT, HSH and IFC) and `conformance/` for core (the rest). `<tree>/requirements/<PFX>.jsonl` holds one line per unit. The first line records the spec file,
 the spec revision and the next free ID.
 
 | Prefix | Spec | Prefix | Spec |
@@ -45,8 +45,11 @@ match the pinned specs.
 
 ## Claims
 
-`<tree>/claims/<PFX>.toml` gives each section a status. A spec two packages share has a claims file in each,
-and `spectrace owners` holds that each unit has one owner. The longest matching section key wins,
+`<tree>/claims/<PFX>.toml` gives each section a status. Each unit is claimed by the package that implements
+its rule (DECISIONS R8). A spec two packages share (IFC, RUN, CFG) has a claims file in each, and each
+gives the other package's units `out-of-scope:<package>`. `spectrace owners` holds that each unit has one
+owner, that a unit neither claims has the same status in both files, and that a claimed unit's tests and
+inspection items are in its owner's trees. The longest matching section key wins,
 and `default` covers the rest. Section keys are `§4.4`, `App B.1`, or `§1/Heading` for an unnumbered
 heading under a numbered one.
 
@@ -1041,7 +1044,10 @@ ids = ["HSH-0004"]
 reason = "Statement about what a profile document must contain; satisfied by HASH itself."
 ```
 
-`spectrace gate` (a flake check) fails when a claimed unit has no test or inspection item, when a
+A unit's evidence counts only in its owner's trees: a test under `tests/` for core or `sdk/tests/` for the
+SDK, or an item in that package's `conformance/inspection/` (R8).
+
+`spectrace gate` (a flake check) fails when a claimed unit has no test or inspection item there, when a
 test names an unknown or retired ID, when a claims file has an invalid status, when an inspection item
 names a unit that is not claimed (inspection stands for a test, so it covers claimed units only), or,
 with `--closed-tier N`, when any status defers to tier N. It prints the deferred units per label.
