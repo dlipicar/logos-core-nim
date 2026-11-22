@@ -28,8 +28,8 @@ from ../transport/io/sock import fitsSunPath, sunPathMax
 from ../durable import ensurePrivateDir
 import
   ./[
-    compose, ctlmodule, diagdrain, evstore, logging, remotetrust, session, supervise,
-    trustfile,
+    compose, credential, ctlmodule, diagdrain, evstore, logging, remotetrust, session,
+    signsvc, supervise, trustfile,
   ]
 
 when defined(posix):
@@ -77,6 +77,10 @@ type
     remote*: Opt[RemoteStart]
       ## [G408] with `remote.enabled`: the remote trust state the start
       ## accepted; the remote processes take its snapshot at spawn (5-7a-2)
+    signer*: SignService
+      ## [G410] with `remote.enabled` and `remote.signing` "logosd": the
+      ## signing service, holding the TLS key; nil otherwise (the key holder
+      ## is spawned with the remote processes, 5-7a-2)
 
 func startError(exit: int, message: string): StartError =
   StartError(exit: exit, message: message)
@@ -224,6 +228,33 @@ proc assembleDaemon*(
     let st = confirmRemoteTrust(s, seenRemote).valueOr:
       return err(startError(ExitRefused, "the remote trust input: " & error))
     remote = Opt.some(st)
+  # [G409; G410] The TLS credential: a pending rotation taken up, then the key
+  # loaded by the signing service. In key-holder mode logosd checks the
+  # certificate and never opens the key, which the holder loads.
+  var signer: SignService = nil
+  if remoteOn:
+    let moved = takeUpCredential(s).valueOr:
+      return err(startError(ExitRefused, "the TLS credential: " & error))
+    if moved:
+      logInfo("remote credential: the rotation is taken up")
+    let present = currentCredential(s).valueOr:
+      return err(startError(ExitRefused, "the TLS credential: " & error))
+    if present.isNone:
+      return err(
+        startError(
+          ExitRefused,
+          "remote.enabled needs a TLS credential: logosctl remote credential new makes one",
+        )
+      )
+    let cred = present.get
+    if prepared.config.remote.signing == rsLogosd:
+      signer = newSignService(cred.dir).valueOr:
+        return err(startError(ExitRefused, "the TLS credential: " & error))
+    logInfo(
+      "remote credential: certificate sha-256 " & anchorName(cred.certificateSha256) &
+        ", enrollment revision " & $cred.revisionOf & ", signed by " &
+        $prepared.config.remote.signing
+    )
   # [G299] The mark moves before the revision is used, never created here,
   # and nothing is refused after it moved (a change since the first read
   # included).
@@ -346,6 +377,7 @@ proc assembleDaemon*(
       socketPath: path,
       startedAtMs: started,
       remote: remote,
+      signer: signer,
       graceMs:
         if grace.isSome:
           int(grace.get)
@@ -379,6 +411,9 @@ proc release*(d: var Daemon) =
   ## called: the store is only stopped (written out), not freed.
   clearPresentation()
   setOrchestratorDiagnostics(nil)
+  if d.signer != nil:
+    d.signer.close()
+    d.signer = nil
   if d.rt == nil:
     freeSupervisor(d.supervisor)
     d.supervisor = nil

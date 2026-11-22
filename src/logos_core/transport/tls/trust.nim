@@ -7,7 +7,7 @@
 
 {.push raises: [].}
 
-import std/tables
+import std/[algorithm, tables]
 import results
 
 export results
@@ -112,6 +112,19 @@ func record*(t: TrustSnapshot, runtime: string): Opt[EnrollmentRecord] =
     Opt.some(t.records.getOrDefault(runtime))
   else:
     Opt.none(EnrollmentRecord)
+
+func anchorIds*(t: TrustSnapshot): seq[string] =
+  ## Every anchor identifier, ascending (the control channel's snapshot
+  ## message, Tier 5 step 5-7a-1).
+  for id in t.anchors.keys:
+    result.add(id)
+  result.sort()
+
+func runtimes*(t: TrustSnapshot): seq[string] =
+  ## Every Runtime holding a current record, ascending.
+  for id in t.records.keys:
+    result.add(id)
+  result.sort()
 
 func holdersOf*(t: TrustSnapshot, spki: seq[byte]): seq[EnrollmentRecord] =
   ## Every current record, of any status, that names the key `spki`.

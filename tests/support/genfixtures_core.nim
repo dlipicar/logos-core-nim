@@ -357,6 +357,24 @@ proc generatedStoreTypes*(): Result[string, string] =
     err(e.msg)
 
 const
+  remoteCarrierTypesPath* = "src/logos_core/remote/carrier_types.nim"
+  remoteCarrierPrimary* = "src/logos_core/remote/carrier.cddl"
+
+proc generatedRemoteCarrierTypes*(): Result[string, string] =
+  ## The remote control channel's messages (`logos-core-nim.remote-carrier.v1`,
+  ## DECISIONS G410, G411), for `remote/carrier.nim`.
+  try:
+    let set =
+      ?acceptContractSet(readFile(remoteCarrierPrimary), [], [], AcceptOptions())
+    nimModule(
+      set,
+      NimOptions(importPrefix: SdkImportRoot, schemaAccessor: "remoteCarrierSchema"),
+      false,
+    )
+  except IOError as e:
+    err(e.msg)
+
+const
   carrierTypesPath* = "src/logos_core/runtime/carrier_types.nim"
   carrierPrimary* = "src/logos_core/runtime/carrier.cddl"
 

@@ -273,6 +273,25 @@ proc selfSignedCertificate*(
     return err("cannot encode the certificate")
   ok(der)
 
+proc sha256Of*(data: openArray[byte]): Result[seq[byte], string] =
+  ## SHA-256 of `data`: what `logosctl remote credential` prints for the
+  ## operator to compare a certificate by (G409).
+  var md = newSeq[byte](32)
+  var n: cuint = 0
+  if EVP_Digest(
+    if data.len > 0:
+      unsafeAddr data[0]
+    else:
+      nil,
+    csize_t(data.len),
+    addr md[0],
+    addr n,
+    EVP_sha256(),
+    nil,
+  ) != 1 or n != 32:
+    return err("cannot hash: " & sslErrors())
+  ok(md)
+
 proc signP256*(k: P256Key, input: openArray[byte]): Result[seq[byte], string] =
   ## `ecdsa_secp256r1_sha256` over `input`: a DER ECDSA signature. The signer
   ## checks the input first (`signing.checkSignInput`).

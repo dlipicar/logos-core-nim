@@ -82,9 +82,10 @@ type
     queue*: int
 
   RemoteSigning* = enum ## [G410] what signs the remote TLS handshakes
-    rsLogosd ## logosd itself (the default)
-    rsKeyHolder ## `logos_keyholder`, relayed through logosd
-    rsProcessCopy ## each TLS process with its own copy: test builds only
+    rsLogosd = "logosd" ## logosd itself (the default)
+    rsKeyHolder = "key-holder" ## `logos_keyholder`, relayed through logosd
+    rsProcessCopy = "process-copy"
+      ## each TLS process with its own copy: test builds only
 
   RemoteSettings* = object ## [G407, G410] `remote`
     enabled*: bool

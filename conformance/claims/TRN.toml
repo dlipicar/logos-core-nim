@@ -109,6 +109,10 @@ default = "claimed"
 "TRN-0226" = "claimed"
 "TRN-0228" = "claimed"
 "TRN-0233" = "claimed"
+# Step 5-7a-1 (DECISIONS G409): logosctl remote credential makes the one credential and
+# certificate-signature algorithm pair this implementation's tls-tcp offers and accepts (P-256,
+# ecdsa-with-SHA256), so every intended peer supports it.
+"TRN-0369" = "claimed"
 "TRN-0370" = "claimed"
 "TRN-0371" = "claimed"
 "TRN-0372" = "claimed"

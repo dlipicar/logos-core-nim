@@ -41,6 +41,9 @@ daemon_allowlist = [
   "orchestration/settings",
   "package/trustdoc",
   "permissions",
+  # [G410, G411, Tier 5 step 5-7a-1] the remote control channel: logosd's signing service and the
+  # key holder answer on it
+  "remote/carrier",
   "runtime/authscopes",
   "runtime/bell",
   "runtime/engine",
@@ -55,6 +58,7 @@ daemon_allowlist = [
   # [G408, Tier 5 step 5-7a-1] the remote trust input: anchors checked with libcrypto, and the
   # snapshot the tls-tcp verifier takes
   "transport/tls/p256",
+  "transport/tls/signing",
   "transport/tls/trustsnap",
   "transport/tls/x509",
 ]
@@ -79,5 +83,6 @@ daemon_cli = [
   "src/logos_core/cli/",
   "src/logosd.nim",
   "src/logosctl.nim",
+  "src/logos_keyholder.nim",
   "src/lcn_call.nim",
 ]

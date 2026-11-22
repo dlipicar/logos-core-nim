@@ -44,6 +44,8 @@ proc main() =
   echo storeTypesPath
   writeFile(carrierTypesPath, generatedCarrierTypes().get)
   echo carrierTypesPath
+  writeFile(remoteCarrierTypesPath, generatedRemoteCarrierTypes().get)
+  echo remoteCarrierTypesPath
   writeFile(caTypesPath, generatedCaTypes().get)
   echo caTypesPath
   writeFile(caKitPath, generatedCaKit().get)

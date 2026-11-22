@@ -64,8 +64,8 @@ when defined(posix):
   import logos_sdk/kit/[rc_arms, rc_types], ./logos_core/runtime/stateadmin
   import
     ./logos_core/daemon/[
-      compose, ctlwire, evexport, evkey, evstore, remotetrust, render, session,
-      sessioninit, trustfile,
+      compose, credential, ctlwire, evexport, evkey, evstore, remotetrust, render,
+      session, sessioninit, signsvc, trustfile,
     ]
   import ./logos_core/cli/[cli_types, launcher]
   from logos_sdk/codegen/nimrt import wipeTyped
@@ -121,6 +121,9 @@ offline (the session's files; writers hold its lock):
   remote trust enroll add @RECORD
   remote trust enroll revoke RUNTIME [--profile tls-tcp|quic]
   remote trust import @PEER
+  remote credential new [--days N]
+  remote credential show
+  remote credential rotate [--days N]
   audit evidence ls
   audit evidence export --seq N [--out FILE]
   state list
@@ -133,7 +136,11 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).
 remote trust: CERT is a DER certificate file, the anchor's id its BLAKE3-256
 unless --id names one; @RECORD is one logos.runtime_enrollment
 remote_runtime_enrollment and @PEER a logos-core-nim.remote-peer.v1 file, each
-.cbor or .diag. Every change applies at the next start of logosd."""
+.cbor or .diag. Every change applies at the next start of logosd.
+remote credential: this Runtime's TLS key and self-signed certificate (valid
+--days, default 3650), and peer.cbor, the anchor and enrollment each peer
+imports; rotate writes the next one, taken up at the next start of logosd
+with remote.enabled (a cutover)."""
     DefaultTimeoutMs = 65_000
     ExitOk = 0
     ExitUsage = 1
@@ -2020,11 +2027,125 @@ remote_runtime_enrollment and @PEER a logos-core-nim.remote-peer.v1 file, each
     else:
       err(usage("unknown remote trust command " & sub))
 
+  # Remote credential (G409) --------------------------------------------------------------
+
+  proc isoTime(t: int64): string =
+    try:
+      fromUnix(t).utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
+    except CatchableError:
+      $t
+
+  proc credentialJson(i: CredentialInfo): JsonNode =
+    %*{
+      "runtime": keyOf(i.peer.enrollment).runtime,
+      "revision": i.revisionOf,
+      "certificate_sha256": lowerHex(i.certificateSha256),
+      "anchor_id": lowerHex(i.anchorId),
+      "spki": lowerHex(i.spki),
+      "certificate": lowerHex(i.certificate),
+      "not_before": isoTime(i.notBefore),
+      "not_after": isoTime(i.notAfter),
+      "peer_file": i.peerFile,
+    }
+
+  proc credentialRows(i: CredentialInfo, what: string): seq[seq[string]] =
+    @[
+      @[what, i.dir],
+      @["runtime", keyOf(i.peer.enrollment).runtime],
+      @["enrollment revision", $i.revisionOf],
+      @["certificate sha-256", lowerHex(i.certificateSha256)],
+      @["anchor id", lowerHex(i.anchorId)],
+      @["key (spki)", lowerHex(i.spki)],
+      @["valid", isoTime(i.notBefore) & " to " & isoTime(i.notAfter)],
+      @["peer file", i.peerFile],
+    ]
+
+  proc daysOpt(c: Cli): Result[int, Fail] =
+    let v = c.opt("days")
+    if v.isNone:
+      return ok(DefaultValidityDays)
+    let n =
+      try:
+        parseInt(v.get)
+      except ValueError:
+        return err(usage("--days takes a number of days"))
+    if n notin 1 .. MaxValidityDays:
+      return err(usage("--days is 1 to " & $MaxValidityDays))
+    ok(n)
+
+  proc cmdRemoteCredential(c: Cli, s: Session): Result[Done, Fail] =
+    let sub = ?c.arg(2, "new, show or rotate")
+    case sub
+    of "new", "rotate":
+      let days = ?daysOpt(c)
+      var lock = ?locked(s)
+      defer:
+        lock.release()
+      let (dc, _) = readDaemonConfig(s).valueOr:
+        return err(fail(ExitUsage, error))
+      let runtime = dc.runtime.runtime_instance_id
+      let made = (
+        if sub == "new":
+          newCredential(s, runtime, days)
+        else:
+          rotateCredential(s, runtime, days)
+      ).valueOr:
+        return err(fail(ExitUsage, error))
+      let give =
+        "give each peer " & made.peerFile &
+        " (logosctl remote trust import @peer.cbor there)"
+      let text =
+        if sub == "new":
+          "a TLS credential for Runtime " & runtime & ", enrolled at revision 1; " & give &
+            "; logosd uses it at its next start with remote.enabled"
+        else:
+          "the next TLS credential, enrolled at revision " & $made.revisionOf &
+            " with the new key alone, is in remote/" & NextCredentialName & "; " & give &
+            "; logosd takes it up at its next start with remote.enabled. A rotation " &
+            "is a cutover: connections with a peer fail until it holds the new record"
+      ok(
+        s.offline(
+          "remote credential " & sub,
+          credentialJson(made),
+          text & "\n" & table(["FIELD", "VALUE"], credentialRows(made, "credential")),
+        )
+      )
+    of "show":
+      let cur = currentCredential(s).valueOr:
+        return err(fail(ExitUsage, error))
+      let next = pendingCredential(s).valueOr:
+        return err(fail(ExitUsage, error))
+      let count = readHolderCount(s).valueOr:
+        return err(fail(ExitUsage, error))
+      var j = %*{"credential": nil, "pending": nil, "key_holder": nil}
+      var rows: seq[seq[string]]
+      if cur.isSome:
+        j["credential"] = credentialJson(cur.get)
+        rows.add(credentialRows(cur.get, "credential"))
+      else:
+        rows.add(@["credential", "none (remote credential new makes one)"])
+      if next.isSome:
+        j["pending"] = credentialJson(next.get)
+        rows.add(credentialRows(next.get, "pending rotation"))
+      if count.isSome:
+        j["key_holder"] = %*{"signed": count.get.signed, "refused": count.get.refused}
+        rows.add(
+          @[
+            "key holder",
+            $count.get.signed & " signed, " & $count.get.refused & " refused",
+          ]
+        )
+      ok(s.offline("remote credential show", j, table(["FIELD", "VALUE"], rows)))
+    else:
+      err(usage("unknown remote credential command " & sub))
+
   proc cmdRemote(c: Cli, s: Session): Result[Done, Fail] =
     let sub = ?c.arg(1, "a remote command")
     case sub
     of "trust":
       cmdRemoteTrust(c, s)
+    of "credential":
+      cmdRemoteCredential(c, s)
     else:
       err(usage("unknown remote command " & sub))
 

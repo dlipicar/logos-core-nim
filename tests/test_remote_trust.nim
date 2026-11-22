@@ -10,9 +10,11 @@ when defined(posix):
   import unittest2
   import logos_sdk/cbor
   import
-    ../src/logos_core/daemon/
-      [config, daemon_config_types, remotetrust, session, sessioninit]
-  import ../src/logos_core/transport/tls/p256
+    ../src/logos_core/daemon/[
+      config, credential, daemon_config_types, evkey, remotetrust, session, sessioninit
+    ]
+  import ../src/logos_core/runtime/evidence
+  import ../src/logos_core/transport/tls/[p256, x509]
   from ../src/logos_core/durable import ensurePrivateDir, removeIfPresent, writeAtomic
   import ./support/[daemonbuild, daemonproc, genfixtures_core, shortdir, slowdown]
   from logos_sdk/testing/kitbuild import kitVariant
@@ -437,6 +439,97 @@ when defined(posix):
       check one.status == rsActive and one.anchor == anchorName(anchorIdOf(b.cert))
       check anchorName([0x0a'u8, 0xff]) == "0aff"
 
+    test "[IMPL-DECISION G409] [TRN-0369] the TLS credential: a P-256 key and a self-signed ecdsa-with-SHA256 certificate that can be a direct anchor, its peer file, and rotation as a cutover the next start takes up, also after a crash":
+      let s = newSession()
+      check newCredential(s, "not-a-uuid").isErr
+      let c = newCredential(s, IdA).get
+      # The one algorithm pair the tls-tcp profile of this implementation
+      # offers and accepts: every intended peer supports it (T l.1219).
+      check directAnchorProblems(c.certificate).len == 0
+      let x = parseCertificate(c.certificate).get
+      check X509_get_signature_nid(x) == NID_ecdsa_with_SHA256
+      X509_free(x)
+      let info = readCertificate(c.certificate).get
+      check info.hasKeyUsage and info.digitalSignature and not info.hasExtKeyUsage
+      check info.notAfter - info.notBefore >= int64(DefaultValidityDays) * 86400
+      for name in [KeyName, CertName, PeerName]:
+        check getFilePermissions(s.credentialDir / name) == {fpUserRead, fpUserWrite}
+      check c.peer.anchor.id == anchorIdOf(c.certificate) and
+        c.anchorId == c.peer.anchor.id
+      check c.peer.enrollment.active and revisionOf(c.peer.enrollment) == 1
+      check keyOf(c.peer.enrollment).runtime == IdA
+      check keyOf(c.peer.enrollment).profile == TlsTcpProfile
+      check keysOf(c.peer.enrollment) == @[c.spki]
+      check c.certificateSha256.len == 32
+      # The peer file is what `remote trust import` takes on a peer.
+      let peerBytes = readFile(c.peerFile)
+      let peer = decodePeer(peerBytes.toOpenArrayByte(0, peerBytes.high)).get
+      check LcnRemoteTrust(revision: 1).withPeer(peer).get.enrollments.len == 1
+      let k = loadCredentialKey(s.credentialDir).get
+      check k.spkiDer.get == c.spki
+      k.free()
+      check newCredential(s, IdA).error.contains("rotate")
+      check rotateCredential(s, IdB).isErr
+      let n = rotateCredential(s, IdA).get
+      check n.revisionOf == 2 and n.spki != c.spki and n.anchorId != c.anchorId
+      check keysOf(n.peer.enrollment) == @[n.spki]
+      check rotateCredential(s, IdA).error.contains("pending")
+      check currentCredential(s).get.get.revisionOf == 1
+      check pendingCredential(s).get.get.revisionOf == 2
+      check takeUpCredential(s).get
+      check currentCredential(s).get.get.spki == n.spki
+      check pendingCredential(s).get.isNone
+      check not takeUpCredential(s).get
+      # A crash between the two renames: the next start finishes the move.
+      discard rotateCredential(s, IdA).get
+      moveDir(s.credentialDir, s.remoteDir / OldCredentialName)
+      check takeUpCredential(s).get
+      check currentCredential(s).get.get.revisionOf == 3
+      check not dirExists(s.remoteDir / OldCredentialName)
+      # A crash after the second rename: the old credential is removed.
+      createDir(s.remoteDir / OldCredentialName)
+      check not takeUpCredential(s).get
+      check not dirExists(s.remoteDir / OldCredentialName)
+      # Protected files only: a key others may read, a link, a key that is not
+      # the certificate's.
+      let keyFile = s.credentialDir / KeyName
+      setFilePermissions(keyFile, {fpUserRead, fpUserWrite, fpGroupRead})
+      check loadCredentialKey(s.credentialDir).error.contains("group or other")
+      check currentCredential(s).isErr
+      setFilePermissions(keyFile, {fpUserRead, fpUserWrite})
+      let saved = readFile(keyFile)
+      let other = newP256Key().get
+      check writeAtomic(s.credentialDir, KeyName, other.toPkcs8.get).isOk
+      other.free()
+      check loadCredentialKey(s.credentialDir).error.contains("is not the key of")
+      check writeAtomic(s.credentialDir, KeyName, saved.toOpenArrayByte(0, saved.high)).isOk
+      check loadCredentialKey(s.credentialDir).isOk
+      moveFile(keyFile, s.dir / "key.p8")
+      createSymlink(s.dir / "key.p8", keyFile)
+      check loadCredentialKey(s.credentialDir).error.contains("not a regular file")
+
+    test "[PKG-0435] [IMPL-DECISION G409] the TLS key and the call-evidence key: each loader refuses the other's file, by shape and by path":
+      let s = newSession()
+      discard newCredential(s, IdA).get
+      let ev = createEvidenceKey(s.keysDir, IdA).get
+      let tlsKey = s.credentialDir / KeyName
+      # The evidence loader takes 96 bytes of SLH-DSA beside their binding: not
+      # the TLS key.
+      check loadEvidenceKey(tlsKey).isErr
+      check checkEvidenceKey(tlsKey, ev.binding.kid, IdA).isErr
+      # The TLS loader takes one PKCS#8 P-256 key at its own path: not the
+      # evidence key's bytes there, and not a link to the evidence key.
+      let evBytes = readFile(ev.keyFile)
+      check writeAtomic(
+        s.credentialDir, KeyName, evBytes.toOpenArrayByte(0, evBytes.high)
+      ).isOk
+      check loadCredentialKey(s.credentialDir).error.contains("PKCS#8")
+      removeFile(tlsKey)
+      createSymlink(ev.keyFile, tlsKey)
+      check loadCredentialKey(s.credentialDir).error.contains("not a regular file")
+      # And the evidence key stays the evidence key's.
+      check checkEvidenceKey(ev.keyFile, ev.binding.kid, IdA).isOk
+
   # As processes ---------------------------------------------------------------------------
 
   let
@@ -527,8 +620,13 @@ when defined(posix):
       check no and "remote trust init" in log2
       let made = c.ctl("remote", "trust", "init")
       check made.code == 0 and AppliesAtNextStart in made.stdout
+      # [G409] and a TLS credential.
+      var (noKey, logK) = c.refusedStart()
+      check noKey and "logosctl remote credential new" in logK
+      check c.ctl("remote", "credential", "new").code == 0
       var (ok2, log3) = c.runs()
       check ok2 and "remote trust: revision 1, 0 anchors, 0 enrollment keys" in log3
+      check "enrollment revision 1, signed by logosd" in log3
       # A conflict: logged, and the start goes on.
       c.s.put(2, @[a.anchor], @[a.active(1)])
       check c.runs()[0]
@@ -541,13 +639,14 @@ when defined(posix):
       c.s.put(4, @[a.anchor], @[a.active(0)])
       let (stale, log5) = c.refusedStart()
       check stale and "stale record" in log5
-      if not (ok1 and ok2 and ok3 and stale):
-        checkpoint(log1 & log2 & log3 & log4 & log5)
+      if not (ok1 and ok2 and ok3 and stale and noKey):
+        checkpoint(log1 & log2 & logK & log3 & log4 & log5)
 
     test "[IMPL-DECISION G408] logosctl remote trust: every change says it applies at the next start and revoke that the restart closes the connections; the writers are refused while logosd runs; show gives the input, the mark and the report":
       let c = newCase()
       check c.initRemote(true).code == 0
       check c.ctl("remote", "trust", "init").code == 0
+      check c.ctl("remote", "credential", "new").code == 0
       let certPath = c.dir / "a.der"
       writeFile(certPath, textOf(a.cert))
       let d = c.start()
@@ -595,5 +694,83 @@ when defined(posix):
       check ok and
         "remote trust: revision 5, 2 anchors, 2 enrollment keys (a higher revision: the mark moved)" in
         log
+      if not ok:
+        checkpoint(log)
+
+    test "[RUN-0498] [IMPL-DECISION G408] the mark is durable before the revision is used: logosd killed once it says the mark moved, the next start replays that revision and writes nothing":
+      let c = newCase()
+      check c.initRemote(true).code == 0
+      check c.ctl("remote", "trust", "init").code == 0
+      check c.ctl("remote", "credential", "new").code == 0
+      check c.runs()[0]
+      c.s.put(2, @[a.anchor], @[a.active(1)])
+      let moved =
+        "remote trust: revision 2, 1 anchors, 1 enrollment keys (a higher revision: the mark moved)"
+      let d = c.start()
+      var seen = false
+      for _ in 0 ..< ReadyMs div 10:
+        if moved in d.errText:
+          seen = true
+          break
+        if not d.alive:
+          break
+        sleep(10)
+      # SIGKILL: no stop, no exit procedure, nothing written after the line.
+      d.killChild()
+      check seen
+      let m = readRemoteMark(c.s).get.get
+      check m.revision == 2 and m.anchors == @[a.anchor] and m.enrollments.len == 1
+      let before = markText(c.s)
+      let (ok, log) = c.runs()
+      check ok and "remote trust: revision 2, 1 anchors, 1 enrollment keys" in log
+      check "the mark moved" notin log
+      check markText(c.s) == before
+      if not (seen and ok):
+        checkpoint(d.errText & log)
+
+    test "[IMPL-DECISION G409] logosctl remote credential: new, show and rotate offline, refused while logosd runs; the peer file imports on a peer; the next start takes the rotation up":
+      let c = newCase()
+      check c.initRemote(true).code == 0
+      check c.ctl("remote", "trust", "init").code == 0
+      let made = c.ctl("remote", "credential", "new")
+      check made.code == 0
+      check "enrolled at revision 1" in made.stdout
+      check "remote trust import @peer.cbor" in made.stdout
+      check c.ctl("remote", "credential", "new").code == 1
+      var j = c.ctlJson("remote", "credential", "show")
+      check j{"result", "credential", "revision"}.getInt == 1
+      check j{"result", "pending"}.kind == JNull
+      let peerFile = j{"result", "credential", "peer_file"}.getStr
+      let runtime = j{"result", "credential", "runtime"}.getStr
+      check runtime.len == 36
+      let sha = j{"result", "credential", "certificate_sha256"}.getStr
+      check sha.len == 64
+      let d = c.start()
+      check c.ready(d)
+      let busy = c.ctl("remote", "credential", "rotate")
+      check busy.code == 1 and SessionBusy in busy.stderr
+      check stopChild(d, StopMs) == 0
+      let rot = c.ctl("remote", "credential", "rotate")
+      check rot.code == 0
+      check "enrolled at revision 2 with the new key alone" in rot.stdout
+      check "cutover" in rot.stdout
+      check c.ctl("remote", "credential", "rotate").code == 1
+      j = c.ctlJson("remote", "credential", "show")
+      check j{"result", "credential", "revision"}.getInt == 1
+      check j{"result", "pending", "revision"}.getInt == 2
+      # A peer imports this Runtime's anchor and record from the peer file.
+      let p = newCase()
+      check p.initRemote(true).code == 0
+      check p.ctl("remote", "trust", "init").code == 0
+      let imp = p.ctl("remote", "trust", "import", "@" & peerFile)
+      check imp.code == 0 and "remote trust revision 2" in imp.stdout
+      # The next start takes the rotation up.
+      let (ok, log) = c.runs()
+      check ok and "the rotation is taken up" in log
+      check "enrollment revision 2, signed by logosd" in log
+      j = c.ctlJson("remote", "credential", "show")
+      check j{"result", "credential", "revision"}.getInt == 2
+      check j{"result", "pending"}.kind == JNull
+      check j{"result", "credential", "certificate_sha256"}.getStr != sha
       if not ok:
         checkpoint(log)

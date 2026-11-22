@@ -34,6 +34,7 @@ suite "core.nim-types: core's generated modules (D29)":
       check generatedLcnCallExports(kind).get == readFile(lcnCallExportsPath(kind))
     check generatedStoreTypes().get == readFile(storeTypesPath)
     check generatedCarrierTypes().get == readFile(carrierTypesPath)
+    check generatedRemoteCarrierTypes().get == readFile(remoteCarrierTypesPath)
     check generatedCaTypes().get == readFile(caTypesPath)
     check generatedCaKit().get == readFile(caKitPath)
     check generatedLdrTypes().get == readFile(ldrTypesPath)
@@ -56,6 +57,7 @@ suite "core.nim-types: core's generated modules (D29)":
     check stamp in readFile(hostConfigTypesPath)
     check stamp in readFile(storeTypesPath)
     check stamp in readFile(carrierTypesPath)
+    check stamp in readFile(remoteCarrierTypesPath)
     for path in [
       caTypesPath, caKitPath, ldrTypesPath, ldrKitPath, policyTypesPath, stateTypesPath,
       orchTypesPath, orchConfigTypesPath, orchKitPath, orchStateTypesPath,
