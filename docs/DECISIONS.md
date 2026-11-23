@@ -7497,7 +7497,8 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   composition with `logosctl`'s own executable, which has no such hash. They cannot know which `logosd` will start,
   so they compose a stand-in at the companion library's place with an all-zero digest (`pmCompanion`), as they assume
   test hooks (G300), and the start decides. Found while writing `test_logosd_pm`: without it a packaged `logosctl`
-  refused every section without `artifact`.
+  refused every section without `artifact`. Accepted by planning (2026-11-23). `test_logosd_pm` covers both halves:
+  `init` and `daemon config check` accept such a section, and a `logosd` with no library refuses it at start.
 - **Decision (the start):** `logosd` appends `{logos_package_manager, package_manager}` to the orchestrator's
   defaults, after the operator's start list and before `systemRules` derives the rules, so rule S2 authorizes its
   start from the composed value, under `allow-all` and a Capability Authority policy alike. `orchestration.start`
@@ -7555,7 +7556,10 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   renewal during an extraction, the stop, the deadline), and its `big` package with them.
 - **The deviation:** the plan had `handoff` go in 5-6a-1. A successful handoff through the real module needs a system
   service caller, which 5-6a-2's binding brings, and the probe's handoff case needs an installed record. So `install`
-  and `handoff` stay in pmtest until 5-6a-2 moves that case to `test_system_binding`; the pair goes then.
+  and `handoff` stay in pmtest until 5-6a-2 moves that case to `test_system_binding`. Accepted by planning
+  (2026-11-23).
+- **What goes in 5-6a-2:** pmtest's `install` and `handoff`, with `test_pm_hosted`'s handoff case (to
+  `test_system_binding`, through the real module). pmtest is then `status` and `resolve` only, as the plan had it.
 - **Status:** built 5-6a-1 (I140); the pair's removal is 5-6a-2's.
 
 ### G497 — The facade's large-reply figures

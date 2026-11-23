@@ -324,6 +324,8 @@ when defined(posix):
 
   const
     CredentialStoreModule = "logos_credential_store" ## CS l.162; BCP l.280
+    OperatorStoreModule = "operator_store"
+      ## an operator module's name, outside the reserved prefix (G490)
     CredentialStoreDoc =
       "_module = \"logos_credential_store\"\n\nstore.changed_event = {\n  n: uint64,\n}\n"
       ## a provider of one event, so it needs no per-method function
@@ -658,7 +660,7 @@ when defined(posix):
         check f["started_at_boot"].getBool == false
         check comp.orchestrator.defaults.get(@[]).allIt(it.instance != CliInstance)
 
-    test "[BCP-0102] [TXT-0555] [TXT-0350] the admission pools' totals and per-consumer limits are the facts', and so is the authority's audit bound; logosd's Runtime instance is the engine with the facts' orchestration module and instance; logosd composes no Credential Store and refuses an operator module named logos_credential_store; a Module Host refuses it at binding":
+    test "[BCP-0102] [TXT-0555] [TXT-0350] the admission pools' totals and per-consumer limits are the facts', and so is the authority's audit bound; logosd's Runtime instance is the engine with the facts' orchestration module and instance; logosd composes no Credential Store, composes an operator module hosted, and a Module Host refuses a module named logos_credential_store at binding":
       # The pools (DEPLOYMENT.md §12, "Admission pools"), with logosd's
       # defaults: it sets no engine, authority or Transport limit.
       proc pool(total: int, perConsumer = -1): JsonNode =
@@ -714,9 +716,10 @@ when defined(posix):
       check a["unwritten_bound"].getInt == al.maxUnwritten
       check a["retained_records"].getInt == int(DefaultAuditRecords)
 
-      # No Credential Store (§25): none in init's composition; [G490] logosd
-      # refuses an operator's module of the name, and binding refuses it as a
-      # provider that is no Logos system module.
+      # No Credential Store (§25): none in init's composition; an operator's
+      # module is composed hosted, and binding refuses one named as the Credential
+      # Store, as a provider that is no Logos system module. logosd refuses an
+      # operator entry of that name before (G490: the case below).
       check facts["credential_store"].getStr == "none"
       let floor = TrustFileState(file: floorTrust())
       let s = Session(dir: makeShortBase("dplcs") / "s")
@@ -739,15 +742,18 @@ when defined(posix):
       var op = dc
       var m = chatterModule()
       m.instance = "credential-store"
-      m.module = CredentialStoreModule
+      m.module = OperatorStoreModule
       m.state_assignment = Opt.none(string)
       op.modules = Opt.some(@[m])
       op.runtime.module_host = Opt.some(hostExe)
       let p = prepareDaemon(s, op.encode.get, floor)
-      check p.isErr
-      if p.isErr:
-        check "modules: instance credential-store uses the reserved module-name prefix logos_" in
-          p.error
+      check p.isOk
+      if p.isOk:
+        let mods = p.get.composition.appConfig.modules
+        check mods.anyIt(
+          it.module == OperatorStoreModule and
+            it.implementation.kind == LcnAppImplementationKind.Process_hosted_dynamic
+        )
       let cs = credentialStoreCode()
       let bound = completeProbe(cs, probeCode(cs, CredentialStoreModule), false)
       check bound.isErr
@@ -756,6 +762,37 @@ when defined(posix):
         check "reserved for Logos system modules" in bound.error.message
       # The same code as a Logos system module binds: the name alone refuses it.
       check completeProbe(cs, probeCode(cs, CredentialStoreModule), true).isOk
+
+    test "[IMPL-DECISION G490] logosd refuses an operator module or declaration named logos_credential_store, as every name with the reserved prefix logos_ (DEPLOYMENT.md §25)":
+      let dc = defaultDaemonConfig("assigned-by-init")
+      let floor = TrustFileState(file: floorTrust())
+      let s = Session(dir: makeShortBase("dplcr") / "s")
+      var op = dc
+      op.runtime.module_host = Opt.some(hostExe)
+      var m = chatterModule()
+      m.instance = "credential-store"
+      m.module = CredentialStoreModule
+      m.state_assignment = Opt.none(string)
+      op.modules = Opt.some(@[m])
+      let p = prepareDaemon(s, op.encode.get, floor)
+      check p.isErr
+      if p.isErr:
+        check "modules: instance credential-store uses the reserved module-name prefix logos_" in
+          p.error
+      var decl = dc
+      decl.runtime.module_host = Opt.some(hostExe)
+      decl.declarations = Opt.some(
+        @[
+          daemon_config_types.LcnAppDeclaration(
+            module: CredentialStoreModule, implementation: m.implementation
+          )
+        ]
+      )
+      let q = prepareDaemon(s, decl.encode.get, floor)
+      check q.isErr
+      if q.isErr:
+        check "declarations: module logos_credential_store uses the reserved module-name prefix logos_" in
+          q.error
 
     test "[PKG-0422] a hosted instance's execution summary names its implementation and no signer or package: no execution depends on package-signing trust":
       l = hostedBoot()
