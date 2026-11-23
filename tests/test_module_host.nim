@@ -2,7 +2,8 @@
 ## Tier 4b step 4b-3, DECISIONS G264, G266; plan §2.2, §4.3) against a test
 ## owner of its carrier (`support/hostowner.nim`), with no engine: startup,
 ## lane 0 (init, apply, release), the ends of the carrier, and the spawn
-## (`hostsup.spawnProcess`, through a stand-in program).
+## (`hostsup.spawnProcess`, through a stand-in program), and the parent the
+## spawn names (`--parent=<pid>`, G264 amended 2026-11-21; Tier 5 step 5-7a-1).
 ##
 ## The module is `tests/kit/probe_impl.nim`, a consumer-only library that reads
 ## what to do from its state directory and writes what it saw there. The host
@@ -14,10 +15,11 @@ when defined(posix):
   import unittest2
   import results
   import logos_sdk/iface/outcome
+  import logos_sdk/base/parentwatch
   import ../src/logos_core/runtime/[carrier, hostio, hostsup]
   import ../src/logos_core/transport/io/endpoint
   from ../src/logos_core/transport/io/sock import fdClose, socketPair
-  from ../src/logos_core/host/state import ExitCarrierLost
+  from ../src/logos_core/host/state import ExitCarrierLost, ExitNotStartedByLoader
   import ./support/[childbuild, hostowner, modulehostbuild, shortdir]
   import ./support/trnowner
 
@@ -87,13 +89,48 @@ when defined(posix):
 
   suite "host.module: startup (plan §2.2)":
     test "[IMPL] H-1 started without a carrier on fd 3, or with fd 3 not a socket: exit 2":
-      check shellStatus("exec 3<&- ; exec " & quoteShell(host) & " 2>/dev/null") == 2
-      check shellStatus("exec " & quoteShell(host) & " 3</dev/null 2>/dev/null") == 2
+      # `$PPID` is this process: `sh` execs the host in its own place.
+      let named = quoteShell(host) & " --parent=$PPID"
+      check shellStatus("exec 3<&- ; exec " & named & " 2>/dev/null") == 2
+      check shellStatus("exec " & named & " 3</dev/null 2>/dev/null") == 2
+
+    test "[IMPL-DECISION G264] H-16 started with a carrier but no valid --parent=<pid>: exit 2":
+      for args in [
+        newSeq[string](),
+        @["--parent="],
+        @["--parent=12x"],
+        @["--parent=0"],
+        @["parent=1"],
+      ]:
+        var r = startHost(host, args = Opt.some(args))
+        defer:
+          r.stop()
+        check r.waitExit() and r.exitedWith == ExitNotStartedByLoader
+
+    test "[IMPL-DECISION G264] H-17 a --parent that is not the host's parent, as when the Runtime ended before the host set its watch and the host was adopted: exit 70":
+      # This suite's own parent: a live process, never the host's.
+      var r = startHost(host, args = Opt.some(@[ParentFlag & $getppid()]))
+      defer:
+        r.stop()
+      check r.waitExit() and r.exitedWith == ExitCarrierLost
+
+    test "[IMPL-DECISION G264] H-18 parentArg: the first --parent=<pid>, a positive decimal that fits pid_t":
+      check parentArg(["--parent=1234"]) == Opt.some(1234)
+      check parentArg(["x", "--parent=7", "--parent=8"]) == Opt.some(7)
+      check parentArg(["--parent=2147483647"]) == Opt.some(2147483647)
+      for bad in [
+        "--parent=", "--parent=0", "--parent=-1", "--parent=+1", "--parent= 1",
+        "--parent=1 ", "--parent=2147483648", "--parent=99999999999", "--parent=0x10",
+      ]:
+        check parentArg([bad]).isNone
+      check parentArg(newSeq[string]()).isNone
+      check parentArg(["--parent", "1"]).isNone
 
   suite "host.module: lane 0 init (LOADER §6)":
-    test "[LDR-0040] [LDR-0042] [LDR-0053] H-2 a consumer-only module: initialized without a call surface; its state directory and only the given environment reach it":
+    test "[LDR-0040] [LDR-0042] [LDR-0053] [IMPL-DECISION G442] H-2 a consumer-only module: initialized without a call surface; its state directory and only the given environment reach it, with this process's five sanitizer variables beside it":
       putEnv("LCN_PROBE_SECRET", "not for the host")
-      let dir = stateDir("env")
+      let want = deliverySettings()
+      let dir = stateDir("env", "env-of " & SanitizerEnv.join(" "))
       var r = startHost(host, env = @["LCN_PROBE_PASSED=1"])
       defer:
         r.stop()
@@ -107,6 +144,7 @@ when defined(posix):
       check "LCN_PROBE_PASSED" in env
       check "LCN_PROBE_SECRET" notin env
       check env.filterIt(it.startsWith("LCN_")) == @["LCN_PROBE_PASSED"]
+      check lines(dir, "envof") == want.mapIt(it[0] & "=" & it[1])
       check r.released()
       check lines(dir, "destroyed") == @["destroyed"]
 
@@ -369,7 +407,7 @@ when defined(posix):
         check toSeq(walkDir(dir)).len == 1 # `probe.cmd` alone: no init ran
 
   suite "host.module: spawn (plan §2.3, R4, R5)":
-    test "[IMPL] H-14 the child starts with an empty signal mask, default actions, only the allow-listed environment, /dev/null on fd 0, the lock on fd 5 and nothing above it":
+    test "[IMPL] H-14 the child starts with --parent=<the Runtime's pid> as its one argument, an empty signal mask, default actions, only the allow-listed environment, /dev/null on fd 0, the lock on fd 5 and nothing above it":
       # Built without Nim's own signal handlers, which would replace the
       # dispositions the spawn set before the probe could read them.
       let program = buildChild(
@@ -390,7 +428,9 @@ when defined(posix):
       let lockFd = posix.open(cstring(lockPath), O_RDWR or O_CLOEXEC)
       var lockStat: Stat
       discard fstat(lockFd, lockStat)
-      let s = newSupervisor(program, ["LCN_SPAWN_PASSED", "LCN_SPAWN_UNSET"])
+      let want = deliverySettings()
+      let s =
+        newSupervisor(program, @["LCN_SPAWN_PASSED", "LCN_SPAWN_UNSET"] & @SanitizerEnv)
       let h = s.newHost(nil, nil, nil, 1024).get
       check h.spawn(lock = lockFd).isOk
       discard pthread_sigmask(SIG_SETMASK, old, blocked)
@@ -402,10 +442,13 @@ when defined(posix):
           m.get.arm_lcn_Carrier_fatal.message.splitLines.filterIt(it.len > 0)
         else:
           @[]
+      check report.filterIt(it.startsWith("arg ")) == @["arg --parent=" & $getpid()]
       check "mask 0" in report
       for sig in ["pipe", "term", "int", "hup"]:
         check (sig & " dfl") in report
       check report.filterIt(it.startsWith("env LCN_")) == @["env LCN_SPAWN_PASSED"]
+      for (name, _) in want:
+        check ("env " & name) in report
       check "fd0 null" in report
       check ("fd5 " & $lockStat.st_dev & ":" & $lockStat.st_ino) in report
       check "fd6 closed" in report
@@ -413,6 +456,88 @@ when defined(posix):
       check e.exited and e.status == 0
       h.dropHost()
       s.closeSupervisor()
+
+  suite "host.module: sanitizer reports from a host (DECISIONS G442)":
+    test "[IMPL-DECISION G442] the canary checker: a file of one stack trace moves to the canary directory once its process is reaped; anything else stays, so the check fails on it":
+      let reports = work / "checker" / "sanitizer-reports"
+      removeDir(reports)
+      createDir(reports)
+      check logDirOf("halt_on_error=1:log_path=" & reports / "report:log_exe_name=1") ==
+        reports
+      check logDirOf("log_path=/a/report:log_path=" & reports / "report") == reports
+      check logDirOf("log_path=stderr") == ""
+      check logDirOf("halt_on_error=1") == ""
+      const
+        trace =
+          "    #0 0x1 in __sanitizer_print_stack_trace\n" &
+          "    #1 0x2 (h1.so+0xef521)\n    #2 0x3 in main\n\n"
+        report =
+          "WARNING: ThreadSanitizer: data race\n    #0 f\n" &
+          "SUMMARY: ThreadSanitizer: data race a.nim:1 in f\n"
+      check isOneTrace(trace)
+      check isOneTrace("#0 f\n")
+      check not isOneTrace("")
+      check not isOneTrace(trace & trace) # two traces: a report came after
+      check not isOneTrace(trace & report)
+      check not isOneTrace("    #1 0x2 in f\n") # not from #0
+      check not isOneTrace("    #0f\n")
+      writeFile(reports / "report.logos_module_host.41", trace)
+      writeFile(reports / "report.logos_module_host.42", trace & report)
+      writeFile(reports / "report.logos_module_host.431", trace)
+      check reportFileOf(reports, 43) == ""
+      check takeCanary(reports, 43) == coMissing
+      check takeCanary(reports, 42) == coNotATrace
+      check fileExists(reports / "report.logos_module_host.42")
+      check takeCanary(reports, 41) == coMoved
+      check not fileExists(reports / "report.logos_module_host.41")
+      check readFile(reports / CanaryDir / "report.logos_module_host.41") == trace
+      removeDir(work / "checker")
+
+    test "[IMPL-DECISION G442] a direct host's stack trace lands in the sanitizer check's report directory (the canary)":
+      when not Sanitized:
+        skip()
+      else:
+        let reports = reportsDir()
+        if reports.len == 0:
+          checkpoint(
+            "no log_path here: this suite was not run by tools/sanitizer/reports.sh"
+          )
+          skip()
+        else:
+          let dir = stateDir("sanitizer-trace")
+          var r = startHost(host)
+          defer:
+            r.stop()
+          check r.initialized(dir)
+          check lines(dir, "inits") == @["init", "sanitizer-trace"]
+          check r.released()
+          r.closeCarrier()
+          check r.waitExit() and r.exitedWith == 0
+          # Reaped: nothing more can land in its file.
+          check takeCanary(reports, r.pid) == coMoved
+
+    test "[IMPL-DECISION G442] a direct host started without the sanitizer settings writes no file there (the control; its trace goes to the suite's stderr)":
+      when not Sanitized:
+        skip()
+      else:
+        let reports = reportsDir()
+        if reports.len == 0:
+          checkpoint(
+            "no log_path here: this suite was not run by tools/sanitizer/reports.sh"
+          )
+          skip()
+        else:
+          let dir = stateDir("sanitizer-trace")
+          # [G442] sanitizer-env: the control, a host without them
+          var r = startHost(host, sanitizerEnv = false)
+          defer:
+            r.stop()
+          check r.initialized(dir)
+          check lines(dir, "inits") == @["init", "sanitizer-trace"]
+          check r.released()
+          r.closeCarrier()
+          check r.waitExit() and r.exitedWith == 0
+          check reportFileOf(reports, r.pid) == ""
 else:
   import unittest2
 

@@ -163,6 +163,10 @@ type
     termCode: ErrorCode
       ## while terminating: NOT_AUTHORISED (authority ended) or NOT_READY
       ## (readiness ended) (§8.1)
+    deferPayload: bool
+      ## [SPEC RUNTIME l.1835; G413] a Request is dispatched once its method
+      ## resolves and is in scope; its owner checks its payload
+      ## (`checkRequestPayload`) after the method's authorization
 
 func code*(e: PublishError): ErrorCode =
   ## [SPEC INTERFACE §2.9.3] The result of a publication boundary that has one;
@@ -190,11 +194,18 @@ func calleeConn*(
     limits = defaultLimits(),
     publishScope = Opt.none(HashSet[string]),
     pool: SlotPool = nil,
+    deferPayload = false,
 ): CalleeConn =
   ## `b` carries the route's method and subscription scope (`withAccess`),
   ## `publishScope` its publication scope; `pool` the loop's execution slots.
+  ## `deferPayload`: the owner checks each Request's payload itself.
   CalleeConn(
-    boundary: b, state: csOpen, limits: limits, publishScope: publishScope, pool: pool
+    boundary: b,
+    state: csOpen,
+    limits: limits,
+    publishScope: publishScope,
+    pool: pool,
+    deferPayload: deferPayload,
   )
 
 func limits*(c: CalleeConn): TransportLimits =
@@ -320,7 +331,11 @@ proc onRequest(c: var CalleeConn, r: Request, size: int): seq[CalleeAction] =
     # termination code and nothing that discloses its condition.
     c.dropParams(r)
     return @[send(responseErr(r.id, c.termFailure))]
-  let checked = c.boundary.acceptRequest(r)
+  let checked =
+    if c.deferPayload:
+      c.boundary.resolveRequest(r)
+    else:
+      c.boundary.acceptRequest(r)
   if checked.isErr:
     let rj = checked.error
     case rj.kind

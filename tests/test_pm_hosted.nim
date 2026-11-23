@@ -30,7 +30,7 @@ include ./support/routefixture
 
 when defined(posix):
   import logos_sdk/crypto/blake3
-  import ./support/[modulehostbuild, pmfixture, shortdir]
+  import ./support/[modulehostbuild, pmfixture, sanitizerenv, shortdir]
   import ../src/logos_core/package/trustdoc_types
   import ../src/logos_core/pm/[catalog, input_types]
   from ./support/trnowner import fastConfig, Ms
@@ -49,10 +49,7 @@ when defined(posix):
   proc capture(line: string) {.nimcall, gcsafe, raises: [].} =
     logged.add(line)
 
-  const
-    SanitizerEnv =
-      ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
-    Answer = 60 * Slow ## seconds: bounds a wait for the Package Manager
+  const Answer = 60 * Slow ## seconds: bounds a wait for the Package Manager
 
   let
     hostProgram = moduleHostProgram()

@@ -2,7 +2,7 @@
 """Holds the import direction between the SDK, core, the daemon and the CLI.
 
 [IMPL] The base set, the generators and the kit sit below core, and the daemon and the CLI
-sit above it. Eight rules keep that shape:
+sit above it. Nine rules keep that shape:
 
   sdk-closed          the SDK imports nothing outside the SDK
   base-below-binding  the SDK's base imports neither `codegen`, `kit` nor `testing`
@@ -13,13 +13,19 @@ sit above it. Eight rules keep that shape:
                       `chronos/...`, `pkg/chronos...`): a plain kit stays chronos-free
   core-below-daemon   core imports nothing from the daemon or the CLI
   daemon-no-tls       the daemon's and CLI's closure reaches no TLS engine (owner: no TLS in logosd)
+  daemon-no-ssl       in that closure only the `daemon_binding_importers` import the BoringSSL
+                      binding, and no module names a libssl function or constant (`SSL_...`,
+                      `TLS_...`, `DTLS1_...`, `TLSEXT_...`): logosd may sign with libcrypto, never
+                      speak TLS (Q2 (a) of Tier 5 step 5-7a)
   daemon-allowlist    the daemon and the CLI import only the reviewed core modules
   testing-test-only   only test code imports `logos_sdk/testing`
 
   python3 tools/lint/layers.py [--config tools/lint/layers.toml]
   python3 tools/lint/layers.py --self-test
 
-Prints `file:line: rule: ...` for each violation and exits 1 if there is any. The layer map,
+Prints `file:line: rule: ...` for each violation and exits 1 if there is any. A root that is not a
+directory, or one with no `.nim` file under the scanned trees, exits 2: from the wrong folder the
+lint would otherwise check nothing, and pass under a config that is not strict. The layer map,
 the allowlist and the recorded exceptions are in `layers.toml`. An exception or an allowlist
 entry that no import needs any more is itself a failure, so neither can go stale. With
 `strict = true` no exception is accepted and every layer must exist.
@@ -30,6 +36,8 @@ with bracket lists on later lines and with the prefix on the line before its bra
 """
 
 import argparse
+import contextlib
+import io
 import os
 import re
 import sys
@@ -39,6 +47,8 @@ import tomllib
 SCANNED = ("src", "tests", "tools", "sdk")
 SEARCH_PATHS = ("src", os.path.join("sdk", "src"))
 PATH_OP = re.compile(r"^[./]+$")
+LIBSSL_NAME = re.compile(r"^(SSL\d*|D?TLS\d*|TLSEXT)_")
+BINDING = "boringssl"
 OP_CHARS = set("=+-*/<>@$~&%|!?^.:\\")
 
 
@@ -335,10 +345,11 @@ def check(root, config):
     layers = config["layers"]
     strict = config.get("strict", False)
     files = nim_files(root)
-    edges, raw, findings = {}, {}, []
+    edges, raw, sources, findings = {}, {}, {}, []
     for path in files:
         with open(os.path.join(root, path), encoding="utf-8") as f:
             source = f.read()
+        sources[path] = source
         edges[path] = []
         raw[path] = imports_of(source)
         for module, line in raw[path]:
@@ -438,6 +449,19 @@ def check(root, config):
     for target in config["daemon_tls_forbidden"]:
         if target in seen:
             findings.append((target, 0, "daemon-no-tls", f"reached by {chain(seen, target)}"))
+    binding_importers = set(config.get("daemon_binding_importers", []))
+    for reached in sorted(p for p in seen if p in sources):
+        for module, line in raw.get(reached, ()):
+            name = module.removeprefix("pkg/")
+            if (name == BINDING or name.startswith(BINDING + "/")) and reached not in binding_importers:
+                findings.append(
+                    (reached, line, "daemon-no-ssl", f"imports {module}: {chain(seen, reached)}")
+                )
+        for kind, text, line, _, _ in tokenize(sources[reached]):
+            if kind == "id" and LIBSSL_NAME.match(text):
+                findings.append(
+                    (reached, line, "daemon-no-ssl", f"names {text}: {chain(seen, reached)}")
+                )
 
     if strict:
         for layer in sorted(sdk):
@@ -488,7 +512,8 @@ SELF_CONFIG = {
         "src/logos_core/transport/tls/boring.nim",
         "src/logos_core/transport/tls/engine.nim",
     ],
-    "daemon_allowlist": ["runtime/host"],
+    "daemon_binding_importers": ["src/logos_core/transport/tls/p256.nim"],
+    "daemon_allowlist": ["runtime/host", "transport/tls/p256"],
     "testing_importers": [],
     "pm_roots": ["src/logos_core/pm/", "src/logos_core/package/"],
     "pm_external_allowlist": ["results"],
@@ -521,10 +546,13 @@ CLEAN_TREE = {
     "sdk/tests/test_hex.nim": "import logos_sdk/base/hex\nimport logos_sdk/testing/helper\n",
     "src/logos_core/runtime/host.nim": "import logos_sdk/kit/rcclient\n",
     "src/logos_core/runtime/engine.nim": "import ./host\n",
-    "src/logos_core/transport/tls/boring.nim": "discard\n",
-    "src/logos_core/transport/tls/engine.nim": "import ./boring\n",
+    "src/logos_core/transport/tls/p256.nim": (
+        'import boringssl\n# SSL_new is libssl\nlet k = EVP_PKEY_new()\nlet s = "SSL_new"\n'
+    ),
+    "src/logos_core/transport/tls/boring.nim": "import ./p256\nlet c = SSL_CTX_new(nil)\n",
+    "src/logos_core/transport/tls/engine.nim": "import boringssl\nimport ./boring\n",
     "src/logos_core/transport/tls/signing.nim": "discard\n",
-    "src/logos_core/daemon/main.nim": "import ../runtime/host\n",
+    "src/logos_core/daemon/main.nim": "import ../runtime/host\nimport ../transport/tls/p256\n",
     "src/logos_core/cli/main.nim": "import ../daemon/main\n",
     "src/logosd.nim": "import ./logos_core/daemon/main\n",
     "tests/test_engine.nim": "import ../src/logos_core/daemon/main\nimport logos_sdk/testing/helper\n",
@@ -551,6 +579,12 @@ PLANTS = [
     ("core-below-daemon", "src/logos_core/runtime/bad.nim", "import ../../logosd\n"),
     ("daemon-no-tls", "src/logos_core/runtime/host.nim", "import ../transport/tls/boring\n"),
     ("daemon-no-tls", "src/logos_core/runtime/host.nim", "import ../transport/tls/engine\n"),
+    ("daemon-no-ssl", "src/logos_core/runtime/host.nim", "import boringssl\n"),
+    ("daemon-no-ssl", "src/logos_core/runtime/host.nim", "import pkg/boringssl\n"),
+    ("daemon-no-ssl", "src/logos_core/runtime/host.nim", "discard SSL_CTX_new(nil)\n"),
+    ("daemon-no-ssl", "src/logos_core/transport/tls/p256.nim", "import boringssl\ndiscard TLS_method()\n"),
+    ("daemon-no-ssl", "src/logos_core/transport/tls/p256.nim", "let v = TLS1_3_VERSION\n"),
+    ("daemon-no-ssl", "src/logos_core/daemon/main.nim", "let n = TLSEXT_NAMETYPE_host_name\n"),
     ("daemon-allowlist", "src/logos_core/daemon/bad.nim", "import ../runtime/engine\n"),
     ("daemon-allowlist", "src/logos_core/cli/bad.nim", "import ../runtime/engine\n"),
     ("testing-test-only", "src/logos_core/runtime/bad.nim", "import logos_sdk/testing/helper\n"),
@@ -647,12 +681,47 @@ def self_test():
         if not any(f[2] == "kit-facade" for f in run(no_facade, strict)):
             failures.append(f"strict accepted a missing facade root: {root}")
 
+    # The two runs that check nothing, under the config that would pass them (not strict, no
+    # allowlist), and the clean tree through the same entry.
+    loose = dict(SELF_CONFIG, daemon_allowlist=[])
+
+    def status(root, config):
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return lint(root, config)
+
+    with tempfile.TemporaryDirectory() as root:
+        if status(os.path.join(root, "missing"), loose) != 2:
+            failures.append("a missing root did not exit 2")
+        if status(root, loose) != 2:
+            failures.append("an empty root did not exit 2")
+        plant_tree(root, CLEAN_TREE)
+        if status(root, SELF_CONFIG) != 0:
+            failures.append("the clean tree did not exit 0 through lint")
+
     for failure in failures:
         print("self-test:", failure)
     if failures:
         return 1
-    print(f"layers self-test: {len(PARSED)} parses and {len(PLANTS)} planted violations caught")
+    print(
+        f"layers self-test: {len(PARSED)} parses and {len(PLANTS)} planted violations caught,"
+        " a missing and an empty root refused"
+    )
     return 0
+
+
+def lint(root, config):
+    """The exit status over `root`: 0 clean, 1 a finding, 2 nothing to check."""
+    if not os.path.isdir(root):
+        print(f"layers: {root}: not a directory", file=sys.stderr)
+        return 2
+    findings, (files, edges, excused) = check(root, config)
+    if not files:
+        print(f"layers: no .nim file under {root} ({', '.join(SCANNED)})", file=sys.stderr)
+        return 2
+    for path, line, rule, message in findings:
+        print(f"{path}:{line}: {rule}: {message}")
+    print(f"layers: {files} files, {edges} project imports, {excused} recorded exceptions")
+    return 1 if findings else 0
 
 
 def main():
@@ -665,11 +734,7 @@ def main():
         return self_test()
     with open(args.config, "rb") as f:
         config = tomllib.load(f)
-    findings, (files, edges, excused) = check(args.root, config)
-    for path, line, rule, message in findings:
-        print(f"{path}:{line}: {rule}: {message}")
-    print(f"layers: {files} files, {edges} project imports, {excused} recorded exceptions")
-    return 1 if findings else 0
+    return lint(args.root, config)
 
 
 if __name__ == "__main__":

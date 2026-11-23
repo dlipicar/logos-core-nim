@@ -31,6 +31,8 @@
 
 {.push raises: [].}
 
+import ./entrymarks
+
 {.compile: "thread_exit.c".}
 
 type Release* = proc() {.nimcall, gcsafe, raises: [].}
@@ -68,7 +70,12 @@ proc releaseAtNimThreadEnd() {.gcsafe, raises: [].} =
   releasePerThread()
   nimEnded = true
 
-proc releaseAtThreadExit() {.cdecl, gcsafe, raises: [].} =
+proc releaseAtThreadExit() {.
+    cdecl,
+    gcsafe,
+    raises: [],
+    lcnOwnRuntime: "lcn_on_thread_exit runs it as a thread enterThread registered exits"
+.} =
   # On a C thread this always runs, tables or not: the cycle collector's root
   # buffer is allocated by any call that drops a possibly cyclic reference, and
   # only a collection frees it (upstream draft 10). On a Nim thread the handler

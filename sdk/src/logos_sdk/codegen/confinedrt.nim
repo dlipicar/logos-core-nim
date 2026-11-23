@@ -966,7 +966,9 @@ proc newBlock(size: int): ptr OwnedBlock =
   if result != nil:
     result.size = size
 
-proc releaseBlock(state: pointer) {.cdecl, gcsafe, raises: [].} =
+proc releaseBlock(
+    state: pointer
+) {.cdecl, gcsafe, raises: [], lcnNoNimHeap: "the C allocator only".} =
   ## [SPEC INTERFACE §2.7.1, l.2085-2091] A completion's response owner: the
   ## response, or the failure's message and detail, zeroed and freed (G276).
   ## Any thread: only the C allocator.
@@ -1083,12 +1085,20 @@ proc completeDeferred(
   invocation.executionRelease(invocation)
   dj.unref()
 
+when defined(lcnTestHooks):
+  var liveDeferredTasks*: Atomic[int]
+    ## [DECISIONS G338, G437] Test hook: the deferred tasks of this library
+    ## begun and not yet ended, in every context. One that teardown abandoned
+    ## stays counted for the life of the process.
+
 proc deferredTask(dj: ptr DeferredJob) {.async: (raises: []).} =
   ## [SPEC INTERFACE §2.9.2; DECISIONS G338] One submitted invocation on the
   ## module thread: the route over the Runtime's method and request bytes,
   ## borrowed until the release (IFC-0752), with the invocation's own context
   ## (l.2131); then its scoped publications answered, its `Invocation`
   ## closed (IFC-0779), its completion and its release.
+  when defined(lcnTestHooks):
+    liveDeferredTasks += 1
   let job = addr dj.job
   let ctx = job.ctx
   let inv = startJob(job)
@@ -1118,6 +1128,8 @@ proc deferredTask(dj: ptr DeferredJob) {.async: (raises: []).} =
   inv.job = nil
   completeDeferred(dj, outcome)
   wipe(outcome)
+  when defined(lcnTestHooks):
+    liveDeferredTasks -= 1
 
 proc runCancel(task: ptr TaskNode, drop: bool) {.nimcall, gcsafe, raises: [].} =
   ## [SPEC INTERFACE §2.9.2 l.2112; DECISIONS G338] A cancellation notice on
@@ -1322,6 +1334,16 @@ when defined(lcnTestHooks):
     result = failInitAt == step
     if result:
       failInitAt = 0
+
+  proc blockOwnerForTests*(bytes: openArray[byte]): LogosResponseOwner =
+    ## [DECISIONS G467] Test hook: a completion's response owner holding a
+    ## copy of `bytes`, as `completeDeferred` makes one, so that a test can run its
+    ## release (`lcnNoNimHeap`) on a thread that never registered.
+    let b = newBlock(bytes.len)
+    doAssert b != nil
+    for i, x in bytes:
+      blockBytes(b)[i] = x
+    LogosResponseOwner(state: b, release: releaseBlock)
 
 when defined(posix):
   proc cDirfd(d: ptr DIR): cint {.importc: "dirfd", header: "<dirent.h>".}
@@ -2151,13 +2173,8 @@ proc poster*(s: ModuleServices): Poster =
   ## post gate value (DECISIONS G440), read without touching the context.
   Poster(s.gateOf)
 
-proc post*(p: Poster, fn: PostFn, payload: pointer) =
-  ## [IMPL] Runs `fn(payload)` on the module thread. Any thread, one the Nim
-  ## runtime never saw included: only the C allocator, and a failure aborts. A
-  ## callback still runs while `destroyModule` runs, which may await it; one
-  ## still queued when `destroyModule` has returned is dropped without running
-  ## (DECISIONS G437), so `fn` owns `payload` only once it runs; stop posting
-  ## before `destroyModule` returns.
+proc postRaw(p: Poster, fn: PostFn, payload: pointer) =
+  ## `post` without the mark's check: `lcn_kit_post`'s, whose callers are C.
   if pointer(p) == nil or fn == nil:
     die("post: a null poster or callback")
   let n = cast[ptr PostNode](cMalloc(csize_t(sizeof(PostNode))))
@@ -2184,6 +2201,16 @@ proc post*(p: Poster, fn: PostFn, payload: pointer) =
   fire(ctx.signal)
   release(ctx.lock)
   release(slot.lock)
+
+proc post*(p: Poster, fn: Entered[PostFn], payload: pointer) =
+  ## [IMPL] Runs `fn(payload)` on the module thread. Any thread, one the Nim
+  ## runtime never saw included: only the C allocator, and a failure aborts. A
+  ## callback still runs while `destroyModule` runs, which may await it; one
+  ## still queued when `destroyModule` has returned is dropped without running
+  ## (DECISIONS G437), so `fn` owns `payload` only once it runs; stop posting
+  ## before `destroyModule` returns. `fn` is `entered(p)` of a procedure marked
+  ## `{.lcnModuleThread.}` (DECISIONS G464, G465).
+  postRaw(p, fn.fn, payload)
 
 proc postTask(context: pointer, task: ptr TaskNode): bool =
   ## [DECISIONS G339, P1] The confined dispatcher's `post`: queues a task its
@@ -2228,10 +2255,16 @@ proc setDeliveryBound*(s: ModuleServices, events: int) =
 
 proc lcnKitPost(
     poster: pointer, fn: PostFn, payload: pointer
-) {.exportc: "lcn_kit_post", cdecl, gcsafe, raises: [].} =
+) {.
+    exportc: "lcn_kit_post",
+    cdecl,
+    gcsafe,
+    raises: [],
+    lcnNoNimHeap: "the C allocator, the gate's and the context's locks, and the signal"
+.} =
   ## `post` for C code linked into the module library (a Rust staticlib's
   ## threads): `void lcn_kit_post(void *poster, void (*fn)(void *), void *payload)`.
-  post(Poster(poster), fn, payload)
+  postRaw(Poster(poster), fn, payload)
 
 proc onItsModuleThread*(s: ModuleServices): bool =
   ## Whether the calling thread is the module thread of `s`'s context.

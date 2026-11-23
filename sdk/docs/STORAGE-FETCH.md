@@ -140,7 +140,7 @@ Package Manager; each provider documents what it means:
 
 | Provider | Encoding |
 |---|---|
-| storage_module | the binary manifest CID (G5); documented with Tier 5 steps 5-3b and N-4 |
+| storage_module | the binary form of a manifest CID: CIDv1, storage's manifest codec (G5, G428). Bytes that are not a CID, or a CID of another codec, answer `invalid-locator`; a manifest CID whose bytes do not decode as a manifest answers `unavailable`. `storage.upload_finalize` and `storage.upload_file` answer this locator beside the text CID. The longest one call takes at the module's defaults: `stat_object` 60 s direct, 120 s private (the manifest lookup bound); `read_object` 120 s direct, 180 s private (the lookup bound plus `fetch.read_timeout_ms`). At either bound it answers `unavailable`. A deployment that raises these bounds raises the consumer's deadline too (storage_module's README, "Serving `lcn.storage_fetch`") |
 | `fetch_fake_module` (tests only) | `fetch-fake/<size>/<seed>`, or `fetch-fake/state/<name>` for a file a test wrote (§6) |
 
 ## 6. The reference fake provider

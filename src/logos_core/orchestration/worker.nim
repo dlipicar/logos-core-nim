@@ -190,7 +190,7 @@ proc onEvent(
     cborData: ptr UncheckedArray[uint8],
     cborDataLen: csize_t,
     userData: pointer,
-) {.cdecl, gcsafe, raises: [].} =
+) {.lcnCallback.} =
   ## [SPEC RUNTIME l.3427] A hint only: the worker reads before it decides.
   let sh = cast[ptr Shared](userData)
   when defined(lcnTestHooks):
@@ -228,7 +228,7 @@ proc onComplete(
     responseCbor: ptr UncheckedArray[uint8],
     responseCborLen: csize_t,
     owner: LogosResponseOwner,
-) {.cdecl, gcsafe, raises: [].} =
+) {.lcnCallback.} =
   let slot = cast[ptr Slot](userData)
   let (code, copy) = readCompletion(status, responseCbor, responseCborLen, owner)
   let sh = slot.shared
@@ -411,7 +411,7 @@ proc issue(w: var Worker, v: View, d: Decision, memo: var Memo): bool =
         instance: Opt.some(v.instance),
         expected_execution_revision: Opt.some(d.revision),
       ),
-      onComplete,
+      entered(onComplete),
       slot,
       slot.call,
     )
@@ -424,7 +424,7 @@ proc issue(w: var Worker, v: View, d: Decision, memo: var Memo): bool =
         instance: Opt.some(v.instance),
         expected_execution_revision: Opt.some(d.revision),
       ),
-      onComplete,
+      entered(onComplete),
       slot,
       slot.call,
     )
@@ -435,7 +435,7 @@ proc issue(w: var Worker, v: View, d: Decision, memo: var Memo): bool =
       LogosNSRuntimeControlRecoverModuleRequest(
         module: v.module, instance: v.instance, expected_execution_revision: d.revision
       ),
-      onComplete,
+      entered(onComplete),
       slot,
       slot.call,
     )
@@ -597,7 +597,7 @@ proc bringUp(w: var Worker) =
 
 proc subscribeAll(w: var Worker): seq[LogosSubscriptionId] =
   for e in Events:
-    let r = subscribe(w.rc, e, onEvent, w.sh)
+    let r = subscribe(w.rc, e, entered(onEvent), w.sh)
     if r.isOk:
       result.add(r.get)
     else:

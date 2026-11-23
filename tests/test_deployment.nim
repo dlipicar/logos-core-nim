@@ -15,6 +15,7 @@
 when defined(posix):
   import std/[algorithm, json, locks, monotimes, os, sequtils, strutils, tables, times]
   import unittest2
+  import ./support/sanitizerenv
   import logos_sdk/crypto/blake3
   import ../src/logos_core/permissions
   import ../src/logos_core/runtime/[engine, host], logos_sdk/kit/[rc_arms, rc_types]
@@ -59,8 +60,6 @@ when defined(posix):
     StopDeadlineMs = 10_000 * Slow
       ## `stop_deadline_ms` and `shutdown_grace_ms` here: the defaults, scaled
       ## under a sanitizer as `test_logosd` does; no case is about them
-    SanitizerEnv =
-      ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
     ChatterInstance = "chatter-1"
     ChatterState = "chatter-state"
     Document = staticRead("../docs/DEPLOYMENT.md")
@@ -124,7 +123,7 @@ when defined(posix):
     hostExe = moduleHostProgram()
     chatterLib = buildKitLibrary("chatter_impl.nim", "dplchatter")
     beaconRoot = @(
-      acceptContractSet(readFile(repoDir / fixtureDir / "beacon_module.cddl"))
+      acceptContractSet(readFile(fixtureDir / "beacon_module.cddl"))
       .expect("the beacon_module contract set").primary.root
     ) ## so `chatter-1` is a provider: its endpoint is made in `run/ep`
 
@@ -496,11 +495,11 @@ when defined(posix):
           i = text.find("logos.", j)
 
       var mirrored: seq[string]
-      for f in walkDirRec(repoDir / "spec" / "mirrors"):
+      for f in walkDirRec("spec" / "mirrors"):
         mirrored.add readFile(f).tokens(quoted = false)
       var seen = 0
       for root in ["src", "sdk" / "src"]:
-        for f in walkDirRec(repoDir / root):
+        for f in walkDirRec(root):
           var found: seq[string]
           if f.endsWith(".nim"):
             found = readFile(f).tokens(quoted = true)

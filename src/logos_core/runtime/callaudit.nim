@@ -45,6 +45,7 @@ import results
 import logos_sdk/cbor
 import ../authority/scopes
 from ../transport/envelope import PayloadCommitment, wipe
+import ./forwarded
 
 export PayloadCommitment
 
@@ -139,8 +140,9 @@ proc callRecord*(
   let complete =
     (not c.retainRequest or t.request.isSome) and
     (not c.retainResponse or t.response.isSome)
+  let parts = consumerParts(c.runtimeId, c.consumer) # [G413] forwarded too
   let consumer =
-    Address(runtime_instance_id: c.runtimeId, module_instance_id: c.consumer)
+    Address(runtime_instance_id: parts.runtime, module_instance_id: parts.instance)
   if t.succeeded and complete and commitments.isSome:
     ok(
       AuditRecord(

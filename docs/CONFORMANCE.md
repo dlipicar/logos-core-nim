@@ -7,8 +7,8 @@ of its units. `tools/spectrace/spectrace.py` does the bookkeeping. In the dev sh
 
 ## Requirement ledger
 
-Each spec's files sit under the conformance tree of the package that owns them: `conformance/` for core
-and `sdk/conformance/` for the SDK (CDE, CMT and HSH). `<tree>/requirements/<PFX>.jsonl` holds one line per unit. The first line records the spec file,
+Each spec's ledger sits under the conformance tree of the package that owns it: `sdk/conformance/` for the
+SDK (CDE, CMT, HSH and IFC) and `conformance/` for core (the rest). `<tree>/requirements/<PFX>.jsonl` holds one line per unit. The first line records the spec file,
 the spec revision and the next free ID.
 
 | Prefix | Spec | Prefix | Spec |
@@ -45,8 +45,11 @@ match the pinned specs.
 
 ## Claims
 
-`<tree>/claims/<PFX>.toml` gives each section a status. A spec two packages share has a claims file in each,
-and `spectrace owners` holds that each unit has one owner. The longest matching section key wins,
+`<tree>/claims/<PFX>.toml` gives each section a status. Each unit is claimed by the package that implements
+its rule (DECISIONS R8). A spec two packages share (IFC, RUN, CFG) has a claims file in each, and each
+gives the other package's units `out-of-scope:<package>`. `spectrace owners` holds that each unit has one
+owner, that a unit neither claims has the same status in both files, and that a claimed unit's tests and
+inspection items are in its owner's trees. The longest matching section key wins,
 and `default` covers the rest. Section keys are `§4.4`, `App B.1`, or `§1/Heading` for an unnumbered
 heading under a numbered one.
 
@@ -522,6 +525,12 @@ the facade process that passes the invocation's Runtime as the one expected (5-7
 also run the carrier against pyOpenSSL (G128, suite `tls.independent peer`); where `LCN_TLS_PEER_PYTHON` is
 not set, as under `nimble test`, those five cases are skipped.
 
+Part 5-7a-1 adds the protected input the snapshot is built from: logosd's remote trust input and its
+mark (G408), accepted at the start before any connection (TRN-0217), and the Runtime's own credential
+(G409), the one algorithm pair this implementation offers and accepts (TRN-0369). The handshakes are
+signed through the control channel by logosd's signing service, its key holder or, in tests, the
+process itself (G410), each in `test_remote_tls`.
+
 Part 5-2d pinned nim-boringssl 0.0.16 and turned on its `BORINGSSL_ZERO_RECORD_BUFFERS` (G327). The re-pin
 to 6cac8335 took the option off again (P4d): the new text forbids marked payloads on `tls-tcp` and `quic`
 whatever the library does (TRANSPORT l.1188-1189; RUNTIME l.1808, l.2939), so the build is upstream's
@@ -712,7 +721,8 @@ marker) and the catalog and provenance selections. Its schema and rules are core
   package name are 1 to 128 bytes and a key 48 bytes. The number of anchors and names is bounded only by
   the file's size.
 - **Key separation** (PM l.533): no anchor may use a call-evidence key of the session, retired ones
-  included. It supplies evidence to PKG-0435, which stays with step 5-7a until the TLS key exists.
+  included. It supplies evidence to PKG-0435, claimed since step 5-7a-1, where the TLS key and the
+  evidence key each refuse the other's file (G409).
 
 ### What Tier 5 step 5-3b-1 changes
 
@@ -1399,6 +1409,10 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `
   B1: tests only); `engine.newTlsContextForTests` makes settings no conforming peer has (TLS 1.2
   allowed, or no certificate) to show the refusals; `stream.abortForTests` ends a connection without
   close_notify. All are called by `test_remote_tls`, which is also an audit build (`base/wipeaudit`).
+- Signing with the TLS key (G410): `remote.signing = "process-copy"` and `signsvc.testKeyMessage`,
+  which send the key to a TLS process, exist only in a build with `-d:logosTestSigning` (owner
+  decision B1: tests only); a packaged logosd refuses the setting. `test_remote_signing` and
+  `test_remote_tls` are built with it.
 
 No deployment binary contains them.
 
@@ -1422,7 +1436,10 @@ ids = ["HSH-0004"]
 reason = "Statement about what a profile document must contain; satisfied by HASH itself."
 ```
 
-`spectrace gate` (a flake check) fails when a claimed unit has no test or inspection item, when a
+A unit's evidence counts only in its owner's trees: a test under `tests/` for core or `sdk/tests/` for the
+SDK, or an item in that package's `conformance/inspection/` (R8).
+
+`spectrace gate` (a flake check) fails when a claimed unit has no test or inspection item there, when a
 test names an unknown or retired ID, when a claims file has an invalid status, when an inspection item
 names a unit that is not claimed (inspection stands for a test, so it covers claimed units only), or,
 with `--closed-tier N`, when any status defers to tier N. It prints the deferred units per label.

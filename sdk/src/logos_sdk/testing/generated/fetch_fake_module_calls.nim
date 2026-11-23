@@ -959,33 +959,33 @@ template exportFetchFakeModuleCalls*() =
     kitEnter()
     callInvoke0(p0, p1, p2, p3, p4, p5)
 
-  proc fetchFakeModuleCallsClear0(p1: ptr LogosResponseOwner) {.exportc: "lcn_clear_fetch_fake_Set_fault", dynlib, cdecl, gcsafe, raises: [].} =
+  proc fetchFakeModuleCallsClear0(p1: ptr LogosResponseOwner) {.exportc: "lcn_clear_fetch_fake_Set_fault", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear0(p1)
 
   proc fetchFakeModuleCallsInvoke1(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: ptr UncheckedArray[logos_fetch_fake_Set_readiness_request_Held_LI_t], p3: csize_t, p4: ptr logos_fetch_fake_Set_readiness_request_Readiness_t): LogosResult {.exportc: "lcn_invoke_fetch_fake_Set_readiness", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
     callInvoke1(p0, p1, p2, p3, p4)
 
-  proc fetchFakeModuleCallsClear1(p1: ptr LogosResponseOwner) {.exportc: "lcn_clear_fetch_fake_Set_readiness", dynlib, cdecl, gcsafe, raises: [].} =
+  proc fetchFakeModuleCallsClear1(p1: ptr LogosResponseOwner) {.exportc: "lcn_clear_fetch_fake_Set_readiness", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear1(p1)
 
   proc fetchFakeModuleCallsInvoke2(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: ptr logos_lcn_NS_storage_fetch_Readiness_t): LogosResult {.exportc: "lcn_invoke_lcn_NS_storage_fetch_Fetch_readiness", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
     callInvoke2(p0, p1, p2)
 
-  proc fetchFakeModuleCallsClear2(p1: ptr LogosResponseOwner, p2: ptr logos_lcn_NS_storage_fetch_Readiness_t) {.exportc: "lcn_clear_lcn_NS_storage_fetch_Fetch_readiness", dynlib, cdecl, gcsafe, raises: [].} =
+  proc fetchFakeModuleCallsClear2(p1: ptr LogosResponseOwner, p2: ptr logos_lcn_NS_storage_fetch_Readiness_t) {.exportc: "lcn_clear_lcn_NS_storage_fetch_Fetch_readiness", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear2(p1, p2)
 
   proc fetchFakeModuleCallsInvoke3(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: uint32, p3: ptr logos_lcn_NS_storage_fetch_Locator_t, p4: uint64, p5: ptr logos_lcn_NS_storage_fetch_Read_object_response_t): LogosResult {.exportc: "lcn_invoke_lcn_NS_storage_fetch_Read_object", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
     callInvoke3(p0, p1, p2, p3, p4, p5)
 
-  proc fetchFakeModuleCallsClear3(p1: ptr LogosResponseOwner, p5: ptr logos_lcn_NS_storage_fetch_Read_object_response_t) {.exportc: "lcn_clear_lcn_NS_storage_fetch_Read_object", dynlib, cdecl, gcsafe, raises: [].} =
+  proc fetchFakeModuleCallsClear3(p1: ptr LogosResponseOwner, p5: ptr logos_lcn_NS_storage_fetch_Read_object_response_t) {.exportc: "lcn_clear_lcn_NS_storage_fetch_Read_object", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear3(p1, p5)
 
   proc fetchFakeModuleCallsInvoke4(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: ptr logos_lcn_NS_storage_fetch_Locator_t, p3: ptr logos_lcn_NS_storage_fetch_Stat_object_response_t): LogosResult {.exportc: "lcn_invoke_lcn_NS_storage_fetch_Stat_object", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
     callInvoke4(p0, p1, p2, p3)
 
-  proc fetchFakeModuleCallsClear4(p1: ptr LogosResponseOwner, p3: ptr logos_lcn_NS_storage_fetch_Stat_object_response_t) {.exportc: "lcn_clear_lcn_NS_storage_fetch_Stat_object", dynlib, cdecl, gcsafe, raises: [].} =
+  proc fetchFakeModuleCallsClear4(p1: ptr LogosResponseOwner, p3: ptr logos_lcn_NS_storage_fetch_Stat_object_response_t) {.exportc: "lcn_clear_lcn_NS_storage_fetch_Stat_object", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear4(p1, p3)

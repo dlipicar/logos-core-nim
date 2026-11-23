@@ -3444,7 +3444,7 @@ template exportLogosModuleLoader*(T: typedesc) =
       destroyModule(instance)
     GC_unref(instance)
 
-  proc logosModuleLoaderKitName(): cstring {.exportc: "logos_logos_module_loader_MODULE_name", dynlib, cdecl, gcsafe, raises: [].} =
+  proc logosModuleLoaderKitName(): cstring {.exportc: "logos_logos_module_loader_MODULE_name", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "a static string".} =
     system.cstring(moduleName)
 
   proc logosModuleLoaderKitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: "logos_logos_module_loader_MODULE_init", dynlib, cdecl, gcsafe, raises: [].} =
@@ -3459,7 +3459,7 @@ template exportLogosModuleLoader*(T: typedesc) =
     let instance {.cursor.} = cast[T](p)
     routeLogosModuleLoader(instance, bare, params)
 
-  proc logosModuleLoaderKitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: "logos_logos_module_loader_MODULE_call_surface", dynlib, cdecl, gcsafe, raises: [].} =
+  proc logosModuleLoaderKitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: "logos_logos_module_loader_MODULE_call_surface", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "static bytes".} =
     if outLen != nil:
       outLen[] = csize_t(callSurfaceData.len)
     addr callSurfaceData[0]
