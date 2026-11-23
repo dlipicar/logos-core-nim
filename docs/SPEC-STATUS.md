@@ -129,13 +129,14 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-6a | where the Package Manager runs | hosted in its own process, the engine's binding over TRANSPORT §8.1.2 | open (C1) |
 | 5-6b | package record observation | deny by default; the grant is protected deployment input | open (C4) |
 | 5-7a | the remote trust input: its own input and revision, apart from the package trust file | — | decided (C2); built 2026-11-22 by 5-7a-1 (G408): `remote/trust.cbor` and its mark, `logosctl remote trust` |
-| 5-7a | NF-06 (G81), the authority part | G81 (a) narrowed | decided (B5); compared with CA l.77-78 at 6cac8335 (re-pin P6a): the enrolled half of TXT-0359 (claimed for the half with no Runtime enrolled) and TXT-0360 (riding RUN-1125) are 5-7a's |
+| 5-7a | NF-06 (G81), the authority part | G81 (a) narrowed | decided (B5); compared with CA l.77-78 at 6cac8335 (re-pin P6a): the enrolled half of TXT-0359 (claimed for the half with no Runtime enrolled) and TXT-0360 (riding RUN-1125) are 5-7a's; built 2026-11-22 by 5-7a-2 (G415), TXT-0359's enrolled half tested, TXT-0360 with 5-7a-4 |
 | 5-7a | NA-04 (G255); TF-30 point 1 (G194) | kept | decided (B9) |
 | 5-7a | enrollment and trust-anchor changes (G87) | offline, under the session lock, at the next start | decided (B3) |
-| 5-7a | G298 | its answers stay for a profile the build lacks; *no record is kept* is re-decided with listener records | decided (B8) |
+| 5-7a | G298 | its answers stay for a profile the build lacks; *no record is kept* is re-decided with listener records | decided (B8); re-decided 2026-11-22 by 5-7a-2 (G412): records kept, only enabling fails |
 | 5-7a, 5-7b | the remote process layout; facades | Runtime-owned TLS processes, a signing seam (logosd signs by default); a facade is a provider record, never served by logosd | decided (B1, B4) |
 | 5-7b | NL-07 (G355) | the `route_failure` spellings and the state table | decided (B6) |
 | 5-7b | NR-04 (G356) | resolve or fail | decided (B7) |
+| 5-7b | Runtime Control events to a consumer of another Runtime (G413's interim) | a Subscribe over remote Runtime Control is SubscriptionResult MODULE_ERROR; 5-7b, with reflected state, delivers them (R l.3184, in RUN-0600's paragraph) and extends the claimed RUN-0676 and RUN-0677 to such a subscriber | decided 2026-11-22 (planning) |
 | 5-8 | TF-44 (G351); a D9 stop | the plan's §6 wording | open (D2) |
 | 5-8 | how a package-backed instance comes to exist | configured entries with pins written offline (recommended) | open (D1) |
 | 5-8 | TF-04, TS-06, TP-07 | `requires` stays advisory; a pin is protected input; `create_module` carries none | open (D3) |
@@ -532,6 +533,30 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
 
   Claimed: RUN-0493 to RUN-0500, RUN-0869, RUN-0928, RUN-0929, TRN-0217, TRN-0369 and PKG-0435 (14
   units).
+
+- 2026-11-22, Tier 5 step 5-7a-2 (I117; G412, G413, G415; G298 re-decided; G81 and G205 amended; Q4 as
+  planning ruled), the target side of remote Runtime Control:
+  - Authority: a consumer of an actively enrolled Runtime is matched only by a subject naming that
+    Runtime (`runtimes`), and `policy: allow-all` with `remote.enabled` refuses the start (G415).
+  - Listener and export records from the configuration and Runtime Control, with their origin. A record
+    of any profile may be kept disabled; only enabling `quic`, or any profile without a remote program,
+    is G298's MODULE_ERROR (G412).
+  - Runtime Control disables last across restarts in `state/remote-exposure.cbor`; enables last for the
+    run. `logosctl remote exposure list|reset` (Q4).
+  - The `logos_remote` program's listener role, supervised by logosd from one thread, ending with logosd
+    whatever ends it. logosd spawns `logos_keyholder` (G411).
+  - Inbound Runtime Control: the Hello token rules, the forwarded consumer, the order of checks of
+    l.1835, forwarded discovery. `get_execution_permissions` and `report_failure` are NOT_AUTHORISED for
+    a forwarded consumer. `establish_route` (until 5-7a-3) and event subscriptions (until 5-7b) are
+    interim MODULE_ERROR (G413).
+  - `docs/REMOTE.md`, `DAEMON.md` §2, §6c (new), §10, `DEPLOYMENT.md` §4 and §5d, `AUTHORITY-POLICY.md`,
+    `HOST-CONFIG.md`.
+
+  Claimed: 38 RUN units (RUN-0092, RUN-0336 to RUN-0340, RUN-0342 to RUN-0344, RUN-0502, RUN-0503,
+  RUN-0508 to RUN-0510, RUN-0513, RUN-0514, RUN-0516 to RUN-0518, RUN-0595, RUN-0596, RUN-0598,
+  RUN-0613 to RUN-0618, RUN-0621, RUN-0622, RUN-0898, RUN-0984 to RUN-0989, RUN-1124), TRN-0206 and
+  TRN-0227 (40 units), and TXT-0359's enrolled half. RUN-0341 moves to 5-7a-4; RUN-0511, RUN-0512 and
+  RUN-0515 to 5-7a-3. TXT-0163 rides on RUN-1125 now, and TXT-0360 stays with it (5-7a-4).
 
 ## Tiers at f4f83471 (the original plan)
 

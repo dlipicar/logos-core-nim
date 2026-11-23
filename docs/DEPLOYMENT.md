@@ -191,11 +191,21 @@ Items 4a and 4b.
 
 - **Local:** `logos.local.unix-stream`, the only local profile, with endpoints under `<session>/run/ep/`
   ([CONFORMANCE.md](CONFORMANCE.md), "Unix-stream endpoints and peer checks").
-- **Remote:** none enabled. logosd has no remote transport, no listener and no provider export; the
-  remote trust input and the TLS credential exist with `remote.enabled` (§5), and nothing uses them
-  yet. The remote Runtime Control methods answer after authorization: the two lists an empty
-  page, `set_provider_export` INVALID_PARAMS, enabling a listener MODULE_ERROR (DECISIONS G298;
-  [DAEMON.md](DAEMON.md) §10). Expected to change in Tier 5.
+- **Remote:** `logos.remote.tls-tcp`, with `remote.enabled` and `runtime.remote_program` (the
+  `logos_remote` program). Remote listeners and provider exports are disabled by default; the
+  deployment's records are `remote.listeners` and `remote.exports` in the daemon configuration,
+  validated as Runtime Control validates the same records, a bad one refusing the start (RUNTIME
+  l.3319-3321; DECISIONS G412). Each enabled listener is one `logos_remote` process that logosd spawns,
+  supervises and ends with itself ([REMOTE.md](REMOTE.md), "The listener process and its end"; G411).
+  A listener with `runtime_control_enabled` serves Runtime Control to enrolled Runtimes' consumers, as
+  a capability-authority policy with `runtimes` rules allows (G413, G415); `policy: allow-all` with
+  `remote.enabled` refuses the start. **Which changes last** (Q4): a listener's `enabled` or
+  `runtime_control_enabled`, or an export's `enabled`, turned off through Runtime Control stays off
+  across restarts and crashes until its configuration entry changes, Runtime Control enables it, or
+  `logosctl remote exposure reset` removes it; an enable through Runtime Control lasts for the run
+  ([DAEMON.md](DAEMON.md) §6c). Remote routes and the source side come with steps 5-7a-3 and 5-7a-4:
+  until then no provider session is served to another Runtime, and `establish_route` from a forwarded
+  consumer is MODULE_ERROR. `quic` records are kept, and enabling one is MODULE_ERROR (step 5-12).
 
 ## 5. Trust inputs
 
@@ -223,7 +233,7 @@ Items 5a–5d.
   **Interoperation** (TRANSPORT l.1245): this implementation accepts only direct anchors, so a peer of
   another implementation must support the direct-anchor case to enroll this Runtime's certificate, and
   must present a certificate DER-equal to an anchor this Runtime holds. Two Runtimes of this
-  implementation interoperate. No remote transport uses the input yet (§4).
+  implementation interoperate. The listener processes use it (§4).
 
 Each trust input has its own file and purpose (SEC l.521).
 

@@ -34,6 +34,8 @@ from ../src/logos_core/durable import release, writeAtomic
 from ../src/logos_core/cli/lcn_call_configuration_types import
   LcnCallSettings, LcnCallSettingsDeploymentChoiceKind, decode
 import ./support/authfixture, logos_sdk/testing/[kitbuild, schemasuite]
+from ../src/logos_core/transport/tls/trust import TrustSnapshot, newTrustSnapshot
+import ../src/logos_core/remote/carrier_types
 from ../src/logos_core/pm/input import MaxReadDeadlineMs
 from ../src/logos_core/package/resolver import
   ResolverLimits, resolverLimits, `==`, MaxResolverLimits, names, depth, candidates,
@@ -584,6 +586,159 @@ suite "dc.remote: the remote section, DAEMON.md §3 check 4 [IMPL-DECISION G407]
       checkRemote(copy, testSigningBuild = false).error
     let accepted = checkRemote(copy, testSigningBuild = true)
     check accepted.isOk and accepted.get.signing == rsProcessCopy
+
+proc tlsAddress(port: int, extra = ""): string =
+  "{\"transport\": \"tls-tcp\", \"host\": \"127.0.0.1\", \"port\": " & $port & extra &
+    "}"
+
+proc listener(address: string, enabled = false): string =
+  "{\"address\": " & address & ", \"enabled\": " & $enabled &
+    ", \"runtime_control_enabled\": false}"
+
+proc export1(address: string, provider = "p-x", runtime = ""): string =
+  "{\"listener\": " & address & ", \"provider\": {\"provider\": \"" & provider & "\"" &
+    (if runtime.len > 0: ", \"runtime_instance_id\": \"" & runtime & "\""
+    else: "") & "}, \"enabled\": true}"
+
+proc withRecords(
+    listeners: seq[string], exports: seq[string] = @[], enabled = true
+): string =
+  var r = "{\"enabled\": " & $enabled
+  if listeners.len > 0:
+    r.add ", \"listeners\": [" & listeners.join(", ") & "]"
+  if exports.len > 0:
+    r.add ", \"exports\": [" & exports.join(", ") & "]"
+  r & "}"
+
+proc prepared(
+    diag: string, snapshot = Opt.none(TrustSnapshot)
+): Result[Prepared, string] =
+  let seen =
+    if snapshot.isSome:
+      Opt.some(RemoteSeen(snapshot: snapshot.get))
+    else:
+      Opt.none(RemoteSeen)
+  prepareDaemon(Session(dir: freshDir()), dcBytes(diag), prod, remote = seen)
+
+suite "dc.remote: allow-all, listeners and exports [IMPL-DECISION G412] [IMPL-DECISION G415]":
+  test "[IMPL-DECISION G415] policy allow-all is refused with remote.enabled, and accepted with it off":
+    let on = dcText(
+        policy = "{\"kind\": \"allow-all\"}", extra = "\"remote\": {\"enabled\": true}"
+      )
+      .replace("\"rt-1\"", "\"" & RemoteId & "\"")
+    check "policy: allow-all is refused with remote.enabled" in refusal(on, dev)
+    check checked(on.replace("\"enabled\": true", "\"enabled\": false"), dev).isOk
+
+  test "[IMPL-DECISION G412] listeners and exports need remote.enabled":
+    let a = tlsAddress(7400)
+    check "remote.listeners and remote.exports need remote.enabled" in
+      refusal(remoteText(withRecords(@[listener(a)], enabled = false)))
+    check "remote.listeners and remote.exports need remote.enabled" in
+      refusal(remoteText(withRecords(@[], @[export1(a)], enabled = false)))
+    check checked(remoteText(withRecords(@[listener(a)], @[export1(a)]))).isOk
+
+  test "[IMPL-DECISION G408] [IMPL-DECISION G412] compose: the snapshot given, else an empty one, and the records as Runtime Control holds them":
+    let a = tlsAddress(7400)
+    let p = prepared(remoteText(withRecords(@[listener(a)], @[export1(a)]))).get
+    let r = p.composition.appConfig.remote.get
+    let m = LcnRchMessage.decode(r.snapshot).get
+    check m.kind == LcnRchMessageKind.lcn_Rch_snapshot
+    check m.arm_lcn_Rch_snapshot.records.len == 0
+    check r.listeners.get.len == 1 and r.exports.get.len == 1
+    check r.listeners.get[0].address.arm_lcn_Rc_tls_tcp_runtime_address.port == 7400
+    let t = newTrustSnapshot(3, [], []).get
+    let q = prepared(remoteText("{\"enabled\": true}"), Opt.some(t)).get
+    let s = LcnRchMessage.decode(q.composition.appConfig.remote.get.snapshot).get
+    check s.arm_lcn_Rch_snapshot.revision == 3
+    check q.composition.appConfig.remote.get.listeners.isNone
+    # without remote.enabled, no remote section
+    check prepared(dcText()).get.composition.appConfig.remote.isNone
+
+  test "[SPEC RUNTIME l.3319-3321] [IMPL-DECISION G412] the records are validated as Runtime Control validates them":
+    let a = tlsAddress(7400)
+    let b = tlsAddress(7401)
+    for (records, why) in [
+      (
+        withRecords(
+          @[listener(tlsAddress(7400, ", \"profile\": \"logos.remote.quic\""))]
+        ),
+        "an address whose profile its transport does not select",
+      ),
+      (withRecords(@[listener(a), listener(a)]), "an address is given twice"),
+      (withRecords(@[listener(a)], @[export1(b)]), "an export names no listener here"),
+      (
+        withRecords(
+          @[listener(a)],
+          @[export1(a, runtime = "7d0e3f1a-9b2c-4a5d-8e6f-1a2b3c4d5e6f")],
+        ),
+        "an export names another Runtime's provider",
+      ),
+      (
+        withRecords(@[listener(a)], @[export1(a), export1(a)]),
+        "an export is given twice",
+      ),
+      (
+        withRecords(@[listener(a, enabled = true)]),
+        "an enabled listener needs runtime.remote_program",
+      ),
+    ]:
+      checkpoint why
+      let r = prepared(remoteText(records))
+      check r.isErr and why in r.error
+    # this Runtime's own id on a provider, two exports of one provider on two
+    # listeners, and a disabled quic listener are all accepted
+    check prepared(
+      remoteText(
+        withRecords(
+          @[
+            listener(a),
+            listener(b),
+            listener(
+              "{\"transport\": \"quic\", \"host\": \"127.0.0.1\", \"port\": 7402}"
+            ),
+          ],
+          @[export1(a, runtime = RemoteId), export1(b)],
+        )
+      )
+    ).isOk
+
+  posixTest "[IMPL-DECISION G411] [IMPL-DECISION G412] an enabled listener: tls-tcp with remote_program; quic refused":
+    let dir = freshDir("rp")
+    createDir(dir)
+    let program = dir / "logos_remote"
+    writeFile(program, "#!/bin/sh\n")
+    setFilePermissions(program, {fpUserRead, fpUserWrite, fpUserExec})
+    proc withProgram(records: string): string =
+      remoteText(records).replace(
+        "{\"runtime_instance_id\": \"" & RemoteId & "\"}",
+        "{\"runtime_instance_id\": \"" & RemoteId & "\", \"remote_program\": \"" &
+          dq(program) & "\"}",
+      )
+
+    let p =
+      prepared(withProgram(withRecords(@[listener(tlsAddress(7400), enabled = true)])))
+    check p.isOk
+    if p.isOk:
+      check p.get.composition.appConfig.runtime.remote_program == Opt.some(program)
+    let q = prepared(
+      withProgram(
+        withRecords(
+          @[
+            listener(
+              "{\"transport\": \"quic\", \"host\": \"127.0.0.1\", \"port\": 7402}",
+              enabled = true,
+            )
+          ]
+        )
+      )
+    )
+    check q.isErr and "not supported by this Runtime" in q.error
+    check "remote_program is writable by its group or others" in (
+      block:
+        setFilePermissions(program, {fpUserRead, fpUserWrite, fpUserExec, fpGroupWrite})
+        let r = prepared(withProgram(withRecords(@[])))
+        if r.isOk: "" else: r.error
+    )
 
 # dc.compose -------------------------------------------------------------------------
 

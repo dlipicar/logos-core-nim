@@ -1,13 +1,15 @@
-# Remote Runtimes: identity, trust and the TLS key
+# Remote Runtimes: identity, trust, listeners and Runtime Control
 
 This page is for an operator who connects two logosd Runtimes with `logos.remote.tls-tcp` (RUNTIME
-§9.3.7; TRANSPORT §8.4.1). It covers what Tier 5 step 5-7a-1 built: the Runtime's identity, the remote
-trust input, the TLS credential and who signs with it. The remote processes, listeners, exports and
-remote routes come with steps 5-7a-2 to 5-7a-4, and so do their sections here. Until then logosd starts
-no remote process and nothing is reachable from another host ([DAEMON.md](DAEMON.md) §10).
+§9.3.7; TRANSPORT §8.4.1). It covers what Tier 5 steps 5-7a-1 and 5-7a-2 built: the Runtime's identity,
+the remote trust input, the TLS credential and who signs with it; the listener processes and how they
+end with logosd; listener and export records; and Runtime Control served to another Runtime's
+consumers. Remote routes (provider sessions to another Runtime) and this Runtime as a source come with
+steps 5-7a-3 and 5-7a-4, and so do their sections here.
 
-The decisions are DECISIONS G407 to G411. The files and commands are in [DAEMON.md](DAEMON.md) §3 (the
-`remote` section), §6a (the remote trust input) and §6b (the TLS credential).
+The decisions are DECISIONS G407 to G413 and G415. The files and commands are in
+[DAEMON.md](DAEMON.md) §3 (the `remote` section), §6a (the remote trust input), §6b (the TLS
+credential), §6c (durable disables) and §10 (remote surfaces).
 
 ## The model
 
@@ -125,5 +127,97 @@ decodes what remote peers send, so this matters in two different cases:
   the holder's memory or from `key.p8`. The mode gives no protection here: rotate the credential.
 
 So the mode guards against faults that disclose logosd's memory or misuse its signing requests, not
-against code execution as logosd's user. logosd starts the holder from step 5-7a-2, with the remote
-processes; the holder exits when logosd is gone.
+against code execution as logosd's user. logosd starts the holder at its start, before any listener
+process; the holder exits when logosd is gone.
+
+## The listener process and its end
+
+Each enabled listener record is one `logos_remote` process (DECISIONS G411). logosd's supervision
+thread binds the address, takes the restart lock `<session>/work/remote/listener-<hash>.lock`, spawns
+the program (`runtime.remote_program`) with the socket and a control channel, and reports the listener
+enabled once the process listens. The process authenticates each peer against this start's trust
+snapshot and relays to logosd only what Runtime Control needs; no module payload passes through logosd.
+A process that ends while its record is enabled is started again after 1 s, doubling to 30 s.
+
+The process ends with logosd however logosd ends (owner decision B3), and its connections with it:
+
+| logosd | How the process ends |
+|---|---|
+| stops in order | logosd stops each process, waits, kills what is left after 2 s, and reaps them all before it exits, so every lock is free |
+| is killed (SIGKILL) | the process's control channel ends, and its parent watch fires: `PR_SET_PDEATHSIG` on Linux, a kqueue `NOTE_EXIT` watch on macOS, on a watcher thread that needs no event loop, so a wedged loop does not delay it |
+| was already gone when the process started | the process compares its parent with the pid it was given, after registering the watch, and exits at once (code 70) |
+
+**A stopped process** (SIGSTOP, say, by a debugger) cannot run its watch. When logosd is killed, the
+process's group becomes an orphaned process group with a stopped member, and the system sends it SIGHUP
+then SIGCONT, which ends it; on Linux the parent-death signal ends it too. Should a process still hold
+its lock, the next start is refused, naming the lock and the pid written in it, and never takes over a
+process it did not start. Kill that process to start again.
+
+## Listeners and exports
+
+A listener record names an address and whether it is `enabled` and whether it serves Runtime Control
+(`runtime_control_enabled`); an export record names a provider of this Runtime and the listener it is
+exported through (RUNTIME §9.3.9; DECISIONS G412). Both are disabled by default, and a listener alone
+exports nothing: a provider is reachable remotely only through an enabled export through an enabled
+listener, and only for a consumer the policy allows.
+
+- **Where they come from:** `remote.listeners` and `remote.exports` in the daemon configuration (only
+  with `remote.enabled`), validated as Runtime Control validates the same records, a bad one refusing
+  the start; and `set_remote_listener` and `set_provider_export` through Runtime Control, by a consumer
+  the policy allows. Package installation and module realization never create one.
+- **What fails:** an address whose `profile` contradicts its transport is INVALID_PARAMS; enabling a
+  `quic` listener (step 5-12), or any listener on a logosd without `runtime.remote_program`, is
+  MODULE_ERROR with the state unchanged; an address that cannot be bound is TRANSPORT_ERROR and the
+  listener is not reported enabled. An export naming no listener record, or another Runtime's
+  provider, is INVALID_PARAMS.
+- **Disabling** a listener stops new connections at its address. Turning its Runtime Control off ends
+  its Runtime Control sessions (the answer to that call may come first) and refuses new ones.
+- **Which changes last** (Q4): a disable through Runtime Control stays across restarts and crashes, an
+  enable through Runtime Control lasts for the run. An operator who shuts a listener through Runtime
+  Control during an incident does not get it back, enabled, at the next start. The disables are kept in
+  `state/remote-exposure.cbor`; `logosctl remote exposure list` shows them, `logosctl remote exposure
+  reset` removes them at the next start, and changing the listener's or export's configuration entry
+  drops its disable ([DAEMON.md](DAEMON.md) §6c). A disable whose record cannot be written stays in
+  force for the run and its call fails, saying so.
+
+## Runtime Control for another Runtime's consumers
+
+A listener with `runtime_control_enabled` serves the `logos_runtime_control` endpoint (RUNTIME
+l.2741-2747; DECISIONS G413). An enrolled source Runtime opens one TLS connection per consumer it
+authenticated, and its Transport Hello names that consumer: the `token` is the exact deterministic CBOR
+of the consumer's `logos.runtime.module_instance_address`, whose `runtime_instance_id` must be the
+source Runtime's own (l.1694-1699). Any other token (missing, empty, malformed, non-deterministic,
+with trailing bytes, or naming a consumer of another Runtime) is refused with ProtocolError
+NOT_AUTHORISED before any method runs, and the answer's token is empty.
+
+Every call on the connection is made as that **forwarded consumer**, which logosd's policy must allow:
+
+- Only a capability-authority rule whose subject names the source Runtime in `runtimes` matches it
+  ([AUTHORITY-POLICY.md](AUTHORITY-POLICY.md), "Subjects and facts"; G415). An empty subject, or one
+  naming only instances or modules, never does, so enabling remote gives another Runtime nothing until
+  the policy says so. `policy: allow-all` with `remote.enabled` refuses the start.
+- The method is authorized before its payload is decoded or validated (RUNTIME l.1835): a method the
+  consumer may not call is NOT_AUTHORISED whatever it sends.
+- `get_self` names the consumer with its own Runtime. `get_execution_permissions` and `report_failure`
+  are NOT_AUTHORISED: the consumer has no realization here.
+- **Discovery** (`describe_provider`, `list_modules`) shows only providers with an enabled export
+  through an enabled listener, and then only as the consumer's `discover` rules allow (l.2765-2767).
+- Audit records, decisions and grants name the consumer by its own address, its Runtime included.
+
+Until step 5-7a-3, `establish_route` from a forwarded consumer is authorized and then answered
+MODULE_ERROR (no remote route is established yet). Until step 5-7b, which delivers Runtime Control
+events to another Runtime with its reflected state, a subscription to a Runtime Control event is
+refused with MODULE_ERROR.
+
+An example rule letting the consumers of Runtime `0b6f3c3e-…` list and change this Runtime's listeners:
+
+```text
+{
+  "kind": "allow",
+  "subject": {"runtimes": ["0b6f3c3e-9d0f-4c1a-8f43-7a8f2b9b1a01"]},
+  "scopes": [{
+    "kind": "runtime-control",
+    "methods": ["list_remote_listeners", "set_remote_listener"]
+  }]
+}
+```
