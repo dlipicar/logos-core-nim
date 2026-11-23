@@ -1,0 +1,463 @@
+# Claim status of each section of spec-module-interface.md.
+# The longest matching section key wins (§4 covers §4.1 and §4/Unnumbered); `default` covers the rest.
+#   claimed               every requirement unit in it needs a test tagged [IFC-NNNN]
+#   deferred:tier-N       not built yet; N is the tier in docs/SPEC-STATUS.md
+#   deferred:tier-4b      Tier 4b is closed (DECISIONS I97); no unit may carry this status
+#   informative           no requirements to test
+#   out-of-scope:<why>    normative, but not this repository's to implement
+# A `[units]` entry gives one requirement unit its own status, overriding its section's.
+
+# Claimed with Tier 4 (DECISIONS I88): the Runtime as ABI caller, route and Runtime Control
+# binding and invocation context, besides Phases 2 and 3 and the module kit.
+default = "claimed"
+
+
+[sections]
+"Abstract" = "claimed"
+# The same interface across direct, local transport and remote transport realizations: claimed with
+# the consumer's transported handle (step 4b-2b, DECISIONS I90), with RUNTIME's RUN-0007, RUN-0008.
+# IFC-0010 (the remote transport bullet, l.51) waits for the remote profiles (units below).
+"Abstract/Execution-Boundary Invariance" = "claimed"
+"References" = "informative"
+"Copyright" = "informative"
+# Phase 2: schema acceptance, the C type mapping (forward), encodings, validation,
+# the common schema and its limits.
+"§1" = "claimed"
+# Marked payloads (DECISIONS I88, I92; G276-G278): `_sensitive` acceptance and its C constants,
+# erasure by every participant the Runtime controls and by generated code, no marked value or
+# value root in logs, audit or diagnostics, the retention refusal, and paths refused only on a
+# path kind without erasure (G277, re-deciding G244); the remote profiles carry no marked payload
+# (G277, re-pin P4d). Non-claims in docs/CONFORMANCE.md.
+"§1.4.1" = "claimed"
+"§2" = "claimed"
+"§2.4" = "claimed"
+"§2.5" = "claimed"
+"§2.6" = "claimed"
+"§2.7" = "claimed"
+# lcn-gen's typed call helpers and their cleanup helpers (part C, I73).
+"§2.7.2" = "claimed"
+"§2.8" = "claimed"
+# The asynchronous call ABI and the protected invocation context (I78, I88).
+"§2.9" = "claimed"
+# The C-to-CDDL reverse mapper (D30, G139, I98) and the §3.9 cases in both directions.
+# The common names are the §5.2 listing's at 6cac8335 (G158 settled, re-pin P2), and the
+# subject is mapper input (G318). See docs/CONFORMANCE.md.
+"§3" = "claimed"
+"§4" = "claimed"
+"§4.6" = "claimed"
+"§5.1" = "claimed"
+"§5.2" = "claimed"
+"§5.3" = "claimed"
+# "Appendix A. Generated Artifacts (Informative)", l.4010.
+"App A" = "informative"
+# Examples only, with implementation-defined names; lcn-gen's helpers follow
+# its shape as `lcn_invoke_` and `lcn_clear_` (part C, I73).
+"App A.5" = "informative"
+
+
+[units]
+# The remote transport mode bullet of the invariance list (l.51): with the remote profiles
+# (fable-scope §7; 4b-2 plan §1.3).
+"IFC-0010" = "deferred:tier-5"
+# §2.5: the event struct is claimed; subscription and handler rules are runtime (tier 4).
+"IFC-0172" = "claimed"
+"IFC-0173" = "claimed"
+# §2.5, §2.9: what the Runtime does for route subscriptions, `observe_end`, asynchronous
+# calls, deferred completion and the invocation context (Runtime slice steps 3 and 4,
+# I76, I78). The caller's and the provider's own obligations, the MAY clauses and the
+# transported cases stay deferred with their sections.
+"IFC-0174" = "out-of-scope:core"
+"IFC-0175" = "out-of-scope:core"
+"IFC-0176" = "out-of-scope:core"
+"IFC-0178" = "out-of-scope:core"
+"IFC-0179" = "out-of-scope:core"
+"IFC-0180" = "out-of-scope:core"
+"IFC-0181" = "out-of-scope:core"
+"IFC-0182" = "out-of-scope:core"
+"IFC-0183" = "out-of-scope:core"
+"IFC-0184" = "out-of-scope:core"
+"IFC-0187" = "out-of-scope:core"
+"IFC-0188" = "out-of-scope:core"
+"IFC-0189" = "out-of-scope:core"
+"IFC-0652" = "out-of-scope:core"
+"IFC-0653" = "out-of-scope:core"
+"IFC-0654" = "out-of-scope:core"
+"IFC-0656" = "out-of-scope:core"
+"IFC-0657" = "out-of-scope:core"
+"IFC-0659" = "out-of-scope:core"
+"IFC-0661" = "out-of-scope:core"
+"IFC-0663" = "out-of-scope:core"
+"IFC-0664" = "out-of-scope:core"
+"IFC-0665" = "out-of-scope:core"
+"IFC-0669" = "out-of-scope:core"
+"IFC-0712" = "out-of-scope:core"
+"IFC-0713" = "out-of-scope:core"
+"IFC-0714" = "out-of-scope:core"
+"IFC-0717" = "claimed"
+"IFC-0718" = "out-of-scope:core"
+"IFC-0719" = "out-of-scope:core"
+"IFC-0720" = "out-of-scope:core"
+"IFC-0724" = "claimed"
+"IFC-0726" = "out-of-scope:core"
+"IFC-0727" = "out-of-scope:core"
+"IFC-0728" = "out-of-scope:core"
+"IFC-0731" = "out-of-scope:core"
+"IFC-0733" = "out-of-scope:core"
+"IFC-0735" = "claimed"
+"IFC-0736" = "claimed"
+"IFC-0737" = "out-of-scope:core"
+"IFC-0740" = "out-of-scope:core"
+"IFC-0742" = "out-of-scope:core"
+"IFC-0749" = "claimed"
+"IFC-0753" = "claimed"
+"IFC-0755" = "out-of-scope:core"
+"IFC-0757" = "out-of-scope:core"
+"IFC-0759" = "out-of-scope:core"
+"IFC-0760" = "out-of-scope:core"
+"IFC-0761" = "out-of-scope:core"
+"IFC-0764" = "out-of-scope:core"
+"IFC-0765" = "out-of-scope:core"
+"IFC-0768" = "out-of-scope:core"
+"IFC-0773" = "out-of-scope:core"
+"IFC-0775" = "out-of-scope:core"
+"IFC-0776" = "claimed"
+"IFC-0782" = "out-of-scope:core"
+# §5.2: logos_types.h and its use; the ABI structs' behaviour is tier 4.
+"IFC-0475" = "claimed"
+"IFC-0934" = "claimed"
+# §2, §2.1, §2.3: the ABI calling convention and C values come with the module
+# kit and runtime. The derived typed
+# call helpers stay outside the header set and identity (part C, I73).
+"IFC-0627" = "claimed"
+"IFC-0628" = "claimed"
+"IFC-0636" = "claimed"
+"IFC-0910" = "claimed"
+# C values and their converters: the module kit's typed provider functions
+# (part B, I72).
+"IFC-0137" = "claimed"
+"IFC-0139" = "claimed"
+"IFC-0140" = "claimed"
+# §1.2, §1.3: a kit module implements the full ABI for its primary and implemented
+# contracts (part B, I72); handwritten modules and the exported-symbol rule wait
+# for the export-set gate.
+"IFC-0045" = "claimed"
+"IFC-0046" = "out-of-scope:a requirement on module authors"
+"IFC-0057" = "out-of-scope:a requirement on module authors"
+# §2.4: a duty of a hand-written module (l.1545); the repository ships none.
+"IFC-0207" = "out-of-scope:a requirement on module authors"
+# §1.4: a recommendation to contract authors on naming their namespace.
+"IFC-0071" = "out-of-scope:a recommendation to contract authors"
+# §4.6: a schema-defined outcome through a typed provider function (part B, I72).
+"IFC-0425" = "claimed"
+# §2.4 and §2.6: the method typedefs, provider functions and module symbols
+# lcn-gen declares (ABI v2, part A). What a module or ABI caller does at run
+# time stays tier 4.
+"IFC-0154" = "claimed"
+"IFC-0155" = "claimed"
+"IFC-0156" = "claimed"
+"IFC-0158" = "claimed"
+"IFC-0159" = "claimed"
+"IFC-0160" = "claimed"
+"IFC-0164" = "claimed"
+"IFC-0165" = "claimed"
+"IFC-0166" = "claimed"
+"IFC-0167" = "claimed"
+"IFC-0168" = "claimed"
+"IFC-0169" = "claimed"
+"IFC-0205" = "claimed"
+"IFC-0225" = "claimed"
+# §3.9.4 wrapper parameters, §3.9 optional tuples and §3.9.6 escapes as method
+# parameters, §3.9.8 method names; C linkage and link-time distinctions
+# (§2, §2.1, §3.9.6, §3.9.7) through a C and C++ program.
+"IFC-0392" = "claimed"
+"IFC-0586" = "claimed"
+"IFC-0623" = "claimed"
+"IFC-0864" = "claimed"
+"IFC-0888" = "claimed"
+"IFC-0892" = "claimed"
+"IFC-0896" = "claimed"
+"IFC-0897" = "claimed"
+"IFC-0903" = "claimed"
+# §2.4, §2.6, §2.7.1, §2.9.2, §5.2: what one side of the native ABI checks in
+# what the other hands it (abi/checks.nim, ABI v2 part B, I66). Building the
+# inputs, calling through the checked bindings and the lifetimes stay tier 4.
+"IFC-0163" = "claimed"
+"IFC-0223" = "claimed"
+"IFC-0251" = "claimed"
+"IFC-0476" = "claimed"
+"IFC-0482" = "claimed"
+"IFC-0483" = "claimed"
+"IFC-0485" = "claimed"
+"IFC-0486" = "claimed"
+"IFC-0487" = "claimed"
+"IFC-0488" = "claimed"
+"IFC-0490" = "claimed"
+"IFC-0519" = "claimed"
+"IFC-0520" = "claimed"
+"IFC-0523" = "claimed"
+"IFC-0684" = "claimed"
+"IFC-0744" = "claimed"
+"IFC-0745" = "claimed"
+"IFC-0936" = "claimed"
+"IFC-0937" = "claimed"
+"IFC-0949" = "claimed"
+"IFC-0950" = "claimed"
+"IFC-0951" = "claimed"
+# §2.6: the provider call-surface descriptor, encoded and validated
+# (iface/provider.nim, ABI v2 part C, I67). Calling `_MODULE_call_surface`
+# (`out_len`, stable bytes, ownership) is tier 4.
+"IFC-0226" = "claimed"
+"IFC-0227" = "claimed"
+"IFC-0228" = "claimed"
+"IFC-0229" = "claimed"
+"IFC-0230" = "claimed"
+"IFC-0231" = "claimed"
+"IFC-0235" = "claimed"
+"IFC-0236" = "claimed"
+"IFC-0237" = "claimed"
+"IFC-0238" = "claimed"
+"IFC-0240" = "claimed"
+"IFC-0241" = "claimed"
+"IFC-0242" = "claimed"
+"IFC-0243" = "claimed"
+"IFC-0244" = "claimed"
+"IFC-0245" = "claimed"
+"IFC-0246" = "claimed"
+"IFC-0673" = "claimed"
+"IFC-0674" = "claimed"
+# §2.6-§2.8 for a module built with lcn-gen's Nim module kit (I71): identity,
+# lifecycle and provider symbols, dispatch, publication, concurrency
+# (sdk/tests/test_kit.nim, sdk/tests/test_kit_dylib.nim). The Runtime's side of these
+# rules stays tier 4.
+"IFC-0194" = "claimed"
+"IFC-0195" = "claimed"
+"IFC-0196" = "claimed"
+"IFC-0197" = "claimed"
+"IFC-0198" = "claimed"
+"IFC-0199" = "claimed"
+"IFC-0201" = "claimed"
+"IFC-0206" = "claimed"
+"IFC-0211" = "claimed"
+"IFC-0212" = "claimed"
+"IFC-0217" = "claimed"
+"IFC-0218" = "claimed"
+"IFC-0219" = "claimed"
+"IFC-0220" = "claimed"
+"IFC-0222" = "claimed"
+"IFC-0224" = "claimed"
+"IFC-0233" = "claimed"
+"IFC-0250" = "claimed"
+"IFC-0256" = "claimed"
+"IFC-0259" = "claimed"
+"IFC-0262" = "claimed"
+"IFC-0263" = "claimed"
+"IFC-0265" = "claimed"
+"IFC-0266" = "claimed"
+"IFC-0267" = "claimed"
+"IFC-0268" = "claimed"
+"IFC-0269" = "claimed"
+"IFC-0270" = "out-of-scope:core"
+"IFC-0271" = "claimed"
+"IFC-0272" = "claimed"
+"IFC-0273" = "claimed"
+"IFC-0274" = "claimed"
+"IFC-0286" = "claimed"
+"IFC-0672" = "claimed"
+# §2.3, §2.4, §2.7.1: the module kit's typed provider functions (part B, I72):
+# C inputs converted and validated as dispatch does, complete outputs that one
+# arena owner holds, failures rolled back, owners released on any thread
+# (sdk/tests/test_kit.nim, sdk/tests/test_kit_dylib.nim, through a C harness). The ABI
+# caller's duties toward a typed provider function (§2.4 initialization,
+# §2.7.1 clearing) are the Runtime's, tier 4; the generated call helpers (part
+# C) call through a route instead.
+"IFC-0162" = "claimed"
+"IFC-0648" = "claimed"
+"IFC-0650" = "claimed"
+"IFC-0685" = "claimed"
+"IFC-0686" = "claimed"
+"IFC-0688" = "claimed"
+"IFC-0689" = "claimed"
+"IFC-0692" = "claimed"
+"IFC-0694" = "claimed"
+# §2.7, §5.2: lcn-gen's typed call helpers as a route's caller (part C, I73):
+# outputs initialized before `call`, the buffer released exactly once, the
+# message and detail kept per thread (sdk/tests/test_calls.nim,
+# sdk/tests/test_kit_dylib.nim). IFC-0490 is claimed above.
+"IFC-0260" = "claimed"
+"IFC-0489" = "claimed"
+"IFC-0491" = "claimed"
+# Tier 4 residuals (DECISIONS I88).
+# §2.5: duties of the module that subscribes or holds a route handle.
+"IFC-0177" = "out-of-scope:a requirement on calling modules"
+"IFC-0185" = "out-of-scope:a requirement on calling modules"
+"IFC-0655" = "out-of-scope:a requirement on calling modules"
+"IFC-0658" = "out-of-scope:a requirement on calling modules"
+"IFC-0667" = "out-of-scope:a requirement on calling modules"
+"IFC-0668" = "out-of-scope:a requirement on calling modules"
+"IFC-0670" = "out-of-scope:a requirement on calling modules"
+# §2.8, l.1924-1928: re-entry into a publishing module, claimed for the Nim kit's thread-confined
+# modules (`lcn-gen kit --confined`, DECISIONS G335, G337; step N-1 sub-part 3): a direct subscriber
+# re-enters during each of `publish`, `publishAsync` and `publishScoped`, from the publisher thread
+# and from the entry thread, plain and async (sdk/tests/test_kit_confined.nim), and through the
+# Runtime and a Module Host (tests/test_kit_mixed.nim). A plain kit module's own code meets them.
+"IFC-0281" = "claimed"
+"IFC-0282" = "claimed"
+# §2.8: other duties of the module that publishes, calls through route handles or is destroyed (the
+# Nim kit meets them for its modules).
+"IFC-0283" = "out-of-scope:a requirement on modules"
+"IFC-0284" = "out-of-scope:a requirement on modules"
+"IFC-0285" = "out-of-scope:a requirement on modules"
+"IFC-0289" = "out-of-scope:a requirement on modules"
+"IFC-0290" = "out-of-scope:a requirement on modules"
+"IFC-0291" = "out-of-scope:a requirement on modules"
+# §2.9.1: IFC-0729 (a Transport Cancel for an admitted request) is claimed with step 4b-2b.
+# §2.9.2: duties of a provider that exports _MODULE_async_api, claimed for the kit's deferred
+# provider (`lcn-gen kit --confined --async-api`; DECISIONS G338): sdk/tests/test_kit_confined.nim
+# "the deferred provider", sdk/tests/test_kit_dylib.nim's confined sensor (IFC-0748: one method,
+# an implemented interface's included, through the typed, dispatch and deferred surfaces) and
+# tests/test_kit_mixed.nim MX-4. IFC-0750: a synchronous entry's caller waits on its job and
+# services no executor; the one thing handed back to it, a plain handler's publishScoped (G337), is
+# the module's own code on the thread that called it. The Runtime's own duties in §2.9.2 (IFC-0756,
+# 0764, 0765, 0768) are claimed above.
+"IFC-0743" = "claimed"
+"IFC-0746" = "claimed"
+"IFC-0748" = "claimed"
+"IFC-0750" = "claimed"
+"IFC-0751" = "claimed"
+"IFC-0752" = "claimed"
+"IFC-0754" = "claimed"
+"IFC-0762" = "claimed"
+"IFC-0763" = "claimed"
+"IFC-0766" = "claimed"
+"IFC-0769" = "claimed"
+# l.2099 and l.2112: the author's backend. The kit cancels the handler's future (G338).
+"IFC-0758" = "out-of-scope:the author's backend; the kit cancels the handler's future"
+"IFC-0767" = "out-of-scope:the author's backend; the kit cancels the handler's future"
+# §2.9.1, §2.9.3: duties of the calling module.
+"IFC-0723" = "out-of-scope:a requirement on calling modules"
+"IFC-0732" = "out-of-scope:a requirement on calling modules"
+"IFC-0734" = "out-of-scope:a requirement on calling modules"
+"IFC-0772" = "out-of-scope:a requirement on calling modules"
+# §2.9.3 l.2136: the provider holding execution ownership stops new uses of it before the release;
+# the kit's deferred job does (G338; test_kit_confined "after its release the invocation is not used").
+"IFC-0779" = "claimed"
+# §5.2: connect_remote and acquired remote bindings (Tier 5).
+"IFC-0493" = "deferred:tier-5"
+"IFC-0494" = "deferred:tier-5"
+"IFC-0495" = "deferred:tier-5"
+"IFC-0496" = "deferred:tier-5"
+"IFC-0497" = "deferred:tier-5"
+"IFC-0498" = "deferred:tier-5"
+"IFC-0499" = "deferred:tier-5"
+"IFC-0500" = "deferred:tier-5"
+"IFC-0501" = "deferred:tier-5"
+"IFC-0502" = "deferred:tier-5"
+"IFC-0503" = "deferred:tier-5"
+"IFC-0504" = "deferred:tier-5"
+"IFC-0505" = "deferred:tier-5"
+"IFC-0506" = "deferred:tier-5"
+"IFC-0507" = "deferred:tier-5"
+"IFC-0508" = "deferred:tier-5"
+# IFC-0939 and IFC-0940 (the endpoint's identity, address and schema checks) need no connection and are
+# claimed with the re-pin's P3b (DECISIONS I107). IFC-0941 (authentication and transport failures keep
+# their codes) waits for a connect path (5-7a).
+"IFC-0941" = "deferred:tier-5"
+# §5.2: the borrowed Runtime Control binding is never released by the module.
+"IFC-0509" = "out-of-scope:a requirement on modules"
+
+# R9 (row 35): these units are implemented by core (`src/logos_core/`), which claims them in
+# conformance/claims/IFC.toml; tools/restructure/claim_split.tsv records where each one's
+# evidence was. Units above marked `out-of-scope:core` moved the same way.
+"IFC-0007" = "out-of-scope:core"
+"IFC-0008" = "out-of-scope:core"
+"IFC-0009" = "out-of-scope:core"
+"IFC-0011" = "out-of-scope:core"
+"IFC-0012" = "out-of-scope:core"
+"IFC-0013" = "out-of-scope:core"
+"IFC-0014" = "out-of-scope:core"
+"IFC-0015" = "out-of-scope:core"
+"IFC-0043" = "out-of-scope:core"
+"IFC-0209" = "out-of-scope:core"
+"IFC-0213" = "out-of-scope:core"
+"IFC-0214" = "out-of-scope:core"
+"IFC-0215" = "out-of-scope:core"
+"IFC-0221" = "out-of-scope:core"
+"IFC-0232" = "out-of-scope:core"
+"IFC-0234" = "out-of-scope:core"
+"IFC-0247" = "out-of-scope:core"
+"IFC-0248" = "out-of-scope:core"
+"IFC-0249" = "out-of-scope:core"
+"IFC-0257" = "out-of-scope:core"
+"IFC-0275" = "out-of-scope:core"
+"IFC-0276" = "out-of-scope:core"
+"IFC-0277" = "out-of-scope:core"
+"IFC-0278" = "out-of-scope:core"
+"IFC-0279" = "out-of-scope:core"
+"IFC-0280" = "out-of-scope:core"
+"IFC-0287" = "out-of-scope:core"
+"IFC-0288" = "out-of-scope:core"
+"IFC-0418" = "out-of-scope:core"
+"IFC-0426" = "out-of-scope:core"
+"IFC-0427" = "out-of-scope:core"
+"IFC-0428" = "out-of-scope:core"
+"IFC-0471" = "out-of-scope:core"
+"IFC-0472" = "out-of-scope:core"
+"IFC-0478" = "out-of-scope:core"
+"IFC-0480" = "out-of-scope:core"
+"IFC-0484" = "out-of-scope:core"
+"IFC-0492" = "out-of-scope:core"
+"IFC-0510" = "out-of-scope:core"
+"IFC-0512" = "out-of-scope:core"
+"IFC-0514" = "out-of-scope:core"
+"IFC-0515" = "out-of-scope:core"
+"IFC-0521" = "out-of-scope:core"
+"IFC-0524" = "out-of-scope:core"
+"IFC-0537" = "out-of-scope:core"
+"IFC-0574" = "out-of-scope:core"
+"IFC-0575" = "out-of-scope:core"
+"IFC-0576" = "out-of-scope:core"
+"IFC-0578" = "out-of-scope:core"
+"IFC-0579" = "out-of-scope:core"
+"IFC-0580" = "out-of-scope:core"
+"IFC-0581" = "out-of-scope:core"
+"IFC-0582" = "out-of-scope:core"
+"IFC-0660" = "out-of-scope:core"
+"IFC-0662" = "out-of-scope:core"
+"IFC-0666" = "out-of-scope:core"
+"IFC-0721" = "out-of-scope:core"
+"IFC-0722" = "out-of-scope:core"
+"IFC-0725" = "out-of-scope:core"
+"IFC-0729" = "out-of-scope:core"
+"IFC-0730" = "out-of-scope:core"
+"IFC-0738" = "out-of-scope:core"
+"IFC-0741" = "out-of-scope:core"
+"IFC-0747" = "out-of-scope:core"
+"IFC-0756" = "out-of-scope:core"
+"IFC-0771" = "out-of-scope:core"
+"IFC-0774" = "out-of-scope:core"
+"IFC-0777" = "out-of-scope:core"
+"IFC-0778" = "out-of-scope:core"
+"IFC-0780" = "out-of-scope:core"
+"IFC-0781" = "out-of-scope:core"
+"IFC-0920" = "out-of-scope:core"
+"IFC-0923" = "out-of-scope:core"
+"IFC-0928" = "out-of-scope:core"
+"IFC-0939" = "out-of-scope:core"
+"IFC-0940" = "out-of-scope:core"
+"IFC-0942" = "out-of-scope:core"
+"IFC-0943" = "out-of-scope:core"
+"IFC-0944" = "out-of-scope:core"
+"IFC-0945" = "out-of-scope:core"
+"IFC-0946" = "out-of-scope:core"
+"IFC-0947" = "out-of-scope:core"
+"IFC-0948" = "out-of-scope:core"
+"IFC-0952" = "out-of-scope:core"
+"IFC-0957" = "out-of-scope:core"
+"IFC-0960" = "out-of-scope:core"
+"IFC-0961" = "out-of-scope:core"
+"IFC-0962" = "out-of-scope:core"
+"IFC-0963" = "out-of-scope:core"
+"IFC-0964" = "out-of-scope:core"
+"IFC-0965" = "out-of-scope:core"
+"IFC-0970" = "out-of-scope:core"
+"IFC-0977" = "out-of-scope:core"
