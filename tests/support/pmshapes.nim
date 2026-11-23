@@ -16,6 +16,11 @@
 ##   each bind of `y` checks every bound dependency for a cycle (`bindCand`; the ruling of
 ##   2026-11-22, 7.2). With `v` versions of `y` and a name after it that no candidate satisfies,
 ##   `y` is bound `v` times.
+## - `lift`: a dense core of `n` names, then `y`, sorting after it, whose `v` - 1 newer versions
+##   each require the core's first name one level deeper than the root does, and `yz ^2.0.0`, of
+##   which only 1.0.0 exists: each deepens every core name and is given up, and `y@1.0.0`, which
+##   requires nothing, completes the closure at the core's first depths. Propagation's worst case
+##   (5-3c's plan §6; G454).
 
 import std/[monotimes, strutils, tables, times]
 import results
@@ -152,6 +157,45 @@ proc hub*(n, v: int): Shape =
   result.root = "r"
   result.rootVersion = "1.0.0"
 
+func rootOf*(s: Shape): RootReference =
+  RootReference(package: Opt.some(s.root), version: Opt.some(s.rootVersion))
+
+proc inputOf*(s: Shape, limits: ResolverLimits): ResolverInput =
+  ## [IMPL-DECISION G454] The shape as one synchronous resolver run's input, every inspection
+  ## answered from the table and nothing installed: what `test_resolver` compares with the frozen
+  ## oracle and what `tools/pmbench.nim --sync` times.
+  let answers = s.answers
+  ResolverInput(
+    catalog: s.catalog,
+    limits: limits,
+    inspect: proc(
+        source: PackageSource, trust: TrustInput
+    ): Inspection {.gcsafe, raises: [].} =
+      answers.getOrDefault(
+        source.encoded, Inspection(kind: ikUnavailable, reason: "no such source")
+      ),
+    retained: proc(p: InstalledPackage): Result[void, string] {.gcsafe, raises: [].} =
+      ok(),
+  )
+
+proc lift*(n, v: int): Shape =
+  ## [G454] See the module's header.
+  proc c(i: int): string =
+    "c" & align($i, 4, '0')
+
+  for i in 0 ..< n:
+    var deps: seq[PackageDependency]
+    for j in i + 1 ..< n:
+      deps.add(needs(c(j)))
+    result.add(c(i), "1.0.0", deps)
+  for i in countdown(v - 1, 1):
+    result.add("y", "1." & $i & ".0", @[needs(c(0)), needs("yz", "2.0.0")])
+  result.add("y", "1.0.0", @[])
+  result.add("yz", "1.0.0", @[])
+  result.add("r", "1.0.0", @[needs(c(0)), needs("y")])
+  result.root = "r"
+  result.rootVersion = "1.0.0"
+
 type BenchRun* = object
   outcome*: Result[Resolution, PackageError]
   counters*: ResolverCounters
@@ -160,9 +204,10 @@ type BenchRun* = object
   longestCpu*, totalCpu*: float ## the process's CPU time, in seconds
 
 func defaultParameter*(shape: string): int =
-  ## `k` for `wide`, `v` for `hub`, `L` for `layered`.
+  ## `k` for `wide`, `v` for `hub` and `lift`, `L` for `layered`.
   case shape
   of "hub": 1
+  of "lift": 2
   of "layered": 32
   else: 20
 
@@ -178,18 +223,15 @@ proc shapeOf*(name: string, size, parameter: int): Opt[Shape] =
     Opt.some(hub(size, parameter))
   of "layered":
     Opt.some(layered(size, parameter))
+  of "lift":
+    Opt.some(lift(size, parameter))
   else:
     Opt.none(Shape)
 
 proc driveShape*(s: Shape, limits: ResolverLimits): BenchRun =
   ## Runs the driver to its outcome, answering every inspection from the table at once.
   var t: TrustInput
-  let d = initDriver(
-    s.catalog,
-    t,
-    limits,
-    RootReference(package: Opt.some(s.root), version: Opt.some(s.rootVersion)),
-  )
+  let d = initDriver(s.catalog, t, limits, s.rootOf)
   while true:
     let start = getMonoTime()
     let cpu0 = cpuTime()

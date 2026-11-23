@@ -12,16 +12,19 @@
 ## section defines them. It keeps its frames on the heap and computes depths
 ## without recursion, so neither the result nor the counters depend on a
 ## native stack.
+##
+## [IMPL-DECISION G454] The search state is kept incrementally (Tier 5 step
+## 5-3c-1): the unresolved names on a heap, each bound name's depth with a
+## trail of what each bind changed, a frame's versions tested as they come and
+## a cycle walk pruned by depth. `tests/support/oracle_resolver.nim`, the search
+## as 5-3b-2 built it, is the reference `test_resolver` compares it with.
 
 {.push raises: [].}
 
 import std/[algorithm, sequtils, sets, tables]
 import results
 import logos_sdk/cbor
-import logos_sdk/base/testhooks
 import ./[errors, lgx, manifest, records, semver, signing, trust]
-
-testHooksMarker("resolver")
 
 export results, errors, records, signing
 
@@ -271,12 +274,19 @@ type
     contracts: seq[seq[byte]]
       ## [SPEC PM §11 l.1215] the encodings of the contracts it lists
 
+  NameId = int32
+    ## [IMPL-DECISION G454] A package name's number in one run (Fable F5): the
+    ## catalog's and the installed state's names in byte order, then each name
+    ## a bound manifest names first. Lists hold numbers; every order is the
+    ## names' bytes, whatever their numbers.
+
   Cand = object
     identity: PackageIdentity
     commitment: ManifestCommitment
     installed: bool
     source: Opt[PackageSource]
     depNames: seq[string]
+    depIds: seq[NameId] ## `depNames`' numbers, set when it is bound
     deps: seq[Req]
     edges: Opt[seq[ResolvedDependency]] ## an installed candidate's recorded edges
     provides: HashSet[seq[byte]]
@@ -296,11 +306,17 @@ type
     errors: seq[PackageError] ## every ineligible catalog record's reason, in order
 
   Frame = object
-    name: string
-    versions: seq[string]
+    id: NameId
     next: int
+      ## the next of the name's versions to test against its requirements,
+      ## which do not change while the frame is on the stack (G454)
+    depth: int ## the name's depth, -1 until a version is first tried
     bound: bool
-    added: seq[string]
+
+  Bind = object
+    id: NameId
+    trail: int ## where the depth changes of its propagation start on `trail`
+    linked: bool ## it passed both checks: its edges are in `kids`
 
   Resolver = object
     installed: seq[InstalledPackage]
@@ -311,15 +327,33 @@ type
     retained: RetainedCheck
     installedAt: Table[(string, string), int]
     entries: Table[(string, string), seq[int]] ## by ascending source encoding
-    versions: Table[string, seq[string]] ## descending SemVer precedence
     inspected: Table[seq[byte], Inspection]
     evals: Table[(string, string), Eval]
-    assigned: Table[string, Cand]
-    reqs: Table[string, seq[Req]]
-    root: string
-    depths: Table[string, int]
-      ## every bound name and every name a bound package requires
-    depthsStale: bool
+    # By name number (G454):
+    ids: Table[string, NameId]
+    names: seq[string]
+    versions: seq[seq[string]] ## descending SemVer precedence
+    reqs: seq[seq[Req]]
+    parents: seq[seq[NameId]] ## the bound names that require it, in step with `reqs`
+    kids: seq[seq[NameId]] ## a bound name's bound dependencies
+    depth: seq[int32] ## a bound name's depth (PM l.1256)
+    cands: seq[Cand] ## a bound name's candidate
+    bound: seq[bool]
+    seenAt, parentAt, changedAt: seq[uint32] ## marks, by `epoch`
+    boundCount: int
+    epoch: uint32
+    unresolved: seq[NameId]
+      ## a binary min-heap by name bytes: every required and unbound name is in
+      ## it; an entry that no longer is one is dropped when it reaches the top
+    binds: seq[Bind]
+    trail: seq[(NameId, int32)] ## (name, its depth before the bind)
+    buckets: seq[seq[NameId]] ## propagation's queue, by depth before the bind
+    bucketLo, bucketHi: int ## the buckets the current propagation uses
+    walk: seq[NameId]
+    work: int64
+      ## [IMPL-DECISION G454] the work units counted so far (5-3c's plan §3.6):
+      ## each O(1) or O(log n), the same total for the same inputs
+    root: NameId
     charged: HashSet[(string, string)]
     considered: Table[string, int]
     attempts: int
@@ -340,6 +374,69 @@ func contractKeys(cs: openArray[CborValue]): HashSet[seq[byte]] =
   for c in cs:
     result.incl(encodeCbor(c))
 
+proc idOf(r: var Resolver, name: string): NameId =
+  ## The name's number, given now if it has none.
+  result = r.ids.getOrDefault(name, -1)
+  if result >= 0:
+    return
+  result = NameId(r.names.len)
+  r.ids[name] = result
+  r.names.add(name)
+  r.versions.add(@[])
+  r.reqs.add(@[])
+  r.parents.add(@[])
+  r.kids.add(@[])
+  r.depth.add(0)
+  r.cands.add(Cand())
+  r.bound.add(false)
+  r.seenAt.add(0)
+  r.parentAt.add(0)
+  r.changedAt.add(0)
+
+func before(r: Resolver, a, b: NameId): bool =
+  r.names[a] < r.names[b]
+
+proc push(r: var Resolver, x: NameId) =
+  inc r.work
+  r.unresolved.add(x)
+  var i = r.unresolved.high
+  while i > 0:
+    let p = (i - 1) div 2
+    if not r.before(r.unresolved[i], r.unresolved[p]):
+      break
+    swap(r.unresolved[i], r.unresolved[p])
+    i = p
+
+proc popTop(r: var Resolver) =
+  inc r.work
+  let last = r.unresolved.pop()
+  let n = r.unresolved.len
+  if n == 0:
+    return
+  r.unresolved[0] = last
+  var i = 0
+  while true:
+    let l = 2 * i + 1
+    if l >= n:
+      break
+    var c = l
+    if l + 1 < n and r.before(r.unresolved[l + 1], r.unresolved[l]):
+      c = l + 1
+    if not r.before(r.unresolved[c], r.unresolved[i]):
+      break
+    swap(r.unresolved[i], r.unresolved[c])
+    i = c
+
+proc nextUnresolved(r: var Resolver): Opt[NameId] =
+  ## [SPEC PM §11] The unresolved package name first in UTF-8 byte order: the
+  ## heap's top once the entries that are no longer unresolved are dropped.
+  while r.unresolved.len > 0:
+    let top = r.unresolved[0]
+    if r.reqs[top].len > 0 and not r.bound[top]:
+      return Opt.some(top)
+    r.popTop()
+  Opt.none(NameId)
+
 proc initResolver(input: ResolverInput): Resolver =
   let l = input.limits
   doAssert l.names > 0 and l.depth > 0 and l.candidates > 0 and l.attempts > 0 and
@@ -356,16 +453,24 @@ proc initResolver(input: ResolverInput): Resolver =
     inspect: input.inspect,
     retained: input.retained,
   )
+  # [G454] The catalog's and the installed state's names, numbered in byte order.
+  var known: seq[string]
+  for p in r.installed:
+    known.add(p.identity.package)
+  for e in r.catalog:
+    known.add(e.identity.package)
+  known.sort()
+  for n in known.deduplicate(isSorted = true):
+    discard r.idOf(n)
+  r.buckets.setLen(input.limits.depth + 1)
   var parsed: Table[string, SemVer]
   proc note(r: var Resolver, id: PackageIdentity): bool =
     let v = parseSemVer(id.version).valueOr:
       return false
     parsed[id.version] = v
-    r.versions.withValue(id.package, known):
-      if id.version notin known[]:
-        known[].add(id.version)
-    do:
-      r.versions[id.package] = @[id.version]
+    let x = r.idOf(id.package)
+    if id.version notin r.versions[x]:
+      r.versions[x].add(id.version)
     true
 
   for i, p in r.installed:
@@ -385,7 +490,7 @@ proc initResolver(input: ResolverInput): Resolver =
       proc(a, b: int): int =
         cmpBytes(encodings[a], encodings[b])
     )
-  for vs in r.versions.mvalues:
+  for vs in r.versions.mitems:
     vs.sort(
       proc(a, b: string): int =
         cmp(parsed.getOrDefault(b), parsed.getOrDefault(a))
@@ -507,16 +612,16 @@ func meets(c: Cand, q: Req): bool =
   satisfies(q.kind, q.version, c.identity.version) and
     (q.pin.isNone or q.pin.get == c.commitment) and q.contracts.allIt(it in c.provides)
 
-func pinsFor(r: Resolver, name: string): seq[ManifestCommitment] =
-  for q in r.reqs.getOrDefault(name):
+func pinsFor(r: Resolver, x: NameId): seq[ManifestCommitment] =
+  for q in r.reqs[x]:
     if q.pin.isSome and q.pin.get notin result:
       result.add(q.pin.get)
 
 func allows(pins: seq[ManifestCommitment], c: ManifestCommitment): bool =
   pins.allIt(it == c)
 
-func needed(r: Resolver, name: string): seq[seq[byte]] =
-  for q in r.reqs.getOrDefault(name):
+func needed(r: Resolver, x: NameId): seq[seq[byte]] =
+  for q in r.reqs[x]:
     for c in q.contracts:
       if c notin result:
         result.add(c)
@@ -542,13 +647,13 @@ func excludedByKnownCommitment(
   true
 
 proc dependencyCandidate(
-    r: Resolver, id: PackageIdentity, e: Eval
+    r: Resolver, x: NameId, id: PackageIdentity, e: Eval
 ): Result[Opt[Cand], PackageError] =
   ## [SPEC PM §11 l.1294-1310] The candidate for a reached dependency identity,
   ## after eligibility, the accumulated pins and contracts, commitment
   ## selection and the installed-identity conflict check.
-  let pins = r.pinsFor(id.package)
-  let need = r.needed(id.package)
+  let pins = r.pinsFor(x)
+  let need = r.needed(x)
   var allowed: seq[CatalogPick]
   for p in e.picks:
     # [IMPL-DECISION I110] Pins apply per record (Q8): a pinned version the
@@ -659,131 +764,210 @@ proc rootCandidate(
     )
   ok(Opt.none(Cand))
 
-func reachesAny(r: Resolver, starts: openArray[string], target: string): bool =
-  ## Whether `target` is reachable over bound packages' edges from any bound
-  ## name of `starts`. [IMPL; planning's ruling of 2026-11-22, 7.2] One walk
-  ## with one visited set, so a candidate that requires many bound names costs
-  ## the edges they reach once, not once per name.
-  var stack: seq[string]
-  for x in starts:
-    if x in r.assigned:
-      stack.add(x)
-  var seen: HashSet[string]
-  while stack.len > 0:
-    let x = stack.pop()
-    if x == target:
-      return true
-    if seen.containsOrIncl(x):
-      continue
-    for d in r.assigned.getOrDefault(x).depNames:
-      if d in r.assigned:
-        stack.add(d)
-  false
-
-when defined(lcnTestHooks):
-  var perDependencyWalk* {.threadvar.}: bool
-    ## A test hook: `bindCand`'s cycle check as 5-3b-1 built it, one walk per
-    ## bound dependency, for the test that compares the two (`test_resolver`).
-
-  func reaches(r: Resolver, start, target: string): bool =
-    r.reachesAny([start], target)
-
-proc bindCand(r: var Resolver, name: string, c: Cand, added: var seq[string]): bool =
+proc bindCand(r: var Resolver, x: NameId, c: Cand): bool =
   ## Binds `c` and records its requirements. False when the partial closure is
   ## then rejected: a bound package does not satisfy a new requirement (one
-  ## version per name, a pin, a contract), or an edge closes a cycle.
-  r.assigned[name] = c
-  r.maxNames = max(r.maxNames, r.assigned.len)
-  added.setLen(0)
-  for i, d in c.depNames:
-    r.reqs.mgetOrPut(d, @[]).add(c.deps[i])
-    added.add(d)
-  for i, d in c.depNames:
-    if d in r.assigned and not r.assigned.getOrDefault(d).meets(c.deps[i]):
+  ## version per name, a pin, a contract), or an edge closes a cycle. Its
+  ## edges, depths and the depth limit are `settle`'s, after both checks pass.
+  # [IMPL-DECISION G454; Fable F1] Its depth, from its bound parents, before
+  # its own edges exist: 0 for the root, else one more than the deepest.
+  var d = 0'i32
+  if x != r.root:
+    for p in r.parents[x]:
+      inc r.work
+      d = max(d, r.depth[p] + 1)
+  var c = c
+  for n in c.depNames:
+    c.depIds.add(r.idOf(n))
+  r.depth[x] = d
+  r.cands[x] = c
+  r.bound[x] = true
+  inc r.boundCount
+  r.maxNames = max(r.maxNames, r.boundCount)
+  r.binds.add(Bind(id: x, trail: r.trail.len))
+  for i, n in c.depIds:
+    inc r.work
+    if r.reqs[n].len == 0:
+      r.push(n)
+    r.reqs[n].add(c.deps[i])
+    r.parents[n].add(x)
+  for i, n in c.depIds:
+    inc r.work
+    if r.bound[n] and not r.cands[n].meets(c.deps[i]):
       return false
   # Both checks only reject, so their order does not change the answer.
-  when defined(lcnTestHooks):
-    if perDependencyWalk:
-      for d in c.depNames:
-        if d in r.assigned and r.reaches(d, name):
-          return false
-      return true
-  not r.reachesAny(c.depNames, name)
+  # [IMPL-DECISION G454] The cycle walk: whether a bound dependency reaches a
+  # bound name that requires `x`. Depths rise strictly along bound edges and
+  # `x`'s exceeds every parent's, so a name at its depth or deeper cannot lead
+  # to a parent: the walk skips it.
+  inc r.epoch
+  let e = r.epoch
+  for p in r.parents[x]:
+    inc r.work
+    r.parentAt[p] = e
+  r.walk.setLen(0)
+  for n in c.depIds:
+    if n == x:
+      return false # itself
+    if r.bound[n] and r.depth[n] < d and r.seenAt[n] != e:
+      r.seenAt[n] = e
+      r.walk.add(n)
+  while r.walk.len > 0:
+    let s = r.walk.pop()
+    if r.parentAt[s] == e:
+      return false
+    for k in r.kids[s]:
+      inc r.work
+      if r.depth[k] < d and r.seenAt[k] != e:
+        r.seenAt[k] = e
+        r.walk.add(k)
+  true
 
-proc unbind(r: var Resolver, name: string, added: seq[string]) =
-  r.assigned.del(name)
-  r.depthsStale = true
-  for d in added:
-    r.reqs.withValue(d, q):
-      q[].setLen(q[].len - 1)
-      if q[].len == 0:
-        r.reqs.del(d)
+proc raiseTo(r: var Resolver, k: NameId, v: int32, e: uint32) =
+  ## Deepens `k` to `v` if that is deeper. Its first change in this bind goes
+  ## on the trail and queues it by its depth before the bind.
+  if v <= r.depth[k]:
+    return
+  if r.changedAt[k] != e:
+    r.changedAt[k] = e
+    let old = r.depth[k]
+    r.trail.add((k, old))
+    if old >= r.buckets.len:
+      r.buckets.setLen(old + 1)
+    r.buckets[old].add(k)
+    r.bucketLo = min(r.bucketLo, int(old))
+    r.bucketHi = max(r.bucketHi, int(old))
+  r.depth[k] = v
 
-proc computeDepths(r: var Resolver) =
-  ## [SPEC PM §11 l.1256] The greatest number of edges on any path from the
-  ## root, for every bound name and every name a bound package requires.
-  ## The partial closure is acyclic (`bindCand`), so a longest path exists;
-  ## Kahn's order computes it without recursion.
-  var indegree: Table[string, int]
-  for c in r.assigned.values:
-    for d in c.depNames:
-      indegree.mgetOrPut(d, 0).inc
-  var depths = {r.root: 0}.toTable
-  var queue = @[r.root]
-  var i = 0
-  while i < queue.len:
-    let x = queue[i]
-    inc i
-    if x notin r.assigned:
-      continue # a required name with no candidate yet
-    let dx = depths.getOrDefault(x)
-    for d in r.assigned.getOrDefault(x).depNames:
-      depths[d] = max(depths.getOrDefault(d), dx + 1)
-      indegree.withValue(d, n):
-        dec n[]
-        if n[] == 0:
-          queue.add(d)
-  doAssert queue.len == depths.len, "the partial closure is acyclic"
-  r.depths = depths
-  r.depthsStale = false
-
-proc depthOf(r: var Resolver, name: string): int =
-  if r.depthsStale:
-    r.computeDepths()
-  r.depths.getOrDefault(name)
-
-proc settleDepths(r: var Resolver): Result[void, PackageError] =
-  ## [SPEC PM §11 l.1257-1260, l.1276-1277] After a bind: an edge that deepens
-  ## a bound name deepens the names it requires, so every bound and required
-  ## name is checked. A name over the limit terminates the root operation; it
-  ## is not backtracked.
-  r.computeDepths()
-  var over = Opt.none(string)
-  for n, d in r.depths:
-    if n in r.assigned:
-      r.maxDepth = max(r.maxDepth, d)
-    if d > r.limits.depth and (over.isNone or n < over.get):
-      over = Opt.some(n)
-  if over.isSome:
-    let n = over.get
+proc settle(r: var Resolver): Result[void, PackageError] =
+  ## [SPEC PM §11 l.1257-1260, l.1276-1277] After a bind that passed both
+  ## checks: its edges join the bound graph and every name it deepens is
+  ## deepened, then the depth limit is checked. A name over the limit
+  ## terminates the root operation; it is not backtracked.
+  ##
+  ## [IMPL-DECISION G454] Only what the bind changed is visited. Every edge
+  ## between names bound before it goes from a lower depth to a higher one, so
+  ## taking the deepened names in the order of their depths before the bind
+  ## deepens each once, after all its deepened parents.
+  let x = r.binds[^1].id
+  r.binds[^1].linked = true
+  let start = r.binds[^1].trail
+  for n in r.cands[x].depIds:
+    inc r.work
+    if r.bound[n]:
+      r.kids[x].add(n)
+  for p in r.parents[x]:
+    inc r.work
+    r.kids[p].add(x)
+  inc r.epoch
+  let e = r.epoch
+  r.changedAt[x] = e
+  let dx = r.depth[x]
+  r.bucketLo = r.buckets.len
+  r.bucketHi = -1
+  for i in 0 ..< r.kids[x].len:
+    inc r.work
+    r.raiseTo(r.kids[x][i], dx + 1, e)
+  var b = r.bucketLo
+  while b <= r.bucketHi:
+    var i = 0
+    while i < r.buckets[b].len:
+      # Each is queued in a strictly later bucket than the name deepening it.
+      let n = r.buckets[b][i]
+      inc i
+      let dn = r.depth[n]
+      for j in 0 ..< r.kids[n].len:
+        inc r.work
+        r.raiseTo(r.kids[n][j], dn + 1, e)
+    r.buckets[b].setLen(0)
+    inc b
+  # The greatest depth of a bound name: an unchanged one is no deeper than
+  # before, and `maxDepth` already covers it. It is raised before the limit
+  # check reports, as for every bound name.
+  r.maxDepth = max(r.maxDepth, int(dx))
+  for i in start ..< r.trail.len:
+    r.maxDepth = max(r.maxDepth, int(r.depth[r.trail[i][0]]))
+  # Before the bind no name was over the limit, or the run would have ended.
+  # So a name over it now is a changed bound name or a name a changed bound
+  # name at the limit or deeper requires.
+  let limit = r.limits.depth
+  var over = -1'i32
+  for i in start - 1 ..< r.trail.len:
+    let n =
+      if i < start:
+        x
+      else:
+        r.trail[i][0]
+    if int(r.depth[n]) > limit and (over < 0 or r.before(n, over)):
+      over = n
+    if int(r.depth[n]) >= limit:
+      for m in r.cands[n].depIds:
+        if over < 0 or r.before(m, over):
+          over = m
+  if over >= 0:
     # [ruling S1] No depth in the message: it would show the limit, which is
     # protected policy input (PM l.1514), to the caller.
     r.tripped = "dependency_depth"
-    return err(unavailableDependency(n & " is beyond the dependency-depth limit"))
+    return err(
+      unavailableDependency(r.names[over] & " is beyond the dependency-depth limit")
+    )
   ok()
 
-func versionsFor(r: Resolver, name: string): seq[string] =
-  ## [SPEC PM §11] Versions satisfying every accumulated requirement, in
-  ## descending SemVer precedence.
-  let reqs = r.reqs.getOrDefault(name)
-  for v in r.versions.getOrDefault(name):
+proc unbind(r: var Resolver, x: NameId) =
+  ## Undoes the last bind, `x`'s: its depth changes, its edges, its
+  ## requirements; `x` is unresolved again if it is still required.
+  let b = r.binds.pop()
+  doAssert b.id == x, "binds are undone in reverse order"
+  for i in countdown(r.trail.high, b.trail):
+    inc r.work
+    let (n, old) = r.trail[i]
+    r.depth[n] = old
+  r.trail.setLen(b.trail)
+  if b.linked:
+    for p in r.parents[x]:
+      inc r.work
+      doAssert r.kids[p][^1] == x, "a bind's edges are the last of its parents'"
+      r.kids[p].setLen(r.kids[p].len - 1)
+    r.kids[x].setLen(0)
+  let ids = r.cands[x].depIds
+  for i in countdown(ids.high, 0):
+    inc r.work
+    let n = ids[i]
+    doAssert r.parents[n][^1] == x, "a bind's requirements are the last of each name's"
+    r.parents[n].setLen(r.parents[n].len - 1)
+    r.reqs[n].setLen(r.reqs[n].len - 1)
+  r.bound[x] = false
+  dec r.boundCount
+  r.cands[x] = Cand()
+  if r.reqs[x].len > 0:
+    r.push(x)
+
+proc unboundDepth(r: var Resolver, x: NameId): int =
+  ## [SPEC PM §11 l.1256] A required name's depth before it is bound: one more
+  ## than its deepest bound parent's. Every bound name is reachable from the
+  ## root, so this is the greatest number of edges on a path to it.
+  for p in r.parents[x]:
+    inc r.work
+    result = max(result, int(r.depth[p]) + 1)
+
+proc nextVersion(r: var Resolver, f: var Frame): Opt[string] =
+  ## [SPEC PM §11] The frame's next version satisfying every accumulated
+  ## requirement, in descending SemVer precedence. [IMPL-DECISION G454] Tested
+  ## as it comes: the name's requirements are the same each time its frame
+  ## tries a version, so this is the sequence a list made at the frame's push
+  ## would give.
+  while f.next < r.versions[f.id].len:
+    let v = r.versions[f.id][f.next]
+    inc f.next
     var ok = true
-    for q in reqs:
+    for q in r.reqs[f.id]:
+      inc r.work
       if not satisfies(q.kind, q.version, v):
         ok = false
         break
     if ok:
-      result.add(v)
+      return Opt.some(v)
+  Opt.none(string)
 
 proc charge(r: var Resolver, name, version: string): Result[void, PackageError] =
   ## [SPEC PM §11 l.1262-1268] [IMPL-DECISION I110] One charge per package name
@@ -909,7 +1093,7 @@ proc selectRoot(r: var Resolver, root: RootReference): Result[Opt[Cand], Package
       )
     )
   var first = Opt.none(PackageError)
-  for v in r.versions.getOrDefault(name):
+  for v in r.versions[r.idOf(name)]:
     if parseSemVer(v).get.isPrerelease:
       continue # [SPEC PM §11] selected only by an explicit version or a source
     if root.newerThan.isSome and not v.newerThan(root.newerThan.get.version):
@@ -958,37 +1142,41 @@ func counters(r: Resolver): ResolverCounters =
   result.limit = r.tripped
 
 proc closure(r: var Resolver): Resolution =
-  if r.depthsStale:
-    r.computeDepths()
-  var names: seq[string]
-  for n in r.assigned.keys:
-    names.add(n)
-  names.sort()
-  result.root = r.assigned.getOrDefault(r.root).identity
-  for n in names:
-    let c = r.assigned.getOrDefault(n)
+  var picked: seq[(string, NameId)]
+  for i in 0 ..< r.names.len:
+    if r.bound[i]:
+      inc r.work
+      picked.add((r.names[i], NameId(i)))
+  picked.sort()
+  result.root = r.cands[r.root].identity
+  for (n, x) in picked:
+    # [IMPL] Fields are read in place: a `let` copy of a candidate copies its
+    # dependency lists, which made this loop cubic in a dense closure.
     var p = SelectedPackage(
-      identity: c.identity,
-      commitment: c.commitment,
-      installed: c.installed,
+      identity: r.cands[x].identity,
+      commitment: r.cands[x].commitment,
+      installed: r.cands[x].installed,
       source:
-        if c.installed and n != r.root:
+        if r.cands[x].installed and x != r.root:
           Opt.none(PackageSource)
         else:
           # [SPEC PM §15 l.1686-1687] The root's selected or supplied source is
           # kept even when it is installed: its signature is the request's.
-          c.source,
-      depth: r.depths.getOrDefault(n),
+          r.cands[x].source,
+      depth: int(r.depth[x]),
     )
-    if c.edges.isSome:
-      p.resolvedDependencies = c.edges.get
+    if r.cands[x].edges.isSome:
+      p.resolvedDependencies = r.cands[x].edges.get
     else:
-      for d in c.depNames:
-        let b = r.assigned.getOrDefault(d)
+      p.resolvedDependencies = newSeqOfCap[ResolvedDependency](r.cands[x].depIds.len)
+      for d in r.cands[x].depIds:
+        inc r.work
         p.resolvedDependencies.add(
-          ResolvedDependency(identity: b.identity, commitment: b.commitment)
+          ResolvedDependency(
+            identity: r.cands[d].identity, commitment: r.cands[d].commitment
+          )
         )
-    result.packages.add(p)
+    result.packages.add(move p)
   result.counters = r.counters
 
 proc run(r: var Resolver, root: RootReference): Result[Resolution, PackageError] =
@@ -997,52 +1185,49 @@ proc run(r: var Resolver, root: RootReference): Result[Resolution, PackageError]
     return
       ok(Resolution(root: root.newerThan.get, unchanged: true, counters: r.counters))
   let rc = picked.get
-  r.root = rc.identity.package
+  r.root = r.idOf(rc.identity.package)
   # [SPEC PM §11] The root counts toward the partial closure, at depth zero; it
   # was charged when it was examined, and binding it is an attempt.
   ?r.attempt()
-  var rootAdded: seq[string]
-  if not r.bindCand(r.root, rc, rootAdded):
+  if not r.bindCand(r.root, rc):
     return err(unavailableDependency("the root's own dependencies close a cycle"))
-  ?r.settleDepths()
+  ?r.settle()
 
   var stack: seq[Frame]
   while true:
-    var next = Opt.none(string)
-    for name in r.reqs.keys:
-      # [SPEC PM §11] The unresolved package name first in UTF-8 byte order.
-      if name notin r.assigned and (next.isNone or name < next.get):
-        next = Opt.some(name)
+    let next = r.nextUnresolved()
     if next.isNone:
       return ok(r.closure())
-    stack.add(Frame(name: next.get, versions: r.versionsFor(next.get)))
+    stack.add(Frame(id: next.get, depth: -1))
     var placed = false
     while stack.len > 0 and not placed:
       let f = stack.len - 1
       if stack[f].bound:
-        r.unbind(stack[f].name, stack[f].added)
+        r.unbind(stack[f].id)
         stack[f].bound = false
-      while stack[f].next < stack[f].versions.len:
-        let name = stack[f].name
-        let version = stack[f].versions[stack[f].next]
-        inc stack[f].next
-        let depth = r.depthOf(name)
-        if depth > r.limits.depth:
+      while true:
+        let x = stack[f].id
+        let version = r.nextVersion(stack[f]).valueOr:
+          break
+        if stack[f].depth < 0:
+          stack[f].depth = r.unboundDepth(x)
+        if stack[f].depth > r.limits.depth:
           r.tripped = "dependency_depth" # [ruling S1] no depth in the message
           return err(
             unavailableDependency(
-              "inspecting " & name & " exceeds the dependency-depth limit"
+              "inspecting " & r.names[x] & " exceeds the dependency-depth limit"
             )
           )
+        let name = r.names[x]
         let id = PackageIdentity(package: name, version: version)
         if (name, version) notin r.charged and
-            r.excludedByKnownCommitment(id, r.pinsFor(name)):
+            r.excludedByKnownCommitment(id, r.pinsFor(x)):
           continue
         ?r.charge(name, version)
         let e = ?r.evaluate(id)
-        let c = (?r.dependencyCandidate(id, e)).valueOr:
+        let c = (?r.dependencyCandidate(x, id, e)).valueOr:
           continue
-        if r.assigned.len + 1 > r.limits.names:
+        if r.boundCount + 1 > r.limits.names:
           r.tripped = "partial_closure_names"
           return err(
             unavailableDependency(
@@ -1050,19 +1235,22 @@ proc run(r: var Resolver, root: RootReference): Result[Resolution, PackageError]
             )
           )
         ?r.attempt()
-        if r.bindCand(name, c, stack[f].added):
-          ?r.settleDepths()
+        if r.bindCand(x, c):
+          ?r.settle()
           stack[f].bound = true
           placed = true
           break
-        r.unbind(name, stack[f].added)
+        r.unbind(x)
       if not placed:
         discard stack.pop()
     if not placed:
       return err(unavailableDependency("no complete dependency closure exists"))
 
 proc resolve*(
-    input: ResolverInput, root: RootReference, counters: var ResolverCounters
+    input: ResolverInput,
+    root: RootReference,
+    counters: var ResolverCounters,
+    work: var int64,
 ): Result[Resolution, PackageError] =
   ## [SPEC PM §11, §15] Resolves the complete transitive closure of `root`, or
   ## reports an update that changes nothing, or fails with
@@ -1070,10 +1258,18 @@ proc resolve*(
   ## `package-unavailable` (material that could not be obtained),
   ## `artifact-integrity-failed` (retained bytes absent or altered) or the
   ## root's own error. `counters` holds the counts either way; they depend only
-  ## on the inputs.
+  ## on the inputs. `work` is the number of work units the run counted
+  ## ([IMPL-DECISION G454]), the same for the same inputs.
   var r = initResolver(input)
   result = r.run(root)
   counters = r.counters
+  work = r.work
+
+proc resolve*(
+    input: ResolverInput, root: RootReference, counters: var ResolverCounters
+): Result[Resolution, PackageError] =
+  var work: int64
+  resolve(input, root, counters, work)
 
 proc resolve*(
     input: ResolverInput, root: RootReference

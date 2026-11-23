@@ -587,6 +587,24 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
     --compare`, 3572 units). Per package at the branch point: IFC core 143, SDK 665; RUN core 767, SDK 124; CFG
     core 119, SDK 7. Merged with master (5-7a's claims), RUN core is 816.
 
+- 2026-11-22, Tier 5 step 5-3c-1 (I122; G454), the resolver's incremental search:
+  - `package/resolver.nim` keeps the search's state incrementally and gives the same results: the unresolved names
+    on a heap, each bound name's depth with a trail of what each bind changed, propagation in ascending depth
+    before the bind, the depth limit over what a bind changed, a frame's versions tested as they come, the cycle
+    walk pruned by depth, and its work counted. Writing the closure reads candidates in place (it was cubic in a
+    dense closure). 5-3b-2's test hook is gone.
+  - The frozen oracle `tests/support/oracle_resolver.nim` (the search at `10cc598`), compared by `test_resolver` on
+    2,000 seeded catalogs, 1,000 seeded acyclic catalogs and the bench's shapes at the preset and the maxima;
+    thirteen mutations of the four parts each fail it.
+  - `tests/support/pmshapes.nim` gains the `lift` shape and a synchronous input, `tools/pmbench.nim` a
+    `--sync new|oracle|input` mode, `test_pm_driver` the `lift` counts; CONFORMANCE "Resolver limits" and DEPLOYMENT §12
+    the new costs. The driver still reruns from the root (5-3c-2).
+  - The probe `test_iterprobe` checks the closure-iterator rules 5-3c-2 relies on, under orc, refc and orc-release.
+  - For 5-5: CONFORMANCE "The archive's inspection", the verification cache's hold and peak memory with the
+    in-memory reader at 1 MiB, 64 MiB and 1 GiB (`tools/pmbench.nim archive`, `inspect`).
+
+  No unit changes status; PKG §11's stay claimed on the same tests, which the oracle suite strengthens.
+
 - 2026-11-23, Tier 5 step N-5 (I126), the blockchain module's contract v2 (G469-G476, G479, G481, I130, I131,
   I133; D20, G97, G419, G422 and G340 amended): v2 extends v1, frozen at N-5.1's first commit, with the library's
   reads, typed (blocks, transactions, the wallet, Blend, PoW, the deployment), the events `new_block_event` and

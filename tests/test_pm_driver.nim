@@ -596,3 +596,40 @@ suite "the resolver measurement's shapes, by their counts (ruling M6; G443)":
         attempts = 9,
         steps = 10,
       )
+
+  test "[IMPL-DECISION G454] the lift deepens the whole core with each newer `y` and gives it up; a deepening past the limit ends it":
+    # The root, the n core names and `y`: n + 2 names. Each of the v - 1 newer versions of `y`
+    # requires `c0000` one level deeper than the root does, so the last core name is at depth
+    # n + 1, and `yz ^2.0.0`, which no version meets (never charged or inspected). `y@1.0.0`
+    # completes the closure. Attempts: the root, the core and every version of `y`.
+    const n = 30
+    check lift(n, 1).counted(preset) ==
+      expect(
+        ok = true,
+        names = n + 2,
+        depth = n,
+        candidates = 1,
+        attempts = n + 2,
+        steps = n + 3,
+      )
+    check lift(n, 4).counted(preset) ==
+      expect(
+        ok = true,
+        names = n + 2,
+        depth = n + 1,
+        candidates = 4,
+        attempts = n + 1 + 4,
+        steps = n + 2 + 4,
+      )
+    # A core reaching the depth limit: the first newer `y` deepens its last name past it, which
+    # ends the operation, though `y@1.0.0` would complete the closure (PM l.1276-1277). The
+    # deepened depth is counted.
+    check lift(depthLimit, 2).counted(preset) ==
+      expect(
+        limit = "dependency_depth",
+        names = depthLimit + 2,
+        depth = depthLimit + 1,
+        candidates = 1,
+        attempts = depthLimit + 2,
+        steps = depthLimit + 3,
+      )
