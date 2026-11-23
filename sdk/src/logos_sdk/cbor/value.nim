@@ -32,7 +32,12 @@ type
   CborValue* = ref CborValueObj
   CborEntry* = tuple[key, value: CborValue]
 
-  CborValueObj* = object
+  CborValueObj* {.acyclic.} = object
+    ## [DECISIONS G478] A value is a tree: one that contains itself cannot be
+    ## encoded, sized or compared. A subtree may be shared; a cycle built by
+    ## hand is never freed, under orc and refc alike, and memory stays safe.
+    ## Neither memory manager traces the type for cycles, so a dropped
+    ## reference is a decrement and never a possible cycle root.
     case kind*: CborKind
     of ckUint:
       uint*: uint64
