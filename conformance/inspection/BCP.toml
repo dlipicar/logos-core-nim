@@ -110,12 +110,12 @@ reason = "docs/DEPLOYMENT.md row 3 and §3: the format (authority-policy.v1, doc
 # bcp-deploy-transport (DECISIONS I97, G309)
 [[item]]
 ids = ["BCP-0041"]
-reason = "docs/DEPLOYMENT.md rows 4a and 4b and §4: the local profile logos.local.unix-stream (Supported; test [BCP-0041] in tests/test_deployment.nim compares it with the facts block); remote profiles: None, no listener, export or enrollment (G298); Tier 5 is expected to change it."
+reason = "docs/DEPLOYMENT.md rows 4a and 4b and §4: the local profile logos.local.unix-stream (Supported; test [BCP-0041] in tests/test_deployment.nim compares it with the facts block); remote profiles: None, no listener or export (G298), and the enrollment trust of row 5d not yet used; Tier 5 is expected to change it."
 
 # bcp-deploy-trust (DECISIONS I97, G309)
 [[item]]
 ids = ["BCP-0042"]
-reason = "docs/DEPLOYMENT.md rows 5a to 5d and §5: call-evidence signing is Supported (one key per session bound to the Runtime, rotated offline; G149). Package-signing trust is Supported since step 5-3a-2: the package trust file holds the anchors, each kid's key and exact names and its development marker under one revision, administered offline by logosctl trust (G396, G397; tests tagged PKG-0418 to PKG-0421 in tests/test_daemon_config.nim and tests/test_logosd.nim). Package provenance and source evidence: None, nothing selected and a selection refused until step 5-11 (G398). Remote Runtime enrollment: None. Tier 5 is expected to change both."
+reason = "docs/DEPLOYMENT.md rows 5a to 5d and §5: call-evidence signing is Supported (one key per session bound to the Runtime, rotated offline; G149). Package-signing trust is Supported since step 5-3a-2: the package trust file holds the anchors, each kid's key and exact names and its development marker under one revision, administered offline by logosctl trust (G396, G397; tests tagged PKG-0418 to PKG-0421 in tests/test_daemon_config.nim and tests/test_logosd.nim). Package provenance and source evidence: None, nothing selected and a selection refused until step 5-11 (G398); Tier 5 is expected to change it. Remote Runtime enrollment is Supported since step 5-7a-1: the remote trust input holds the anchors and the enrollment records in RUNTIME's published schema under one revision with its own mark, administered offline by logosctl remote trust and applied at the next start (G408; tests tagged RUN-0493 to RUN-0500 in tests/test_remote_trust.nim)."
 
 # bcp-deploy-loader (DECISIONS I97, G309, G312)
 [[item]]

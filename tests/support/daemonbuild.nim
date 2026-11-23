@@ -8,7 +8,7 @@
 import std/os
 import ./childbuild
 
-var builtD, builtCtl: string
+var builtD, builtCtl, builtHolder: string
 
 proc logosdProgram*(): string =
   if builtD.len > 0:
@@ -31,3 +31,11 @@ proc logosctlProgram*(): string =
     else:
       buildChild("src/logosctl.nim", "logosctl", "logosctl")
   builtCtl
+
+proc keyholderProgram*(): string =
+  ## [G410, Tier 5 step 5-7a-1] `logos_keyholder`, a program logosd starts:
+  ## no hooks.
+  if builtHolder.len == 0:
+    builtHolder =
+      buildChild("src/logos_keyholder.nim", "logos_keyholder", "logos_keyholder")
+  builtHolder

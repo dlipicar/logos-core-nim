@@ -2,7 +2,7 @@
 ## tests/test_gen_current.nim: the types and kits of its system contracts, its configuration and
 ## state formats, and the fixtures only core's suites use.
 
-import std/[os, sequtils]
+import std/[os, sequtils, strutils]
 import results
 import logos_sdk/iface/accept
 import logos_sdk/codegen/[kitgen, nimgen, sdkroot]
@@ -184,6 +184,49 @@ proc generatedTrustTypes*(): Result[string, string] =
     err(e.msg)
 
 const
+  remoteTrustTypesPath* = "src/logos_core/daemon/remote_trust_types.nim"
+  remoteTrustPrimary* = "src/logos_core/daemon/remote_trust.cddl"
+  remoteEnrollmentMirror* = "spec/mirrors/RNT/9.3.7.runtime-enrollment.cddl"
+    ## RUNTIME's enrollment schema (l.2599-2632), mirrored
+  EnrollmentNamespace* = "logos.runtime_enrollment."
+  EnrollmentLocal* = "lcn.enrollment_"
+    ## what each of its names becomes in the remote trust document
+
+func enrollmentRules*(mirror: string): string =
+  ## [IMPL-DECISION G408] RUNTIME §9.3.7's enrollment records as rules of the
+  ## remote trust document. A supporting document imports nothing (COMMITMENT
+  ## §3.1 step 6; the reason §9.3.7 restates `runtime_instance_id`), and every
+  ## name sits one segment below its namespace, so each mirrored name
+  ## `logos.runtime_enrollment.x` becomes `lcn.enrollment_x`. Nothing else
+  ## changes: the records are generated from the spec's text, never retyped,
+  ## and encode to the same bytes (CBOR carries no rule name). A reference to
+  ## any other schema is left unresolved, which acceptance refuses.
+  mirror.replace(EnrollmentNamespace, EnrollmentLocal)
+
+proc remoteTrustSource*(): Result[string, string] =
+  ## The remote trust document: `remote_trust.cddl`, then the enrollment rules.
+  try:
+    ok(
+      readFile(remoteTrustPrimary) & "\n" &
+        enrollmentRules(readFile(remoteEnrollmentMirror))
+    )
+  except IOError as e:
+    err(e.msg)
+
+proc generatedRemoteTrustTypes*(): Result[string, string] =
+  ## The remote trust input and its mark (G408), for `daemon/remotetrust.nim`.
+  let set = ?acceptContractSet(?remoteTrustSource(), [], [], AcceptOptions())
+  nimModule(
+    set,
+    NimOptions(
+      importPrefix: SdkImportRoot,
+      schemaAccessor: "remoteTrustSchema",
+      documentsAccessor: "remoteTrustDocuments",
+    ),
+    false,
+  )
+
+const
   trustdocTypesPath* = "src/logos_core/package/trustdoc_types.nim"
   trustdocPrimary* = "src/logos_core/package/trustdoc.cddl"
 
@@ -351,6 +394,24 @@ proc generatedStoreTypes*(): Result[string, string] =
     let set = ?acceptContractSet(readFile(storePrimary), [], [], AcceptOptions())
     nimModule(
       set, NimOptions(importPrefix: SdkImportRoot, schemaAccessor: "storeSchema"), false
+    )
+  except IOError as e:
+    err(e.msg)
+
+const
+  remoteCarrierTypesPath* = "src/logos_core/remote/carrier_types.nim"
+  remoteCarrierPrimary* = "src/logos_core/remote/carrier.cddl"
+
+proc generatedRemoteCarrierTypes*(): Result[string, string] =
+  ## The remote control channel's messages (`logos-core-nim.remote-carrier.v1`,
+  ## DECISIONS G410, G411), for `remote/carrier.nim`.
+  try:
+    let set =
+      ?acceptContractSet(readFile(remoteCarrierPrimary), [], [], AcceptOptions())
+    nimModule(
+      set,
+      NimOptions(importPrefix: SdkImportRoot, schemaAccessor: "remoteCarrierSchema"),
+      false,
     )
   except IOError as e:
     err(e.msg)

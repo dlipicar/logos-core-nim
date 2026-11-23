@@ -227,7 +227,7 @@ deferred past the re-pin.
 12. Platforms, build, CI and tooling
 13. Implementation defaults chosen without a separate question
 14. Index
-15. Revisions and implementation choices since work started (R1–R7, I1–I120)
+15. Revisions and implementation choices since work started (R1–R7, I1–I125)
 
 ---
 
@@ -1567,8 +1567,9 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   service also counts signatures per channel, as a diagnostic (Fable's check, 2026-11-18).
 
 ### G324 — Which certificates the tls-tcp verifier accepts
-- **Kind:** READING, under owner decision B2 · **Specs:** TRANSPORT §8.4.1 l.1248-1250, l.1258-1267;
-  RUNTIME l.2680, l.2723.
+- **Kind:** READING, under owner decision B2 · **Specs:** TRANSPORT §8.4.1 l.1232-1234, l.1242-1252;
+  RUNTIME l.2637, l.2678 (lines at 6cac8335; the text below cites `6a4dfa28` lines, mapped in the
+  note of 2026-11-22).
 - **Description:** RFC 5280 path validation under the enrollment's anchor and protected certificate
   policy (l.1258), with revocation evidence for every non-anchor certificate (l.1265). B2 (owner,
   2026-11-17, approved as written) makes each Runtime's credential a self-signed certificate held as a
@@ -1599,6 +1600,19 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   under a CA anchor is a valid record that never authenticates: it fails closed, and 5-7a's loader
   reports an active record whose anchor's key is not among its keys.
 - **Status:** decided 2026-11-17 with B2; built in part 5-2a (I99).
+- **Lines at 6cac8335 (2026-11-22, step 5-7a-1, I117; batch B recheck §6):** TRANSPORT l.1253 is now
+  l.1237, l.1258-1260 l.1242-1244, l.1262-1264 l.1247-1249, l.1265 l.1250 and l.1267 l.1252; RUNTIME
+  l.2701 l.2657, l.2703 l.2659 and l.2718-2722 l.2673-2677. The words are the same. TRANSPORT l.1245
+  is new: an implementation without the direct-anchor case refuses to provision one.
+- **Extended 2026-11-22 (Tier 5 step 5-7a-1, I117; G408):** the loader report of limit 3 covers
+  three cases (`remotetrust.remoteReport`): (1) an active tls-tcp record whose anchor is not in the
+  set, or whose anchor's key is not among its keys; (2) a second key in such a record, which no
+  anchor can match, since under a direct anchor only the anchor certificate's key can (limit 1); (3)
+  an anchor that cannot be a direct anchor (`x509.directAnchorProblems`: not P-256, not self-signed,
+  a CA certificate, a Key Usage without digitalSignature, an Extended Key Usage that lacks serverAuth
+  or clientAuth, or a critical extension validation does not process), or that no record names. The
+  report changes nothing: logosd logs each line as `remote-trust-report:` at the start, and every
+  `logosctl remote trust` command prints it. `test_remote_trust`.
 
 ### G325 — Accepted current time for the tls-tcp verifier
 - **Kind:** FREE · **Specs:** TRANSPORT §8.4.1 l.1259 ("using accepted current time"), l.1267
@@ -2870,6 +2884,11 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   instance of that id exists here. `engine.retire`.
 - **Status:** OPEN (TF-30 point 1, logos-lips `9a8d4c14`); found 2026-11-12 planning the Runtime slice
   step 6. Built in I82.
+- **Settled 2026-11-22 (6cac8335; Tier 5 step 5-7a-1, I117; batch B recheck §1.5):** the text settles
+  it as built, so this is no longer an interim. A target address that names another Runtime is
+  INVALID_PARAMS (RUNTIME l.1806), without validation detail (l.1814), checked after the payload is
+  decoded (l.1829). The re-pin (P4b) took it as settled; this note records that. **Status:** decided
+  by the text.
 
 ### G195 — The code when `create_module` selects no declaration
 - **Kind:** GAP · **Specs:** RUNTIME l.3614 ("Runtime MUST select one accepted declaration for `module`
@@ -3504,6 +3523,11 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   (`sessionauth.live`, `engine.establish`, `engine.renew`).
 - **Status:** OPEN (NA-04 remark, not yet answered); interim decided and built 2026-11-13 (I90, part
   4b-2a). `test_transported`.
+- **Settled 2026-11-22 (6cac8335; Tier 5 step 5-7a-1, I117; batch B recheck §1.5):** the text now says
+  what the owner decided, so this is no longer an interim. `invocation` is present on a ready
+  transported route except in an idempotent replay (RUNTIME l.2914), and the retained result holds no
+  raw ticket: a replayed route record omits `invocation` and the consumer renews for one (l.3080-3081).
+  The built behaviour is unchanged. **Status:** decided by the text.
 
 ### G256 — A transported connection lost with no known cause
 - **Kind:** GAP (decided, owner decision 12; TF-15) · **Specs:** RUNTIME l.3475; TRANSPORT l.541-547.
@@ -3677,6 +3701,16 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   protocol. On Windows the configuration refuses `module_host` and the program is a stub that exits 2.
 - **Status:** decided and built 2026-11-14 (I91, part 4b-3.1a). `test_module_host`, `test_hosted`,
   `test_host`.
+- **Amended 2026-11-21 (Tier 5 step 5-7a-1, I117; Fable's check of the 5-7a plan, item 5):** `argv`
+  is the program name and `--parent=<pid>`, the pid of the process that spawned the host (both
+  spawns in `hostsup.nim`); still nothing about the instance. The host read `getppid()`, set
+  `PR_SET_PDEATHSIG` and read `getppid()` again, so a daemon that ended before the first read was
+  missed: the host had already been adopted, both reads named the adopter, and it ran on with a
+  signal that could never fire. Now the host sets the signal first (Linux) and then compares
+  `getppid()` with the pid it was given, on Linux and macOS (`logos_sdk/base/parentwatch.nim`, shared
+  with `logos_remote`, G411): a mismatch exits 70, and an `argv` with no valid `--parent` is "not
+  started by a Loader", exit 2. The host's watch on macOS stays its carrier. `test_module_host`
+  H-1, H-14, H-16-H-18.
 
 ### G265 — Module Host supervision
 - **Kind:** FREE · **Specs:** RUNTIME l.664-669, l.3818-3826 (the Runtime ends hosted work through
@@ -6375,8 +6409,8 @@ their history.
   `ctl.socket_dir`); there is no listener (G298).
 
 ### G86 — Session mTLS trust
-- **Kind:** FREE · **Specs:** TRANSPORT §8.4, §8.4.1 (mutual TLS 1.3; enrollment provisioned explicitly,
-  no trust on first use); RUNTIME §9.3 l.2318-2370.
+- **Kind:** FREE · **Specs:** TRANSPORT §8.4, §8.4.1 l.1211-1284 (mutual TLS 1.3; enrollment provisioned
+  explicitly, no trust on first use); RUNTIME §9.3.7 l.2590-2683 (lines at 6cac8335).
 - **Options offered:** (a) an Ed25519 session CA (10-year validity) whose key is kept 0600 for rotation;
   enrollments pin exact SPKIs *(recommended)*; (b) no CA, self-signed identities pinned by SPKI.
 - **Decision:** (a); runtime ids are UUIDv4.
@@ -6404,10 +6438,18 @@ their history.
   configured Runtime id must be a lowercase UUIDv4 when remote is enabled. No certificate that is not
   itself an anchor is accepted, so no revocation evidence is needed (TRANSPORT l.1265). The verifier is
   step 5-2's (G324); the key, the command and the anchor set are step 5-7a's.
+- **Lines at 6cac8335 (2026-11-22, step 5-7a-1, I117; batch B recheck §6):** the notes above cite
+  `6a4dfa28` lines. The same sentences are now TRANSPORT l.1222-1223 (were l.1238-1239), l.1232-1234
+  (l.1248-1250), l.1244 (l.1260) and l.1250 (l.1265); RUNTIME l.2637 (l.2680) and l.2678 (l.2723); CA
+  l.1312 (l.1268). TRANSPORT l.1245 is new: an implementation without the direct-anchor case refuses
+  to provision one. This one has it.
+- **Built 2026-11-22 (I117, part 5-7a-1):** the key and certificate, the offline command and rotation
+  as a cutover (G409); the remote trust-anchor set and the enrollments (G408); who signs (G410).
 
 ### G87 — When trust and enrollment changes apply
-- **Kind:** FREE · **Specs:** RUNTIME §9.3 l.2333-2371 (revisions, revocation), TRANSPORT l.1061 (a
-  revoked or conflicting enrollment closes connections).
+- **Kind:** FREE · **Specs:** RUNTIME §9.3.7 l.2590-2683 (revisions, revocation, the anchor set's own
+  revision l.2673-2678), TRANSPORT l.1262 (a revoked or conflicting enrollment closes the affected
+  connections) (lines at 6cac8335).
 - **Options offered:** (a) at the next daemon start; live-revocation rows claimed through the restart path
   *(recommended)*; (b) live. **Decision:** (a); `trust rotate` bumps the revision on the daemon and on
   every CLI slot.
@@ -6421,6 +6463,15 @@ their history.
   5-0):** enrollment and remote trust-anchor changes are made offline, under the session lock, and apply
   at the next start, as the trust file does (G299). A revoked enrollment closes its connections by the
   restart (TRANSPORT l.1277). Built in Tier 5 step 5-7a.
+- **Redone on B3 and built 2026-11-22 (Tier 5 step 5-7a-1, I117; G408, G411):** the remote trust input
+  (`remote/trust.cbor`, its own revision) is changed only by `logosctl remote trust`, offline, under
+  the session lock, refused while logosd runs. Each command that writes says the change applies at
+  logosd's next start, and `enroll revoke` adds that the restart closes that Runtime's connections.
+  At the start logosd applies G299's table to the input against its continuity mark
+  (`state/remote-trust-mark.cbor`) and writes a higher revision's mark before it uses it. The
+  restart ends every remote process with logosd (G411, from part 5-7a-2), so a revoked or
+  conflicting record's connections close then (TRANSPORT l.1262, was l.1277). Nothing applies live.
+  `test_remote_trust`.
 ### G88 — Binaries
 - **Kind:** FREE · **Specs:** BCP §7 (informative).
 - **Options offered:** (a) one `logosctl` for daemon and CLI plus a separate `logos_module_host`
@@ -6853,6 +6904,181 @@ their history.
   goal (Tier 5 plan A1), not by l.266.
 - **Status:** decided 2026-11-17 by step 5-0 (a reading; no code); in the comments document as a TF-06
   remark; not sent to the spec owner.
+
+### G407 — The Runtime identity of a remote-enabled logosd
+- **Kind:** FREE, under owner decision B2 · **Specs:** RUNTIME §9.3.6-§9.3.7 l.2586-2597 (lines at
+  6cac8335).
+- **Decision (5-7a plan §3.2, approved with the plan):** the id `logosctl init` makes (a lowercase
+  UUIDv4 from the OS CSPRNG, `sessioninit.newRuntimeId`) is kept: logosd's id is host-assigned and
+  fixed for the session's life (l.2594), never derived from the key (l.2595), so a credential rotation
+  leaves it. The daemon configuration gains `remote` (`enabled`, `signing`, `key_holder`; DAEMON.md
+  §3); with `remote.enabled` a start is refused unless `runtime.runtime_instance_id` is a lowercase
+  canonical UUIDv4 (l.2592-2593), the check naming the field. There is no identity command: a new id
+  is a new session and a new enrollment at every peer (l.2597).
+- **Status:** decided 2026-11-21 with the 5-7a plan; built 2026-11-21 (I117, part 5-7a-1,
+  `90f9903`). `test_daemon_config` (`dc.remote`).
+
+### G408 — The remote trust input and its continuity mark
+- **Kind:** FREE, under owner decisions B2, B3 and C2 · **Specs:** RUNTIME §9.3.7 l.2590-2683 (the
+  enrollment schema l.2599-2632; the rules per key l.2650-2656; the anchor set l.2673-2678; loss
+  l.2680-2682); TRANSPORT l.1232-1238 (lines at 6cac8335).
+- **Decision (5-7a plan §3.4):** `<session>/remote/trust.cbor` (`lcn.remote_trust`, closed CDDL in
+  `daemon/remote_trust.cddl`) holds the complete anchor set and the enrollment records under one
+  revision of its own, apart from the package trust file (C2), with no nodes (G418). Its records are
+  RUNTIME's published `logos.runtime_enrollment`, unchanged. `state/remote-trust-mark.cbor` keeps the
+  highest revision used, the BLAKE3-256 of the file's bytes, the anchor set and each key's accepted
+  record or conflict; a higher revision's mark is written durably before the state is used (l.2674).
+  At start logosd applies G299's table to the file against the mark (a refusal stops the start, the
+  mark unchanged), then the rules per key: a higher revision replaces, the same record keeps, a
+  different one at the same revision is a conflict that rejects that identity while the start goes
+  on, and `revoked` supersedes. **Stricter than the text** (their cost in `docs/REMOTE.md`): a stale
+  record refuses the whole start, and so does a key the mark holds that the file omits. logosd reads
+  neither file without `remote.enabled`, so such a session needs no mark. `logosctl remote trust init`
+  and `reestablish --revision N` write the file and mark together; every other change is offline,
+  under the session lock, refused while logosd runs, written as revision + 1 only when it changes
+  something and logosd would accept it, and applies at the next start (B3, G87). The start's snapshot
+  for the verifier (`trustsnap`) holds every anchor by its hex id and the tls-tcp keys only. G324's
+  loader report is extended (G324's note of 2026-11-22).
+- **[IMPL] choices made building it:**
+  - *The schema.* The plan's sketch, `enrollments: [* logos.runtime_enrollment]`, cannot be written: a
+    supporting document imports nothing (COMMITMENT §3.1 step 6). lcn-gen appends the mirrored rules
+    (`spec/mirrors/RNT/9.3.7.runtime-enrollment.cddl`) with each `logos.runtime_enrollment.x` renamed
+    `lcn.enrollment_x`; CBOR carries no rule name, so a record another implementation writes reads
+    unchanged.
+  - *An anchor's id,* when `remote trust anchor add` or `remote credential` names none: the
+    BLAKE3-256 of its DER (`remotetrust.anchorIdOf`).
+  - *One record per key per file:* a file with two records for one (`runtime_instance_id`,
+    `profile`) is refused; a conflict exists only against the mark.
+  - *A withdrawn anchor:* the records that name it stay and fail closed in the verifier, and the
+    loader report names them (G324 case 1).
+  - *Extended Key Usage:* an anchor whose EKU is present must name both `serverAuth` and
+    `clientAuth`, since a Runtime is a TLS server and a TLS client (`x509.directAnchorProblems`).
+  - *Deferred:* `remote trust import --node` with the nodes (5-7a-4, G418); passing the accepted input
+    through `prepareDaemon` to the remote supervision with its first use (5-7a-2).
+- **Status:** decided 2026-11-21 with the 5-7a plan; built 2026-11-22 (I117, part 5-7a-1,
+  `18a1c0a`). `test_remote_trust`.
+
+### G409 — The Runtime's TLS credential
+- **Kind:** FREE, under owner decision B2 · **Specs:** TRANSPORT §8.4.1 l.1222-1223, l.1244-1247;
+  RUNTIME l.2637, l.2657-2659; CA l.1312 (lines at 6cac8335).
+- **Decision (5-7a plan §3.3):** `logosctl remote credential new [--days N]`, offline, under the
+  session lock, refused while logosd runs, makes a P-256 key and a self-signed certificate under
+  `<session>/remote/credential/`: `key.p8` (PKCS#8, 0600), `cert.der` (ecdsa-with-SHA256; Key Usage
+  critical digitalSignature; no Extended Key Usage; subject `CN=logos runtime <id>`, which the verifier
+  does not use) and `peer.cbor` (`lcn.remote_peer`: the anchor and the enrollment record at revision 1
+  naming it with the one key), and prints the certificate's SHA-256, the anchor and the record. Validity
+  3650 days by default [IMPL], at most 36500. `show` prints the same without the key, the pending
+  rotation and the key holder's count. **Rotation is a cutover** (G324 limit 1): `rotate` writes the
+  next credential and its peer file at revision + 1 with the new key alone; each peer imports it
+  offline; this node takes it up at its next start with `remote.enabled`. A start with
+  `remote.enabled` and no credential is refused, naming the command. Key separation (PKG-0435; CA
+  l.1312): its own command, file and algorithm; the evidence key's loader refuses `key.p8` and the TLS
+  loader refuses the evidence key, by shape and by path.
+- **[IMPL] choices made building it:**
+  - *The next credential* is `remote/credential-next/`, not the plan's `next/`: the three names
+    (`credential`, `credential-next`, `credential-old`) sort together.
+  - *The take-up:* `credential` is renamed `credential-old`, `credential-next` `credential`, and
+    `credential-old` is removed, its key overwritten first through a write-only descriptor that
+    follows no link; a start interrupted between or after the renames finishes them.
+  - *notBefore* is the time of making less 300 s, for peers whose clocks lag.
+  - *The handoff* is the peer file, which `remote trust import @peer.cbor` reads on each peer.
+  - *What logosd checks at start* opens no key: `readCredential` checks `key.p8` with `lstat` only
+    (a regular file of this user, mode 0600, no link), and only the default mode's signing service
+    loads it (G410).
+  - *logosd's link* (Q2's link half; Fable's check of logosd's link and planning's ruling, 2026-11-22).
+    logosd signs through `transport/tls/p256.nim`, which calls BoringSSL's libcrypto only. The binding
+    still compiles libssl's sources into every program that imports it: eleven objects, the eight
+    `ssl/*.cc` units plus the amalgamated `ssl_common`, `ssl_dtls` and `ssl_tls13_misc`. logosd links
+    with dead stripping, by system in `src/logosd.nim`: `-Wl,-dead_strip` on macOS and
+    `-Wl,--gc-sections` on Linux. Nothing resolves symbols from logosd: it is linked without
+    `-rdynamic`, `-export_dynamic` or `dynamic_lookup`. Only the audit build's executables export
+    their symbols on Linux, and logosd ships no audit build.
+    - *The check* (`tests/support/nossl.nim`) takes every global symbol that only those objects define
+      in a nimcache that compiled them. Local names (static functions, the labels and switch tables a
+      compiler numbers in each object, such as GCC's `CSWTCH.n`) are left out, because they can recur
+      by chance in an object the nimcache lacks. A list without `SSL_new` fails, and so does a program
+      that holds none of libcrypto's symbols, whose symbol table was stripped. The check asserts that
+      none of those symbols is in logosd, and it runs in two places:
+      - in `test_logosd`, on the test build, on plain builds only, because a sanitizer can keep
+        libssl's tables and their code alive (ASan's per-object global registration, the other
+        sanitizers' per-object constructors);
+      - as the flake check `logosd-no-ssl`, beside `no-test-hooks`, on the deployed logosd. The probe
+        that compiles the objects is built with logosd's switches, one flake variable for both
+        (`logosdSwitches`). logosd adds only `lcnVersion` and `lcnCallArtifactHash`, constants of its
+        own Nim code. The binding reads platform defines and its own `BORINGSSL_USE_ASM` and
+        `BORINGSSL_ZERO_RECORD_BUFFERS`, so the probe compiles the objects logosd links, under the
+        same names. The probe is linked too, without dead stripping, and must fail the check, so the
+        search is not vacuous. Nothing runs it; it is linked because Nim 2.2.14 links under
+        `--noLinking:on` too (upstream ISSUES 196).
+    - *Measured* (global symbols only):
+      - macOS: 1174 counted. The test and release builds hold none of them, and the probe linked whole
+        holds all 1174. Before the change, the test build held 1570 of the 1577 then counted (locals
+        included). The binary went from 13.4 MB to 11.3 MB.
+      - Linux (x86_64, the flake's toolchain): 1072 counted. The deployed logosd holds none of them,
+        and the probe holds all 1072. logosd holds 5653 of libcrypto's symbols.
+      - The ssl units are compiled without `-ffunction-sections`, which reaches only Nim's own C
+        (Fable). They went whole because nothing references them. The fallback wording ("linked but
+        unreachable") is not needed.
+    - *What the owner is told:* logosd's binary holds no libssl code, checked on the binary (the link
+      line still names libssl's objects).
+- **Status:** decided 2026-11-21 with the 5-7a plan; built 2026-11-22 (I117, part 5-7a-1).
+  `test_remote_trust` (TRN-0369, PKG-0435), `test_remote_signing`, `test_logosd` and the flake check
+  `logosd-no-ssl` (the link).
+
+### G410 — Who signs with the TLS key
+- **Kind:** FREE, under owner decision B1 · **Specs:** TRANSPORT §8.4.1 l.1249 (proof of possession);
+  CA l.1312 (lines at 6cac8335).
+- **Decision (5-7a plan §3.6):** the TLS processes hold no key. Each sends its handshake's
+  CertificateVerify input over its control channel (G411) and waits for the signature; a request
+  names no role, logosd fixes it per process. `remote.signing`:
+  - **`logosd`** (absent: the default): logosd's signing service (`daemon/signsvc.nim`) loads the key
+    from `key.p8` at start, runs `checkSignInput` for the process's role and signs, under a rate limit
+    per process.
+  - **`key-holder`**: `logos_keyholder` (path `remote.key_holder`) loads the key; logosd never opens
+    `key.p8` and relays each request unchanged under its own request id, with the role it fixed,
+    after the same checks and its own limit per process, and maps the answer back. The holder binds
+    itself to logosd first (`parentwatch`, G411), runs the same checks for the role logosd names, its
+    own rate limit, and keeps its own count in `remote/keyholder.count`, which logosd neither writes
+    nor reads and `remote credential show` prints. What the mode gives and does not give is in
+    `docs/REMOTE.md`.
+  - **`process-copy`** (tests only, B1): each TLS process gets the key on its channel at spawn; only a
+    logosd built with `-d:logosTestSigning` accepts it.
+- **[IMPL] choices made building it:**
+  - *The role* logosd fixed travels to the holder in each `holder_sign`, so the holder checks the input
+    against it without supervising the TLS processes itself.
+  - *The limits:* 100 signatures a second with bursts of 200, logosd's per process and the holder's
+    its own (a token bucket each); a request over either is refused, which the process takes as a
+    failed handshake.
+  - *The count file:* two lines, `signed N` and `refused N`, carried across the holder's runs, written
+    every 60 s while it changes and at its exit.
+  - *Deferred to 5-7a-2 with the remote supervision:* logosd spawning the holder, and the open-watch
+    test (an interposer recording every open under `remote/credential/` in logosd and the holder).
+    5-7a-1 tests the holder as a program on a socket pair, the relay in process, and that what logosd
+    reads at a key-holder start, rotation take-up included, works with `key.p8` unreadable.
+- **Status:** decided 2026-11-21 with the 5-7a plan; built 2026-11-22 (I117, part 5-7a-1), the spawn
+  in 5-7a-2. `test_remote_signing`, `test_remote_tls` (handshakes signed through logosd's service, the
+  relayed holder and the test copy).
+
+### G411 — The remote program, its control channel and its end with logosd
+- **Kind:** FREE, under owner decisions B1 and B3 · **Specs:** TRANSPORT l.1262 (lines at 6cac8335).
+- **Decision (5-7a plan §3.1, §3.7):** one program, `logos_remote`, in listener and target roles,
+  spawned and supervised by logosd on its remote supervision thread; its control connections live in
+  those processes; its own control-channel CDDL; §3.1's four ways it ends with logosd (the parent
+  watch registered before `getppid()` is compared with the pid it was given, a watcher thread that
+  needs no event loop, the restart lock, no adoption), a start refused while a lock is held, and an
+  orderly stop that reaps every process.
+- **Built in 5-7a-1:** the start-up binding, `logos_sdk/base/parentwatch.nim` (G264's amendment of
+  2026-11-21: `PR_SET_PDEATHSIG` on Linux, then `getppid()` compared with the `--parent` pid; the key
+  holder binds itself with it too; the macOS kqueue watch and the watcher thread come with the
+  program in 5-7a-2), and the channel: `remote/carrier.cddl`,
+  `logos-core-nim.remote-carrier.v1` (core, so the remote program never decodes the host carrier's
+  types), frames of a 4-byte big-endian length and one det-CBOR `lcn.rch_message`, at most the
+  transport's minimum frame limit plus 64 KiB [IMPL]. 5-7a-1's messages: `snapshot` (the verifier's
+  trust snapshot), `sign` → `signed` / `sign_refused`, `holder_sign` (logosd to the key holder, with the
+  role) and `test_key` (process copy only). A message an end does not expect, or a frame that does
+  not decode, ends the channel. The plan's other messages come with their sub-parts.
+- **Status:** decided 2026-11-21 with the 5-7a plan; the program and its supervision in 5-7a-2.
+  `test_remote_signing`, `test_module_host`.
 
 ---
 
@@ -8801,6 +9027,7 @@ of work follows the tiers in `docs/SPEC-STATUS.md`: most settled areas first.
 | I114 | IMPL | Tier 5 step 5-3a: the `lcn.storage_fetch` contract and the package trust file (PACKAGE MANAGER l.401-449, l.733-745, l.854-862, l.1453-1465; RUNTIME l.601-626; plan `tier5-plans/step5-3a-trust.md` revision 5; reviews `opus-checks/step5-3a-plan.md` and `fable-checks/step5-3a-plan.md`, synthesis `fable-checks/step5-3a-synthesis.md`). Built as 5-3a-1, 5-3a-2a and 5-3a-2b | **5-3a-1, the contract** (G395; G91, G136 and G140 amended): `sdk/src/logos_sdk/contracts/` starts with `lcn_storage_fetch.cddl`, its generated types, calls and C headers (`lcn_NS_storage_fetch_*`, the generator's names for a dotted namespace) and its root (`lcn_storage_fetch_root.nim`, written by `nimble regen` from the commitment code; `test_nimgen` checks it current); the layer lint puts `contracts/` in `sdk_binding`. The fake `fetch_fake_module` (`testing/fixtures/`, its kit, calls and export lists in `testing/generated/`) derives each object from its locator with BLAKE3's extendable output read at an offset (`Blake3Hasher.finish(seek, …)`, new, over the vendored `blake3_hasher_finalize_seek`). The harness `testing/storagefetch.nim` takes materialized route handles (the INTERFACE §5.2 consumer surface, so the typed calls are the generated ones), an optional readiness driver and a fixture, and returns what it found wrong. `sdk/docs/STORAGE-FETCH.md` (the SDK's first document) holds the contract verbatim, checked by `sdk/tests/test_storage_fetch_contract.nim`, which also runs the call checks against the fake over the in-process route. `tests/test_storage_fetch.nim` runs the whole harness against the fake `direct_static` and `hosted_dynamic` under a test Runtime, and a hosted probe reading 4 MiB from the hosted fake in four calls, with P-13's trace finding none of the object's bytes or its locator in a carrier frame [RUN-0815]. No unit is claimed: the contract is half of PKG-0474's evidence, which 5-3b claims. **5-3a-2a** (the package trust file and logosd's start; G396, G398; G137, G299 and G96 amended). **The document** (core, `package/`): `trustdoc.cddl` holds `lcn.package_trust` (`logos-core-nim.trust.v2`) and `lcn.trust_file` (v1, which leaves `daemon/trust.cddl`; that file keeps the mark and the evidence key binding and cites PM l.401-406); its codecs are generated into `trustdoc_types.nim`, registered in `tests/support/genfixtures_core.nim` and `tools/regen_nim.nim`. `trustdoc.nim`: `decodeTrust` (deterministic CBOR within the exported `MaxTrustBytes`, against the schema of the value's format; v1 read as the v2 content with no anchor and nothing selected), `checkTrust` (the floor; kids and each anchor's names strictly ascending by bytes, names non-empty; a catalog or provenance selection refused, naming it), `inForce`, `acceptedSigning` (the anchors in force through `addAnchor`, only for a file `checkTrust` passes) and `floorTrust`. **The daemon:** `trustfile.nim`'s `TrustInput` is renamed `TrustFileState` (file, digest, present), and `config`, `compose`, `sessioninit`, `assemble` and the tests follow; `logosctl.nim` needed no change. `readTrust` decodes only; `checkedTrust` adds the rules; `establishTrust` runs the rules, key separation (`separateKeys` against `sessionEvidenceKeys`: every binding under `keys/`, retired ones included, and the binding beside the configured key; read at a start only when the file names an anchor, `startEvidenceKeys`, so a session without anchors gains no new refusal; G397), the conversion, the change since the start's first read (`seen`), then continuity and the mark, and returns the state with the accepted `TrustInput`. `assembleDaemon` applies the rules at both reads, passes the evidence keys and keeps the accepted input as `Daemon.signing` for 5-3b. The comparison of the two reads now comes before the mark moves (4b-6a made it after). `decide` (now a proc) names `logosctl trust reestablish --revision 1` when there is no file and the mark holds the v1 floor's digest (Q15). `initTrust` writes the v2 floor, and `setDevelopment` keeps the anchors and selections and writes v2 (the unchanged rule and the writers' checks are 5-3a-2b's). Layers: `package/trustdoc` joins `daemon_allowlist`. `docs/DAEMON.md` §6: both schemas verbatim, the rules, the start order and Q15's case; its command prose stays for 5-3a-2b. **Tests:** `test_trustdoc` (new: the round trip, an unknown field in each of the five maps, determinism and the bound, the profile literal against the mirrored one, the v1 reader, the canonical form [PKG-0107] [PKG-0072] [PKG-0434], exact names [PKG-0071] [PKG-0073], development anchors [BCP-0094] [BCP-0103], the selections [PKG-0169] [PKG-0467], only the file selects [PKG-0166], `acceptedSigning` feeding `verifyPackage` [PKG-0074] [PKG-0075] [PKG-0083]), `test_daemon_config` (the trust document's rules in the schema suite; the decision table with anchors; one name added, a marker flipped and a key changed at one revision refused [PKG-0418] [PKG-0420] [TXT-0463]; the start order and the two reads; a v1 session; Q15; key separation, current, retired and configured elsewhere [PKG-0435], and the bindings read only for a file with anchors; DAEMON.md verbatim), `test_gen_current`, `test_rmap_system`, and `test_logosd` and `test_deployment` for the rename. No claim moves: 5-3a-2b moves the ledger. **Departures from plan revision 5 in 5-3a-2a** (kept on planning's word, 2026-11-20): the two reads of a start are compared before the mark moves, not after as 4b-6a did, so a file changed during a start never moves it; the floor is a rule of `checkTrust`, not of the read, so `trust show` reads a file below it; a signing profile other than the baseline fails at decode against the CDDL literal, before any rule, since the schema fixes the value; `setDevelopment` carried the anchors over without checking them until 5-3a-2b replaced it with the checked writers; a selection's refusal reads "this implementation supports no … profile", naming no product. **5-3a-2b** (`logosctl trust`, the documents and the claims; G397 built; G303, I41 and I43 amended). **The writers** (`daemon/trustfile.nim`): the pure edits `withAnchor`, `withoutAnchor`, `withNames`, `withoutNames` and `withDevelopment`; `validateTrust` (the schema and the 1 MiB bound, `checkTrust`, `separateKeys`, `acceptedSigning`: what a start applies before continuity); `commitTrust` (nothing written when the edit changes nothing, otherwise revision + 1 in v2 if `validateTrust` passes, the refusal ending with `CorrectByHand` when the current file already fails, Q17; a writer whose change changes nothing refuses such a file too); `reestablish` takes the evidence keys and refuses a file `validateTrust` refuses, writing no mark. `setDevelopment` is gone: `trust development` is one more edit. **The command** (`src/logosctl.nim`): `trust anchor add|remove|add-names|remove-names` with `--kid` (text or `hex:`) and `--key` (96 hex digits or `@FILE`, `lcn-pkg keygen`'s line accepted); the evidence keys read from `keys/` and the configured binding when the file before or after names an anchor; `trust development` with the number of development anchors entering or leaving force; `trust show` with the profile, the anchors (`kid_text` when printable ASCII, `in_force`), the selections and `refused`; `trust reestablish` with the checks. Render in `daemon/render.nim` (`trustJson`, `trustRows`, `anchorsTable`, `kidText`). **Documents:** `docs/DAEMON.md` §6 (the commands, every writer's checks, the unchanged rule, the refused file, JSON; `reestablish` with the checks; what the switch gates) and §2, §8; `docs/DEPLOYMENT.md` rows 5b (Supported), 5c and 22, §1's ground 1 (the file holds anchors and nothing uses them; the answer stays *no*), §2's table and revocation, §5, §20 and SECURITY §13's table; `docs/CONFORMANCE.md` "What Tier 5 step 5-3a-2 changes" (claims, limits, bounds); `docs/SPEC-STATUS.md` (the A4 and C rows by step, the open-items row split, the log). `src/lcn_pkg.nim`'s header says its JSON trust file is no trust input (I41). **Claims and ledger:** `conformance/claims/PKG.toml`: PKG-0418 to PKG-0421 and PKG-0083 leave their deferrals (claimed through §4.1), PKG-0166 and PKG-0169 claimed by name, with PKG-0166's note on the sources that arrive later; `spec/repin-pending.toml` loses PKG-0418 and TXT-0463, and `spec/repin-text-cleared.toml` gains TXT-0463's `[[text]]` record (step P7, `tests/test_daemon_config.nim`; its `[[deferred]]` record stays). The inspection reasons of PKG-0422, BCP-0042, BCP-0074, BCP-0094 and BCP-0096 are re-read (A9): PKG-0422's ground 1 no longer held. **Tests:** `test_daemon_config` suite `dc.trustctl` (each change the next revision, one added name included [PKG-0418] [TXT-0463]; the unchanged rule; the refusals, nothing written [PKG-0107] [PKG-0072] [PKG-0434] [PKG-0435]; a refused file: every writer says to correct it, `reestablish` writes no mark, a change that removes the cause is written [PKG-0169]; the revision limit); `test_logosd` (the commands as processes from a Tier 4b v1 session, `--kid hex:` and `--key @FILE`, unchanged commands exit 0, logosd starts with the result, `trust show` text and JSON with the banner [PKG-0418] [TXT-0463]; the refusals exit 1 and write nothing, the hand-set selection shown with its reason and refused by the writers, `reestablish` and logosd [PKG-0435] [PKG-0169]; continuity across starts now with an anchor in the file [PKG-0419] [PKG-0421]). **Departures from plan revision 5 in 5-3a-2b** (kept on planning's word, 2026-11-21; Q16's and Q17's widening and the canonical names are G397's, as built, and `setDevelopment`'s removal is above): the inspection reasons of BCP-0042, BCP-0074, BCP-0094 and BCP-0096, DEPLOYMENT row 22 and SECURITY §13's table are reworded beyond plan §4.2, since each described the Tier 4b file, a switch and no anchors, which A9's re-read found no longer true; TXT-0463's cleared record names `tests/test_daemon_config.nim` at step P7, as the other cleared records do, since spectrace has no `same_step` check for the plan to cite; the remote trust input gets its own SPEC-STATUS row (5-7a, decided by C2), split from the 5-3a row, so that row can read built while the remote input stays 5-7a's; `trust show` and `trust reestablish` read the evidence keys only when the file names an anchor, as a start does since 3a7d052, so neither fails a session without anchors over a binding it does not need; PKG-0419 and PKG-0421 take their evidence from an anchor added to the existing continuity process test, which already restarts logosd across revisions, rather than from a second test of the same path. **5-3a-2c** (planning's ruling on the two questions 5-3a-2b left open, after Fable's answers, 2026-11-21; no spec gap, PM l.119 leaves both to the implementation; G397 amended). **Withdrawals of what is not there are refused:** `withoutAnchor` returns a refusal for a kid that names no anchor ("no anchor has kid HEX", without `trust anchor add`'s hint), and `withoutNames` is all or nothing, refusing with every name the anchor does not authorize byte for byte; additions and settings of what is already so stay unchanged (exit 0). bb554fd's unchanged answer naming the kid goes. **JSON:** `refused` is `refusal` (it holds a reason, and `refused` is a `status` of ctl.cddl and cli.cddl); `kid_text` is left out for a text beginning `hex:`, in the text table too, since `--kid` would read it as hex; `development_anchors` counts the anchors marked `development` whether or not anything changed; DAEMON.md says `in_force` is what the file says. `trust show`'s continuity reads "not reached" when the rules refuse the file. **Documents:** DAEMON.md §6, DEPLOYMENT §2's Revocation paragraph (a removal naming something absent is refused, BCP l.364), G397 and plan §3.3 (Q16). **Tests:** `dc.trustctl` (the unchanged case without withdrawals; the absent anchor and name among the refusals; remove-names all or nothing, by case and normalization form), `test_logosd` (the unchanged commands, the refused withdrawals exit 1, `development_anchors` unchanged, continuity on a refused file, a kid whose text is `hex:ab`). | 2026-11-20, 2026-11-21 |
 | I115 | IMPL | Tier 5: the marked-copy audit (G276, G278; INTERFACE §1.2.1, §1.4.1 l.380-386; `tier5-plans/marked-copy-audit.md`, one row per site with its evidence; the probe in `tier5-plans/marked-copy-probe/`). Built as `a71ebac` and `bd97ba8` | **The rule.** In results 0.5.1, `isOkOr`, `isErrOr`, `valueOr`, `errorOr`, `and`, `or` and `orErr` begin with `let s = (self)`, and whatever part of `s` the template does not move out is freed unzeroed; `?` moves both sides, and `get`, `value` and `error` are lent (`resultsLent`). Whether `s` is a copy is the compiler's cursor inference (the probe, under the free scan, orc and orc `-d:release` alike): a `var` local is copied; a `let` local is not, except inside a loop; a field of a `var` object, a `var` parameter and a plain parameter are not; `discard ?f()` drops a copy. An object, tuple or array constructor passed to a non-sink parameter borrows its fields and is not destroyed (Nim 2.2.14 `compiler/injectdestructors.nim` l.884-929). Not a Nim bug: the copy is results' own `TODO avoid copy`, and zeroing before release is G276's requirement, not the language's. **Nine paths fixed**, each with a case that fails without its fix: (1) `abi/checks.providerChecked` zeroes a status outside the provider set in place, not in a copy; (2) `codegen/consumert.completeTyped` zeroes the checked completion status and erases a failure's text once `onDone` returns; (3) `iface/outcome.checkDetail` zeroes the decoded detail tree; (4) `codegen/kitrt` registers `releaseLastFailure` with `onThreadRelease`, so the per-thread failure text is cleared at a thread's end (`a71ebac`); (5) `runtime/invoke.commitSync` zeroes a provider's failure when the route's end decides a synchronous call; (6) `transport/envelope.failureOf` zeroes a refused failure; (7) `transport/hello.readFirst` zeroes the first frame's tree, and the payload and failure text of a first message that is not a Hello (`wipeRefused`); (8) `transport/session.onResponse` zeroes the failure text of a Response for no outstanding request; (9) `host/consumer.setFailure` zeroes the `clip` copy. Tests: `test_wipe_routes` gains the matrix steps `outside` and `detail` (W-4, W-6, W-7, and W-7's hosted consumer through the probe's new `call-quiet`), a W-4 `commitSync` case and a W-8 typed-failure case; `test_wipe` W-2 gains three refused-message cases. **Four found safe** by the rule: `transport/session.nim` :540 `encoded(Message(... response: resp))` and `checkStatus`'s `checkFailure(InvocationFailure(...))` (constructors passed to non-sink parameters), `checkFailure`'s `let m = f.message.get` (a cursor), and `readDetail`'s `view` (a template over `toOpenArray`); the md lists the sites that never see marked text. **Out of scope**, with reasons: ticket copies on the Hello path (R18: a ticket exists only transiently; fix 7 zeroes a received Hello's tree); the carrier's frame copies (no marked payload crosses the carrier, I92); `host/rcbinding`'s `clip` temporaries (Runtime Control marks nothing). **Handed on:** `cli/` is a consumer like any other, so G276 applies to `lcn_call`. N-2's `lcn_call` refuses every marked method before any route (its `commands.nim` :594, checked by L-5), so N-2b exposes only the refused argument text and records that as a non-claim; N-2d builds the full erasure (a marked response erased once written out) with a W-case, citing this audit. **Open:** whether a newer `results` drops the copy is unchecked; nothing was downloaded. Checks on `bd97ba8`: the 18 touched suites in orc, refc and orc-release on the Mac and on framework.lan, nph, the three lints and the spectrace gate at 6cac8335 | 2026-11-20 |
 | I116 | IMPL | Tier 5 step 5-3b: Package Manager foundations, A4 and A2 (PACKAGE MANAGER §4.1 to §4.4, §6, §11, §13, l.834-858, l.1294-1331; STORAGE-FETCH; plan `tier5-plans/step5-3b-plan.md`, its revision log and planning's rulings §12; reviews `fable-checks/step5-3b-plan.md`). Built as 5-3b-1 (the engine) and 5-3b-2 (the channel and the module) | **Closed 2026-11-22** (5-3b-2). **5-3b-1, the engine** (G399's value, G401, G402's retrieval, G403, G404, G405's driver and engine, G406; G90 amended, G150 replaced, notes on G91 and G166). `src/logos_core/pm/`: `input` (`lcn.pm_input`, generated types, `decodePmInput`), `catalog` (`lcn.package_catalog` and `lcn.pm_catalog_kept`, the canonical order, the digest pin, sequence continuity against the kept document), `fetcher` (one retrieval: `stat_object`, 1 MiB reads with BLAKE3, the retries and waits of G402), `vcache` (G403), `driver` (the resolver over a memo, G405) and `engine` (sans-I/O: commands out, events in; routes and their renewal with fresh keys, readiness, acquisition and the kept catalog, one retrieval per binding, a deadline timer per call, `resolve` for one root). `lcn-pkg catalog` writes the canonical document and prints its digest. `tools/lint/nostorage.py` and `nostorage.toml` (the flake check `lint-nostorage`) and `layers.py`'s `pm-external` rule with `layers.toml`'s `pm_roots` and `pm_external_allowlist` (G406). `docs/PACKAGE-MANAGER.md` but the channel and the daemon's section. Suites `test_pm_input`, `test_pm_catalog`, `test_pm_fetch`, `test_pm_vcache`, `test_pm_driver`, cases in `test_lcn_pkg`; the engine is tested over scripted providers in one process, the hosted case is 5-3b-2's. 25 PKG units claimed (§4.2's 9, §4.4's 0114, 0115 and 0449, PKG-0353's in-process half, and 0019, 0021, 0069, 0076, 0077, 0079, 0081, 0082, 0112, 0167, 0472 and 0473 by entry). `[IMPL]` The resolver's limits are an engine parameter with no configured source yet. G400 is recorded as decided. **5-3b-2, the channel and the module** (G399's daemon section, G400, G402's grants and hosted case, G405's shell; G140 amended). **The channel** (G400): `protected_inputs` in `app-config.v1` (`runtime/host_config.cddl`), checked at create (a listed instance with a `state_assignment`, at most one entry); the Module Loader writes `input` to `<state_dir>/.lcn-protected-input` at each realization attempt, before the module's code runs, and removes it when initialization returns, at release and at retirement (`runtime/protinput.nim`, `loader/provider.nim`, `runtime/realizer.nim`); a `copy` state transfer skips the reserved name and its temporary names. **logosd** (G399): the `package_manager` section (`daemon/daemon_config.cddl`), its checks with each refusal naming its field, `resolver_limits` all four or absent, absent being logosd's preset (rulings C1 to C4), the start line naming the limits and their origin; compose writes the instance's `lcn.pm_input` with the trust file the start accepted, checked by the Package Manager's own decoder before anything starts. **S9 to S11** (G402, DAEMON.md §5): S9's Runtime Control rule names no `targets` and holds `list_modules`, since this Capability Authority never allows a request without selectors (a list, `establish_route`) or one naming a route through a rule with `targets` (found in `test_logosd_pm`; planning's ruling of 2026-11-22, 7.3); G402 and DAEMON.md §5 record that the Package Manager can read every module record. `test_authority` shows a targeted deny never matching a list either, and AUTHORITY-POLICY.md says so. **The shell** (G405): `pm/shell.nim` runs the engine in a hosted module over the kit's routes, looks up each binding's provider record with `list_modules`, and logs a resolver limit that ends a root operation by name (ruling M5); `pmtest_module` (`tests/kit/`) wraps it for tests. **The fake** serves `fetch-fake/state/<name>` from its state directory (STORAGE-FETCH §5). **The resolver limits** (rulings M1 to M6, planning's ruling of 2026-11-22): logosd's preset is G443's (256, 32, 256, 1,024), its relations tested on the constants; `bindCand` makes one cycle walk per bind (G361's amendment), checked against the per-dependency walk kept under `lcnTestHooks` on 400 seeded catalogs (`test_resolver`); the shapes (wide, dense, layered, chain, hub) are `tests/support/pmshapes.nim`, timed by `tools/pmbench.nim` and counted in `test_pm_driver` (M6); CONFORMANCE "Resolver limits" gives the measured cost at the preset and at the maxima, DEPLOYMENT §12 what raising a limit costs. The cost fix is a step of its own after 5-3b, gated before 5-5 (G443). Suites `test_protected_input` (10), `test_pm_hosted` (6), `test_logosd_pm` (2), and cases in `test_daemon_config` (S9 to S11 decided by the Capability Authority; the preset's relations), `test_loader`, `test_authority` (a targeted rule and a list), `test_resolver` (the walk's oracle) and `test_pm_driver` (the shapes' counts). PKG-0474 claimed; PKG 279/279. | 2026-11-22 |
+| I117 | IMPL | Tier 5 step 5-7a: remote Runtimes over `logos.remote.tls-tcp` (RUNTIME §9.3.6-§9.3.9; TRANSPORT §8.4.1; plan `tier5-plans/step5-7a-plan.md` revision 4 with its recheck at `c9e88db`; Fable's batch B recheck `fable-batch-b-6cac8335.md`; G407-G418). Built as 5-7a-1 to 5-7a-4, each merged on its own | **5-7a-1** (the foundations, with no remote process; `5f24b55`, `90f9903`, `250313c`, `18a1c0a`, `a09940d`, and the records). **The host's parent** (G264 amended, a separate commit ahead of the rest): `logos_sdk/base/parentwatch.nim`; the spawner passes `--parent=<pid>`, and the host sets `PR_SET_PDEATHSIG` first (Linux) and then compares `getppid()` with that pid, exiting 70 on a mismatch and 2 without the argument. **The remote section** (G407): daemon configuration `remote` (`enabled`, `signing`, `key_holder`); with `remote.enabled` the Runtime id must be a lowercase UUIDv4; `key_holder` goes with `key-holder` only; `process-copy` only with `-d:logosTestSigning`. **The split** (Q2 (a)): the P-256 key, PKCS#8, the self-signed certificate and ECDSA move from `credential.nim` behind `boring.nim` to `transport/tls/p256.nim`, which calls no libssl function; the layers lint gains `daemon-no-ssl`. **The link** (G409; Fable's check and planning's ruling, 2026-11-22): logosd links with `-Wl,-dead_strip` (macOS) or `-Wl,--gc-sections` (Linux), and `tests/support/nossl.nim` checks that none of the symbols that only libssl's eleven objects define is in the binary (`test_logosd` on plain builds, the flake check `logosd-no-ssl` on the deployed logosd). **The remote trust input** (G408): `remote/trust.cbor` and `state/remote-trust-mark.cbor` (`daemon/remote_trust.cddl`, RUNTIME's enrollment rules appended and renamed `lcn.enrollment_*`), G299's start table, the rules per key with the two stricter ones, the extended loader report (G324), `logosctl remote trust` (`init`, `show`, `reestablish`, `anchor add`, `anchor remove`, `enroll add`, `enroll revoke`, `import`), and the verifier's snapshot (`transport/tls/trustsnap.nim`); `trust.nim` keeps an active record whose anchor was withdrawn, failing it closed. **The credential** (G409): `daemon/credential.nim` and `logosctl remote credential` (`new`, `show`, `rotate`); rotation a cutover through `remote/credential-next/`, taken up at the next start, crash-safe; a start with `remote.enabled` and no credential refused. **The channel** (G411): `remote/carrier.cddl` (`logos-core-nim.remote-carrier.v1`) and `remote/carrier.nim`; `signing.SignClient`, the TLS process's end. **Who signs** (G410): `daemon/signsvc.nim` (logosd's service, `HolderRelay`, the rate limits, the count file) and the program `logos_keyholder` (`daemon/keyholder.nim`); `testKeyMessage` for the test copy; `assemble` takes the rotation up, refuses a start without a credential, and loads the key only in the default mode. **Tests:** `test_remote_trust` (new: the schema, every row of the start table, the rules per key, protected files, the loader report, the writers, the snapshot, the credential, key separation, and logosd and logosctl as processes, a kill right after the mark moved included), `test_remote_signing` (new: the channel, logosd's service, the key holder as a program on a socket pair, the relay, a key-holder start's reads with `key.p8` unreadable, the test copy), `test_remote_tls` (handshakes signed through logosd's service, the relayed holder and the test copy), `test_logosd` (no libssl code in the binary), `test_module_host`, `test_daemon_config`, `test_gen_current`. **Claims:** RUN-0493 to RUN-0500, RUN-0869, RUN-0928 and RUN-0929, TRN-0217, TRN-0369 and PKG-0435. **Records:** G86, G87, G324 lines at `6cac8335`, G87 redone, G324 extended, G255 and G194 settled by the text; `docs/REMOTE.md` (new), `DAEMON.md` §2, §3, §6a and §6b, `DEPLOYMENT.md` §2 and §5 (row 5d Supported), `HOST-CONFIG.md` (the host's argv). **Left to 5-7a-2:** logosd spawning the key holder and the open-watch test, the remote program and its supervision, passing the accepted input through `prepareDaemon`; to 5-7a-4: `remote trust import --node`. **At the merge of master `193a58a`:** the `logos_keyholder` bin in the nimble file and the flake, in W2-P's layout: the flake package `logos-keyholder`, and logosd's package installs it at `libexec/logos-core/logos_keyholder`, beside the Module Host (`docs/REMOTE.md`). `nix/ci-weights.json` is unchanged: the new suites take their group's mean until a CI run measures them | 2026-11-21 to 2026-11-22 (5-7a-1) |
 | I120 | IMPL | Tier 5 step W2-P: the repository split's packaging (`tier5-plans/wave2-plan.md`; plan `tier5-plans/stepW2-P-plan.md`, spike record `tier5-plans/stepW2-P-spike.md`; G433-G436). Parts W2-P.2: the two packages; W2-P.1: Nimble 0.26.2, the lock and the Nim pin | **W2-P.2.** `sdk/` is the Nimble package `logos_sdk` 0.1.0, with `lcn-gen` as its program and ranges for its requirements (G433, `acf7fb0`). Kits build, and test data is read, from an installed SDK as from a checkout (G435, `ac561f5`). `lint-packaging` checks the install lists, the requirements, the lock and the addresses (`cfd2a96`). A module repository requires the SDK by name, one SDK revision per Nimble directory (G434, `4458360`; `sdk/docs/MODULE-KIT.md` §9). **W2-P.1.** Nimble 0.26.2 built from the copy Nim 2.2.14 ships, in place of nixpkgs' 0.20.1 (`931a306`); every Nimble command passes `--useSystemNim`, the lock has no `nim` entry and is regenerated byte for byte, both nimble files refuse a Nimble older than 0.26, and the Nim pin has one home (`806fd6d`); CI and `tools/ci/windows.ps1` run with them, and `workflow_dispatch` gains `nimble_only` for the trial push (G436, `b8f305f`). `test_kit_dylib`'s installed-package case reads the build record under its Windows name too (`4374de4`). Nimble checks none of a lock's checksums (draft #191, found by N-4), so `tools/check_installs.nim`, through `logos_sdk/testing/lockcheck`, compares every install `nimble.paths` names with the lock before every `nimble test*` task, `build_runtime_lib` and, in a checkout with `nimbledeps/`, `nimble build`, and as its own step after setup in CI and `windows.ps1` (first in `1c4b9ee`; G436, Fable's §10 on the plan). Test: `test_lockcheck`. The Nimble drafts the step found, #189 (two installs of one version) and #191, are in `build/scratch/upstream/ISSUES.md`, not filed. The checks on each host are in the spike record's §4 and the merge note | 2026-11-21 |
 | R6 | SCOPE (revises R1; Tier 5 plan A6) | CI legs from Tier 5 | Linux x86_64, Linux aarch64 and macOS arm64 in the `nix` and `nimble` jobs; Windows x86_64 in the `windows` job, on the Nimble path with its own toolchain, the library suites under orc, blocking since step 5-4c (G123 as revised, G334). Android and iOS join with M12, with G105 and G125. Owner's approval of the Tier 5 plan, batch A (A6), 2026-11-16. | 2026-11-16 |
 | R7 | SCOPE (Tier 5 restructure; plan `tier5-plans/restructure-in-place.md`) | The SDK inside this repository | `sdk/` is the package `logos_sdk`, this implementation's layer 1: the base set (CBOR, cdCDDLe, hashing, commitments, INTERFACE), the generators, the module kit and `logos_sdk/testing`. Core (`src/logos_core/`), the daemon and the CLI are built on it. `tools/lint/layers.py` (the check `lint-layers`, strict) holds the import direction with no recorded exception. Each spec's ledger has one owning package: CDE, CMT and HSH are under `sdk/conformance/`, the rest, IFC included until its claims are split, under `conformance/`; `spectrace owners` holds that a unit has one owner. No behaviour, claim or gate result changed. | 2026-11-18 |

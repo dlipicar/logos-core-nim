@@ -1,0 +1,96 @@
+; logos-core-nim.remote-carrier.v1: the private control channel between logosd
+; and one remote process (logos_remote, Tier 5 step 5-7a-2), and between logosd
+; and its key holder (logos_keyholder) (DECISIONS G410, G411; Tier 5 step
+; 5-7a-1). Never in a public record, a store or a configuration file. No module
+; payload crosses it: what it carries is control (5-7a plan §3.16).
+;
+; A frame is a 4-byte big-endian length, then one Logos deterministic-CBOR
+; lcn.rch_message (remote/carrier.nim). Its kind fixes its lane:
+;   lane 0, control:   snapshot, test_key (to the remote process)
+;   lane 1, signing:   sign (from the remote process) / signed, sign_refused
+;   the key holder's:  holder_sign (from logosd) / signed, sign_refused
+; Steps 5-7a-2 to 5-7a-4 add the listener, Hello, Runtime Control and session
+; messages. A frame that does not decode to one message, or one a side does not
+; expect, ends the channel, and the process with it.
+;
+; Each side numbers its own requests (id); a reply names the request it
+; answers. A sign request names no role: the role is the one logosd fixed for
+; the process (a listener process signs as a TLS server, a target process as a
+; client), and logosd names it to the key holder.
+
+lcn.rch_message =
+  lcn.rch_snapshot /
+  lcn.rch_test_key /
+  lcn.rch_sign /
+  lcn.rch_holder_sign /
+  lcn.rch_signed /
+  lcn.rch_sign_refused
+
+; The trust snapshot of this logosd start (owner decision B3; DECISIONS G324,
+; G408): the remote trust-anchor set at its revision, each anchor named by its
+; identifier in lowercase hex, and the current logos.remote.tls-tcp record of
+; each enrolled Runtime. Sent once, first, and never changed afterwards.
+lcn.rch_snapshot = {
+  kind: "snapshot",
+  revision: uint64,
+  anchors: [* lcn.rch_anchor],
+  records: [* lcn.rch_record],
+}
+
+lcn.rch_anchor = {
+  id: tstr .size (1..128),
+  certificate: bstr .size (1..16384),
+}
+
+; status active: anchor and one or two keys; revoked: no key; conflicting:
+; every key the conflicting records name (G324).
+lcn.rch_record = {
+  runtime_instance_id: tstr .size 36,
+  revision: uint64,
+  status: "active" / "revoked" / "conflicting",
+  ? anchor: tstr .size (1..128),
+  keys: [* bstr .size (1..1024)],
+}
+
+; remote.signing = "process-copy" only, which a logosd accepts only when built
+; with -d:logosTestSigning: the TLS key for the process to sign with itself
+; (owner decision B1: tests only). A process built without that define takes
+; this message as the channel's end.
+lcn.rch_test_key = {
+  kind: "test_key",
+  pkcs8: bstr .size (1..1024),
+}
+
+; One TLS 1.3 CertificateVerify input to sign with the Runtime's TLS key
+; (transport/tls/signing.nim checkSignInput): alg is the TLS SignatureScheme.
+lcn.rch_sign = {
+  kind: "sign",
+  id: uint64,
+  alg: uint16,
+  input: bstr .size (1..256),
+}
+
+; logosd to its key holder: a sign request relayed unchanged, under logosd's own
+; id, with the role logosd fixed for the process that asked.
+lcn.rch_holder_sign = {
+  kind: "holder_sign",
+  id: uint64,
+  role: "client" / "server",
+  alg: uint16,
+  input: bstr .size (1..256),
+}
+
+; A DER ECDSA signature.
+lcn.rch_signed = {
+  kind: "signed",
+  id: uint64,
+  signature: bstr .size (1..128),
+}
+
+; refused: the signer will not sign this input (checkSignInput, the rate
+; limit); unavailable: no signer could answer.
+lcn.rch_sign_refused = {
+  kind: "sign_refused",
+  id: uint64,
+  reason: "refused" / "unavailable",
+}

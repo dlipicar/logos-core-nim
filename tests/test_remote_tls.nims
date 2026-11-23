@@ -3,3 +3,5 @@
 # (the test-hook rule, sdk/src/logos_sdk/base/wipeaudit.nim).
 switch("define", "useMalloc")
 switch("define", "lcnWipeAudit")
+# [G410] The test copy of the TLS key (owner decision B1: tests only).
+switch("define", "logosTestSigning")
