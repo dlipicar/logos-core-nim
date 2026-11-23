@@ -747,6 +747,22 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   installed-state mutation is serialized in one slot (G449). TXT-0493 to TXT-0495 and PKG-0608 and PKG-0609 leave
   the re-pin's deferred list. PKG 367/367, BCP 53/53. Areas A3 and A4's 5-5 units are all claimed.
 
+- 2026-11-23, Tier 5 step 5-3c-4 (I122; G482; G447, G455 and G477 amended), inspections carry contract encodings:
+  - `package/resolver.nim`: an eligible `Inspection` holds its contracts as their deterministic encodings, in one
+    private buffer with `int32` ends, built only by `eligibleInspection` and checked free of references
+    (`package/reffree.nim`). The numbering moves a catalog record's encodings into its walk and hashes ranges of
+    them with the same function; G477's walk reads lengths.
+  - `pm/jobs.nim` and `pm/engine.nim`: a judgment crosses as it is and is cached and supplied in the turn it
+    arrives; D1's decode is left for the staged record. `pm/vcache.nim`: the estimate by lengths, and
+    `ContractUnitBytes` 192, measured (it was 1,024).
+  - The oracle keeps the values shape as a test-side type (`tests/support/valueinspection.nim`), and every oracle
+    suite checks the builder against it. New cases in `test_resolver`, `test_pm_vcache` and `test_pm_driver`.
+  - Every resolver count is unchanged for a run that ends by itself, with three exceptions (CONFORMANCE "The
+    resumable run"); a judgment's decode turns are gone (100 for the bench's maximal judgment, 80,000 entries and 22,000
+    contracts; none now).
+
+  No unit changes status. PKG 367/367.
+
 ## Tiers at f4f83471 (the original plan)
 
 | Tier | Area | Verdict |
