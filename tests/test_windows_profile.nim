@@ -64,6 +64,7 @@ when defined(windows):
       # The engine wires the Loader with `hosted` exactly when it holds a
       # Module Host supervisor (`engine.nim`, `hosts != nil`); on Windows the
       # supervisor is a stand-in that never exists.
+      # [G442] sanitizer-env: no supervisor exists on Windows, nothing starts
       check newSupervisor(getAppFilename(), []).isNil
       var h = openHarness(@[], work / "harness", hosted = false).expect("the Loader")
       defer:

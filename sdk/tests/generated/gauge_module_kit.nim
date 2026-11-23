@@ -242,7 +242,7 @@ template exportGaugeModule*(T: typedesc) =
       destroyModule(instance)
     GC_unref(instance)
 
-  proc gaugeModuleKitName(): cstring {.exportc: "logos_gauge_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [].} =
+  proc gaugeModuleKitName(): cstring {.exportc: "logos_gauge_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "a static string".} =
     system.cstring(moduleName)
 
   proc gaugeModuleKitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: "logos_gauge_module_MODULE_init", dynlib, cdecl, gcsafe, raises: [].} =
@@ -257,7 +257,7 @@ template exportGaugeModule*(T: typedesc) =
     let instance {.cursor.} = cast[T](p)
     routeGaugeModule(instance, bare, params)
 
-  proc gaugeModuleKitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: "logos_gauge_module_MODULE_call_surface", dynlib, cdecl, gcsafe, raises: [].} =
+  proc gaugeModuleKitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: "logos_gauge_module_MODULE_call_surface", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "static bytes".} =
     if outLen != nil:
       outLen[] = csize_t(callSurfaceData.len)
     addr callSurfaceData[0]

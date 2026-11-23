@@ -19,7 +19,9 @@ when defined(posix):
   import logos_sdk/codegen/common_types
   import logos_sdk/pins
   from logos_sdk/abi/host import AppConfigFormat
-  import ./support/[modulehostbuild, shortdir], logos_sdk/testing/[kitbuild, kitruntime]
+  import
+    ./support/[modulehostbuild, sanitizerenv, shortdir],
+    logos_sdk/testing/[kitbuild, kitruntime]
   import logos_sdk/testing/fixtures/meter_impl
   import logos_sdk/testing/generated/meter_module_calls
   from ../src/logos_core/runtime/hostsup import traceMarkers, traced
@@ -42,11 +44,8 @@ when defined(posix):
 
   let shortBase = makeShortBase("lcnpi", "/e999/12345678/logos_meter_module.sock")
 
-  const
-    SanitizerEnv =
-      ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
-    Marker = "lcn-protected-input-marker-7d41c09e"
-      ## the bytes every case hands over: found in no frame, log line or diagnostic
+  const Marker = "lcn-protected-input-marker-7d41c09e"
+    ## the bytes every case hands over: found in no frame, log line or diagnostic
 
   let
     hostProgram = moduleHostProgram()

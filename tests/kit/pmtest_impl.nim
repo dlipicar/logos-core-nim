@@ -8,6 +8,7 @@
 ## - `status` answers the catalog in use (its sequence, digest and entry
 ##   count), each binding's route state, route id, readiness and the routes
 ##   established for it, and the root operations still running.
+## - Its resolutions take turns of a single work unit (`PmtestTurnWork`, G455).
 ## - `resolve {name, version}` answers the driver's outcome for that exact root:
 ##   the selected packages with their schema roots, and the resolver's
 ##   counters; or the error code and its message.
@@ -20,8 +21,13 @@ import ../../src/logos_core/package/[errors, records, resolver]
 type PmTest* = ref object
   shell: Shell
 
+const PmtestTurnWork = 1'i64
+  ## [IMPL; G455] Every hosted resolution is sliced at each work unit, so each
+  ## goes through the event loop turn by turn, as one at the maxima does
+  ## (`test_pm_hosted`'s sliced case). It changes no outcome.
+
 proc initModule(_: type PmTest, init: ModuleInit): Result[PmTest, InvocationFailure] =
-  let s = ?openShell(init)
+  let s = ?openShell(init, turnWork = PmtestTurnWork)
   ok(PmTest(shell: s))
 
 proc destroyModule(m: PmTest) {.async: (raises: []).} =

@@ -7,7 +7,7 @@
 import std/[atomics, locks]
 import results
 import logos_sdk/cbor
-import logos_sdk/abi/[checks, types]
+import logos_sdk/abi/[checks, cstatus, types]
 import logos_sdk/iface/outcome
 
 export atomics, locks, results, checks, types, outcome
@@ -15,6 +15,7 @@ export atomics, locks, results, checks, types, outcome
 # A Runtime stand-in -------------------------------------------------------------------
 
 proc unusedOp*() {.cdecl.} =
+  bindingEnter()
   doAssert false, "the kit called a Runtime Control operation it does not use"
 
 let unusedAddr* = cast[pointer](unusedOp)
@@ -67,6 +68,7 @@ proc publishOp*(
     cborData: ptr UncheckedArray[uint8],
     cborDataLen: csize_t,
 ): CErrorCode {.cdecl, gcsafe, raises: [].} =
+  bindingEnter()
   doAssert userData == addr publishState
   record(eventName, cborData, cborDataLen, "plain")
   CErrorCode(publishResult.load)
@@ -82,6 +84,7 @@ var cancelled*: Atomic[bool]
 proc callerOp*(
     invocation: ptr LogosInvocationContext, outCaller: ptr LogosCallerView
 ): LogosResult {.cdecl, gcsafe, raises: [].} =
+  bindingEnter()
   outCaller[] = LogosCallerView(
     kind: CallerModule,
     runtimeInstanceId: LogosUtf8View(
@@ -98,6 +101,7 @@ proc callerOp*(
 proc cancelledOp*(
     invocation: ptr LogosInvocationContext
 ): bool {.cdecl, gcsafe, raises: [].} =
+  bindingEnter()
   cancelled.load
 
 proc scopedPublishOp*(
@@ -106,6 +110,7 @@ proc scopedPublishOp*(
     cborData: ptr UncheckedArray[uint8],
     cborDataLen: csize_t,
 ): LogosResult {.cdecl, gcsafe, raises: [].} =
+  bindingEnter()
   record(eventName, cborData, cborDataLen, "scoped")
   LogosResult()
 
@@ -124,6 +129,7 @@ var
 proc currentOp*(
     state: pointer
 ): ptr LogosInvocationContext {.cdecl, gcsafe, raises: [].} =
+  bindingEnter()
   activeContext
 
 var accessState*: byte

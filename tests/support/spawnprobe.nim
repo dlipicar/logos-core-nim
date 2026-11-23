@@ -1,9 +1,9 @@
 ## A stand-in for `logos-module-host` in `test_module_host` H-14 (Tier 4b step
 ## 4b-3; plan §4.3, R4, R5): started by the supervision exactly as a host is,
 ## it reports what it was started with in one lane-0 `fatal` message on fd 3,
-## then exits 0. Lines: `mask <n>` (signals blocked), `<signal> dfl|other`,
-## `env <name>` per variable, `fd0 null|other`, `fd5 <dev>:<ino>|closed`,
-## `fd6 open|closed`. Built with `-d:noSignalHandler`, so the Nim runtime
+## then exits 0. Lines: `arg <argument>` per argument after the program's
+## name, `mask <n>` (signals blocked), `<signal> dfl|other`, `env <name>` per
+## variable, `fd0 null|other`, `fd5 <dev>:<ino>|closed`, `fd6 open|closed`. Built with `-d:noSignalHandler`, so the Nim runtime
 ## leaves the dispositions it was started with.
 
 import std/[os, posix]
@@ -20,6 +20,8 @@ proc disposition(sig: cint): string =
 
 proc main() =
   var lines: seq[string]
+  for i in 1 .. paramCount():
+    lines.add("arg " & paramStr(i))
   var none, mask: Sigset
   discard sigemptyset(none)
   discard pthread_sigmask(SIG_BLOCK, none, mask) # blocks nothing more

@@ -43,11 +43,13 @@ from ../runtime/authscopes import AuthorityModule
 from ../authority/scopes import rcContractInfo
 from ../runtime/host_config import parseHostConfig
 from ../permissions import HostAmbient
+from ../transport/tls/trustsnap import TrustSnapshot, newTrustSnapshot
+import ../remote/carrier
 from logos_sdk/pins import CommitmentModelId, HashProfileId, HashSuiteId
 import logos_sdk/contracts/generated/lcn_storage_fetch_root
 import ../orchestration/[settings, needs]
 import ../cli/callsettings
-import ./[config, session, trustfile]
+import ./[config, remoteexposure, session, trustfile]
 
 when defined(posix):
   import std/posix
@@ -63,6 +65,8 @@ const
   AuthorityState* = "authority"
   ModuleHostName* = "logos-module-host" ## [G264]
   LibexecHost* = ".." / "libexec" / "logos-core" / ModuleHostName
+  RemoteProgramName* = "logos_remote" ## [G411]
+  LibexecRemote* = ".." / "libexec" / "logos-core" / RemoteProgramName
   LibDir* = ".." / "lib" / "logos-core" ## [G343] the companion library's directory
   CliLibrary* = DynlibFormat.replace("$1", CliModule) ## `liblcn_call.so` or `.dylib`
   RcEventPrefix = "logos.runtime_control."
@@ -85,10 +89,22 @@ type
     appConfig*: LcnAppConfig ## the derived `lcn.app_config`
     bytes*: seq[byte] ## its deterministic CBOR
     orchestrator*: OrchestratorSettings ## the orchestration instance's value
+    retained*: Retained
+      ## [G412; Q4] the durable disables applied to the records, and those
+      ## dropped, which the start removes from the file
+
+  RemoteSeen* = object
+    ## [G408, G412] What this start read of the remote inputs, for compose:
+    ## the trust snapshot the remote processes take, and the durable disables
+    ## (`state/remote-exposure.cbor`, Q4).
+    snapshot*: TrustSnapshot
+    exposure*: seq[LcnRemoteExposureEntry]
 
   Prepared* = object ## A daemon-config that passed DAEMON.md §3's five checks.
     config*: DaemonConfig
     composition*: Composition
+    policyReport*: seq[string]
+      ## [G415] the authority policy's load report, which logosd logs
 
 # CBOR helpers for the policy -------------------------------------------------------
 
@@ -578,6 +594,17 @@ proc defaultModuleHost*(exe: string): Opt[string] =
       return Opt.some(realPath(p))
   Opt.none(string)
 
+proc defaultRemoteProgram*(exe: string): Opt[string] =
+  ## [G411] `logos_remote`, found as `defaultModuleHost` finds the Module Host.
+  if exe.len == 0:
+    return Opt.none(string)
+  let d = realPath(exe).parentDir
+  for candidate in [d / LibexecRemote, d / RemoteProgramName]:
+    let p = candidate.normalizedPath
+    if fileExists(p):
+      return Opt.some(realPath(p))
+  Opt.none(string)
+
 proc companionLibrary*(exe: string): Opt[string] =
   ## [G343] `<d>/../lib/logos-core/liblcn_call.{so,dylib}`, `<d>` as for the
   ## Module Host; none when `exe` is empty.
@@ -660,9 +687,42 @@ func staticModule(instance, module, binding: string): LcnAppModule =
     ),
   )
 
-proc compose*(s: Session, c: DaemonConfig, exe = ""): Result[Composition, string] =
+proc remoteValue*(
+    c: DaemonConfig, seen: Opt[RemoteSeen]
+): Result[(Opt[LcnAppRemote], Retained), string] =
+  ## [G408, G412] The host configuration's `remote`, with `remote.enabled`:
+  ## this start's trust snapshot, as the remote processes take it, and the
+  ## deployment's records with the retained disables whose configuration
+  ## entry is unchanged applied (Q4). Without what the start read (a check
+  ## before it, `logosctl daemon config check`) the snapshot is an empty one
+  ## and nothing is retained, so the records are still checked.
+  if not c.remote.enabled:
+    return ok((Opt.none(LcnAppRemote), Retained()))
+  let t =
+    if seen.isSome:
+      seen.get.snapshot
+    else:
+      ?newTrustSnapshot(0, [], [])
+  var x = c.value.remote.get
+  var retained = Retained()
+  if seen.isSome:
+    retained = ?applyRetained(x, seen.get.exposure)
+  let snapshot = ?snapshotMessage(t).encode
+  ok(
+    (
+      Opt.some(
+        LcnAppRemote(snapshot: snapshot, listeners: x.listeners, exports: x.exports)
+      ),
+      retained,
+    )
+  )
+
+proc compose*(
+    s: Session, c: DaemonConfig, exe = "", remote = Opt.none(RemoteSeen)
+): Result[Composition, string] =
   ## [G294] The derived host configuration. `exe` is logosd's executable, for
-  ## the default `module_host`; empty: none.
+  ## the default `module_host` and `remote_program`; empty: none. `remote` is
+  ## what this start read of the remote inputs (G408), with `remote.enabled`.
   let dc = c.value
   let orch = ?orchestratorValue(dc)
   var orchRecord =
@@ -696,6 +756,9 @@ proc compose*(s: Session, c: DaemonConfig, exe = ""): Result[Composition, string
   if moduleHost.isNone:
     moduleHost = defaultModuleHost(exe)
   let r = dc.runtime
+  var remoteProgram = r.remote_program
+  if c.remote.enabled and remoteProgram.isNone:
+    remoteProgram = defaultRemoteProgram(exe)
   let protectedInputs = protectedInputsOf(c)
   var app = LcnAppConfig(
     runtime: LcnAppRuntime(
@@ -711,6 +774,7 @@ proc compose*(s: Session, c: DaemonConfig, exe = ""): Result[Composition, string
       endpoint_dir: Opt.some(s.endpointDir),
       module_host: moduleHost,
       module_host_env: r.module_host_env,
+      remote_program: remoteProgram,
     ),
     policy: policy,
     orchestration: OrchestratorInstance,
@@ -732,8 +796,10 @@ proc compose*(s: Session, c: DaemonConfig, exe = ""): Result[Composition, string
         Opt.some(LcnAppCallAudit(call_records: a.call_records, evidence: a.evidence))
     else:
       app.call_audit = Opt.some(LcnAppCallAudit())
+  let (remoteApp, retained) = ?remoteValue(c, remote)
+  app.remote = remoteApp
   let bytes = ?app.encode
-  ok(Composition(appConfig: app, bytes: bytes, orchestrator: orch))
+  ok(Composition(appConfig: app, bytes: bytes, orchestrator: orch, retained: retained))
 
 proc prepareDaemon*(
     s: Session,
@@ -742,14 +808,17 @@ proc prepareDaemon*(
     hooksBuild = HooksBuild,
     checkKey = true,
     exe = "",
+    remote = Opt.none(RemoteSeen),
 ): Result[Prepared, string] =
   ## DAEMON.md §3's checks 1 to 5 on daemon-config bytes, before anything
-  ## starts; `logosctl daemon config check` runs the same.
+  ## starts; `logosctl daemon config check` runs the same. `remote` is what
+  ## the start read of the remote inputs (G408), passed on to the remote
+  ## processes.
   let dc = ?decodeDaemonConfig(bytes)
   let c = ?checkDaemonConfig(dc, trust, hooksBuild, checkKey)
-  let comp = ?compose(s, c, exe)
-  discard parseHostConfig(AppConfigFormat, comp.bytes).valueOr:
+  let comp = ?compose(s, c, exe, remote)
+  let hc = parseHostConfig(AppConfigFormat, comp.bytes).valueOr:
     return err("the derived host configuration is refused: " & error.message)
-  ok(Prepared(config: c, composition: comp))
+  ok(Prepared(config: c, composition: comp, policyReport: hc.policyReport))
 
 {.pop.}

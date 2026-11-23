@@ -1,0 +1,198 @@
+; logos-core-nim.remote-carrier.v1: the private control channel between logosd
+; and one remote process (logos_remote, Tier 5 step 5-7a-2), and between logosd
+; and its key holder (logos_keyholder) (DECISIONS G410, G411; Tier 5 step
+; 5-7a-1). Never in a public record, a store or a configuration file. No module
+; payload crosses it: what it carries is control (5-7a plan §3.16).
+;
+; A frame is a 4-byte big-endian length, then one Logos deterministic-CBOR
+; lcn.rch_message (remote/carrier.nim). Its kind fixes its lane:
+;   lane 0, control:   snapshot, test_key, listen, hello_admit, hello_refuse,
+;                      rc_out, close_conn, stop (to the remote process) /
+;                      listening, hello_judge, rc_in, conn_closed
+;   lane 1, signing:   sign (from the remote process) / signed, sign_refused
+;   the key holder's:  holder_sign (from logosd) / signed, sign_refused
+; Steps 5-7a-3 and 5-7a-4 add the provider session and target-side messages.
+; A frame that does not decode to one message, or one a side does not expect,
+; ends the channel, and the process with it.
+;
+; Each side numbers its own requests (id); a reply names the request it
+; answers. A sign request names no role: the role is the one logosd fixed for
+; the process (a listener process signs as a TLS server, a target process as a
+; client), and logosd names it to the key holder.
+
+lcn.rch_message =
+  lcn.rch_snapshot /
+  lcn.rch_test_key /
+  lcn.rch_sign /
+  lcn.rch_holder_sign /
+  lcn.rch_signed /
+  lcn.rch_sign_refused /
+  lcn.rch_listen /
+  lcn.rch_listening /
+  lcn.rch_hello_judge /
+  lcn.rch_hello_admit /
+  lcn.rch_hello_refuse /
+  lcn.rch_rc_in /
+  lcn.rch_rc_out /
+  lcn.rch_close_conn /
+  lcn.rch_conn_closed /
+  lcn.rch_stop
+
+; The trust snapshot of this logosd start (owner decision B3; DECISIONS G324,
+; G408): the remote trust-anchor set at its revision, each anchor named by its
+; identifier in lowercase hex, and the current logos.remote.tls-tcp record of
+; each enrolled Runtime. Sent once, first, and never changed afterwards.
+lcn.rch_snapshot = {
+  kind: "snapshot",
+  revision: uint64,
+  anchors: [* lcn.rch_anchor],
+  records: [* lcn.rch_record],
+}
+
+lcn.rch_anchor = {
+  id: tstr .size (1..128),
+  certificate: bstr .size (1..16384),
+}
+
+; status active: anchor and one or two keys; revoked: no key; conflicting:
+; every key the conflicting records name (G324).
+lcn.rch_record = {
+  runtime_instance_id: tstr .size 36,
+  revision: uint64,
+  status: "active" / "revoked" / "conflicting",
+  ? anchor: tstr .size (1..128),
+  keys: [* bstr .size (1..1024)],
+}
+
+; remote.signing = "process-copy" only, which a logosd accepts only when built
+; with -d:logosTestSigning: the TLS key for the process to sign with itself
+; (owner decision B1: tests only). A process built without that define takes
+; this message as the channel's end.
+lcn.rch_test_key = {
+  kind: "test_key",
+  pkcs8: bstr .size (1..1024),
+}
+
+; One TLS 1.3 CertificateVerify input to sign with the Runtime's TLS key
+; (transport/tls/signing.nim checkSignInput): alg is the TLS SignatureScheme.
+lcn.rch_sign = {
+  kind: "sign",
+  id: uint64,
+  alg: uint16,
+  input: bstr .size (1..256),
+}
+
+; logosd to its key holder: a sign request relayed unchanged, under logosd's own
+; id, with the role logosd fixed for the process that asked.
+lcn.rch_holder_sign = {
+  kind: "holder_sign",
+  id: uint64,
+  role: "client" / "server",
+  alg: uint16,
+  input: bstr .size (1..256),
+}
+
+; A DER ECDSA signature.
+lcn.rch_signed = {
+  kind: "signed",
+  id: uint64,
+  signature: bstr .size (1..128),
+}
+
+; refused: the signer will not sign this input (checkSignInput, the rate
+; limit); unavailable: no signer could answer.
+lcn.rch_sign_refused = {
+  kind: "sign_refused",
+  id: uint64,
+  reason: "refused" / "unavailable",
+}
+
+; [5-7a-2; G411] logosd to a listener process, once, after the snapshot (and
+; the test key): what it serves. Its TCP listener is fd 4, which logosd bound;
+; certificate is the Runtime's TLS certificate (DER), whose key the process
+; never holds unless the test copy gave it. The limits are the TLS carrier's
+; (transport/tls/params.nim), which the process checks as its own. It answers
+; listening once it accepts.
+lcn.rch_listen = {
+  kind: "listen",
+  certificate: bstr .size (1..16384),
+  limits: lcn.rch_tls_limits,
+}
+
+lcn.rch_tls_limits = {
+  handshake_timeout_ms: uint64,
+  max_handshakes: uint64,
+  max_connections: uint64,
+  read_bound: uint64,
+  write_bound: uint64,
+  frame_limit: uint64,
+  peer_frame_limit: uint64,
+  close_wait_ms: uint64,
+}
+
+lcn.rch_listening = {
+  kind: "listening",
+}
+
+; [G413] A listener process to logosd: the first frame of connection id (the
+; process's own number) from the peer the TLS handshake authenticated as
+; runtime, under revision, its 32-byte tls-exporter binding, and the frame's
+; body. logosd answers hello_admit or hello_refuse; until then the process
+; reads nothing more from that connection.
+lcn.rch_hello_judge = {
+  kind: "hello_judge",
+  id: uint64,
+  runtime: tstr .size 36,
+  revision: uint64,
+  binding: bstr .size 32,
+  hello: bstr .size (0..16842752),
+}
+
+; response: the frame body to send (the Hello response). From then on the
+; process relays each frame of the connection as rc_in.
+lcn.rch_hello_admit = {
+  kind: "hello_admit",
+  id: uint64,
+  response: bstr .size (1..16842752),
+}
+
+; response: the ProtocolError frame body to send, or empty to send nothing (the
+; peer refused first); the process then closes the connection.
+lcn.rch_hello_refuse = {
+  kind: "hello_refuse",
+  id: uint64,
+  response: bstr .size (0..16842752),
+}
+
+; [G413] One frame of an admitted Runtime Control connection, relayed as it
+; came; logosd answers with zero or more rc_out frames for it, and close
+; when the connection must end (its listener disabled, Runtime Control off, a
+; framing fault).
+lcn.rch_rc_in = {
+  kind: "rc_in",
+  id: uint64,
+  frame: bstr .size (1..16842752),
+}
+
+lcn.rch_rc_out = {
+  kind: "rc_out",
+  id: uint64,
+  frame: bstr .size (1..16842752),
+}
+
+; logosd to the process: end connection id (no further frame is sent on it).
+lcn.rch_close_conn = {
+  kind: "close_conn",
+  id: uint64,
+}
+
+; The process to logosd: connection id ended.
+lcn.rch_conn_closed = {
+  kind: "conn_closed",
+  id: uint64,
+}
+
+; logosd to the process: stop accepting, send what is queued, and exit.
+lcn.rch_stop = {
+  kind: "stop",
+}

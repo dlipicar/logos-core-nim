@@ -186,7 +186,7 @@ template exportTallyModule*(T: typedesc) =
       destroyModule(instance)
     GC_unref(instance)
 
-  proc tallyModuleKitName(): cstring {.exportc: "logos_tally_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [].} =
+  proc tallyModuleKitName(): cstring {.exportc: "logos_tally_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "a static string".} =
     system.cstring(moduleName)
 
   proc tallyModuleKitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: "logos_tally_module_MODULE_init", dynlib, cdecl, gcsafe, raises: [].} =
@@ -201,7 +201,7 @@ template exportTallyModule*(T: typedesc) =
     let instance {.cursor.} = cast[T](p)
     routeTallyModule(instance, bare, params)
 
-  proc tallyModuleKitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: "logos_tally_module_MODULE_call_surface", dynlib, cdecl, gcsafe, raises: [].} =
+  proc tallyModuleKitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: "logos_tally_module_MODULE_call_surface", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "static bytes".} =
     if outLen != nil:
       outLen[] = csize_t(callSurfaceData.len)
     addr callSurfaceData[0]

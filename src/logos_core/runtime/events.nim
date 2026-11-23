@@ -134,6 +134,13 @@ type
 proc subOf*(p: pointer): ptr SubState =
   cast[ptr SubState](p)
 
+when defined(lcnTestHooks):
+  proc linkKeyForTests*(p: pointer): pointer =
+    ## [DECISIONS G466] Test hook: the handler `linkDrain` runs.
+    let s = subOf(p)
+    withLock s.lock:
+      result = cast[pointer](s.handler)
+
 proc newQueued(
     scoped: bool,
     origin, attempt: string,

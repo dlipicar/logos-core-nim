@@ -13,6 +13,8 @@
 import std/[atomics, os]
 import logos_sdk/abi/types
 import logos_sdk/iface/outcome
+from logos_sdk/base/entry import lcnCallback, lcnNoNimHeap
+from logos_sdk/codegen/kitrt import kitEnter
 import logos_sdk/testing/fixtures/meter_impl
 
 type DeferredMode* = enum
@@ -77,7 +79,7 @@ type Owned = object
   module: ptr LogosModuleContext
   buf: ptr UncheckedArray[uint8]
 
-proc releaseOwned(state: pointer) {.cdecl, gcsafe, raises: [].} =
+proc releaseOwned(state: pointer) {.lcnCallback.} =
   let o = cast[ptr Owned](state)
   if o.buf != nil:
     kitFree(o.module, o.buf)
@@ -113,6 +115,7 @@ proc settle*(
 proc submit(
     module: ptr LogosModuleContext, inv: ptr LogosProviderInvocation
 ) {.cdecl, gcsafe, raises: [].} =
+  kitEnter()
   submits += 1
   if current() == inv.context:
     submitSawContext += 1
@@ -129,6 +132,7 @@ proc submit(
 proc requestCancel(
     module: ptr LogosModuleContext, inv: ptr LogosProviderInvocation
 ) {.cdecl, gcsafe, raises: [].} =
+  kitEnter()
   hooks += 1
   inHook += 1
   if current() == inv.context:
@@ -181,12 +185,15 @@ var api = LogosAsyncProviderApi(
   requestCancel: requestCancel,
 )
 
-proc asyncApi(): ptr LogosAsyncProviderApi {.cdecl, gcsafe, raises: [].} =
+proc asyncApi(): ptr LogosAsyncProviderApi {.
+    cdecl, gcsafe, raises: [], lcnNoNimHeap: "a static descriptor"
+.} =
   addr api
 
 proc init(
     input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext
 ): LogosResult {.cdecl, gcsafe, raises: [].} =
+  kitEnter()
   accessState.store(input.invocationAccess.state)
   accessCurrent.store(cast[pointer](input.invocationAccess.current))
   publishFn.store(cast[pointer](input.publish))

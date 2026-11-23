@@ -215,6 +215,29 @@ raises a provider's bounds raises this one too.
 **`provenance_object` is never read** (PKG-0167; until step 5-11). A source with one inspects and
 resolves exactly as the same source without it, and no call names its locator.
 
+**Resolution over retrieval** (G405, G455). A root operation's resolution is a resumable run that the
+driver holds for the operation's life, on the module thread:
+- **A turn** of the run ends where it needs a candidate's inspection, which the engine retrieves as
+  above and supplies; where it needs an installed record's retained-bytes answer (5-5); or once
+  `ResolverTurnWork` units of work are spent. The run's first turns are its setup over the catalog.
+  After a spent turn the engine issues `cmContinue`, and the shell runs the next turn from a
+  `callSoon` of its own, one event-loop poll later. So route answers, timers, readiness events and
+  other operations go between two turns, and two operations take turns one after the other.
+- **Nothing is rerun** from the root. The candidates retrieved are exactly those one synchronous
+  resolution reaches, in its order (PM l.1294-1295, l.1310), and the budget changes no outcome or
+  counter (l.1279-1280).
+- **After the reply** the run's state is freed a turn at a time, by continues of their own.
+- **A caller that gives its operation up** (its future cancelled) cancels it: it takes no more turns,
+  its queued retrieval is dropped, and nothing answers it. A continue that arrives for it is ignored.
+- At `_MODULE_destroy` each operation still running is answered `package-unavailable`.
+- **The operation bound** (G477): the run counts the inputs it reads, a unit for each record read
+  (inspected or installed), for each of its dependency entries, for each contract an entry lists and
+  for each contract it provides, each record once (one walk, `inputUnits`). A count equal to the bound
+  goes on; the read that takes it over ends the operation with `package-unavailable` (PM l.1308-1309),
+  and the caller's message does not state the bound. The four resolver limits and their counters are
+  untouched. The resolver half is built; the protected key `operation_entries` in `lcn.pm_limits`
+  comes with 5-5-3, and until then the driver runs with no bound.
+
 The locator encodings of each provider are STORAGE-FETCH §5's table. In logosd the bindings are
 `package_manager.storage` ([DAEMON.md](DAEMON.md) §3), each naming a `hosted_dynamic` instance that
 provides `lcn.storage_fetch`; the system rules S9 to S11 grant the routes to those instances, the

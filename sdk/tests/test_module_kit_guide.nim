@@ -26,7 +26,7 @@ when defined(linux) or defined(macosx):
     Guide = "sdk/docs/MODULE-KIT.md"
     Platform = (when defined(macosx): "macos" else: "linux")
 
-  let work = repoDir / "build" / "module-kit-guide" / kitVariant
+  let work = absolutePath("build" / "module-kit-guide" / kitVariant)
     # under the repository, so its config.nims puts the SDK on the path
 
   type Recorded = object
@@ -70,7 +70,7 @@ when defined(linux) or defined(macosx):
     var info = ""
     var text = ""
     var inside = false
-    for line in readFile(repoDir / Guide).splitLines:
+    for line in readFile(Guide).splitLines:
       if line.startsWith("```"):
         if inside:
           result[info] = text
@@ -111,17 +111,17 @@ when defined(linux) or defined(macosx):
         writeFile(work / "counter_impl.nim", b["nim counter_impl.nim"])
 
         # lcn-gen, under a name of its own so test_nimgen's build never races it.
-        let lcnGen = repoDir / "build" / "tools" / "lcn_gen_guide"
+        let lcnGen = absolutePath("build" / "tools" / "lcn_gen_guide")
         check run(
           @[
             getCurrentCompilerExe(),
             "c",
             "--hints:off",
-            "--nimcache:" & repoDir / "build" / "nimcache" / "lcn_gen_guide",
+            "--nimcache:" & absolutePath("build" / "nimcache" / "lcn_gen_guide"),
             "-o:" & lcnGen,
-            repoDir / "src" / "lcn_gen.nim",
+            absolutePath("sdk" / "src" / "lcn_gen.nim"),
           ],
-          repoDir,
+          getCurrentDir(),
         )[1] == 0
         var generate = words(b["sh generate"])
         check generate[0] == "lcn-gen"

@@ -5,7 +5,7 @@
 ## (`fetch-fake/state/<name>`, Q1 (c)); the Package Manager gets its `lcn.pm_input` as its
 ## protected realization input (G400); the test's client drives the fake and asks the probe.
 
-import std/[atomics, monotimes, os, strutils, tables, times, typedthreads]
+import std/[atomics, monotimes, os, sequtils, strutils, tables, times, typedthreads]
 import unittest2
 import ../src/logos_core/runtime/engine
 import logos_sdk/abi/[checks, types]
@@ -30,7 +30,7 @@ include ./support/routefixture
 
 when defined(posix):
   import logos_sdk/crypto/blake3
-  import ./support/[modulehostbuild, pmfixture, shortdir]
+  import ./support/[modulehostbuild, pmfixture, sanitizerenv, shortdir]
   import ../src/logos_core/package/trustdoc_types
   import ../src/logos_core/pm/[catalog, input_types]
   from ./support/trnowner import fastConfig, Ms
@@ -49,10 +49,7 @@ when defined(posix):
   proc capture(line: string) {.nimcall, gcsafe, raises: [].} =
     logged.add(line)
 
-  const
-    SanitizerEnv =
-      ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
-    Answer = 60 * Slow ## seconds: bounds a wait for the Package Manager
+  const Answer = 60 * Slow ## seconds: bounds a wait for the Package Manager
 
   let
     hostProgram = moduleHostProgram()
@@ -99,10 +96,67 @@ when defined(posix):
     ]
     document = catalogBytes(entries)
 
-  proc pmInputBytes(trust = orgTrust): seq[byte] =
+  # [G455] The sliced case's catalog: `scan` requires `a1` to `a8` and `gap ^2.0.0`; `a1` to `a7`
+  # require `gap ^2.0.0` too and `a8` requires `gap ^3.0.0`. `gap` is listed at `GapVersions`
+  # versions 2.x.y, none stocked or retrieved. So once the `a` names are bound, each `gap` version
+  # is tested against nine requirements, the last failing, with nothing retrieved: nine turns for
+  # each catalog entry, against the one step for each entry that every operation's setup takes.
+  # Then the operation fails `dependency-unavailable`.
+  const
+    ANames = 8
+    GapVersions = 10_000
+  let
+    scan100 = block:
+      var deps: seq[(string, string)]
+      for i in 1 .. ANames:
+        deps.add(("a" & $i, "1.0.0"))
+      deps.add(("gap", "2.0.0"))
+      packed(dataManifest("scan", "1.0.0", deps, Hosts), "org", orgKey)
+    aArchives = block:
+      var all: seq[(string, seq[byte])]
+      for i in 1 .. ANames:
+        let wants = if i == ANames: "3.0.0" else: "2.0.0"
+        all.add(
+          (
+            "a" & $i & "-1.0.0",
+            packed(
+              dataManifest("a" & $i, "1.0.0", [("gap", wants)], Hosts), "org", orgKey
+            ),
+          )
+        )
+      all
+    scanTrust = block:
+      var names: seq[string]
+      for i in 1 .. ANames:
+        names.add("a" & $i)
+      names.add(["app", "gap", "lib", "scan"])
+      trustOf([anchorOf("org", names, orgPub)]).trustBytes
+    scanObjects = objects & @[("scan-1.0.0", scan100)] & aArchives
+    scanDocument = block:
+      var all = entries
+      all.add(entryOf("scan", "1.0.0", locator = "fetch-fake/state/scan-1.0.0"))
+      for (name, _) in aArchives:
+        all.add(entryOf(name[0 .. 1], "1.0.0", locator = "fetch-fake/state/" & name))
+      for i in 0 ..< GapVersions:
+        all.add(
+          entryOf(
+            "gap",
+            "2." & $(i div 100) & "." & $(i mod 100),
+            locator = "fetch-fake/state/gap-" & $i,
+          )
+        )
+      catalogBytes(all)
+    # What the fake still serves while it is not ready: every archive the case retrieves, and
+    # with `scanGate` every one but the last `a`'s, at which the operation then waits.
+    scanHeld = scanObjects.mapIt(pmfixture.bytesOf("fetch-fake/state/" & it[0]))
+    scanGate = scanObjects.filterIt(it[0] != "a" & $ANames & "-1.0.0").mapIt(
+        pmfixture.bytesOf("fetch-fake/state/" & it[0])
+      )
+
+  proc pmInputBytes(trust = orgTrust, doc = document): seq[byte] =
     pmValue(
       trust,
-      document,
+      doc,
       bindings = [("main", "hf")],
       catalogLocator = "fetch-fake/state/catalog",
     ).encode.tryGet
@@ -127,12 +181,12 @@ when defined(posix):
     result = cfg.stateRoot.get / state
     createDir(result)
 
-  proc stock(cfg: EngineConfig) =
+  proc stock(cfg: EngineConfig, doc = document, stocked = objects) =
     ## The fake's `objects/`: the catalog and the archives, written before the start.
     let dir = cfg.stateDir("f") / "objects"
     createDir(dir)
-    writeFile(dir / "catalog", textOf(document))
-    for (name, bytes) in objects:
+    writeFile(dir / "catalog", textOf(doc))
+    for (name, bytes) in stocked:
       writeFile(dir / name, textOf(bytes))
 
   proc fakeRecord(): ModuleRecord =
@@ -162,7 +216,7 @@ when defined(posix):
 
   # The client's handles: the fake's driver, the fake's contract, the probe. Each is a route of
   # its own, so a hosted provider's ticket is used once (G258).
-  var driver, fetch, probe: LogosRouteHandle
+  var driver, fetch, probe, probeA: LogosRouteHandle
   var opened = 0
 
   proc open(
@@ -178,16 +232,18 @@ when defined(posix):
     h
 
   proc releaseAll() =
-    for h in [addr driver, addr fetch, addr probe]:
+    for h in [addr driver, addr fetch, addr probe, addr probeA]:
       if h[].vtable != nil:
         h[].release()
       h[] = LogosRouteHandle()
 
-  proc drive(to: FetchFakeSetReadinessRequestReadinessChoiceKind): bool =
+  proc drive(
+      to: FetchFakeSetReadinessRequestReadinessChoiceKind, held: seq[seq[byte]] = @[]
+  ): bool =
     let r = invoke(
       addr driver,
       FetchFakeSetReadinessRequest(
-        readiness: FetchFakeSetReadinessRequestReadinessChoice(kind: to), held: @[]
+        readiness: FetchFakeSetReadinessRequestReadinessChoice(kind: to), held: held
       ),
     )
     r.isOk
@@ -203,6 +259,24 @@ when defined(posix):
     check r.isOk
     if r.isOk:
       result = r.get
+
+  # [G455] The sliced case's operation, invoked from a thread of its own through `probeA`:
+  # 0 while it runs, then 1 for `dependency-unavailable`, 2 for another answer, 3 for an
+  # invocation failure.
+  var aAnswer: Atomic[int]
+
+  proc resolveScan() {.thread.} =
+    {.gcsafe.}:
+      let r = invoke(addr probeA, PmtestResolveRequest(name: "scan", version: "1.0.0"))
+      aAnswer.store(
+        if r.isErr:
+          3
+        elif r.get.kind == PmtestResolveResponseKind.Map_error and
+          r.get.arm_Map_error.error == "dependency-unavailable":
+          1
+        else:
+          2
+      )
 
   func packagesOf(r: PmtestResolveResponse): seq[string] =
     if r.kind == PmtestResolveResponseKind.Map_counters_packages:
@@ -361,6 +435,81 @@ when defined(posix):
       checkpoint "binding: " & $b
       check b.route.isSome and b.route != firstRoute
       check b.established >= 2
+      releaseAll()
+      e.finish()
+
+    test "[IMPL-DECISION G455] a sliced resolution goes through the event loop turn by turn: a second operation and a readiness event go through between its turns (F2)":
+      # The Package Manager's turns are one work unit each (`tests/kit/pmtest_impl.nim`), so
+      # `scan` tests each listed `gap` version against each requirement in a turn of its own,
+      # then fails `dependency-unavailable`. Were a turn's continue only posted to the shell's
+      # queue, its turns would run back to back in one drain, and neither the second operation
+      # nor the readiness event nor a status call would be answered before it ended.
+      let cfg = hosted(pmInputBytes(scanTrust, scanDocument))
+      cfg.stock(scanDocument, scanObjects)
+      let e = fixtureEngine(cfg)
+      discard e.started(fakeRecord(), "hf")
+      discard e.started(pmRecord(), "pm")
+      let (_, rc) = e.startClient("c")
+      driver = rc.open(fakeRoot, fakeSchema)
+      probe = rc.open(pmRoot, pmSchema)
+      probeA = rc.open(pmRoot, pmSchema)
+      check drive(FetchFakeSetReadinessRequestReadinessChoiceKind.Ready)
+      check acquired()
+      check status().catalog.get.entries ==
+        uint64(entries.len + 1 + aArchives.len + GapVersions)
+      proc readiness(): PmtestBindingReadinessChoiceKind =
+        let b = status().bindingOf
+        if b.readiness.isSome:
+          b.readiness.get.kind
+        else:
+          PmtestBindingReadinessChoiceKind.Starting
+
+      proc reached(r: PmtestBindingReadinessChoiceKind): bool =
+        waitUntil(
+          proc(): bool =
+            readiness() == r,
+          Answer,
+        )
+
+      # The gate: not ready, serving every archive but the last `a`'s, so the operation's
+      # retrievals end there and its scan starts only once the fake is ready again. No status
+      # call or other operation can then fall between its retrievals.
+      check drive(FetchFakeSetReadinessRequestReadinessChoiceKind.Offline, scanGate)
+      check reached(PmtestBindingReadinessChoiceKind.Offline)
+      aAnswer.store(0)
+      var t: Thread[void]
+      createThread(t, resolveScan)
+      check waitUntil(
+        proc(): bool =
+          status().pending == 1,
+        Answer,
+      )
+      # [IMPL] Time for the retrievals the gate lets through. A shorter wait leaves the
+      # outcome as it is: the operation cannot end at the gate.
+      sleep(3_000)
+      check aAnswer.load == 0
+      let began = getMonoTime()
+      check drive(FetchFakeSetReadinessRequestReadinessChoiceKind.Ready)
+      check reached(PmtestBindingReadinessChoiceKind.Ready)
+      # A second operation, its retrieval and its own turns.
+      check resolved("lib", "1.2.0").packagesOf == @["lib@1.2.0"]
+      let second = getMonoTime() - began
+      check aAnswer.load == 0
+      # A readiness event, from the fake through the Runtime; the fake still serves the case's
+      # archives.
+      check drive(FetchFakeSetReadinessRequestReadinessChoiceKind.Offline, scanHeld)
+      check reached(PmtestBindingReadinessChoiceKind.Offline)
+      let during = status()
+      let event = getMonoTime() - began
+      check aAnswer.load == 0
+      check during.pending == 1
+      check drive(FetchFakeSetReadinessRequestReadinessChoiceKind.Ready)
+      joinThread(t)
+      let took = getMonoTime() - began
+      checkpoint "second operation at " & $second & ", readiness at " & $event &
+        ", the sliced one ended at " & $took
+      check aAnswer.load == 1
+      check status().pending == 0
       releaseAll()
       e.finish()
 

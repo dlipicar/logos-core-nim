@@ -211,7 +211,7 @@ reason = "A negative over route readiness (RUNTIME l.922). There is one commitme
 # R-mode (DECISIONS I88)
 [[item]]
 ids = ["RUN-0190"]
-reason = "A rule across execution modes (RUNTIME l.941). Only direct mode exists, so the route-handle surface has one implementation (runtime/bindings.nim routeCallOp, routeSubscribeOp, routeUnsubscribeOp, routeObserveEndOp) and there is no second mode to compare. Its behaviour is tested in tests/test_events.nim (tests [RUN-0191] and [RUN-0193]) and tests/test_routes.nim. The plan's hint (sdk/tests/test_calls.nim) does not fit: that file tests typed call helpers through tests/support/testroute, with no subscriptions and no second mode."
+reason = "A rule across execution modes (RUNTIME l.941). Only direct mode exists, so the route-handle surface has one implementation (runtime/bindings.nim routeCallOp, routeSubscribeOp, routeUnsubscribeOp, routeObserveEndOp) and there is no second mode to compare. Its behaviour is tested in tests/test_events.nim (tests [RUN-0191] and [RUN-0193]) and tests/test_routes.nim. The plan's hint (sdk/tests/test_calls.nim) does not fit: that file tests typed call helpers through logos_sdk/testing/testroute (sdk/src/logos_sdk/testing/testroute.nim), with no subscriptions and no second mode."
 
 [[item]]
 ids = ["RUN-0173", "RUN-0179"]
@@ -248,3 +248,11 @@ reason = "A rule whose condition never holds here (RUNTIME l.1047): no module th
 [[item]]
 ids = ["RUN-1102"]
 reason = "Half a deployment duty (RUNTIME l.1320): a build whose linked implementation is not compatible with a retained instance's state registers it under a different binding identifier and configures a replacement instance; supplying the same identifier asserts continuity. docs/HOST-CONFIG.md ('Instances and the configuration', 'A static binding mismatch') states it. The Runtime's half is tested: test [RUN-1102] in tests/test_host.nim registers the new implementation as `meter-v2` with a replacement instance, which starts, while the retained instance on the dropped binding keeps its record and reports `static-binding-mismatch` (DECISIONS G160 as changed, G243 as changed). The Runtime cannot tell whether an implementation is compatible with retained state; it compares declaration facts and binding identifiers only (l.1319, l.1321)."
+
+[[item]]
+ids = ["RUN-0496"]
+reason = "A rule for a remote identity profile that obtains enrollment records from a transparency log, consensus system, catalog or other external source. Neither baseline profile does (l.2670-2671), and logosd has no such source: enrollment records reach it only in the protected remote trust input, <session>/remote/trust.cbor, written offline by logosctl remote trust under the session lock (daemon/remotetrust.nim; DECISIONS G408; docs/DAEMON.md §6a; test [RUN-0869] in tests/test_remote_trust.nim)."
+
+[[item]]
+ids = ["RUN-0928", "RUN-0929"]
+reason = "Conditional on a provisioning interface that reports failures through the shared Logos error registry (l.2646-2649). logosd's one provisioning interface is offline: logosctl remote trust prints each refusal locally and exits 1, and reports nothing through the registry (DECISIONS G408; docs/DAEMON.md §6a); no Runtime Control method provisions enrollments (l.2636, l.2645)."

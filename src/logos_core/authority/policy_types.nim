@@ -10,7 +10,7 @@ import logos_sdk/codegen/common_types
 export nimrt, common_types
 
 const
-  primaryDocument = "; logos-core-nim.authority-policy.v1: the Capability Authority\'s policy input\x0A; (BCP l.360; DECISIONS I84). One Logos deterministic-CBOR lcn.authority_policy\x0A; value. docs/AUTHORITY-POLICY.md documents each rule.\x0A;\x0A; Every array is a set: strictly ascending by its elements\' deterministic-CBOR\x0A; bytes, with no duplicates (CA l.130-138 applied to this input), and non-empty,\x0A; except a method or event list, which permits none of that kind when empty\x0A; (CA l.126). The checks the schema cannot express (order, non-empty arrays, the\x0A; source pattern, bounds, names that resolve, restricted declarations, a\x0A; target-denied rule that names no target) are applied when the policy is\x0A; loaded (authority/policy.nim).\x0A\x0Alcn.authority_policy = {\x0A  format: \"logos-core-nim.authority-policy.v1\",\x0A  source: tstr .size (1..128),\x0A  ? decision_validity_ms: uint64,\x0A  ? audit: { ? records: uint64 },\x0A  rules: [* lcn.ap_rule],\x0A}\x0A\x0Alcn.ap_rule = lcn.ap_allow / lcn.ap_deny / lcn.ap_issue / lcn.ap_revoke / lcn.ap_inspect\x0A\x0Alcn.ap_allow = {\x0A  kind: \"allow\",\x0A  subject: lcn.ap_subject,\x0A  scopes: [* lcn.ap_scope],\x0A  ? commitment: lcn.ap_commitment,\x0A}\x0A\x0Alcn.ap_deny = {\x0A  kind: \"deny\",\x0A  subject: lcn.ap_subject,\x0A  scopes: [* lcn.ap_scope],\x0A  ? code: \"consumer-denied\" / \"target-denied\",\x0A}\x0A\x0Alcn.ap_issue = {\x0A  kind: \"issue\",\x0A  subject: lcn.ap_subject,\x0A  targets: lcn.ap_target,\x0A  scopes: [* lcn.ap_scope],\x0A  ? max_validity_ms: uint64,\x0A}\x0A\x0Alcn.ap_revoke = {\x0A  kind: \"revoke\",\x0A  subject: lcn.ap_subject,\x0A  targets: lcn.ap_target,\x0A}\x0A\x0Alcn.ap_inspect = {\x0A  kind: \"inspect\",\x0A  subject: lcn.ap_subject,\x0A  ? grants: lcn.ap_target,\x0A  ? audit: lcn.ap_target,\x0A  ? policy_changes: true,\x0A}\x0A\x0A; G47 facts. Fields AND, list entries OR; {} matches any Runtime-known instance.\x0Alcn.ap_subject = {\x0A  ? instances: [* tstr .size (1..128)],\x0A  ? modules: [* tstr .size (1..64)],\x0A  ? signers: [* bstr .size 48],\x0A  ? packages: [* tstr .size (1..128)],\x0A}\x0A\x0Alcn.ap_target = lcn.ap_subject / \"self\" / \"issued\"\x0A\x0Alcn.ap_scope =\x0A  lcn.ap_provider_access / lcn.ap_runtime_control / lcn.ap_module_execution /\x0A  lcn.ap_permission\x0A\x0Alcn.ap_provider_access = {\x0A  kind: \"provider-access\",\x0A  contract: logos.schema_commitment / \"capability-authority\" / \"runtime-control\",\x0A  actions: [* lcn.ap_action],\x0A  ? providers: lcn.ap_subject,\x0A  ? access: lcn.ap_access,\x0A}\x0A\x0Alcn.ap_action =\x0A  \"discover\" / \"establish-route\" / \"renew-route\" / \"call\" / \"publish-event\" /\x0A  \"subscribe-event\"\x0A\x0Alcn.ap_access = {\x0A  ? methods: [* lcn.ap_decl],\x0A  ? publish_events: [* lcn.ap_decl],\x0A  ? subscribe_events: [* lcn.ap_decl],\x0A}\x0A\x0Alcn.ap_runtime_control = {\x0A  kind: \"runtime-control\",\x0A  ? methods: [* lcn.ap_decl],\x0A  ? events: [* lcn.ap_decl],\x0A  ? targets: lcn.ap_subject,\x0A}\x0A\x0Alcn.ap_module_execution = {\x0A  kind: \"module-execution\",\x0A  targets: lcn.ap_subject,\x0A  actions: [* (\"start\" / \"stop\")],\x0A  ? modes: [* (\"direct\" / \"local-transport\")],\x0A  ? placements: [* (\"process\" / \"sandbox\" / \"container\")],\x0A}\x0A\x0A; A permission scope (CA l.212-216; DECISIONS I93): the name, and the broadest\x0A; constraints allowed (one deterministic-CBOR value of the definition); without\x0A; constraints any conforming value. Both are checked against the selected\x0A; permission profile when the policy is loaded. A start is allowed only by one\x0A; rule holding its execution scope and every permission scope (G207).\x0Alcn.ap_permission = {\x0A  kind: \"permission\",\x0A  permission: tstr .size (1..128),\x0A  ? constraints: bstr .size (1..1048576),\x0A}\x0A\x0A; a declaration root, or a name the contract\'s pinned schema resolves (only with\x0A; \"capability-authority\" or \"runtime-control\")\x0Alcn.ap_decl = bstr .size 32 / tstr .size (1..128)\x0A\x0A; logos.capability_authority.commitment_requirements, repeated (test_nimgen)\x0Alcn.ap_commitment = {\x0A  ? request: \"retain-root\",\x0A  ? response: \"retain-root\",\x0A}\x0A"
+  primaryDocument = "; logos-core-nim.authority-policy.v1: the Capability Authority\'s policy input\x0A; (BCP l.360; DECISIONS I84). One Logos deterministic-CBOR lcn.authority_policy\x0A; value. docs/AUTHORITY-POLICY.md documents each rule.\x0A;\x0A; Every array is a set: strictly ascending by its elements\' deterministic-CBOR\x0A; bytes, with no duplicates (CA l.130-138 applied to this input), and non-empty,\x0A; except a method or event list, which permits none of that kind when empty\x0A; (CA l.126). The checks the schema cannot express (order, non-empty arrays, the\x0A; source pattern, bounds, names that resolve, restricted declarations, a\x0A; target-denied rule that names no target) are applied when the policy is\x0A; loaded (authority/policy.nim).\x0A\x0Alcn.authority_policy = {\x0A  format: \"logos-core-nim.authority-policy.v1\",\x0A  source: tstr .size (1..128),\x0A  ? decision_validity_ms: uint64,\x0A  ? audit: { ? records: uint64 },\x0A  rules: [* lcn.ap_rule],\x0A}\x0A\x0Alcn.ap_rule = lcn.ap_allow / lcn.ap_deny / lcn.ap_issue / lcn.ap_revoke / lcn.ap_inspect\x0A\x0Alcn.ap_allow = {\x0A  kind: \"allow\",\x0A  subject: lcn.ap_subject,\x0A  scopes: [* lcn.ap_scope],\x0A  ? commitment: lcn.ap_commitment,\x0A}\x0A\x0Alcn.ap_deny = {\x0A  kind: \"deny\",\x0A  subject: lcn.ap_subject,\x0A  scopes: [* lcn.ap_scope],\x0A  ? code: \"consumer-denied\" / \"target-denied\",\x0A}\x0A\x0Alcn.ap_issue = {\x0A  kind: \"issue\",\x0A  subject: lcn.ap_subject,\x0A  targets: lcn.ap_target,\x0A  scopes: [* lcn.ap_scope],\x0A  ? max_validity_ms: uint64,\x0A}\x0A\x0Alcn.ap_revoke = {\x0A  kind: \"revoke\",\x0A  subject: lcn.ap_subject,\x0A  targets: lcn.ap_target,\x0A}\x0A\x0Alcn.ap_inspect = {\x0A  kind: \"inspect\",\x0A  subject: lcn.ap_subject,\x0A  ? grants: lcn.ap_target,\x0A  ? audit: lcn.ap_target,\x0A  ? policy_changes: true,\x0A}\x0A\x0A; G47 facts. Fields AND, list entries OR. [G415; owner decision B5, item O1 (a)]\x0A; A subject that names no Runtime matches local instances only; a consumer of\x0A; another Runtime (a forwarded consumer, RUNTIME l.1685-1699) is matched only by\x0A; a subject whose runtimes names that Runtime, and only while that Runtime is\x0A; actively enrolled. So {} matches any local instance. runtimes holds lowercase\x0A; UUIDv4 Runtime ids, never this Runtime\'s own, and is never combined with\x0A; modules, signers or packages, which a forwarded consumer does not carry. In an\x0A; inspect rule\'s grants and audit, a subject naming no Runtime covers the\x0A; records of every consumer, local and forwarded (O1\'s inspect choice (x)).\x0Alcn.ap_subject = {\x0A  ? runtimes: [* tstr .size (1..128)],\x0A  ? instances: [* tstr .size (1..128)],\x0A  ? modules: [* tstr .size (1..64)],\x0A  ? signers: [* bstr .size 48],\x0A  ? packages: [* tstr .size (1..128)],\x0A}\x0A\x0A; [G415] What provider selectors and the targets of runtime-control and\x0A; module-execution scopes name: this Runtime\'s own instances and providers\x0A; (RUNTIME l.1829, l.2541-2542), so no runtimes.\x0Alcn.ap_selector = {\x0A  ? instances: [* tstr .size (1..128)],\x0A  ? modules: [* tstr .size (1..64)],\x0A  ? signers: [* bstr .size 48],\x0A  ? packages: [* tstr .size (1..128)],\x0A}\x0A\x0Alcn.ap_target = lcn.ap_subject / \"self\" / \"issued\"\x0A\x0Alcn.ap_scope =\x0A  lcn.ap_provider_access / lcn.ap_runtime_control / lcn.ap_module_execution /\x0A  lcn.ap_permission\x0A\x0Alcn.ap_provider_access = {\x0A  kind: \"provider-access\",\x0A  contract: logos.schema_commitment / \"capability-authority\" / \"runtime-control\",\x0A  actions: [* lcn.ap_action],\x0A  ? providers: lcn.ap_selector,\x0A  ? access: lcn.ap_access,\x0A}\x0A\x0Alcn.ap_action =\x0A  \"discover\" / \"establish-route\" / \"renew-route\" / \"call\" / \"publish-event\" /\x0A  \"subscribe-event\"\x0A\x0Alcn.ap_access = {\x0A  ? methods: [* lcn.ap_decl],\x0A  ? publish_events: [* lcn.ap_decl],\x0A  ? subscribe_events: [* lcn.ap_decl],\x0A}\x0A\x0Alcn.ap_runtime_control = {\x0A  kind: \"runtime-control\",\x0A  ? methods: [* lcn.ap_decl],\x0A  ? events: [* lcn.ap_decl],\x0A  ? targets: lcn.ap_selector,\x0A}\x0A\x0Alcn.ap_module_execution = {\x0A  kind: \"module-execution\",\x0A  targets: lcn.ap_selector,\x0A  actions: [* (\"start\" / \"stop\")],\x0A  ? modes: [* (\"direct\" / \"local-transport\")],\x0A  ? placements: [* (\"process\" / \"sandbox\" / \"container\")],\x0A}\x0A\x0A; A permission scope (CA l.212-216; DECISIONS I93): the name, and the broadest\x0A; constraints allowed (one deterministic-CBOR value of the definition); without\x0A; constraints any conforming value. Both are checked against the selected\x0A; permission profile when the policy is loaded. A start is allowed only by one\x0A; rule holding its execution scope and every permission scope (G207).\x0Alcn.ap_permission = {\x0A  kind: \"permission\",\x0A  permission: tstr .size (1..128),\x0A  ? constraints: bstr .size (1..1048576),\x0A}\x0A\x0A; a declaration root, or a name the contract\'s pinned schema resolves (only with\x0A; \"capability-authority\" or \"runtime-control\")\x0Alcn.ap_decl = bstr .size 32 / tstr .size (1..128)\x0A\x0A; logos.capability_authority.commitment_requirements, repeated (test_nimgen)\x0Alcn.ap_commitment = {\x0A  ? request: \"retain-root\",\x0A  ? response: \"retain-root\",\x0A}\x0A"
   interfaceDocuments: array[0, string] = []
   supportingDocuments: array[0, string] = []
 
@@ -147,7 +147,7 @@ type
     kind*: string = "module-execution"
     modes*: Opt[seq[LcnApModuleExecutionModesLIChoice]]
     placements*: Opt[seq[LcnApModuleExecutionPlacementsLIChoice]]
-    targets*: LcnApSubject
+    targets*: LcnApSelector
 
   LcnApPermission* = object
     constraints*: Opt[seq[byte]]
@@ -173,7 +173,7 @@ type
     actions*: seq[LcnApAction]
     contract*: LcnApProviderAccessContractChoice
     kind*: string = "provider-access"
-    providers*: Opt[LcnApSubject]
+    providers*: Opt[LcnApSelector]
 
   LcnApRevoke* = object
     kind*: string = "revoke"
@@ -204,7 +204,7 @@ type
     events*: Opt[seq[LcnApDecl]]
     kind*: string = "runtime-control"
     methods*: Opt[seq[LcnApDecl]]
-    targets*: Opt[LcnApSubject]
+    targets*: Opt[LcnApSelector]
 
   LcnApScopeKind* {.pure.} = enum
     lcn_Ap_module_execution
@@ -223,10 +223,17 @@ type
     of LcnApScopeKind.lcn_Ap_runtime_control:
       arm_lcn_Ap_runtime_control*: LcnApRuntimeControl
 
+  LcnApSelector* = object
+    instances*: Opt[seq[string]]
+    modules*: Opt[seq[string]]
+    packages*: Opt[seq[string]]
+    signers*: Opt[seq[seq[byte]]]
+
   LcnApSubject* = object
     instances*: Opt[seq[string]]
     modules*: Opt[seq[string]]
     packages*: Opt[seq[string]]
+    runtimes*: Opt[seq[string]]
     signers*: Opt[seq[seq[byte]]]
 
   LcnApTargetKind* {.pure.} = enum
@@ -333,6 +340,10 @@ proc toCbor*(x: LcnApScope): CborValue
 proc fromChecked*(T: type LcnApScope, v: CborValue): LcnApScope
 proc stepEncLcnApScope*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnApScope*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnApSelector): CborValue
+proc fromChecked*(T: type LcnApSelector, v: CborValue): LcnApSelector
+proc stepEncLcnApSelector*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnApSelector*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LcnApSubject): CborValue
 proc fromChecked*(T: type LcnApSubject, v: CborValue): LcnApSubject
 proc stepEncLcnApSubject*(w: var EncWork, src: pointer, dst: ptr CborValue)
@@ -862,7 +873,7 @@ proc stepEncLcnApModuleExecution*(w: var EncWork, src: pointer, dst: ptr CborVal
       w.later(stepEncLcnApModuleExecutionPlacementsLIChoice, addr x.placements.get[i47], addr a46.items[i47])
     inc k
   node.entries[k].key = cbor("targets")
-  w.later(stepEncLcnApSubject, addr x.targets, addr node.entries[k].value)
+  w.later(stepEncLcnApSelector, addr x.targets, addr node.entries[k].value)
   inc k
 
 proc stepDecLcnApModuleExecution*(w: var DecWork, v: CborValue, dst: pointer) =
@@ -885,7 +896,7 @@ proc stepDecLcnApModuleExecution*(w: var DecWork, v: CborValue, dst: pointer) =
     for i49 in 0 ..< f48.get.items.len:
       w.later(stepDecLcnApModuleExecutionPlacementsLIChoice, f48.get.items[i49], addr r.placements.get[i49])
   let f50 = v.lookup("targets").get
-  w.later(stepDecLcnApSubject, f50, addr r.targets)
+  w.later(stepDecLcnApSelector, f50, addr r.targets)
 
 proc toCbor*(x: LcnApModuleExecution): CborValue =
   runEnc(stepEncLcnApModuleExecution, addr x)
@@ -989,7 +1000,7 @@ proc stepEncLcnApProviderAccess*(w: var EncWork, src: pointer, dst: ptr CborValu
   inc k
   if x.providers.isSome:
     node.entries[k].key = cbor("providers")
-    w.later(stepEncLcnApSubject, addr x.providers.get, addr node.entries[k].value)
+    w.later(stepEncLcnApSelector, addr x.providers.get, addr node.entries[k].value)
     inc k
 
 proc stepDecLcnApProviderAccess*(w: var DecWork, v: CborValue, dst: pointer) =
@@ -1007,8 +1018,8 @@ proc stepDecLcnApProviderAccess*(w: var DecWork, v: CborValue, dst: pointer) =
   w.later(stepDecLcnApProviderAccessContractChoice, f57, addr r.contract)
   let f58 = v.lookup("providers")
   if f58.isSome:
-    r.providers = Opt.some(default(LcnApSubject))
-    w.later(stepDecLcnApSubject, f58.get, addr r.providers.get)
+    r.providers = Opt.some(default(LcnApSelector))
+    w.later(stepDecLcnApSelector, f58.get, addr r.providers.get)
 
 proc toCbor*(x: LcnApProviderAccess): CborValue =
   runEnc(stepEncLcnApProviderAccess, addr x)
@@ -1123,7 +1134,7 @@ proc stepEncLcnApRuntimeControl*(w: var EncWork, src: pointer, dst: ptr CborValu
     inc k
   if x.targets.isSome:
     node.entries[k].key = cbor("targets")
-    w.later(stepEncLcnApSubject, addr x.targets.get, addr node.entries[k].value)
+    w.later(stepEncLcnApSelector, addr x.targets.get, addr node.entries[k].value)
     inc k
 
 proc stepDecLcnApRuntimeControl*(w: var DecWork, v: CborValue, dst: pointer) =
@@ -1143,8 +1154,8 @@ proc stepDecLcnApRuntimeControl*(w: var DecWork, v: CborValue, dst: pointer) =
       w.later(stepDecLcnApDecl, f67.get.items[i68], addr r.methods.get[i68])
   let f69 = v.lookup("targets")
   if f69.isSome:
-    r.targets = Opt.some(default(LcnApSubject))
-    w.later(stepDecLcnApSubject, f69.get, addr r.targets.get)
+    r.targets = Opt.some(default(LcnApSelector))
+    w.later(stepDecLcnApSelector, f69.get, addr r.targets.get)
 
 proc toCbor*(x: LcnApRuntimeControl): CborValue =
   runEnc(stepEncLcnApRuntimeControl, addr x)
@@ -1192,8 +1203,8 @@ proc fromChecked*(T: type LcnApScope, v: CborValue): LcnApScope =
   runDec(stepDecLcnApScope, v, addr r)
   r
 
-proc stepEncLcnApSubject*(w: var EncWork, src: pointer, dst: ptr CborValue) =
-  let x {.used.} = cast[ptr LcnApSubject](src)
+proc stepEncLcnApSelector*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnApSelector](src)
   var n = 0
   if x.instances.isSome:
     inc n
@@ -1235,9 +1246,9 @@ proc stepEncLcnApSubject*(w: var EncWork, src: pointer, dst: ptr CborValue) =
       a82.items[i83] = cbor(x.signers.get[i83])
     inc k
 
-proc stepDecLcnApSubject*(w: var DecWork, v: CborValue, dst: pointer) =
-  let r = cast[ptr LcnApSubject](dst)
-  r[] = LcnApSubject()
+proc stepDecLcnApSelector*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnApSelector](dst)
+  r[] = LcnApSelector()
   let f72 = v.lookup("instances")
   if f72.isSome:
     r.instances = Opt.some(default(seq[string]))
@@ -1262,6 +1273,100 @@ proc stepDecLcnApSubject*(w: var DecWork, v: CborValue, dst: pointer) =
     r.signers.get.setLen(f84.get.items.len)
     for i85 in 0 ..< f84.get.items.len:
       r.signers.get[i85] = f84.get.items[i85].bytes
+
+proc toCbor*(x: LcnApSelector): CborValue =
+  runEnc(stepEncLcnApSelector, addr x)
+
+proc fromChecked*(T: type LcnApSelector, v: CborValue): LcnApSelector =
+  var r: LcnApSelector
+  runDec(stepDecLcnApSelector, v, addr r)
+  r
+
+proc stepEncLcnApSubject*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnApSubject](src)
+  var n = 0
+  if x.instances.isSome:
+    inc n
+  if x.modules.isSome:
+    inc n
+  if x.packages.isSome:
+    inc n
+  if x.runtimes.isSome:
+    inc n
+  if x.signers.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  if x.instances.isSome:
+    node.entries[k].key = cbor("instances")
+    let a86 = newCborArray(x.instances.get.len)
+    node.entries[k].value = a86
+    for i87 in 0 ..< x.instances.get.len:
+      a86.items[i87] = cbor(x.instances.get[i87])
+    inc k
+  if x.modules.isSome:
+    node.entries[k].key = cbor("modules")
+    let a90 = newCborArray(x.modules.get.len)
+    node.entries[k].value = a90
+    for i91 in 0 ..< x.modules.get.len:
+      a90.items[i91] = cbor(x.modules.get[i91])
+    inc k
+  if x.packages.isSome:
+    node.entries[k].key = cbor("packages")
+    let a94 = newCborArray(x.packages.get.len)
+    node.entries[k].value = a94
+    for i95 in 0 ..< x.packages.get.len:
+      a94.items[i95] = cbor(x.packages.get[i95])
+    inc k
+  if x.runtimes.isSome:
+    node.entries[k].key = cbor("runtimes")
+    let a98 = newCborArray(x.runtimes.get.len)
+    node.entries[k].value = a98
+    for i99 in 0 ..< x.runtimes.get.len:
+      a98.items[i99] = cbor(x.runtimes.get[i99])
+    inc k
+  if x.signers.isSome:
+    node.entries[k].key = cbor("signers")
+    let a102 = newCborArray(x.signers.get.len)
+    node.entries[k].value = a102
+    for i103 in 0 ..< x.signers.get.len:
+      a102.items[i103] = cbor(x.signers.get[i103])
+    inc k
+
+proc stepDecLcnApSubject*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnApSubject](dst)
+  r[] = LcnApSubject()
+  let f88 = v.lookup("instances")
+  if f88.isSome:
+    r.instances = Opt.some(default(seq[string]))
+    r.instances.get.setLen(f88.get.items.len)
+    for i89 in 0 ..< f88.get.items.len:
+      r.instances.get[i89] = f88.get.items[i89].text
+  let f92 = v.lookup("modules")
+  if f92.isSome:
+    r.modules = Opt.some(default(seq[string]))
+    r.modules.get.setLen(f92.get.items.len)
+    for i93 in 0 ..< f92.get.items.len:
+      r.modules.get[i93] = f92.get.items[i93].text
+  let f96 = v.lookup("packages")
+  if f96.isSome:
+    r.packages = Opt.some(default(seq[string]))
+    r.packages.get.setLen(f96.get.items.len)
+    for i97 in 0 ..< f96.get.items.len:
+      r.packages.get[i97] = f96.get.items[i97].text
+  let f100 = v.lookup("runtimes")
+  if f100.isSome:
+    r.runtimes = Opt.some(default(seq[string]))
+    r.runtimes.get.setLen(f100.get.items.len)
+    for i101 in 0 ..< f100.get.items.len:
+      r.runtimes.get[i101] = f100.get.items[i101].text
+  let f104 = v.lookup("signers")
+  if f104.isSome:
+    r.signers = Opt.some(default(seq[seq[byte]]))
+    r.signers.get.setLen(f104.get.items.len)
+    for i105 in 0 ..< f104.get.items.len:
+      r.signers.get[i105] = f104.get.items[i105].bytes
 
 proc toCbor*(x: LcnApSubject): CborValue =
   runEnc(stepEncLcnApSubject, addr x)
@@ -1318,9 +1423,9 @@ proc stepEncLcnAuthorityPolicyAuditMap*(w: var EncWork, src: pointer, dst: ptr C
 proc stepDecLcnAuthorityPolicyAuditMap*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnAuthorityPolicyAuditMap](dst)
   r[] = LcnAuthorityPolicyAuditMap()
-  let f86 = v.lookup("records")
-  if f86.isSome:
-    r.records = Opt.some(uint64(f86.get.uint))
+  let f106 = v.lookup("records")
+  if f106.isSome:
+    r.records = Opt.some(uint64(f106.get.uint))
 
 proc toCbor*(x: LcnAuthorityPolicyAuditMap): CborValue =
   runEnc(stepEncLcnAuthorityPolicyAuditMap, addr x)
@@ -1352,10 +1457,10 @@ proc stepEncLcnAuthorityPolicy*(w: var EncWork, src: pointer, dst: ptr CborValue
   node.entries[k].value = cbor("logos-core-nim.authority-policy.v1")
   inc k
   node.entries[k].key = cbor("rules")
-  let a89 = newCborArray(x.rules.len)
-  node.entries[k].value = a89
-  for i90 in 0 ..< x.rules.len:
-    w.later(stepEncLcnApRule, addr x.rules[i90], addr a89.items[i90])
+  let a109 = newCborArray(x.rules.len)
+  node.entries[k].value = a109
+  for i110 in 0 ..< x.rules.len:
+    w.later(stepEncLcnApRule, addr x.rules[i110], addr a109.items[i110])
   inc k
   node.entries[k].key = cbor("source")
   node.entries[k].value = cbor(x.source)
@@ -1364,17 +1469,17 @@ proc stepEncLcnAuthorityPolicy*(w: var EncWork, src: pointer, dst: ptr CborValue
 proc stepDecLcnAuthorityPolicy*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnAuthorityPolicy](dst)
   r[] = LcnAuthorityPolicy()
-  let f87 = v.lookup("audit")
-  if f87.isSome:
+  let f107 = v.lookup("audit")
+  if f107.isSome:
     r.audit = Opt.some(default(LcnAuthorityPolicyAuditMap))
-    w.later(stepDecLcnAuthorityPolicyAuditMap, f87.get, addr r.audit.get)
-  let f88 = v.lookup("decision_validity_ms")
-  if f88.isSome:
-    r.decision_validity_ms = Opt.some(uint64(f88.get.uint))
-  let f91 = v.lookup("rules").get
-  r.rules.setLen(f91.items.len)
-  for i92 in 0 ..< f91.items.len:
-    w.later(stepDecLcnApRule, f91.items[i92], addr r.rules[i92])
+    w.later(stepDecLcnAuthorityPolicyAuditMap, f107.get, addr r.audit.get)
+  let f108 = v.lookup("decision_validity_ms")
+  if f108.isSome:
+    r.decision_validity_ms = Opt.some(uint64(f108.get.uint))
+  let f111 = v.lookup("rules").get
+  r.rules.setLen(f111.items.len)
+  for i112 in 0 ..< f111.items.len:
+    w.later(stepDecLcnApRule, f111.items[i112], addr r.rules[i112])
   r.source = v.lookup("source").get.text
 
 proc toCbor*(x: LcnAuthorityPolicy): CborValue =
@@ -1593,6 +1698,20 @@ proc encode*(x: LcnApScope): Result[seq[byte], string] =
 proc decode*(T: type LcnApScope, data: openArray[byte]): Result[LcnApScope, string] =
   ## One deterministic-CBOR `lcn.ap_scope` value.
   let v = ?generatedSchema().decodeChecked("lcn.ap_scope", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnApSelector, v: CborValue): Result[LcnApSelector, string] =
+  ## A value checked against `lcn.ap_selector`.
+  ?generatedSchema().check("lcn.ap_selector", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnApSelector): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.ap_selector`.
+  generatedSchema().encodeChecked("lcn.ap_selector", toCbor(x))
+
+proc decode*(T: type LcnApSelector, data: openArray[byte]): Result[LcnApSelector, string] =
+  ## One deterministic-CBOR `lcn.ap_selector` value.
+  let v = ?generatedSchema().decodeChecked("lcn.ap_selector", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type LcnApSubject, v: CborValue): Result[LcnApSubject, string] =

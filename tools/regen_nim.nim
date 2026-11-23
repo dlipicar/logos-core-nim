@@ -17,6 +17,10 @@ proc main() =
   echo daemonConfigTypesPath
   writeFile(trustTypesPath, generatedTrustTypes().get)
   echo trustTypesPath
+  writeFile(remoteTrustTypesPath, generatedRemoteTrustTypes().get)
+  echo remoteTrustTypesPath
+  writeFile(remoteExposureTypesPath, generatedRemoteExposureTypes().get)
+  echo remoteExposureTypesPath
   writeFile(trustdocTypesPath, generatedTrustdocTypes().get)
   echo trustdocTypesPath
   writeFile(pmInputTypesPath, generatedPmInputTypes().get)
@@ -44,6 +48,8 @@ proc main() =
   echo storeTypesPath
   writeFile(carrierTypesPath, generatedCarrierTypes().get)
   echo carrierTypesPath
+  writeFile(remoteCarrierTypesPath, generatedRemoteCarrierTypes().get)
+  echo remoteCarrierTypesPath
   writeFile(caTypesPath, generatedCaTypes().get)
   echo caTypesPath
   writeFile(caKitPath, generatedCaKit().get)

@@ -12,6 +12,8 @@
 import std/[atomics, monotimes, os, sequtils, strutils, times, typedthreads]
 import unittest2
 import ../src/logos_core/runtime/engine
+from ../src/logos_core/runtime/firstfresh import
+  handedOverForTests, onHandoverThreadForTests
 import logos_sdk/abi/types
 import logos_sdk/cbor
 import logos_sdk/commitment
@@ -52,6 +54,7 @@ type Done = object
   inside: Atomic[int]
   code: Atomic[int]
   thread: Atomic[int]
+  handedOver: Atomic[bool] ## [DECISIONS G466] it ran on a handover thread
   hold: Atomic[bool] ## the callback waits while it is true
   keep: bool ## keep the response owner for the test
   owner: LogosResponseOwner
@@ -65,6 +68,7 @@ proc clear(d: var Done, keep = false) =
   d.inside.store(0)
   d.code.store(-1)
   d.thread.store(0)
+  d.handedOver.store(false)
   d.hold.store(false)
   d.keep = keep
   d.owner = LogosResponseOwner()
@@ -84,6 +88,7 @@ proc onComplete(
   while d.hold.load:
     sleep(1)
   d.thread.store(getThreadId())
+  d.handedOver.store(onHandoverThreadForTests())
   let n = min(int(len), MaxResponse)
   for i in 0 ..< n:
     d.bytes[i] = response[i]
@@ -103,6 +108,17 @@ proc onComplete(
   d.code.store(int(r.code))
   d.inside -= 1
   d.count += 1
+
+proc onCompleteAlone(
+    userData: pointer,
+    r: LogosResult,
+    response: ptr UncheckedArray[uint8],
+    len: csize_t,
+    owner: LogosResponseOwner,
+) {.cdecl, gcsafe, raises: [].} =
+  ## [DECISIONS G466] `onComplete` under a pointer of its own, which no other
+  ## case delivers to.
+  onComplete(userData, r, response, len, owner)
 
 var done: array[4, Done]
 
@@ -140,11 +156,13 @@ proc options(timeoutMs = -1): LogosAsyncOptions =
     timeoutMs: uint64(max(timeoutMs, 0)),
   )
 
-proc callbacks(d: ptr Done): LogosAsyncCallbacks =
+proc callbacks(
+    d: ptr Done, complete: LogosAsyncCompleteFn = onComplete
+): LogosAsyncCallbacks =
   LogosAsyncCallbacks(
     abiVersion: AsyncCallAbiVersion,
     structSize: csize_t(sizeof(LogosAsyncCallbacks)),
-    complete: onComplete,
+    complete: complete,
     userData: d,
   )
 
@@ -154,9 +172,10 @@ proc prepare(
     d: ptr Done,
     timeoutMs = -1,
     name = "read",
+    complete: LogosAsyncCompleteFn = onComplete,
 ): (ErrorCode, LogosAsyncCall) =
   var o = options(timeoutMs)
-  var cb = callbacks(d)
+  var cb = callbacks(d, complete)
   var c = LogosAsyncCall()
   let r = h.vtable.prepareCall(
     addr h,
@@ -200,9 +219,13 @@ proc release(c: var LogosAsyncCall) =
   c.vtable.release(addr c)
 
 proc started(
-    h: var LogosRouteHandle, params: openArray[byte], d: ptr Done, timeoutMs = -1
+    h: var LogosRouteHandle,
+    params: openArray[byte],
+    d: ptr Done,
+    timeoutMs = -1,
+    complete: LogosAsyncCompleteFn = onComplete,
 ): LogosAsyncCall =
-  let (code, c) = h.prepare(params, d, timeoutMs)
+  let (code, c) = h.prepare(params, d, timeoutMs, complete = complete)
   check code == ecOk
   result = c
   result.submit()
@@ -337,6 +360,25 @@ suite "run.async: route calls (INTERFACE §2.9.1)":
     check r.label == c.instance
     check r.reading.value == 0 # not cancelled
     slow.release()
+    h.release()
+    e.finish()
+
+  test "[IMPL-DECISION G466] under test hooks the first completion to a callback runs on a new thread, and the later ones on the lifecycle workers":
+    let e = fixtureEngine(config())
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    let expected = h.raw("read", req(5)).response
+    let before = handedOverForTests()
+    for i in 0 ..< 3:
+      var call = h.started(req(5), addr done[i], complete = onCompleteAlone)
+      check done[i].finished
+      check done[i].codeOf == ecOk
+      check done[i].responseOf == expected
+      check done[i].handedOver.load == (i == 0)
+      check done[i].thread.load != getThreadId()
+      call.release()
+    check handedOverForTests() >= before + 1
     h.release()
     e.finish()
 
@@ -1193,6 +1235,12 @@ var
   chainRoute: ptr LogosRouteHandle
   chainFailed: Atomic[int] ## links that could not submit or saw no completion
 
+proc completed(n: int): seq[int] =
+  ## The calls among the first `n` of `many` that have completed.
+  for i in 0 ..< n:
+    if many[i].count.load > 0:
+      result.add(i)
+
 proc onChain(
     userData: pointer,
     r: LogosResult,
@@ -1276,6 +1324,7 @@ suite "run.async: starvation (DECISIONS I88, deviation 5)":
     gate.store(false)
   teardown:
     gate.store(false)
+    setLateCallWorkerForTests(-1, 0)
     leftover()
 
   test "[IMPL-DECISION G242] [IFC-0712] [IFC-0771] [RUN-0217] calls queued behind 64 busy call workers get overflow workers, whichever thread submitted them":
@@ -1329,15 +1378,134 @@ suite "run.async: starvation (DECISIONS I88, deviation 5)":
     # a refused call's completion over local transport (`test_async_lt`) took
     # more than 30 s (2026-11-15).
     const Completes = 60 * Slow ## seconds
-    for i in N - 2 ..< N:
-      check many[i].finished(seconds = Completes)
+    # Two calls are refused, each one no call worker had begun: every call that
+    # runs waits at the gate, so a call that completes before it opens never ran.
+    # They are found by outcome, not index: G242 refuses the oldest call no
+    # worker has begun, and which calls the workers begin first is scheduling.
+    check waitUntil(
+      proc(): bool =
+        completed(N).len >= 2,
+      Completes,
+    )
+    let refused = completed(N)
+    check refused.len == 2
+    for i in refused:
       check many[i].codeOf == ecModule
       check many[i].messageOf == "no call worker is available"
+    # The other 128 hold every call worker.
+    check held.load == before + MaxCallWorkers + MaxNestedCallWorkers
     check e.diagnostics().anyIt("every call worker is busy" in it)
     gate.store(false)
-    for i in 0 ..< N - 2:
-      check many[i].finished(seconds = Completes)
-      check many[i].codeOf == ecOk
+    for i in 0 ..< N:
+      if i notin refused:
+        check many[i].finished(seconds = Completes)
+        check many[i].codeOf == ecOk
+    for c in calls.mitems:
+      c.release()
+    h.release()
+    e.finish()
+
+  test "[IMPL-DECISION G242] a call worker a loaded host starts late is not busy: once it runs its call, exactly two queued calls are refused":
+    # CI run 44978149107 (ASan on an arm runner) started the 128th call worker
+    # more than `refuseDelay` after its spawn. The Runtime then counted it as
+    # busy: the call it was about to take was refused, and one more each
+    # `refuseDelay`, so a worker started later than twice that had no call left
+    # (G242 revised). Here it starts four times that late.
+    var cfg = config()
+    cfg.limits.refuseDelay = initDuration(milliseconds = 100 * Slow)
+    setLateCallWorkerForTests(MaxCallWorkers + MaxNestedCallWorkers - 1, 400 * Slow)
+    let e = fixtureEngine(cfg)
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    gate.store(true)
+    let before = held.load
+    const N = MaxCallWorkers + MaxNestedCallWorkers + 2
+    var calls: seq[LogosAsyncCall]
+    for i in 0 ..< N:
+      calls.add(h.started(req(19), addr many[i]))
+    check waitUntil(
+      proc(): bool =
+        held.load == before + MaxCallWorkers + MaxNestedCallWorkers
+    )
+    const Completes = 60 * Slow ## seconds, as in the case above
+    check waitUntil(
+      proc(): bool =
+        completed(N).len >= 2,
+      Completes,
+    )
+    let refused = completed(N)
+    check refused.len == 2
+    for i in refused:
+      check many[i].codeOf == ecModule
+      check many[i].messageOf == "no call worker is available"
+    check held.load == before + MaxCallWorkers + MaxNestedCallWorkers
+    gate.store(false)
+    for i in 0 ..< N:
+      if i notin refused:
+        check many[i].finished(seconds = Completes)
+        check many[i].codeOf == ecOk
+    for c in calls.mitems:
+      c.release()
+    h.release()
+    e.finish()
+
+  test "[IMPL-DECISION G242] a call worker that never takes a job: at the bound, one queued call is refused each 10 refuseDelays, with a diagnostic":
+    var cfg = config()
+    cfg.limits.refuseDelay = initDuration(milliseconds = 100 * Slow)
+    const Period = 10 * 100 * Slow ## ms: `CallStallFactor` × `refuseDelay`
+    setLateCallWorkerForTests(MaxCallWorkers + MaxNestedCallWorkers - 1, -1)
+    let e = fixtureEngine(cfg)
+    discard e.started(meter())
+    let (_, rc) = e.startClient()
+    var h = rc.handle(rc.routeId("k"))
+    gate.store(true)
+    let before = held.load
+    const N = MaxCallWorkers + MaxNestedCallWorkers + 2
+    var calls: seq[LogosAsyncCall]
+    for i in 0 ..< N:
+      calls.add(h.started(req(19), addr many[i]))
+    check waitUntil(
+      proc(): bool =
+        held.load == before + MaxCallWorkers + MaxNestedCallWorkers - 1
+    )
+    # The 128th worker is not busy, so nothing is refused after `refuseDelay`.
+    sleep(Period div 2)
+    check completed(N).len == 0
+    const Completes = 60 * Slow ## seconds
+    check waitUntil(
+      proc(): bool =
+        completed(N).len >= 1,
+      Completes,
+    )
+    # One each period: no other for half of one.
+    sleep(Period div 2)
+    check completed(N).len == 1
+    check waitUntil(
+      proc(): bool =
+        completed(N).len >= 2,
+      Completes,
+    )
+    let refused = completed(N)
+    check refused.len == 2
+    for i in refused:
+      check many[i].codeOf == ecModule
+      check many[i].messageOf == "no call worker is available"
+    check e.diagnostics().countIt("a call worker did not take a queued call" in it) == 2
+    # Once it starts, it takes the one call left; nothing more is refused.
+    setLateCallWorkerForTests(-1, 0)
+    check waitUntil(
+      proc(): bool =
+        held.load == before + MaxCallWorkers + MaxNestedCallWorkers
+    )
+    sleep(3 * 100 * Slow)
+    check completed(N) == refused
+    check not e.diagnostics().anyIt("every call worker is busy" in it)
+    gate.store(false)
+    for i in 0 ..< N:
+      if i notin refused:
+        check many[i].finished(seconds = Completes)
+        check many[i].codeOf == ecOk
     for c in calls.mitems:
       c.release()
     h.release()
@@ -1439,8 +1607,7 @@ suite "run.async: starvation (DECISIONS I88, deviation 5)":
 # One payload depth setting ----------------------------------------------------------------
 
 let
-  shapesSet =
-    acceptContractSet(readFile(repo / fixtureDir / "shapes_module.cddl")).tryGet
+  shapesSet = acceptContractSet(readFile(fixtureDir / "shapes_module.cddl")).tryGet
   shapesRoot = shapesSet.primary.root
   shapesSchema = encodeCbor(schemaResponse(shapesSet, shapesRoot).tryGet)
   shapesStatic = checkStaticRegistration("shapes", shapesModuleStaticSymbols()).tryGet
