@@ -12,9 +12,10 @@ namedBin["lcn_pkg"] = "lcn-pkg"
 namedBin["logos_module_host"] = "logos-module-host"
 # logosd and logosctl need unix-stream sockets, peer credentials and signals: POSIX hosts
 # only (DECISIONS I95; docs/DAEMON.md). The Module Host lands beside logosd, where its
-# default lookup finds it.
+# default lookup finds it, and so do the key holder (DECISIONS G410), which
+# `remote.key_holder` names, and the remote program (DECISIONS G411).
 when not defined(windows):
-  bin.add ["logosd", "logosctl"]
+  bin.add ["logosd", "logosctl", "logos_keyholder", "logos_remote"]
 
 # [DECISIONS G436] Nimble 0.26.2 or later: 0.20.1 empties or crashes on a lock made over an existing
 # one, and on macOS crashes without --useSystemNim. Every Nimble command passes --useSystemNim, so
@@ -83,7 +84,10 @@ before build:
   if dirExists(thisDir() / "nimbledeps"):
     checkInstalls()
 
-proc runSuites(flags, outDir: string) =
+proc runSuites(flags, outDir: string, sanitizer = false) =
+  ## [DECISIONS G442] With `sanitizer`, each suite runs through tools/sanitizer/reports.sh, as the
+  ## flake's sanitizer checks do: every report, a child's included, goes to a file under
+  ## `build/tests/<outDir>/sanitizer-reports/<suite>/`, and the suite fails on any.
   checkInstalls()
   var suites: seq[string]
   for dir in ["tests", "sdk/tests"]:
@@ -97,7 +101,14 @@ proc runSuites(flags, outDir: string) =
     echo "Shard " & $k & "/" & $n & " of " & $suites.len & " suites"
   for i, file in suites:
     if i mod n == k - 1:
-      exec "nim c -r " & flags & " --outdir:build/tests/" & outDir & " " & file
+      let command = "nim c -r " & flags & " --outdir:build/tests/" & outDir & " " & file
+      if sanitizer:
+        let suite = file.extractFilename.changeFileExt("")
+        exec "bash tools/sanitizer/reports.sh run --suite " & suite &
+          " --dir build/tests/" & outDir & "/sanitizer-reports/" & suite & " -- " &
+          command
+      else:
+        exec command
 
 task test, "Run every test suite under --mm:orc":
   runSuites("--mm:orc", "orc")
@@ -111,13 +122,13 @@ task test_refc, "Run every test suite under --mm:refc":
 # The sanitizer switches are in config.nims, their run-time defaults in
 # tests/support/sanitizers.c.
 task test_asan, "Run every test suite under AddressSanitizer and UBSan":
-  runSuites("--mm:orc -d:asan", "asan")
+  runSuites("--mm:orc -d:asan", "asan", sanitizer = true)
 
 task test_tsan, "Run every test suite under ThreadSanitizer":
-  runSuites("--mm:orc -d:tsan", "tsan")
+  runSuites("--mm:orc -d:tsan", "tsan", sanitizer = true)
 
 task test_msan, "Run every test suite under MemorySanitizer (clang on Linux)":
-  runSuites("--mm:orc -d:msan", "msan")
+  runSuites("--mm:orc -d:msan", "msan", sanitizer = true)
 
 task build_runtime_lib,
   "Build liblogos_runtime and logos_runtime.h under build/lib/ (RUNTIME §13)":

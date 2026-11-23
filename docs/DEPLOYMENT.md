@@ -42,15 +42,15 @@ CONFORMANCE and `conformance/`.
 | Item | BCP | Part | Verdict | Changes in | Answer | Section | Units |
 |---|---|---|---|---|---|---|---|
 | 0 | l.360-361 | this document, its two tables, every applicable choice indexed | Supported | — | this page; the second table sweeps the other specifications | [§0](#0-this-document) | BCP-0038, BCP-0039 |
-| 1 | l.363 | Package Manager source kinds; provenance profiles | None | Tier 5 | no Package Manager is deployed; no source kind, no provenance profile | [§1](#1-package-manager) | BCP-0040 |
+| 1 | l.363 | Package Manager source kinds; provenance profiles | None | Tier 5 | no packaged Package Manager (a test build until step 5-6a); no source kind for package-backed creation, no provenance profile | [§1](#1-package-manager) | BCP-0040 |
 | 2 | l.364 | protected inputs: representations, provisioning, validation, replacement, revocation | Supported | — | owner-only session files, checked at start, replaced offline for the next start | [§2](#2-protected-inputs) | BCP-0074 |
 | 3 | l.365 | authority-policy format, administration, permissions of bootstrap and system instances | Supported | — | `authority-policy.v1` in daemon-config; system rules S1–S5, and S6–S8 with the CLI module; host-ambient for system instances | [§3](#3-authority-policy) | BCP-0075 |
 | 4a | l.366 | local transport profile | Supported | — | `logos.local.unix-stream` | [§4](#4-transport) | BCP-0041 |
-| 4b | l.366 | remote transport profiles | None | Tier 5 | none enabled; no listener, no export, no enrollment | [§4](#4-transport) | BCP-0041 |
+| 4b | l.366 | remote transport profiles | None | Tier 5 | none enabled; no listener, no export; the enrollment trust (5d) is not yet used | [§4](#4-transport) | BCP-0041 |
 | 5a | l.367 | call-evidence signing trust | Supported | — | one evidence key per session, bound to the Runtime, rotated offline | [§5](#5-trust-inputs) | BCP-0042 |
 | 5b | l.367 | package-signing trust | Supported | — | the package trust file: anchors with exact names under one revision, administered offline by `logosctl trust` | [§5](#5-trust-inputs) | BCP-0042 |
 | 5c | l.367 | package-provenance and source-evidence requirements | None | Tier 5 | none selected; a selection is refused until step 5-11 | [§5](#5-trust-inputs) | BCP-0042 |
-| 5d | l.367 | remote Runtime enrollment | None | Tier 5 | no enrollment trust | [§5](#5-trust-inputs) | BCP-0042 |
+| 5d | l.367 | remote Runtime enrollment | Supported | — | the remote trust input: anchors and enrollment records under one revision with its mark, administered offline by `logosctl remote trust`, applied at the next start | [§5](#5-trust-inputs) | BCP-0042 |
 | 6a | l.368 | Module Loader mappings; the `process` mechanism | Supported | — | `direct_static`, `direct_dynamic`, `hosted_dynamic` with placement `process`; the CLI module `lcn_call` hosted | [§6](#6-module-loader-mappings) | BCP-0043 |
 | 6b | l.368 | `sandbox` and `container` mechanisms | Not supported | — | not advertised; a request for one is `unsupported-strategy`; outside Tier 5 (D16) | [§6](#6-module-loader-mappings) | BCP-0043 |
 | 7 | l.369 | permission definitions, constraint mappings, enforcers | Supported | — | one definition, host-ambient, empty constraints, enforced by Runtime admission | [§7](#7-permission-definitions) | BCP-0044 |
@@ -62,11 +62,11 @@ CONFORMANCE and `conformance/`.
 | 11 | l.373 | attribute-source integration | Supported | — | the Runtime's registry, in process: instance id and module name | [§11](#11-the-attribute-source) | BCP-0077 |
 | 24 | l.374 | Credential Store: credential, format and sealing profiles; backend durability and recovery; operation-record retention; protected delivery and activation | None | — | no Credential Store is deployed or claimed | [§25](#25-credential-store) | BCP-0101 |
 | 12a | l.375 | bounds of the Runtime, Transport, Module Loader and schema processing | Supported | — | finite, listed with their scope and exhaustion behaviour; the CLI module's in DAEMON.md §7a | [§12](#12-resource-bounds) | BCP-0047 |
-| 12b | l.375 | Package Manager bounds, dependency resolution | None | Tier 5 | no Package Manager | [§12](#12-resource-bounds) | BCP-0047 |
+| 12b | l.375 | Package Manager bounds, dependency resolution | None | Tier 5 | no packaged Package Manager; the hosted one's bounds and resolver limits are listed | [§12](#12-resource-bounds) | BCP-0047 |
 | 13 | l.376 | deadlines: start points, phases, effects, escalation, shared-process limits | Supported | — | five deadlines; a Module Host may be ended by force; a direct realization never | [§13](#13-deadlines) | BCP-0078 |
 | 14 | l.377 | configuration-preserving upgrade; verified defaults | Supported | — | the operator carries configuration; defaults come from accepted declarations | [§14](#14-upgrade-and-verified-defaults) | BCP-0079 |
 | 15 | l.378 | presentation profile | None | — | none selected (BCP l.346); the CLI writes to the launcher's terminal, which is not a presentation profile | [§15](#15-presentation) | BCP-0048 |
-| 16a | l.380 | Package Manager installation, inventory, shared state | None | Tier 5 | no Package Manager | [§1](#1-package-manager) | BCP-0080 |
+| 16a | l.380 | Package Manager installation, inventory, shared state | None | Tier 5 | no installation, inventory or shared package state | [§1](#1-package-manager) | BCP-0080 |
 | 16b | l.380 | operating-system integration material | Supported | — | a systemd user unit and a launchd agent, owner-installed | [§16](#16-facilities-that-cannot-be-supplied) | BCP-0080 |
 | 17 | l.380-382 | a facility or constraint that cannot be supplied fails | Supported | — | the dependent realization fails; nothing falls back | [§16](#16-facilities-that-cannot-be-supplied) | BCP-0081 |
 | 25 | l.383 | each finite admission pool shared by consumers or providers: whether a per-consumer or per-provider limit applies | Supported | — | each pool with its total and its per-consumer or per-provider limit, or none | [§12](#admission-pools) | BCP-0102 |
@@ -113,9 +113,10 @@ over the lines the revision changed: it added IF l.1473 and PM l.1727, the Crede
 | CFG | l.266 | the configuration-preserving upgrade workflow | [§14](#14-upgrade-and-verified-defaults) | CFG-0134, CFG-0135 |
 | PM | l.408 | whether continued execution depends on current package-signing trust | no ([§1](#1-package-manager)) | PKG-0422 |
 
-The Package Manager's own documentation duties (PM l.834 catalogs, l.857 retrieval, l.931
-installation scope, l.1183 resource access, l.1727 the storage failure model, l.1731 retention) belong
-to a Package Manager, which this deployment does not have; they come with it in Tier 5. The Credential
+The Package Manager's catalogs (PM l.834) and its bindings' retrieval and locators (PM l.854-857) are
+documented in [PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) §3 and §4, with the locator encodings in
+`sdk/docs/STORAGE-FETCH.md` §5. Its other documentation duties (l.931 installation scope, l.1183
+resource access, l.1727 the storage failure model, l.1731 retention) come with later steps of Tier 5. The Credential
 Store's (CS l.319, l.370, l.476) belong to a Credential Store, which it does not have either (§25).
 The other hits of the search are duties of a specification, a record or a message (for example HASH
 l.35, R l.3265, T l.564), not choices of a deployment.
@@ -124,23 +125,32 @@ l.35, R l.3265, T l.564), not choices of a deployment.
 
 Items 1, 5b, 5c, 10b, 12b and 16a.
 
-- **None is deployed.** `lcn-pkg`, the LGX parser and the dependency resolver are tools (DECISIONS
-  I49, I69): nothing in logosd installs, inventories or selects a package. There is no source kind, no
-  provenance profile, no installation scope, no inventory and no shared package state. A module comes
-  from daemon-config as an artifact path with its digest (§10); no package-backed creation exists.
+- **Hosted, when configured.** With a `package_manager` section in daemon-config ([DAEMON.md](DAEMON.md)
+  §3; DECISIONS G399), logosd designates one operator instance, `hosted_dynamic`, as the Package
+  Manager and hands it its `lcn.pm_input` as protected realization input (G400): the bindings to its
+  Storage providers, the protected catalog, the resolver limits and a copy of the trust file the start
+  accepted. It acquires the catalog over its own routes (G401, G402) and resolves roots against it
+  ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md)). Until step 5-6a its module is a test build
+  (`pmtest_module`), so a packaged deployment has none, and nothing installs, inventories or selects a
+  package: there is no package-backed creation, installation scope, inventory or shared package state.
+  A module still comes from daemon-config as an artifact path with its digest (§10). `lcn-pkg`, the
+  LGX parser and the resolver are also tools (DECISIONS I49, I69).
+- **The baseline only** (G404). The Package Manager applies the package-signature and
+  artifact-verification baseline (PM §4.1, §4.3, §4.4) and selects no catalog or provenance profile: it
+  provides no authenticated catalog ordering, freshness or external anchoring, and claims no package
+  provenance ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) §6).
 - **Does continued execution depend on current package-signing trust acceptance** (PM l.408)? **No.**
-  1. Nothing uses package-signing trust. The trust file holds anchors since Tier 5 step 5-3a
-     ([DAEMON.md](DAEMON.md) §6; DECISIONS G396), and logosd accepts them at each start, but no Package
-     Manager is deployed: no package is verified, installed or selected, and the accepted input logosd
-     keeps for the Package Manager (step 5-3b) is read by nothing.
+  1. No instance runs from a package. The trust file's anchors ([DAEMON.md](DAEMON.md) §6; DECISIONS
+     G396) are used by the Package Manager to verify the packages it inspects, and by nothing that
+     decides whether a module runs.
   2. No instance has a signer or package fact, direct or hosted: the Runtime's registry, the only
      source of the facts the authority reads, records an instance's id and module name and no
      selection (§11). A policy rule naming a signer or package matches nothing, and no execution
      decision depends on one.
-  3. A change of the trust file takes effect only at the next start ([DAEMON.md](DAEMON.md) §6), so
-     nothing running is affected by one.
-  4. Tier 5 (the Package Manager, its anchors and package-backed selection) is expected to change
-     this answer (DECISIONS G137, amended 2026-11-16).
+  3. A change of the trust file takes effect only at the next start ([DAEMON.md](DAEMON.md) §6), the
+     Package Manager's copy included, so nothing running is affected by one.
+  4. Package-backed selection (Tier 5) is expected to change this answer (DECISIONS G137, amended
+     2026-11-16).
 
 ## 2. Protected inputs
 
@@ -152,19 +162,25 @@ Item 2. Each is a file of the session, owned by its user, mode 0600 in 0700 dire
 | daemon-config, the authority policy in it, module configuration values, `state_transfers` | one deterministic-CBOR `lcn.daemon_config` ([DAEMON.md](DAEMON.md) §3) | `logosctl init`, `daemon config set` | the five checks of DAEMON.md §3, at `set` and at every start | at the next start |
 | the package trust file and its mark | `lcn.package_trust` (a Tier 4b `lcn.trust_file` is still read), `lcn.trust_mark` (§6 there) | `init`, `trust anchor …`, `trust development`, `trust reestablish` | at every start, and by every writer before it writes: the schema and its 1 MiB bound, the rules (canonical order, exact names, nothing selected), key separation from the evidence keys; at start, revision continuity: rollback and changed contents refused | at the next start |
 | the evidence key and its binding | `lcn.ev_key_binding` (§6 there) | `init`, `trust evidence-keys rotate` | the binding names this Runtime (§3 check 4) | at the next start |
+| the remote trust input and its mark (with `remote.enabled`) | `lcn.remote_trust`, its records RUNTIME's `logos.runtime_enrollment` unchanged; `lcn.remote_trust_mark` (§6a there) | `remote trust init`, `reestablish`, `anchor …`, `enroll …`, `import` | at every start, and by every writer before it writes: the schema and its 16 MiB bound, the rules, the loader report; at start, revision continuity (rollback and changed contents refused) and the enrollment rules per key (a stale or omitted record refused) | at the next start |
+| the TLS credential (with `remote.enabled`) | `key.p8` (PKCS#8 P-256), `cert.der`, `peer.cbor` (§6b there) | `remote credential new`, `rotate` | at every start: present, the key the certificate's, the peer file naming both; a pending rotation taken up | at the next start (a rotation is a cutover) |
 
 **Revocation.** A grant's end, its expiry and a policy decision that no longer allows an execution or
 route take effect at once, while logosd runs (CA §8; [HOST-CONFIG.md](HOST-CONFIG.md), "Under
 `capability-authority`", Authority over time). A withdrawn development switch, a removed trust anchor or
 package name, a rotated evidence key and a changed policy take effect at the next start, since every
 input is read once. A removal that names an anchor or package name the file does not hold withdraws
-nothing and is refused, so a mistyped revocation is reported, not taken for one (BCP l.364).
+nothing and is refused, so a mistyped revocation is reported, not taken for one (BCP l.364). An
+enrollment's revocation (`remote trust enroll revoke`) and a withdrawn remote trust anchor apply at the
+next start too, by the restart that also ends every connection of that run (DECISIONS G87, G408); the
+command says so.
 
 ## 3. Authority policy
 
 Item 3. The format is `logos-core-nim.authority-policy.v1` ([AUTHORITY-POLICY.md](AUTHORITY-POLICY.md)).
-logosd merges the operator's rules with its system rules S1–S5, and S6–S8 when it composes the CLI
-module `lcn_call`, which are derived and not configurable ([DAEMON.md](DAEMON.md) §5). Administration is
+logosd merges the operator's rules with its system rules S1–S5, S6–S8 when it composes the CLI
+module `lcn_call`, and S9–S11 with a `package_manager` section (the Package Manager's routes to its
+Storage providers), which are derived and not configurable ([DAEMON.md](DAEMON.md) §5). Administration is
 the offline path of §17. The explicit permissions of the bootstrap and system instances: host-ambient for
 `orchestrator`, `logosctl`, `authority` and `lcn_call`, written by logosd; the Module Loader holds it by construction ([PERMISSIONS.md](PERMISSIONS.md), "What BCP asks to
 be documented"). `allow-all` is accepted only with the development switch on (§20).
@@ -175,10 +191,21 @@ Items 4a and 4b.
 
 - **Local:** `logos.local.unix-stream`, the only local profile, with endpoints under `<session>/run/ep/`
   ([CONFORMANCE.md](CONFORMANCE.md), "Unix-stream endpoints and peer checks").
-- **Remote:** none enabled. logosd has no remote transport, no listener, no provider export and no
-  enrollment. The remote Runtime Control methods answer after authorization: the two lists an empty
-  page, `set_provider_export` INVALID_PARAMS, enabling a listener MODULE_ERROR (DECISIONS G298;
-  [DAEMON.md](DAEMON.md) §10). Expected to change in Tier 5.
+- **Remote:** `logos.remote.tls-tcp`, with `remote.enabled` and `runtime.remote_program` (the
+  `logos_remote` program). Remote listeners and provider exports are disabled by default; the
+  deployment's records are `remote.listeners` and `remote.exports` in the daemon configuration,
+  validated as Runtime Control validates the same records, a bad one refusing the start (RUNTIME
+  l.3319-3321; DECISIONS G412). Each enabled listener is one `logos_remote` process that logosd spawns,
+  supervises and ends with itself ([REMOTE.md](REMOTE.md), "The listener process and its end"; G411).
+  A listener with `runtime_control_enabled` serves Runtime Control to enrolled Runtimes' consumers, as
+  a capability-authority policy with `runtimes` rules allows (G413, G415); `policy: allow-all` with
+  `remote.enabled` refuses the start. **Which changes last** (Q4): a listener's `enabled` or
+  `runtime_control_enabled`, or an export's `enabled`, turned off through Runtime Control stays off
+  across restarts and crashes until its configuration entry changes, Runtime Control enables it, or
+  `logosctl remote exposure reset` removes it; an enable through Runtime Control lasts for the run
+  ([DAEMON.md](DAEMON.md) §6c). Remote routes and the source side come with steps 5-7a-3 and 5-7a-4:
+  until then no provider session is served to another Runtime, and `establish_route` from a forwarded
+  consumer is MODULE_ERROR. `quic` records are kept, and enabling one is MODULE_ERROR (step 5-12).
 
 ## 5. Trust inputs
 
@@ -192,10 +219,21 @@ Items 5a–5d.
   `logos.package-signing.cose-sign1-slh-dsa-sha2-192s` and each anchor's kid, 48-byte key, exact package
   names and development marker, all under one revision with its continuity mark. It is written offline
   by `logosctl trust anchor …`, checked at every start and by every writer, and replaced at the next
-  start. No anchor may use a call-evidence key. No Package Manager reads it yet (§1).
+  start. No anchor may use a call-evidence key. The Package Manager receives a copy at every start (§1;
+  [DAEMON.md](DAEMON.md) §6), so a change applies to it at the next start.
 - **Package provenance and source evidence** (5c): none selected. The trust file's `provenance` section
   is empty, and a file that selects a profile is refused until step 5-11 (DECISIONS G398). Tier 5.
-- **Remote Runtime enrollment** (5d): none. Tier 5.
+- **Remote Runtime enrollment** (5d): the remote trust input, `<session>/remote/trust.cbor`
+  (`lcn.remote_trust`; [DAEMON.md](DAEMON.md) §6a; DECISIONS G408): the complete remote trust-anchor set
+  and the enrollment records in RUNTIME's published schema, under one revision of its own with its own
+  continuity mark, apart from the package trust file. It is written offline by `logosctl remote trust`,
+  checked at every start with `remote.enabled` and by every writer, and replaced at the next start. Each
+  anchor is a direct anchor, a peer's own self-signed certificate (G324); the Runtime's own credential
+  is `logosctl remote credential`'s (§6b there; G409), its key apart from every other key.
+  **Interoperation** (TRANSPORT l.1245): this implementation accepts only direct anchors, so a peer of
+  another implementation must support the direct-anchor case to enroll this Runtime's certificate, and
+  must present a certificate DER-equal to an anchor this Runtime holds. Two Runtimes of this
+  implementation interoperate. The listener processes use it (§4).
 
 Each trust input has its own file and purpose (SEC l.521).
 
@@ -239,13 +277,19 @@ a separate process: its own address space, a process group of its own that is ki
 of the host, an environment of only `module_host_env`, and the descriptors listed in
 [HOST-CONFIG.md](HOST-CONFIG.md), "Module Hosts". Every process runs as logosd's user. The CLI module
 `lcn_call` is such a module; the terminal descriptors a launcher hands it are its own for the command.
+The Package Manager and its Storage providers are such modules too: logosd refuses a `package_manager`
+section whose instances are not `hosted_dynamic` (DECISIONS G399), so no archive enters logosd's process.
 
 **Not supported (8b).** Placement `process` is a separate address space, **not a sandbox** (DECISIONS
 G265): a hosted module has the filesystem, network, device, process and credential access of logosd's
 user, and no operating-system resource control is applied. A process the module moves out of its
 group or session outlives the host. Processes of the same user can reach each other's sockets and
-files (CONFORMANCE, "Properties not claimed"). Outside Tier 5: DECISIONS D16 leaves sandbox and container
-placements and their controls out, and so does the Tier 5 plan (its area K).
+files (CONFORMANCE, "Properties not claimed"). So it is with the Package Manager's protected input: its
+file is written by logosd's Runtime, owner-only, which keeps other users out; any process of logosd's
+user can replace it between the write and the Package Manager's read ([HOST-CONFIG.md](HOST-CONFIG.md),
+`protected_inputs`). Outside Tier 5: DECISIONS D16 leaves sandbox and container
+placements and their controls out, and so does the Tier 5 plan (its area K). A payload module's own
+network behaviour, beside its peers, is in §26.
 
 **The data path.**
 
@@ -266,6 +310,9 @@ placements and their controls out, and so does the Tier 5 plan (its area K).
   module configuration values (stored by the Runtime, handed to a host at init and apply), a provider's
   call surface, call-record roots, and reported failure text in diagnostics (attributed, §23). A Module
   Host's stdout and stderr are inherited descriptors and do not pass through logosd's memory.
+- **The Package Manager's data path** (G402): the catalog and the archives travel over its own routes
+  from the Storage provider's process to the Package Manager's; logosd issues the routes and decides
+  their Hello, and never carries a catalog, an archive or the trust input.
 - **The trust in the host program** (DECISIONS G273, G274): a hosted provider's host checks and
   commits its calls and reports its call records' roots; what it sends a consumer and those roots rest
   on the host program. CONFORMANCE, "Properties not claimed", says so.
@@ -280,6 +327,13 @@ Item 9.
   mapped are the bytes verified. `run/` is recreated at each start; `work/` is never emptied.
 - **State realization.** An instance with persistent state gets `state/modules/<assignment>`, keyed by
   its state assignment, not its instance id (DECISIONS G143).
+- **Reserved names.** `.lcn-protected-input` and its temporary names `.lcn-protected-input.<32 hex>`
+  are reserved in every state directory (DECISIONS G400): the protected realization input's file,
+  written before each realization attempt's initialization and removed when it returns, at release
+  and at retirement. A state transfer by `copy` skips them; a backup of the state directory does
+  not, so it may hold the input while an attempt runs ([HOST-CONFIG.md](HOST-CONFIG.md)). The Package
+  Manager's own state is `catalog.kept`, the last catalog it accepted, under its state assignment
+  ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) §3).
 - **Retention.** Retiring an instance keeps its state directory ("retired; its state directory is
   kept"). Nothing removes it but `logosctl state purge` (§19).
 - **Cleanup.** At start the Runtime removes the `+transfer-…` and `+purge-…` names an interrupted
@@ -333,7 +387,27 @@ reached:
 - schema processing: the INTERFACE §5.3 limits (`MaxSchemaNodes` and the others in `iface/accept.nim`);
 - the daemon: [DAEMON.md](DAEMON.md) §7 "Limits" and §9 "Limits";
 - the Package Manager's resolver: [CONFORMANCE.md](CONFORMANCE.md), "Resolver limits" (the protected
-  policy supplies the values; these are their maxima).
+  policy supplies the values; these are their maxima). logosd supplies `package_manager.resolver_limits`,
+  or its preset when the section names none ([DAEMON.md](DAEMON.md) §3; DECISIONS G443: 256 names,
+  depth 32, 256 candidates per name, 1,024 attempts). A new preset changes the results of a
+  configuration that names no limits, so an operator who needs results fixed across upgrades writes the
+  four values. A limit that ends an operation answers `dependency-unavailable`, as a missing dependency
+  does; the Package Manager's log names the limit;
+  - **What raising a limit costs.** Nothing but the limits ends a resolution (PM l.1279-1280), and each
+    step of one holds the Package Manager's module thread. At the preset an honest closure holds it
+    under 1 s for each step. A package with a maximum-size manifest (4 MiB, about 80,000 dependency
+    entries) anywhere in the closure costs about 55 ms (Mac) to 75 ms (Linux) for each attempt, so
+    `assignment_attempts` sets the longest hold: about 56 to 76 s at the preset's 1,024, and about
+    14.5 h at the maximum, by extrapolation. Raising `dependency_depth` and `partial_closure_names` lets a dense
+    closure grow: 256 names take about 0.6 to 0.7 s for the longest step and about a minute in all, and
+    4,096 names about 50 min and 48 days, by extrapolation. CONFORMANCE's tables give the measured
+    figures on both machines. Any accepted signer with a package in the closure can bring these costs,
+    not only the root's, so a raised limit is the operator's choice for every package its trust admits;
+- the Package Manager's own bounds, `package_manager.limits` ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md)
+  §2): one archive (`archive_bytes`, 1 GiB by default, held in memory in the Package Manager's process
+  while it is inspected), the catalog document (4 MiB) and its entries (65,536), and the verification
+  cache (256 entries). A larger archive leaves its candidate unavailable; a larger catalog is refused
+  and the one in use stays; the cache drops its least recently used entry.
 
 ### Admission pools
 
@@ -371,7 +445,8 @@ block lists each pool's total and per-consumer limit (`admission_pools`; the aud
   by default). A subscription's own event queue is not shared.
 - **The `logosctl` socket's workers** (`ctl.workers`, [DAEMON.md](DAEMON.md) §7) serve shell clients,
   which reach the Runtime as one consumer, the `logosctl` instance.
-- **No Package Manager** is deployed, so it has no pool.
+- **The Package Manager** has no pool: its bounds (above) are its own, and it reaches its providers
+  as one consumer, through the routes and Transport totals above.
 
 ## 13. Deadlines
 
@@ -397,6 +472,13 @@ Item 13. Five deadlines, in milliseconds, each 1 to 3,600,000 where configurable
   the host process must end"). At shutdown logosd retries the Runtime's destruction for `shutdown_grace_ms` plus 5 s; ending
   the process is the remaining escalation, which a service manager's stop timeout (90 s) performs.
 - **Loader loss** ends logosd with exit 4 ([DAEMON.md](DAEMON.md) §15).
+- **The Package Manager's read deadline** (`package_manager.limits.read_deadline_ms`, 300000 by
+  default, 1 to 86400000): it bounds one call to a Storage provider (`stat_object`, `read_object`,
+  `fetch_readiness`) and the wait for `ready` after `not-ready`. It sits above the provider's own bound
+  for one call (storage_module's longest is 180 s at its defaults), so it catches a provider that broke
+  its bound; availability comes from the provider's `unavailable`, never from the deadline
+  ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) §4).
+- **A payload module's figures** (its stop time, the shutdown grace its profile sets) are in §26.
 
 ## 14. Upgrade and verified defaults
 
@@ -479,7 +561,8 @@ Item 21.
 - **Other principals:** other operating-system users are kept out by the modes. Processes of the same
   user can read everything, and write the policy, the trust file and the evidence key.
 - **Backup and synchronization:** no synchronization facility exists. A backup or a synchronized copy
-  of the session holds everything, the evidence key's secret half included.
+  of the session holds everything, the evidence key's secret half included, and a payload module's
+  keys (§26).
 - **Restore:** a restored older `trust.cbor` is refused by continuity; a restored `state/` without its
   mark needs `logosctl trust reestablish`; a lost `state/` needs a new session ([DAEMON.md](DAEMON.md)
   §2, §6, §11).
@@ -591,6 +674,81 @@ would come with one.
   Store.
 - `tests/test_deployment.nim` checks the facts' `credential_store`, the default composition, logosd's
   acceptance of the operator module and its refusal at binding.
+
+## 26. Payload modules
+
+Not an item of its own. What items 6a, 8, 9 and 13 answer for logosd holds for every operator module; a
+payload module built on the kit adds where it may be placed, what it takes from its realization, its
+state, its stop figure and its network behaviour apart from its peers (BCP l.370). The module's README
+gives the same answers. Nothing here changes a row of the item table.
+
+### blockchain_module
+
+The Logos blockchain node as a module (DECISIONS G419–G424; the library's `logos_module/README.md`).
+
+- **Placement** (DECISIONS G421): `hosted_dynamic` with placement `process` only, one node per
+  process. The library's threads outlive `_MODULE_destroy`, so a host must never unload the library and
+  must end with `_exit` after the release; logosd's Module Host does both. Run it `hosted_dynamic`: in an
+  embedder's own process the library's signal handling, its HTTP API and any fault of the library all
+  belong to the embedder (below), and `direct_dynamic` would leave the library's threads in logosd's
+  process. Under an embedder with an ordinary SIGINT handler, the library's handler replaces it. Nothing
+  refuses another placement while NP-14 is open (a module cannot declare the placements it supports, and
+  its init is not told its placement): the operator's daemon-config decides, and the node profile (Tier 5
+  step N-6a) sets `hosted_dynamic`.
+- **Signals.** The node is started with the library's stock start, whose `SystemSig` service takes the
+  process's SIGINT at the start and keeps it: a SIGINT to the node's Module Host stops the node, and the
+  instance goes to `error` (`reported-by-module`) as for any stop of the inner node. It takes no other
+  signal. logosd ends a Module Host with SIGKILL, which no handler sees.
+- **The HTTP API.** The stock start always starts the library's HTTP API, and the module puts it on
+  `127.0.0.1` at a port the system picks at each start; no setting moves it or turns it off. The API has
+  no authentication. Any local process of any user, other modules' hosts included, that finds the port
+  can spend from the node's wallet, sign any payload (`/wallet/sign/ed25519`, `/wallet/sign/zk`), claim,
+  post SDP declarations, add transactions, start and stop PoW mining and auto-claim, change the log
+  filter and dial peers. None of that passes the Runtime, the policy classes or the Capability Authority.
+  The API refuses web pages by their `Origin` and `Host`, not local programs. The module's README lists
+  every route. Run the node only on a machine where every local user is trusted.
+- **Resources** (D5 for blockchain, DECISIONS G422): the module takes only its typed configuration
+  (`blockchain_config.cddl`, delivered at init), and no home directory. The library reads 24 environment
+  variables of its own in place of that configuration (the README names them), so init refuses to start
+  while any of them is set, empty or not, naming it: `runtime.module_host_env` must not list them. The
+  chain's deployment is built in, or a read-only file the configuration names, with an optional SHA-256
+  that init checks (DECISIONS G441). Its circuits are compiled in, and it logs to standard error, which
+  its Module Host inherits (§23). It runs one tokio worker per CPU; `TOKIO_WORKER_THREADS` in
+  `runtime.module_host_env` sets fewer. On Linux its prover
+  (rapidsnark, as the circuits' prebuilt archive ships it) also logs each proof, about 1.4 KB of phase
+  names, to `MyLogFile.log` in the working directory. While the node runs, the module's process works
+  in its state directory's `prover/`, and the module empties that file in place past 1 MiB (DECISIONS
+  G421, G422). Its permission settings must
+  hold `logos-core-nim.host-ambient` (§7; [DAEMON.md](DAEMON.md), "Grants"); with it, its host has the
+  access of logosd's user (§8, 8b).
+- **State** (§9): its state directory `state/modules/<assignment>/` holds `keystore.yaml` (0600: the
+  node's keys, which the library makes at the first start, or placed before it; never rewritten),
+  `node/` (the library's database), `run/` (the configuration rendered for the library, rewritten at
+  each start, no secret) and `prover/` (the process's working directory; on Linux, the prover's log). The keystore is the node's identity and the key to its funds, protected by its
+  mode only (§19). A `state_transfers` entry with `copy` clones it: two instances then hold one identity
+  and spend the same funds. `move` hands it over.
+- **Stop figure** (DECISIONS G423): `_MODULE_init` starts the node and `_MODULE_destroy` stops it,
+  joins its work before returning and awaits no posted callback. Measured unprepared destroys: 1.2 ms on
+  macOS and 1.3 ms on Linux for an idle node, 0.5 to 670 ms under logosd in a Module Host. A library call
+  in flight holds destroy until it returns. The default `runtime.stop_deadline_ms` (10000) holds. A
+  daemon-config that runs the node sets `runtime.shutdown_grace_ms` to 20000, the node's figure (§13);
+  the node profile (Tier 5 step N-6a) will. An inner node that stops by itself makes
+  every method answer `unavailable` (`node-stopped`) and reports one failure: the instance is `error`
+  (`reported-by-module`) and a restart policy recovers it.
+- **Network behaviour apart from its peers** (BCP l.370):
+  - **Time.** The node asks the NTP server `time.ntp_server` at start and every `time.update_interval`
+    (15 s when absent), one request to each address the name resolves to. An unreachable server leaves
+    the slot timer on the local clock, with one warning each interval. `127.0.0.1:9` is the offline
+    value: an IP literal, so no resolver is asked, and nothing answers.
+  - **NAT.** With `network.nat` `static` the node sends nothing to the network's gateway. `traversal`
+    turns on the library's NAT behaviour: a gateway lookup, autonat, and port mapping through PCP,
+    NAT-PMP and UPnP.
+  - It listens on `network.listen_host` and `network.port`, and on `blend.port` once the blend
+    membership reaches the era's minimum size; it dials `network.initial_peers`. Its HTTP API listens on
+    a TCP port on `127.0.0.1` (above).
+- **Bootstrap period.** With `cryptarchia.prolonged_bootstrap_period` absent, the library's hour
+  applies: for that hour a fresh node's `mode` is `bootstrapping` and it does not lead. A value set is
+  logged once at start.
 
 ## Facts
 

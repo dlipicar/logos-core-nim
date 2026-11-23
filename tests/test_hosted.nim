@@ -20,6 +20,7 @@ when defined(posix):
   import std/[atomics, monotimes, os, sequtils, strutils, times, typedthreads]
   import std/posix except Time
   import unittest2
+  import ./support/sanitizerenv
   import ../src/logos_core/runtime/engine
   import ../src/logos_core/runtime/[hostlock, hostsup, store]
   import logos_sdk/abi/types
@@ -57,9 +58,6 @@ when defined(posix):
   const
     RuntimeId = "0b6f2d4e-8a1c-4f3b-9d2e-7c5a1b3e9f40"
       ## both engines of a comparison: the probe's own address is the same
-    SanitizerEnv =
-      ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
-      ## the host's environment allow-list here: the sanitizers' settings only
     ModuleStateEv = "logos.runtime_control.module_state_changed_event"
 
   let
@@ -211,9 +209,10 @@ when defined(posix):
       leftover()
       check noHostLeft()
 
-    test "[RUN-0169] [LDR-0045] [LDR-0149] S-2 a hosted consumer-only probe is ready in a process of its own; no record or answer names the host program, the artifact, the work directory or the host's process":
+    test "[RUN-0169] [LDR-0045] [LDR-0149] [IMPL-DECISION G442] S-2 a hosted consumer-only probe is ready in a process of its own, with the Runtime's five sanitizer variables; no record or answer names the host program, the artifact, the work directory or the host's process":
+      let want = deliverySettings()
       let cfg = hostedConfig()
-      let dir = cfg.prepare("env")
+      let dir = cfg.prepare("env", "env-of " & SanitizerEnv.join(" "))
       let e = fixtureEngine(cfg)
       let (_, rc) = e.startClient("c")
       discard e.create(probe(), "p").tryGet
@@ -227,6 +226,9 @@ when defined(posix):
       for name in lines(dir, "env"):
         check name in SanitizerEnv or
           (defined(macosx) and name == "__CF_USER_TEXT_ENCODING")
+      # [G442] All five, each with the value the Runtime's process has: a
+      # sanitizer check's `log_path` reaches the host.
+      check lines(dir, "envof") == want.mapIt(it[0] & "=" & it[1])
       let s = rc.summary(e, "p")
       type
         R = LogosNSRuntimeControlGetExecutionSummaryResponseRealizationChoiceKind
@@ -266,6 +268,32 @@ when defined(posix):
       check rc.summary(e, "p").realization.kind == R.Absent
       check noHostLeft()
       e.finish()
+
+    test "[IMPL-DECISION G442] a hosted probe's stack trace lands in the sanitizer check's report directory (the canary)":
+      when not Sanitized:
+        skip()
+      else:
+        let reports = reportsDir()
+        if reports.len == 0:
+          checkpoint(
+            "no log_path here: this suite was not run by tools/sanitizer/reports.sh"
+          )
+          skip()
+        else:
+          let cfg = hostedConfig()
+          let dir = cfg.prepare("sanitizer-trace")
+          let e = fixtureEngine(cfg)
+          discard e.create(probe(), "p").tryGet
+          check e.start("p").tryGet.state == msReady
+          check lines(dir, "inits") == @["init", "sanitizer-trace"]
+          let pids = hostsLeft()
+          check pids.len == 1
+          check e.stop("p").tryGet.state == msUnloaded
+          # Its end confirmed: nothing more can land in its file.
+          check noHostLeft()
+          e.finish()
+          if pids.len == 1:
+            check takeCanary(reports, pids[0]) == coMoved
 
     test "[RUN-0170] [RUN-0171] [RUN-0172] [RUN-0180] S-3 Runtime Control from the host gives the probe the values, errors and transitions it gets in process":
       proc requests(): seq[string] =

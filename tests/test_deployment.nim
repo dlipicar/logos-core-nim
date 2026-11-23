@@ -15,6 +15,7 @@
 when defined(posix):
   import std/[algorithm, json, locks, monotimes, os, sequtils, strutils, tables, times]
   import unittest2
+  import ./support/sanitizerenv
   import logos_sdk/crypto/blake3
   import ../src/logos_core/permissions
   import ../src/logos_core/runtime/[engine, host], logos_sdk/kit/[rc_arms, rc_types]
@@ -59,8 +60,6 @@ when defined(posix):
     StopDeadlineMs = 10_000 * Slow
       ## `stop_deadline_ms` and `shutdown_grace_ms` here: the defaults, scaled
       ## under a sanitizer as `test_logosd` does; no case is about them
-    SanitizerEnv =
-      ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
     ChatterInstance = "chatter-1"
     ChatterState = "chatter-state"
     Document = staticRead("../docs/DEPLOYMENT.md")

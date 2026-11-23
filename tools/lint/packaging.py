@@ -43,11 +43,14 @@ this lint checks that they do. The rules:
   python3 tools/lint/packaging.py [--root DIR]
   python3 tools/lint/packaging.py --self-test
 
-Prints `file:line: rule: ...` for each finding and exits 1 if there is any. In a git checkout the
-install-list rule reads `git ls-files`; elsewhere (a Nix source) it walks the tree.
+Prints `file:line: rule: ...` for each finding and exits 1 if there is any. A root that is not a
+directory, or one with no nimble file, exits 2: the lint was run from the wrong folder. In a git
+checkout the install-list rule reads `git ls-files`; elsewhere (a Nix source) it walks the tree.
 """
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import re
@@ -682,15 +685,46 @@ def self_test():
         found = {f[2] for f in run(dict(CLEAN_TREE, **{path: text}))}
         if rule not in found:
             failures.append(f"{rule} did not fire on {path}: {text!r} (found {found})")
+    # The two runs that check nothing, and the clean tree through the same entry.
+    def status(root):
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return lint(root, system_nim_pending=False)
+
+    with tempfile.TemporaryDirectory() as root:
+        if status(os.path.join(root, "missing")) != 2:
+            failures.append("a missing root did not exit 2")
+        if status(root) != 2:
+            failures.append("an empty root did not exit 2")
+        plant_tree(root, CLEAN_TREE)
+        if status(root) != 0:
+            failures.append("the clean tree did not exit 0 through lint")
     for failure in failures:
         print("self-test:", failure)
     if failures:
         return 1
     print(
         f"packaging self-test: {len(SATISFIES)} ranges, {len(PLANTS)} planted violations caught,"
-        " the pending switch's two states and a stale UNGUARDED"
+        " the pending switch's two states, a stale UNGUARDED, and a missing and an empty root refused"
     )
     return 0
+
+
+def lint(root, **kw):
+    """The exit status over `root`: 0 clean, 1 a finding, 2 nothing to check."""
+    if not os.path.isdir(root):
+        print(f"packaging: {root}: not a directory", file=sys.stderr)
+        return 2
+    findings, (nimbles, installed, scanned) = check(root, **kw)
+    if not nimbles:
+        print(f"packaging: no nimble file under {root}", file=sys.stderr)
+        return 2
+    for path, line, rule, message in findings:
+        print(f"{path}:{line}: {rule}: {message}")
+    print(
+        f"packaging: {nimbles} nimble files, {installed} package files checked,"
+        f" {scanned} files scanned for addresses"
+    )
+    return 1 if findings else 0
 
 
 def main():
@@ -700,14 +734,7 @@ def main():
     args = parser.parse_args()
     if args.self_test:
         return self_test()
-    findings, (nimbles, installed, scanned) = check(args.root)
-    for path, line, rule, message in findings:
-        print(f"{path}:{line}: {rule}: {message}")
-    print(
-        f"packaging: {nimbles} nimble files, {installed} package files checked,"
-        f" {scanned} files scanned for addresses"
-    )
-    return 1 if findings else 0
+    return lint(args.root)
 
 
 if __name__ == "__main__":

@@ -28,6 +28,7 @@ when defined(posix):
   import std/[atomics, monotimes, os, sequtils, strutils, times, typedthreads]
   import std/posix except Time
   import unittest2
+  import ./support/sanitizerenv
   import ../src/logos_core/runtime/[engine, hostsup]
   import logos_sdk/abi/types
   import logos_sdk/base/clock
@@ -70,8 +71,6 @@ when defined(posix):
   let shortBase = makeShortBase("lcnhr", "/e999/12345678/logos_meter_module.sock")
 
   const
-    SanitizerEnv =
-      ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
     # [IMPL] Bounds a wait for what comes: a response, an end, a held call, a
     # delivery, a record or the probe's answer. A hosted path crosses the
     # carrier, a call that publishes an Event three more times, and on a CI

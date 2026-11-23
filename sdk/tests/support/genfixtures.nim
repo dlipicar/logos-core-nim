@@ -5,7 +5,8 @@
 import std/[os, sequtils, strutils]
 import results
 import logos_sdk/pins
-import logos_sdk/iface/accept
+import logos_sdk/cbor
+import logos_sdk/iface/[accept, surface]
 import logos_sdk/codegen/[cmirror, kitgen, nimgen, sdkroot]
 import logos_sdk/testing/fixturegen
 import ./clisting
@@ -381,17 +382,58 @@ proc generatedRcTypes*(): Result[string, string] =
 proc generatedStorageFetchRoot*(): Result[string, string] =
   ## [DECISIONS G395] `lcn.storage_fetch`'s schema root, computed from its document by the
   ## commitment code and written as data: no root is typed by hand.
+  ## [DECISIONS G402] Its methods' and event's declaration roots too, which
+  ## logosd's system rules S9 to S11 name (a policy names a contract's method
+  ## or event by its root, AUTHORITY-POLICY.md).
+  func hexBytes(d: openArray[byte]): string =
+    var bytes: seq[string]
+    for b in d:
+      bytes.add("0x" & toHex(b, 2) & "'u8")
+    "[\n  " & bytes[0 .. 15].join(", ") & ",\n  " & bytes[16 .. 31].join(", ") & ",\n]"
+
   try:
     let set = ?acceptContractSet(readFile(storageFetchDocument))
-    var bytes: seq[string]
-    for b in set.primary.root:
-      bytes.add("0x" & toHex(b, 2) & "'u8")
-    ok(
+    let m = set.primary.model
+    var text =
       "## lcn_storage_fetch_root.nim: written by `nimble regen` from lcn_storage_fetch.cddl.\n" &
-        "## " & "PROVISIONAL (spec " & SpecRevision[0 .. 7] & "). Do not edit.\n\n" &
-        "#!fmt: off\n" & "const LcnStorageFetchRoot*: array[32, byte] = [\n  " &
-        bytes[0 .. 15].join(", ") & ",\n  " & bytes[16 .. 31].join(", ") &
-        ",\n] ## [DECISIONS G395] the schema root of `lcn.storage_fetch` (INTERFACE §1.2)\n"
+      "## " & "PROVISIONAL (spec " & SpecRevision[0 .. 7] & "). Do not edit.\n\n" &
+      "#!fmt: off\n" & "const LcnStorageFetchRoot*: array[32, byte] = " &
+      hexBytes(set.primary.root) &
+      " ## [DECISIONS G395] the schema root of `lcn.storage_fetch` (INTERFACE §1.2)\n"
+    for (name, decl) in [
+      ("LcnStorageFetchStatObjectRoot", "lcn.storage_fetch.stat_object"),
+      ("LcnStorageFetchReadObjectRoot", "lcn.storage_fetch.read_object"),
+      ("LcnStorageFetchFetchReadinessRoot", "lcn.storage_fetch.fetch_readiness"),
+      (
+        "LcnStorageFetchReadinessChangedRoot",
+        "lcn.storage_fetch.fetch_readiness_changed_event",
+      ),
+    ]:
+      let d = m.find(decl)
+      if d.isNone:
+        return err("lcn_storage_fetch.cddl has no declaration " & decl)
+      text.add(
+        "\nconst " & name & "*: array[32, byte] = " & hexBytes(
+          declarationRoot(m, d.get)
+        ) & " ## [DECISIONS G402] the declaration root of `" & decl & "`\n"
+      )
+    # [DECISIONS G405] The contract's construction input (`get_schema`'s response,
+    # INTERFACE §5.2), which the Package Manager's shell materializes its routes with.
+    let schema = encodeCbor(?schemaResponse(set, set.primary.root))
+    var rows: seq[string]
+    var i = 0
+    while i < schema.len:
+      var row: seq[string]
+      for b in schema[i ..< min(i + 16, schema.len)]:
+        row.add("0x" & toHex(b, 2) & "'u8")
+      rows.add("  " & row.join(", ") & ",")
+      i += 16
+    text.add(
+      "\nconst LcnStorageFetchSchema*: array[" & $schema.len & ", byte] = [\n" &
+        rows.join("\n") & "\n]\n" &
+        "  ## [DECISIONS G405] the construction input of `lcn.storage_fetch`: its schema\n" &
+        "  ## response, which `materialize_route` checks (INTERFACE §5.2)\n"
     )
+    ok(text)
   except IOError as e:
     err(e.msg)
