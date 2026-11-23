@@ -227,7 +227,7 @@ deferred past the re-pin.
 12. Platforms, build, CI and tooling
 13. Implementation defaults chosen without a separate question
 14. Index
-15. Revisions and implementation choices since work started (R1–R7, I1–I125)
+15. Revisions and implementation choices since work started (R1–R7, I1–I133)
 
 ---
 
@@ -435,6 +435,9 @@ deferred past the re-pin.
 - **Options offered:** (a) the node-flow subset with JSON carried in tstr fields *(recommended)*; (b) the
   full surface with JSON in tstr; (c) the full surface, fully typed.
 - **Decision:** (c), including today's lifecycle/config methods (G97).
+- **Amended 2026-11-23 for blockchain's v2 (Tier 5 step N-5; G470, G474):** (c) stands, with one recorded
+  exception: `open_metrics` answers the library's OpenMetrics text, bounded (G470). The six PoW toggle and set
+  entries are not methods: their settings are configuration, applied at start (the owner's Q3 (a), G474).
 
 ### D21 — How payload modules get their configuration
 - **Kind:** FREE · **Specs:** CONFIG §1 (no credentials, trust input, permissions or grants in
@@ -7244,6 +7247,10 @@ their history.
 - **Note 2026-11-22 (Tier 5 step N-4.4):** storage's `togglePrivateQueries` has no entry at storage's pin: upstream
   removed it on purpose (`e7269721`). The 1:1 rule has nothing to keep, and storage_module drops the method (G147's
   amendment), following the owner's rule of 2026-11-22 that a module wraps its library as it is.
+- **Amended 2026-11-23 for blockchain's v2 (Tier 5 step N-5; G474):** the PoW toggles and settings (six
+  entries) go as `start` and `stop` went: typed configuration applied at start (the owner's Q3 (a)). A toggle
+  set by a method would sit outside the snapshot the Runtime revises and authorizes, and the library keeps
+  none across a start.
 
 ### G98 — Delivery's RLN and service-discovery dependencies
 - **Kind:** FREE · **Specs:** RUNTIME §7.5 (module-to-module calls only through Runtime routes).
@@ -7427,6 +7434,11 @@ their history.
     crane's default put the 840 MB cargo target into each output).
 - **Tests:** `logos_module/tests/test_artifact.nim` (T1), on the module package's library on Linux.
 - **Status:** built 2026-11-22 (Tier 5 steps N-3.1 and N-3.2; I118).
+- **Amended 2026-11-23 (Tier 5 step N-5.1; G474; the owner's (b), 2026-11-22):** the module calls the library's
+  stock `start_lb_node`. N-3.1's embedded start and its test hooks are dropped, and `c-bindings/` is upstream's
+  (`git diff e0d79cc25 -- c-bindings` is empty), so both archives are the library as it is, with the same
+  entries, and the test archive differs only by its profile. T1 finds `start_lb_node` inside, hidden, and no
+  test hook of the module's in a release artifact (no `lbg_test_` symbol, no hook string).
 
 ### G420 — The blockchain module's threads: a confined kit over C workers
 - **Kind:** IMPL, on G335, G338, G111 · **Specs:** INTERFACE l.1955, l.2100, l.2114-2115 (destroy and
@@ -7522,6 +7534,14 @@ their history.
   process's working directory while the node runs. On Linux it holds rapidsnark's `MyLogFile.log`, the
   prover's phase names (no key, no witness), kept under 1 MiB. So the module logs to standard error and,
   on Linux, to that one file.
+- **Amended 2026-11-23 (Tier 5 step N-5; G473, G474):**
+  - The keystore is rewritten by the key methods only, through a synced copy renamed over it, never by `_init`
+    (G473); the layout gains `keystore.yaml.tmp` (a key job's copy), `key-import` (a placed key until
+    `add_placed_key` takes it) and `spends.cbor` with `spends.cbor.tmp` (G472).
+  - The stock start (G474): the library's HTTP API runs, at `127.0.0.1:0`, so "no HTTP API" no longer holds
+    (DEPLOYMENT §26); `runtime_threads` is gone, and the node runs one tokio worker per CPU. The module still
+    reads no environment variable, and `_init` refuses the library's 24 names (I133).
+  - `pow` is the configuration's one widening (G474); the schema froze with v2 (G469).
 - **Tests:** T4, T5, T11, T6 (the devnet with a placed keystore), `test_units`; T9 checks the configuration
   the module renders under logosd.
 - **Status:** built 2026-11-22 (Tier 5 step N-3.2; I118).
@@ -7549,6 +7569,9 @@ their history.
 - **Tests:** T5 (init and destroy times, the thread plateau), T7 (destroy with a job running), T8 (the
   node stopped by itself), T9 (the failure, the recovery and five stops under logosd).
 - **Status:** built 2026-11-22 (Tier 5 steps N-3.2, N-3.3; I118).
+- **Note 2026-11-23 (Tier 5 step N-5; G475):** v2's row keeps this rule under Q4 (i), provisionally until the
+  mobile exploration: `_destroy` waits for a running spend, and the stop figure stays 10 s. Under (ii), v3's
+  `stop` and `start` would amend it.
 
 ### G424 — The blockchain module's contract v1
 - **Kind:** IMPL, on D20, COMMITMENT l.966-976, l.1007-1010, RUNTIME l.614 · **Specs:** as named;
@@ -7567,6 +7590,8 @@ their history.
 - **Tests:** T2 `test_contract` (roots recomputed from the text; the frozen-declarations rule on a fixture
   v2), T9 (the calls, events and `describe` through `lcn_call`).
 - **Status:** built 2026-11-22 (Tier 5 step N-3.2; I118).
+- **Frozen** at N-5.1's first module commit, `52e6ae970` (2026-11-22): `contracts/v1.cddl` holds v1's text as
+  at `c77ce98cf`, the commit `contracts/v1.freeze` names, and T12 checks it. v2 extends it (G469).
 
 ### G425 — The `storage_module` contract
 - **Kind:** FREE (Tier 5 step N-4; plan `tier5-plans/stepN-4-plan.md` §3.6; Fable's reviews
@@ -7858,6 +7883,342 @@ their history.
   loads to.
 - **Status:** built 2026-11-22 (Tier 5 step N-3.2, logos-blockchain 56192e5e4 on `lcn/n3-2-sha`).
 
+### G469 — The blockchain module's contract v2, extending v1
+- **Kind:** IMPL, on D20, G424, COMMITMENT l.966-976, RUNTIME l.614 · **Specs:** as named; stepN-5 plan §4.1, §9
+  (Gb1).
+- **Decision.**
+  - `blockchain_module.cddl` is v2: every v1 declaration with v1's kind, name and body (COMMITMENT l.971), and the
+    rest of the library's surface: 36 methods, v1's three and 33 more, and three events, v1's
+    `chain_progress_event`, `new_block_event` and `lib_event`. v1's text is `contracts/v1.cddl`, frozen (G424). v2
+    lists v1 under `extends` (G393). T2 and T12 build both roots and check the extension that way (l.974), never by
+    trusting the claim.
+  - **No v1 method changes what it answers.** The kit dispatches by bare name, so a v1 route runs v2's handler; a
+    v1 method may answer a new code in its open arm, nothing else. v1's suites run against the v2 build unchanged.
+  - **v1's rules hold for every method** (G424): each response writes out the open `unavailable` arm, with `code`
+    and the module's own `reason`; the library's text never reaches a response, with one recorded exception
+    (`open_metrics`, G470); no request holds a path (G99). New codes need no declaration, since `code` is open:
+    G470's, the spends' (G472, G479) and the keys' (G473). `not-found` arms answer for what the node does not hold
+    (`block`, `transaction`, `block_events`, `channel_state`; `balance` and `wallet_notes` for a key the wallet
+    does not hold, I130).
+  - **Nothing is marked** (Q2 (c), G473): v2 has no `_sensitive` block, so G277's refc refusals do not reach it.
+  - **Left out, because it cannot be specified yet** (G479): `remove_key`, a listing of the keystore (G473), and
+    `stop` and `start` (G475: v3 extending v2, if a machine needs them).
+  - Until the freeze v2 changed in place, as v1 did, and every rule naming its root with it.
+- **Frozen** at N-5.3's merge into `lcn/blockchain-module`, `a834055da` (2026-11-23): the first of the two events
+  the plan names (N-6a's first pin of v2's root, or N-5's blockchain part closing). v2's root is
+  `b2e01cef3f8b542af86ebe9ed86521b5e8da16f7a64992e0e6b66c950bc9a97f` (T12, from the text). **The configuration
+  schema freezes with it** (planning, 2026-11-23, as G480 has for storage): every declaration of
+  `blockchain_config.cddl` as it is at `a834055da`, G474's one widening and unchanged since N-5.1's `52e6ae970`;
+  its comments stay free. A retained configuration under another schema commitment is not eligible for startup
+  (CONFIGURATION l.145), so a later change to either is a new version, and N-6a is told. The frozen copy follows
+  v1's practice: `contracts/v2.cddl` and `contracts/v2.freeze` come with the first change that extends v2, and
+  N-6a pins the root from T12's data, not from a copy.
+- **Tests:** T2 `test_contract` (v1's root from `contracts/v1.cddl`); T12 `test_contract_v2` (both roots, v1's
+  declarations in v2, v2 changing none of v1's methods, `contracts/v1.cddl` against v1's text at its freeze, nothing
+  marked, the roots against the binding the Runtime accepts); v1's suites on the v2 build; T9 (v2 under logosd,
+  `extends` v1).
+- **Status:** built 2026-11-22 (Tier 5 step N-5.1) and completed by N-5.3, 2026-11-23; frozen (above; I126).
+
+### G470 — v2's typed results and requests; `unmapped`; `open_metrics` as the recorded exception
+- **Kind:** IMPL, on D20 (c); the owner's Q5 (a), 2026-11-22; planning's P2 · **Specs:** INTERFACE §1.1-§1.7;
+  HOST-CONFIG `frame_limit`; stepN-5 plan §4.2, §9 (Gb2).
+- **Decision.**
+  - **No JSON in strings** (D20 (c), Q5 (a)). The library's JSON (blocks; transactions, a choice over 11 op kinds
+    and 6 proof kinds; block events; channel state; Blend's view; `wallet_fund_tx`'s result; the events; the
+    participation data) is parsed on the module thread into typed values, hashes, keys, ids and proofs as `bstr`.
+    Typed requests are rendered to the library's JSON (`wallet_fund_tx`, `submit_signed_transaction`).
+  - **The full `u64` range,** read from the JSON text and rendered back, never through a float or a signed integer.
+  - **Unknown or malformed output fails closed,** logged and counted: a single value answers `unavailable` with
+    `unmapped`. In `blocks` the unit is the block: one the mapping cannot read stands as `unmapped { slot }`, and the
+    page keeps the rest.
+  - **The core form** (draft 3c, under the owner's rule of 2026-11-22). `block`, `blocks` and `transaction` call the
+    stock `get_block`, `get_blocks` and `get_transaction`: a header carries no id and a transaction no hash, so the
+    id or hash a request names is the key, and the block keeps its `signature`, required in v2 (upstream draft
+    214). The processed-blocks stream, with its ids and hashes, has its own reader.
+  - **`blocks` is bounded by bytes:** the blocks that fit 8 MiB of encoded blocks [IMPL], in slot order and at least
+    one, with `next_slot` while the range is not done; immutable blocks only, up to the LIB (`block` reads newer ones
+    by id). An answer is at most 16 library calls [IMPL], over windows bounded by the blocks they can hold, not by
+    their slots (from 64 slots, at most 4096 once the chain passes 4096 blocks, halving after an answer over the
+    JSON bound): a deployment started long after its genesis has millions of empty slots.
+  - **Golden files are captured data** (Q5): `tests/capture_golden.nim` writes the pinned library's JSON on the
+    devnet into `tests/golden/`; nobody edits them, and a library bump reruns the capture. One synthetic golden per
+    `u64` field holds 2^64−1.
+  - **`participation_data`** is a typed read in place of `participate`'s file: the module runs `participate` on its
+    own configuration in a private directory under the state directory, removed after, and answers the public keys
+    and the Blend declaration's preview. It submits nothing and holds no secret.
+  - **`open_metrics`** (P2): one OpenMetrics text, the recorded exception to D20 (c)'s typing and to the rule that
+    the library's text never reaches a response. Bounded at 256 KiB [IMPL] and never cut, since the format ends with
+    a marker line: over it the call answers `too-large`, and metrics turned off answer `metrics-off`.
+  - `blend_rewards` on a node with no Blend declaration answers `not-declared` [IMPL]; a list over the module's
+    bound, or an empty range, `bad-request`.
+  - Every response fits the 16 MiB frame and the payload depth of 1024: a block nests 9 deep, a `blocks` answer 10.
+- **Tests:** T13 `test_reads` (the goldens field by field, the full `u64` range, the `unmapped` entries, `blocks`'
+  paging, every read on the devnet, and the stream against the core-form reads), T14 `test_events_v2`, `test_units`.
+- **Status:** built 2026-11-22 (N-5.1; I126).
+
+### G471 — The blockchain module's worker classes, delayed Responses, and spends never abandoned
+- **Kind:** IMPL, on G420, G338 · **Specs:** INTERFACE l.2018-2028 (the caller's timeout and cancel); TRANSPORT
+  l.826-828 (one Request, one final Response); stepN-5 plan §4.3, §9 (Gb3).
+- **Decision.**
+  - **Seven glue workers in four classes** [IMPL]: four short workers for reads, as v1's; one watchdog worker, so the
+    liveness check never waits behind a proof; one long worker for the spends; one store worker for the spend
+    records' writes (n5-2b, below).
+  - **One long worker,** because `channel_deposit` reserves nothing: it picks notes from `get_balance`, which leaves
+    out neither notes a pending spend holds nor blend-locked ones; only `transfer_funds` and `wallet_fund_tx`
+    reserve, through the wallet's `FundTx`. So two of the module's own spends at once could pick one note. The
+    library itself runs two spends at once. At the measured figures a spend waits under half a second for each one
+    ahead of it. The long queue holds 8 [IMPL], counting the spends still writing their first record; more answer
+    `busy`, with no record, so the id stays free.
+  - **Delayed Responses.** Every long method is an `async` handler served through the declared `_MODULE_async_api`
+    (G338): one Request and its final Response, no job id and no acknowledgement method. The caller picks its own
+    timeout; there is no 30 s premise (G100).
+  - **A spend is never abandoned.** The caller's Runtime decides CANCELLED and TIMEOUT alone, so what the provider
+    does afterwards reaches no caller: it decides only what `spend_status` says (G472). A running spend's handler
+    catches the cancel, lets the job finish and records its outcome; a queued one is removed and recorded `failed
+    { code: "cancelled" }`. `_destroy` starts no new spend, records the queued ones `cancelled`, waits for the
+    running one through its handler and for the records' writes, and only then calls the glue's destroy, so
+    `interrupted` means a kill or a crash. It has no timeout of its own, since a write inside a sync cannot be cut
+    short: the Runtime's bound applies. Reads keep G420's rule: removed while queued, abandoned while running, freed
+    by their worker.
+- **Amended 2026-11-23 (n5-2b; planning's rulings on Fable's `tier5-plans/fable-checks/stepN-5-2-store-and-fee.md`):**
+  - **The store worker.** N-5.2 measured the records' writes on the module thread over the plan's 5 ms rule on
+    framework.lan (p95 6.16 ms, 12.69 ms at most), so one glue store worker writes them, one job at a time, the
+    oldest first: a temporary file, its sync, a rename and the directory's sync. The `running` record's write is
+    awaited before the long job is submitted, one write is in flight at a time, and a change made during it goes
+    into the next, so no write overtakes another.
+  - **`F_FULLFSYNC` on Darwin** for every sync of the glue and the module (the records, their directory and the key
+    jobs; `flush_fd`, `flushFd`), as core's `durable.nim` does: a plain `fsync` there does not reach the medium, and
+    a lost `running` record with a retry under the same id would spend twice. Plain `fsync` elsewhere.
+  - **Incremental encoding** on the module thread: each record keeps its encoded bytes, and only a changed one is
+    encoded again. At 1,024 records under refc on framework.lan a whole encode took 7.79 / 8.04 / 14.65 ms (p50 /
+    p95 / max); the incremental one 0.132 / 0.148 / 0.217 ms, and 0.264 / 0.285 / 0.346 ms a spend (0.581 / 0.608 /
+    0.979 with the table's changes). A fixed-seed test of 600 random operations compares its bytes with a whole
+    encode. The cache holds about the table's size once more, 175 KB at 1,024 records.
+  - **What a spend waits for:** two writes, the `running` record before the library is called and the outcome
+    before the answer. Each took p50 11–13 ms and p95 15–22 ms on the Mac with `F_FULLFSYNC`, p95 3.1–3.9 ms on
+    framework.lan.
+- **Tests:** T16 `test_long_calls` (reads meanwhile, one spend at a time, `busy`, cancellation, destroy; a burst of
+  twelve, 8 run and 4 `busy`; an outcome that cannot be written), T15, T5 (the seven workers), T7.
+- **Status:** built 2026-11-22 (the watchdog worker in N-5.1, the rest in N-5.2) and amended 2026-11-23 (n5-2b;
+  I126).
+
+### G472 — What a caller learns of a spend: request ids and the spend records
+- **Kind:** IMPL, for the owner with the stepN-5 plan (Q1 (a), 2026-11-22), with Fable's corrections · **Specs:**
+  INTERFACE l.2026; RUNTIME l.1190-1191, l.3787; TRANSPORT l.833; stepN-5 plan §4.4, §9 (Gb4).
+- **Decision.**
+  - **The problem.** A spend's library call cannot be stopped once running, and the transaction hash exists only in
+    the final Response, so a caller told CANCELLED, TIMEOUT or TRANSPORT_ERROR may still have spent (INTERFACE
+    l.2026); the module contract defines what continues (RUNTIME l.3787).
+  - **The id.** `transfer_funds`, `channel_deposit`, `channel_deposit_with_notes`, `leader_claim`, `pow_claim`,
+    `blend_join_as_core_node` and `blend_withdraw` take a caller-chosen 16-byte `request_id`, drawn at random (the
+    README); the module never makes one. `wallet_fund_tx` submits nothing and `submit_signed_transaction` is safe
+    to repeat, so neither has one.
+  - **The record comes first.** Before the library call the module writes the record `running`, with the id and
+    the request's digest, and syncs it: BLAKE3 over the method's name, a zero byte and the request's deterministic
+    CBOR without the id (the name, since `leader_claim` and `blend_withdraw` take no arguments). The outcome
+    rewrites the record before the answer. So a crash cannot leave `unknown`.
+  - **A reused id.** Another digest answers `request-id-reused` in every state: a caller is never told another's
+    outcome. With the same digest, a running record answers `request-in-flight`, an interrupted one
+    `request-interrupted` (it never spends again), a finished one its recorded answer, and nothing is spent. A
+    failed id stays failed: a retry takes a new id.
+  - **`spend_status { request_id }`:** `unknown`; `running`; `interrupted` (the process that ran the spend ended:
+    the outcome is unknown, look at the chain; set at `_init` for a record left `running`); `failed { code }`,
+    nothing spent; the method's arm, `submitted { tx_hash }`, `withdrawn { tx_hash, unlocks_at_epoch }` or
+    `declared { declaration_id }`; or `included { tx_hash, header_id, slot }` once a processed block carries the
+    hash, final once the LIB passes that block. `submitted` is the mempool's acceptance, not inclusion: a spend the
+    ledger refuses is evicted and stays `submitted`, and the `transaction` read cannot tell, since the mempool keeps
+    an evicted body for its `tx_ttl` (upstream draft 218).
+  - **The store.** `<state_dir>/spends.cbor` beside the keystore, 0600, rewritten through `spends.cbor.tmp` (one a
+    kill left goes at `_init`) and synced (G471). Every finished record is kept at least ten minutes after its spend
+    ended, 1024 at most [IMPL]; with the table full of younger, running or interrupted records a new spend answers
+    `busy`. Running and interrupted records are never evicted. An id reused more than ten minutes after its record
+    ended may find it gone, and then spends again (README). An unreadable file fails `_init`.
+  - **A failed write** (Fable's check). The `running` write failing answers `spend-record-failed` before the library
+    is called, drops the record and frees the id in this process. The outcome's write failing keeps the id and the
+    true answer; the table is written again at each processed block until a write succeeds, and a restart before
+    that reads `interrupted`.
+  - **Guards** [IMPL]. A deposit into a channel the node does not hold is refused with `channel-unknown`, read first
+    through `channel_state`: a guard, not a guarantee. `channel_deposit` itself is refused (G479), so the plan's
+    note filter for it is not built. `wallet_fund_tx` holds its funding notes until a block spends them or 10
+    immutable blocks pass (a restart drops the hold); the README says so.
+  - The spend codes: `spend-refused`, `channel-unknown`, `no-rewards`, `cancelled`, `busy`, `spend-record-failed`,
+    `unsupported` (G479), `request-id-reused`, `request-in-flight` and `request-interrupted`.
+- **Tests:** T15 `test_spending` (every spend on the short-epoch devnet and `spend_status` through its outcomes; a
+  record a kill left `running` answers `interrupted`; the ten-minute minimum, shortened; a record that cannot be
+  written), T16 (an outcome that cannot be written), T19 `test_channels` (a channel by the caller's transaction,
+  deposits into it, a note raced), T18 `test_two_nodes` (Blend's join on three nodes; upstream draft 219),
+  `test_units`.
+- **Status:** built 2026-11-22 (N-5.2) and amended 2026-11-23 (n5-2b; I126).
+
+### G473 — The blockchain module's keys: a copy and a rename, applying at the next start
+- **Kind:** IMPL, for the owner with the stepN-5 plan (Q2 (c), 2026-11-22); planning's rulings of 2026-11-23 on
+  Fable's freeze check (`tier5-plans/fable-checks/stepN-5-3-freeze.md`) · **Specs:** INTERFACE l.360-363 (marked
+  payloads); stepN-5 plan §4.5, §9 (Gb5). Amends G422's keystore wording.
+- **Decision.**
+  - **Two methods, nothing secret crosses the boundary.** `generate_key { title, key_type }` has the library make a
+    key; `add_placed_key { title, key_type }` adds the key the operator placed at `<state_dir>/key-import`. An
+    answer names the title and the public key (for `"zk"`, the wallet address), and every answer says
+    `applies: "next-start"`: the library reads its keystore once, at start, and nothing reloads it. Until then a
+    `"zk"` key a key method added answers `key-not-loaded` from `balance` and `wallet_notes` (I130). Nothing is
+    marked (Q2 (c)); both are local only (the `keys` class, `remote: never`, G476). `remove_key` left v2 (draft 3c):
+    the module cannot prove a key empty that was added after the wallet's first start (I131).
+  - **The keystore is changed through a copy** [IMPL]. The library rewrites a keystore in place, with no sync and no
+    mode of its own. The glue copies it to `keystore.yaml.tmp` (0600 from its creation), has the library change the
+    copy, syncs it, reads its public section back, renames it over the keystore and syncs the directory. A kill
+    leaves the old keystore or the new one, and `_init` removes a copy a kill left. One key job runs at a time; a
+    cancelled one still queued never runs, and a running one finishes. The library's refusal text is not kept (it
+    could quote the keystore), only its code. The keystore is read up to 1 MiB, the placed key up to 256 bytes.
+  - **`add_placed_key`'s order:** the title and the type first, so a refused request never opens the file; then the
+    file, opened with `O_NOFOLLOW` and `O_NONBLOCK` and checked on the descriptor (a regular file, one link, mode
+    0600, the node's user, at most 256 bytes); then its content (64 hex digits and at most one newline), checked by
+    the module so the library's error text never sees it; then the library's `add_key` on the copy. On success the
+    file is overwritten with zeros, synced and removed, and its directory synced: best effort on the medium (the
+    README, for the whole state directory).
+  - **The codes:** `title-exists` (the library would replace a key silently, the node's own included), `bad-request`
+    (a title outside 1 to 64 of A-Z, a-z, 0-9, `_` and `-` [IMPL]), `key-file-missing`, `key-file-unsafe`,
+    `key-file-malformed`, `keystore-write-failed` [IMPL] (the keystore could not be read, copied, synced or renamed,
+    and is unchanged; a keystore over 1 MiB answers it for every key method while the node still starts) and
+    `key-not-loaded`.
+  - **The freeze check** (planning's rulings, 2026-11-23):
+    - `ok` says the rename is on the medium. A directory sync that fails after the rename answers `unavailable` with
+      **`keystore-not-synced`** [IMPL]: the new keystore is in place but may not be on the medium. Nothing is undone:
+      the title is taken, a `"zk"` key is counted as added (`key-not-loaded`), no public key is given, and
+      `add_placed_key` keeps the placed file, which may be the key's only copy. No rollback. The directory's open is
+      tried twice and its flush once: after a refused flush, a later success would not show that the rename reached
+      the medium.
+    - No reason tells the caller to remove the placed file. After `keystore-not-synced` a generated key is not
+      used (another title is made); a placed one is added again after the next start, where `title-exists` means
+      it is in.
+    - A zk address is given out only once `known_addresses` shows the key, after the next start.
+    - **No listing of the keystore's titles and public keys in v2.** A `generate_key` answer lost to a cancel, a
+      destroy, a transport failure or `keystore-not-synced` cannot be had again; its title stays taken, and the way
+      round is a new title, the first key harmless since nobody has its address. The README states the limit.
+    - **For N-6a:** making keys through the module is not idempotent, so an installer that must be safe to run
+      twice places its keys (`add_placed_key`) or has them made at the first start.
+- **Tests:** T17 `test_keys` (11 cases: both methods, the refusals and their order, every unsafe file, the next
+  start loading the keys, a kill before the rename, titles YAML quotes, the directory sync failing for both methods
+  and its open retried), T9 (a hosted `generate_key`; a keys call refused under chain-read only), T1 (no hook in a
+  release artifact), `test_units`.
+- **Status:** built 2026-11-23 (N-5.3; I126).
+
+### G474 — D5 for v2: the `pow` widening, the stock start, and `deployment_info`
+- **Kind:** IMPL, for the owner with the stepN-5 plan (Q3 (a), 2026-11-22; the stock start, the owner's (b),
+  2026-11-22) · **Specs:** CONFIGURATION l.58, l.145; stepN-5 plan §4.6, §9 (Gb6). Amends D20 (c), G97, G419,
+  G422 and G340 for blockchain.
+- **Decision.**
+  - **One widening of the configuration,** in N-5.1: `? pow { ? mining, ? max_threads, ? max_tickets_per_block,
+    ? auto_claim, ? claim_tick_seconds }`, each optional with the library's default when absent, the integers'
+    ranges checked at start [IMPL]. The PoW toggles and set methods (six entries) are dropped under the single D6
+    rule: applied at start, so turning mining on or off is a new configuration value and a restart (Q3 (a)). The
+    library keeps no toggle across a start either. `auto_claim: false` renders `pow.auto_claim.targets: []`, so
+    auto-claim is never armed (the user config's list replaces the keystore's); with `mining` true the glue calls
+    `pow_start_mining` after the start, and its failure fails `_init`.
+  - **`runtime_threads` is gone** (draft 3d, planning's (a)): the stock start has no worker count, so the node runs
+    one tokio worker per CPU, and an operator who needs fewer lists `TOKIO_WORKER_THREADS` in `module_host_env`. A
+    v1 value without `runtime_threads` is a v2 value. The schema froze with v2 (G469).
+  - **The stock start** (draft 3d, the owner's (b)): the module calls `start_lb_node` and N-3.1's embedded start is
+    dropped; `c-bindings/` is upstream's (`git diff e0d79cc25 -- c-bindings` is empty). So the library's HTTP API
+    starts, rendered at `127.0.0.1:0` [IMPL] with no setting to move or stop it: unauthenticated, any local process
+    that finds the port can spend and sign outside the Runtime, the policy classes and the Capability Authority
+    (DEPLOYMENT §26; upstream draft 215). The library's `SystemSig` takes the process's SIGINT at the first start
+    and keeps it: G340's one exception. Hosted only stays a documented requirement with no check at `_init` (G421;
+    NP-14).
+  - **`deployment_info`** calls the stock `get_deployment_info` with the module's user config and the deployment the
+    node started from (draft 3c, which dropped I127's entry). Its loader reads the keystore, whose reader leaves
+    copies of the secrets nothing erases, so [IMPL] the answer is kept with the fork digest it was computed under
+    (draft 3d): each call asks the running node for its digest (`get_fork_digest`, no file read) and loads again only
+    when it differs; a loaded answer whose four fork-scoped names do not carry the reported digest is answered, not
+    kept; after a stop the kept answer is served; calls meanwhile share one load.
+  - **No new resource.** The circuits and the prover are compiled in, and no new file is read: `deployment_info`
+    reads the deployment the start already names. The library's 24 environment names are refused at `_init`
+    (I133). v2 writes `spends.cbor` (G472), the key jobs' copy and `key-import`'s removal (G473), and the
+    participation directory, removed after its call (G470).
+- **Tests:** T4 (each library name refused; `deployment_info` under the other wrong variables; one TCP listener,
+  the HTTP API, on 127.0.0.1), T11, T3 (every watched disposition but SIGINT unchanged), T8 (SIGINT to the node's
+  process), T13 (`deployment_info` on the devnet, and the digest case across an era change, the keystore unreadable
+  while the digest holds), T9 (I133's case under logosd), T12 (no module source names `show_config`),
+  `test_units`.
+- **Status:** built 2026-11-22 (N-5.1; I126).
+
+### G475 — Blockchain's v2 D6 row: no preparation method, provisionally
+- **Kind:** IMPL, for the owner with the stepN-5 plan (Q4 (i), 2026-11-22, on desktops and servers, Linux and
+  macOS) · **Specs:** RUNTIME l.3700-3701, l.3713-3719, l.3739; stepN-5 plan §4.7, §9 (Gb7). Under (ii) it would
+  amend G423.
+- **Decision.**
+  - **(i): no preparation method,** decided by the slowest proof on the slowest supported machine. N-5.2 measured
+    the long calls on the short-epoch devnet: the slowest was 425 ms, a transfer on the Mac (`leader_claim` 193–390
+    ms, `pow_claim` 73–166 ms, `blend_join_as_core_node` 183 ms there); every long call took 47–115 ms on
+    framework.lan. The stop figure is the slowest long call plus 5 s, at least 10 s: 10 s, v1's. The shutdown budget
+    adds the slowest long call to the drain, and `shutdown_grace_ms` 20000 holds (G423).
+  - `_destroy` waits for the running spend (its job holds the node pointer that `shutdown_node` frees; G471). A spend
+    cut by a kill answers `interrupted` (G472). A destroy that does not wait is not offered: the library has no
+    cancellation.
+  - **Provisional** until the mobile exploration at the end of the work (the owner, 2026-11-22). A phone whose
+    slowest proof is over 5 s brings (ii) as v3 extending v2: `stop { drain_ms }` and `start`, local only, with
+    wave 3's core D6 step; v2's rules and routes stay valid. v2 froze without them (G469).
+- **Tests:** T16 (destroy with a spend running), T15's timings, T5.
+- **Status:** decided 2026-11-22 (owner); figures measured 2026-11-22 (N-5.2; I126).
+
+### G476 — The blockchain module's policy rule classes: `policy-classes.json`, format 1
+- **Kind:** IMPL, on D4, G140, G394, G415 (revised: planning's rulings on Fable's
+  `tier5-plans/fable-checks/policy-classes-format.md`) · **Specs:** CAPABILITY AUTHORITY (a rule names one contract
+  root); stepN-5 plan §4.8, §9 (Gb8).
+- **Decision.**
+  - `logos_module/policy-classes.json` is **format 1**, `logos-core-nim.policy-classes.v1`, provisional [IMPL]. The
+    module owns it; N-6a adapts its G140 generator to it when its plan is made. No reader exists yet.
+  - **Five classes:** `chain-read` (the chain, block, transaction, time, deployment and channel reads, and every
+    event; for `lcn_call` and consumers), `node-status` (`network_info`, `open_metrics`, `pow_status`,
+    `blend_status`, `blend_info`), `wallet-read` (addresses, balances, notes, vouchers, rewards,
+    `participation_data`), `spend` (the spends, `wallet_fund_tx`, `submit_signed_transaction` and `spend_status`)
+    and `keys` (`generate_key`, `add_placed_key`).
+  - **An entry lists names; the generator builds the scopes.** An entry is one class under one contract (`v1` or
+    `v2`) with its methods' and events' names as the schema declares them (`blockchain.node_info`; events keep
+    `_event`). For every subject that holds any class, the generator writes one discover scope with no access per
+    contract, and per contract one call scope and, when the union has events, one subscription scope over the union
+    of the classes the subject holds, each with a provider selector naming `blockchain_module`. A route's access
+    fits one pattern, and a route that leaves an access list out asks for all of it, so the call and the
+    subscription scopes are apart (T9).
+  - **Each entry names its contract, and the root decides** (a rule names one root; the authority compares roots
+    for equality). A v1 name sits in the same class under both roots. A contract's root is
+    `schemaRoot(buildSchema(text, pinnedContext()))` over the document's bytes, as `lcn-gen` builds the kit's, and a
+    name's is `declarationRoot` of its declaration.
+  - **Local by default:** the file can only forbid, with `"remote": "never"` on `spend` and `keys`, and the generator
+    refuses to grant a never-remote class to a subject that names a Runtime (G415).
+  - **The instance's own `publish-event`** is not in the file: the generator derives it from the module's record
+    (G394).
+  - **The format:** a new format id for any change of meaning; closed parsing (an unknown key, field or repeated
+    class and contract is refused); paths relative to the file, read from the installed package; order carries no
+    meaning, the names ascending for stable diffs. Once N-6a pins a class name, the class may gain names, a name
+    never moves to a class more subjects hold, and a different grouping takes a new name.
+- **Tests:** T12 (the format, the roots against the binding the Runtime accepts, every method and event in exactly
+  one class under each contract, a v1 name in the same class under both roots), T9 (the scopes under logosd).
+- **Status:** built 2026-11-22 (N-5.1; `spend` and `keys` filled by N-5.2 and N-5.3; I126).
+
+### G479 — What a module contract keeps of its library's surface: the specified, even undelivered
+- **Kind:** FREE (planning's rulings on Fable's `tier5-plans/fable-checks/stepN-5-blend-withdraw.md` and
+  `stepN-5-channel-deposit.md`, 2026-11-22) · **Specs:** INTERFACE §1.4 (a contract's content is its author's);
+  RUNTIME l.609-614 and INTERFACE l.1762-1763 (a ready module whose method fails in a declared `unavailable` arm);
+  COMMITMENT l.976 (the freeze runs one way).
+- **Decision.** Leave out what cannot be specified yet; keep what is specified but not delivered, and wrap it as
+  the library ships it while its answer is true, even a failure. Guard it when its answer is known to be false.
+  - **Left out:** `remove_key` (G473) and `stop` and `start` (G475). Each comes as a later version if wanted.
+  - **`blend_withdraw` kept** ((a)): with the library at `e0d79cc25` it fails (upstream draft 217: the entry asks for
+    the epoch state at the tip's own slot) and answers `library-error`, recorded failed; a tip moving to a lower
+    slot between its two messages lets it post, so the docs say it "fails with this library". The contract comments
+    at the method; the README names the node's own `POST /sdp/withdrawal` as the way out; the success arm is tested
+    through a stock result fed to the glue (the `withdraw_stub` hook); T15 and T18 keep tripwires that name what to
+    change at the fixing bump.
+  - **`channel_deposit` refused** ((b′)): its entry builds a transfer whose outputs equal its inputs, so the
+    transaction balances to 0 under any gas cost; the mempool takes it and the entry answers `submitted`, then the
+    leader evicts it (upstream draft 218). That answer would be false, so the module refuses every call with
+    `unsupported`, listed in the contract's header, before the `channel-unknown` check and before any record, the
+    reason naming `channel_deposit_with_notes`. T19's tripwire calls the stock entry (the `channel_deposit_stock`
+    hook) with a deposit with notes landing in the same blocks as a control. The guard goes at the bump that fixes
+    the entry.
+  - **An accepted risk:** a fixing bump that adds an argument, such as a fee limit, cannot be carried by frozen v2;
+    the module passes none, as for `transfer_funds` (G481).
+- **Status:** decided 2026-11-22 (planning); built in N-5.2 (I126).
+
 ### G480 — When storage_module's contract freezes
 - **Kind:** FREE (Tier 5 step N-4; planning's ruling 2026-11-22, the rule blockchain's v2 has) · **Specs:** INTERFACE
   §1.4 (a contract's content is its author's).
@@ -7866,6 +8227,32 @@ their history.
 - **Decision:** storage_module's contract freezes at N-6a's first pin of its root or at N-4.5's merge, whichever
   comes first, as blockchain's v2 does. Until then it changes in place.
 - **Status:** decided 2026-11-22 (planning). Not frozen yet: N-4.4's amendments (`f835f6a8`) were made in place.
+
+### G481 — The blockchain module's spends carry no fee reserve: an accepted risk
+- **Kind:** FREE (planning's ruling on Fable's `tier5-plans/fable-checks/stepN-5-2-store-and-fee.md`, 2026-11-22) ·
+  **Specs:** INTERFACE §1.4 (a contract's content is its author's); COMMITMENT l.976.
+- **Description:** the library's `transfer_funds`, `channel_deposit_with_notes` and SDP declarations
+  (`blend_join_as_core_node`) fund themselves with `fund_tx(..., 0)`: no reserve over the tip's storage price. The
+  ledger moves that price at each epoch's first block, by at most an eighth on the standalone deployment, rounded
+  up, so from the genesis price of 1 a rise doubles it; below 8 every rise is one whole step (derived from the code,
+  not run). A spend priced on one epoch's tip and selected after a rise is evicted, and its record stays
+  `submitted` (G472). All seven evictions of funded spends in N-5.2's runs fit this (upstream draft 220, which
+  quotes upstream's own comment at `wallet_fund_tx`: 12% by default, and no guarantee at low prices).
+- **Decision:** no reserve in the module, and no reserve member in v2. Nothing is blocked, and `submitted` is true
+  when it is given (G479's rule). A fixed reserve would be a fee policy of the module's, 12% would cover none of the
+  seven, and it would stack on upstream's fix or have to go, changing a method's meaning after the freeze. A member
+  on `transfer_funds` alone could not be honoured by the other two. **The accepted risk:** if upstream's fix adds an
+  argument, frozen v2 cannot carry it, and the module passes the library's default.
+  - What a caller has: `wallet_fund_tx`'s `priority_fee_percent` is a reserve, which covers a rise no larger than
+    it. A plain transfer cannot take one that way: a `transfer` operation needs an input the caller proves, and the
+    request has no member for the builder's own outputs.
+  - The README says what a caller does after an eviction: a send under a new id is a second transaction, funded
+    apart while the wallet holds the first one's notes, so both may pay; the removed one can still land while the
+    funding node keeps its body.
+  - The suites send each spend that must land with eight slots left in the epoch and the funding node's tip in it
+    (`epochRoom`).
+- **Status:** decided 2026-11-22 (planning); the README's limit and the contract's comments at the three methods
+  built in N-5.2 and n5-2b (I126).
 
 ---
 
@@ -8365,6 +8752,10 @@ their history.
   process's signals, so the module library leaves its host's dispositions alone (the spike's F5 and F6;
   T3 `test_signals`).
   A module repository builds its module library with the switch too (the kit's guide, TIER5-PLAN N-1).
+- **Amended 2026-11-23 (Tier 5 step N-5.1; G474; the owner's (b), 2026-11-22):** the blockchain module is the
+  one exception. It calls the library's stock start, whose `SystemSig` service takes the process's SIGINT at
+  the first node's start and keeps it, `_destroy` included; every other disposition is left alone (T3). It
+  runs hosted only, one node to a Module Host (G421), and logosd ends a Module Host with SIGKILL.
 - **Test:** `tests/test_host_dylib.nim` "[DECISIONS G340] loading the library leaves the host's SIGINT,
   SIGSEGV and SIGPIPE dispositions as they were": a sentinel handler on each before the load, compared
   after it. It fails without the switch (all three) and without the restore (SIGPIPE). POSIX only.
@@ -9563,7 +9954,17 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G442 | sanitizer reports from child processes fail the check | IMPL | 12 |
 | G443 | logosd's preset of the resolver limits | IMPL | 9 |
 | G468 | the lock check: an install and its own `srcDir` are one install (amends G436) | IMPL | 12 |
+| G469 | the blockchain module's contract v2, extending v1 | IMPL | 11 |
+| G470 | v2's typed results and requests; `unmapped`; `open_metrics` as the recorded exception | IMPL (Q5 (a)) | 11 |
+| G471 | the blockchain module's worker classes, delayed Responses, and spends never abandoned | IMPL | 11 |
+| G472 | what a caller learns of a spend: request ids and the spend records | IMPL (Q1 (a)) | 11 |
+| G473 | the blockchain module's keys: a copy and a rename, applying at the next start | IMPL (Q2 (c)) | 11 |
+| G474 | D5 for v2: the `pow` widening, the stock start, and `deployment_info` | IMPL (Q3 (a)) | 11 |
+| G475 | blockchain's v2 D6 row: no preparation method, provisionally | IMPL (Q4 (i)) | 11 |
+| G476 | the blockchain module's policy rule classes: `policy-classes.json`, format 1 | IMPL | 11 |
+| G479 | what a module contract keeps of its library's surface: the specified, even undelivered | FREE | 11 |
 | G480 | when storage_module's contract freezes | FREE | 11 |
+| G481 | the blockchain module's spends carry no fee reserve: an accepted risk | FREE | 11 |
 
 ---
 
@@ -9699,6 +10100,10 @@ of work follows the tiers in `docs/SPEC-STATUS.md`: most settled areas first.
 | I118 | IMPL | Tier 5 step N-3: the blockchain node as a Logos Core module (G419-G424, G441; D10 revised, G97 and G144 amended, G111 and G340 cited; plan `tier5-plans/stepN-3-plan.md`, spike `tier5-plans/stepN-3-spike.md`) | **Where.** The library's clone `logos-blockchain` (no push URL), from master at `e0d79cc25`. Branches: `lcn/n3-1-embedded` (`4ff155b9a`: the embedded start `start_lb_node_embedded` without `SystemSig` and the HTTP service, the static packages, the cargo tests), `lcn/n3-2-module` (`c77ce98cf`: the module; `56192e5e4`: G441) and `lcn/n3-3-hosted` (`718606723`: the late-post report written through a rename; `72a011436`: T9; `7162acef2`: T9's permission case cites G110; `5b7c03d23`: condition (d)'s wording), `lcn/n3-4-sdk` (`b8bf31fe7`: the SDK required as the nimble package `logos_sdk`, G434, G436; `b2b8967e1`: `report_failure`'s completion registers its thread, G339) and `lcn/n3-5-prover-log` (`9ad0cedba`: the working directory, G421; `4df729c3e`: T9 removes a passing case's directory), each merged `--no-ff` into `lcn/blockchain-module` (`154774268`, `52e60e13a`, `95a76de53`, `8b13199a7`, `01e403c72`). Its `logos_module/` directory moves to the module's own repository unchanged. Core: docs only, on `stepN-3` (`ffa12fa`: G441; then this row's commit). **Built.** `logos-blockchain-c-static` and `-static-test` (G419); contract v1 and the configuration (G424, G422); the C glue and the confined kit (G420); D6's rule (G423); the placement (G421); the deployment digest (G441); the SDK as an installed package (N-3.4's first half); the working directory and the prover's bounded log (G421, G422); the suites T1 to T9, T11, T20 and `test_units`, each a flake check `blockchain-module-<suite>-<orc|refc|orcrelease>` on x86_64-linux and aarch64-darwin (T20's not yet run as one: no per-step full flake); the cargo tests. **Measured** (F7, T5, T7, T9). Init 17.5-55.1 ms on the Mac and 31.5-83.4 ms on framework.lan; destroy 1.2-12.7 ms and 1.4-2.8 ms; an unprepared destroy on an idle node 1.2 ms and 1.3 ms. Over ten cycles the other threads stay at 4 and the `tracing-appender` threads equal the starts; after the last cycle the Mac keeps `tracing-appender` and `futures-timer`, Linux `rocksdb:low`, `rocksdb:high`, `tracing-appende` and `futures-timer` (G421's grounds). Destroy with a job running waits 2.7 s for T7's 3 s hook, every count balanced. Under logosd in a Module Host: destroys 0.5-670 ms on the Mac and 1.9-3.5 ms on framework.lan; T9 runs 15-27 s. **Checks.** N-3.1: the archives, the cargo tests (11 passed, 0 failed, 22 ignored) and the release output free of test hooks, on framework.lan and the Mac. N-3.2 on `56192e5e4`: the ten suites x orc/refc/orc-release on the Mac (30/30) and framework.lan (30/30), the library-side cargo test (2/2); the flake check on framework.lan: 29 of 30 suite checks, the cargo tests and `logos-blockchain-utils-lcn-tests`, the failure a test race in T7 under orc-release (it read the late-post report before the glue wrote it), fixed in `718606723`. N-3.3: T7 and T9 x orc/refc/orc-release on the Mac (6/6) and T7, T8 and T9 x 3 on framework.lan (9/9), T9's refc case a skip (G277); T9 again under orc on the merged tree's `5b7c03d23` (2/2); the library's flake check on framework.lan (`72a011436`, rc 0, 1063 s): the 33 suite checks, the three `blockchain-module-hosted-*` ones in the sandbox on core's packaged logosd, logosctl, `lcn_call` and Module Host; `spectrace deploydoc` and `pending`. N-3.4's first half, package mode (the SDK from core `c6f9ed4`): on `b2b8967e1` the Mac 33/33, framework.lan 33/33 with T1's Nix build, T9 orc-release x3 on the Mac (3/3), `nimble --useSystemNim --offline -l test` on the Mac (11 suites, 53 tests), path mode on the Mac (4/4); on `b8bf31fe7` framework.lan 33/33 and the Mac 32/33, T9 under orc-release the G339 fault `b2b8967e1` fixes. N-3.5 on `9ad0cedba`: the twelve suites (T20 new) x orc/refc/orc-release on the Mac (36/36; T1 in a second run with the release archive, which the first omitted) and framework.lan (36/36, with T1's Nix build of the module package); T20 on framework.lan: under each variant the logger held the instance's `prover/MyLogFile.log`, which was emptied twice (the leftover at `_init`, then past the 16 KiB test bound), and no `MyLogFile.log` appeared in the suites' working directory. On `4df729c3e` (T9's case directories): T9 x orc/refc/orc-release on framework.lan (3/3, refc the G277 skip) and the Mac (3/3, refc the G277 skip), no `lbh` directory left; a scratch copy with a forced failure kept exactly the failed case's directory and printed its path. Measured: rapidsnark's Linux log is 29 lines, about 1.4 KB a proof, and the devnet node makes about one proof a second (765 in 777 s), some 124 MB a day; the bound is 1 MiB, checked every 5 s by the watchdog. **Upstream.** Nim draft #195 in `build/scratch/upstream/ISSUES.md` (an `importc` struct in a refc case object copied as zeros; G420's `JobResult`); #197, the circuits' Linux archives built with rapidsnark's logger on. Not filed. **Downloads** (reported after, the owner's rule of 2026-11-22): the Rust 1.100.0 toolchain through rustup (1.4 GB, for rustfmt), the workspace's git dependencies (`~/.cargo/git` 410 to 885 MB) and a crates.io index update on the Mac, all deleted when N-3 ends; the core input at `349f4a5` through the git fetcher; Nimble's package list (`packages_official.json`, about 1 MB) on N-3.4's first install. **Left.** N-3.4's second half (the lock entry, the Nix reader and the core address, at the extraction); the per-module stop field and the orchestrator's preparation call (wave 3); NP-14 (G421); a bound blend port, which needs two nodes (N-6a) | 2026-11-22 |
 | I120 | IMPL | Tier 5 step W2-P: the repository split's packaging (`tier5-plans/wave2-plan.md`; plan `tier5-plans/stepW2-P-plan.md`, spike record `tier5-plans/stepW2-P-spike.md`; G433-G436). Parts W2-P.2: the two packages; W2-P.1: Nimble 0.26.2, the lock and the Nim pin | **W2-P.2.** `sdk/` is the Nimble package `logos_sdk` 0.1.0, with `lcn-gen` as its program and ranges for its requirements (G433, `acf7fb0`). Kits build, and test data is read, from an installed SDK as from a checkout (G435, `ac561f5`). `lint-packaging` checks the install lists, the requirements, the lock and the addresses (`cfd2a96`). A module repository requires the SDK by name, one SDK revision per Nimble directory (G434, `4458360`; `sdk/docs/MODULE-KIT.md` §9). **W2-P.1.** Nimble 0.26.2 built from the copy Nim 2.2.14 ships, in place of nixpkgs' 0.20.1 (`931a306`); every Nimble command passes `--useSystemNim`, the lock has no `nim` entry and is regenerated byte for byte, both nimble files refuse a Nimble older than 0.26, and the Nim pin has one home (`806fd6d`); CI and `tools/ci/windows.ps1` run with them, and `workflow_dispatch` gains `nimble_only` for the trial push (G436, `b8f305f`). `test_kit_dylib`'s installed-package case reads the build record under its Windows name too (`4374de4`). Nimble checks none of a lock's checksums (draft #191, found by N-4), so `tools/check_installs.nim`, through `logos_sdk/testing/lockcheck`, compares every install `nimble.paths` names with the lock before every `nimble test*` task, `build_runtime_lib` and, in a checkout with `nimbledeps/`, `nimble build`, and as its own step after setup in CI and `windows.ps1` (first in `1c4b9ee`; G436, Fable's §10 on the plan). Test: `test_lockcheck`. The Nimble drafts the step found, #189 (two installs of one version) and #191, are in `build/scratch/upstream/ISSUES.md`, not filed. The checks on each host are in the spike record's §4 and the merge note | 2026-11-21 |
 | I125 | IMPL | The LGX reader on a tar that ends inside an entry's padding (PACKAGE MANAGER §7.1, §8; PKG-0269) | **The fault.** `readTar` checked an entry's padding with `for i in pos + n ..< pos + padded: tar[i]` and never checked `pos + padded` against the tar's length. An archive whose inflated tar ends inside an entry's padding (527 bytes: `manifest.cbor`'s header, its 10 bytes and 5 of its padding) raised an IndexDefect, which the reader's callers do not catch, so the process ended. It was reached from `openLgx`, so through the verification cache's inspection, the resolver's eligibility, `lcn-pkg verify` and the hosted Package Manager. Found in step 5-5-2b's equivalence tests. **The fix.** Before the loop, `pos + padded > tar.len` is "an entry's data is truncated: <path>", `invalid-package` like every format check. **The audit** of `gunzip`, `readTar` and the header fields found no other read that untrusted bytes can push past a buffer: each header is copied only after `pos + 512` is checked, each field lies inside that copy, the end blocks are read only after their length is checked, and the gzip header's optional fields are bounded before they are read. One wrong result of the same kind is fixed with it: zlib's `crc32` takes a `cuint` length, so a tar of exactly 4 GiB (the default decompressed limit) had its CRC-32 taken over no bytes; the reader now takes it in pieces of at most 1 GiB (`crc32Of`). The writer's own CRC and `avail_in` keep the `cuint` length; its inputs are the packager's. **Tests** (`test_lgx`): the 527-byte case; every proper prefix of a small archive's tar, and of its gzip member, is refused; each byte of each of its eight headers set to three values, with the checksum as it was and set again, never crashes. Without the check the new test ends with "index 527 not in 0 .. 526 [IndexDefect]". Step 5-5-2b replaces `readTar` with the streaming tar cursor and keeps these tests. | 2026-11-22 |
+| I126 | IMPL | Tier 5 step N-5: the blockchain module's contract v2 (G469-G476, G479, G481, I130, I131, I133; D20, G97, G419, G422, G340 amended, G423 and G424 noted; plan `tier5-plans/stepN-5-plan.md` draft 3d with its revision log, Fable's checks in `tier5-plans/fable-checks/stepN-5-*.md`) | **Where.** The library's clone `logos-blockchain`, on `lcn/blockchain-module`: `lcn/n5-1-reads` (`52e6ae970`: contract v2, the library's reads and events, the stock start; `56696622d`: `c-bindings/` back to upstream), merged as `8c64db441`; `lcn/n5-2-spend` (`063771dbf`: the spends, their records and the caller's transactions), as `e0729837b`; `lcn/n5-2b-store` (`64f23ccc1`: the store worker's conditions), as `ebdf93b0b`; `lcn/n5-3-keys` (`e4e1e15dc`: the key methods; `2081064aa`: n5-2b merged in; `ed6ccba63`: the key jobs on n5-2b's flush and one copy name; `e5026cf07`: the units check's own Nix source; `00006c6f0`: `keystore-not-synced` and the freeze check's notes), as `a834055da`, v2's freeze. All signed, none pushed. No Rust: `git diff e0d79cc25 a834055da -- c-bindings` is empty, and outside `logos_module/` only `flake.nix`, `flake.lock` and `utils/tests/lcn_deployment.rs` differ from upstream. Core: docs only, on `stepN-5`, in two commits: these rows, then SPEC-STATUS, DEPLOYMENT §26 and DAEMON's Grants example. **Built.** Contract v2, 36 methods and three events (G469), typed (G470); seven glue workers, delayed Responses and spends never abandoned (G471); request ids and the spend records (G472); the key methods (G473); the `pow` widening, the stock start and `deployment_info` kept with its fork digest (G474); the D6 row (G475); `policy-classes.json` format 1 (G476); the rule for the library's undelivered entries (G479) and the fee risk (G481); the wallet reads (I130, I131) and the environment refusal (I133). New suites T12 `test_contract_v2`, T13 `test_reads` with `tests/golden/` and its capture tool, T14 `test_events_v2`, T15 `test_spending`, T16 `test_long_calls`, T17 `test_keys`, T18 `test_two_nodes`, T19 `test_channels`, each a flake check under orc, refc and orc-release; T15, T16, T18 and T19 run on a short-epoch deployment made at test time. **Measured.** The long calls on the short-epoch devnet (G475): the slowest 425 ms, a transfer on the Mac; 47-115 ms on framework.lan. The records' writes on the module thread over the 5 ms rule on framework.lan (p95 6.16 ms), so a store worker; its writes p95 15-22 ms on the Mac with `F_FULLFSYNC`, 3.1-3.9 ms on framework.lan; an encode at 1,024 records under refc 7.79 ms at p50 whole, 0.132 ms incremental (G471). A burst of twelve spends: 8 run, 4 `busy`. **Checks.** N-5.1 on `56696622d`: the Mac 45/45 (14 suites x orc/refc/orc-release, T1 x 3 on the release archive) and framework.lan 45/45 (15 suites x 3; T9's refc case skips, G277, and T2's v1-freeze case on a git archive without history). N-5.2 on `063771dbf`: the touched suites x 3 on both machines, after the fixes its first matrices found (epoch-boundary evictions, upstream draft 220, and the fixture's PoW window), with T1 x 3 on the clean tree's Nix package; no release artifact holds a test hook (no `lbg_test_` symbol or hook string; the test library as the control). n5-2b on `64f23ccc1`: the Mac 24/24 and framework.lan 24/24 (eight suites x 3). N-5.3 on `00006c6f0`: the Mac 39/39 (13 suites x 3), framework.lan 57/57 (19 suites x 3), T1 3/3 on the Nix package of a clean tree, and the flake's keys, units, contract, contract_v2 and artifact checks in the sandbox, 15/15 with core overridden to `c6f9ed4`. The flake check of `ed6ccba63` against its locked core (`349f4a5`) passed 57 of 60 suite checks and the cargo tests; the three units checks import `logos_sdk/testing/lockcheck` (W2-P, I120), so they pass only with core overridden until the flake's core input is re-pinned to a pushed core with W2-P (planning's end item), and `e5026cf07` gave them the library sources they read. **Dropped** under the owner's rule of 2026-11-22 (draft 3c, "only patch whatever impedes us from creating the modules"): the entries of I127 (`get_deployment_info_embedded`), I129 (the block reads' API form) and I132 (`generate_user_config_embedded`), built in N-5.1 and removed with N-3.1's embedded start (the owner's (b), draft 3d); the three numbers stay unused. **Upstream.** Drafts in `build/scratch/upstream/ISSUES.md`, not filed: 204, 205, 206, 211 (with the devnet repro), 212, 213, 214, 215, 217, 218, 219 and 220. **Downloads:** none. **Left.** The flake's core input re-pinned after the core push, then its flake check again; the mobile exploration (G475); `contracts/v2.cddl` and `v2.freeze` with the first change that extends v2; N-6a's node profile (`hosted_dynamic`, `shutdown_grace_ms`, v2's root from T12's data, the G140 generator for format 1 with Fable's two generator tests); N-3.4's second half at the extraction | 2026-11-23 |
+| I130 | IMPL | The blockchain module's wallet reads for a key with no notes, and for a key the wallet does not hold (stepN-5 plan §4.5; Fable's `tier5-plans/fable-checks/stepN-5-empty-balance.md` and `stepN-5-added-key-options.md`; planning's interim, final as (i) with the owner's (d), 2026-11-22) | **The library.** `get_balance` and `get_wallet_notes` answer NotFound, "Unknown wallet address.", both for a key the wallet holds with no notes and for one it does not hold; an unknown or pruned tip is another error (upstream draft 204). **The module.** `balance` and `wallet_notes` read at the request's `tip` or, without one, at the node's tip read first through `cryptarchia_info`; the tip is passed to the library explicitly and both answers name it. On the library's NotFound the module reads `known_addresses`: a key the wallet holds answers ok with 0 or no notes at that tip, any other key `not-found`, v2's arm for what the node does not hold (a retry cannot help until the key is added, and `unavailable` reads as transient). An unknown or pruned tip keeps `unavailable` with `library-error`. A `"zk"` key a key method added since this start answers `key-not-loaded` (G473). The key set does not change while the node runs, so the two calls agree. **What the answer means,** in the contract's text: what the wallet has indexed for the key at that tip; a key added after the wallet's first start never has the notes it received before the start that first loaded it counted (I131). **Tests:** T13 (each key the wallet holds at an explicit tip, named in the answer; a foreign key `not-found` for both reads; an unknown tip `library-error`), T17 (`key-not-loaded`), `test_units` | 2026-11-22 |
+| I131 | IMPL | A key added after the wallet's first start: the owner's (d), no wallet patch (stepN-5 plan §4.5, §10; the owner, 2026-11-22: wrap the library as it is, draft the report) | **The fault** (Fable's reading, confirmed on the devnet in N-5.1). At its first start the wallet scans the ledger for its keys' notes; at every later start it restores its saved state beside the current key set and never scans again. So a key added after the first start never has its earlier notes indexed: its balance reads short, those funds cannot be spent, and an emptiness check passes falsely. On the devnet a key added after the first start read 0 and no notes after a restore, while the control, held from the first start, read 100000000000 in one note. **The choice, (d):** no wallet patch. v2's text and the README say what the reads mean (I130), that a key that already holds funds goes in before a new instance's first start, and that a generated key's address is not given out before the next start. `remove_key` left v2 (draft 3c): the module cannot prove such a key empty. The fault is upstream draft 211, with the repro | 2026-11-22 |
+| I133 | IMPL | The blockchain module refuses the library's environment names at `_init` (stepN-5 plan §4.6, draft 3c; planning's ruling, which dropped I132) | **The readers.** The stock `generate_user_config`, which `_init` calls, starts from clap's parse of an empty command line: it reads the init groups' environment variables, and a value clap cannot parse exits the process with status 2, past `#[panic_to_error]` (upstream draft 206). `get_deployment_info` reads them through the configuration loader (213). N-3's audit (F4) had found the embedded start reading none, and missed these two. **The refusal** [IMPL]: before any library call `_init` refuses when any of the library's 24 names is in its environment, set or empty, naming it, and lays nothing out (`libenv.nim`; a unit test compares the list with the pinned source's `env =` attributes). Under logosd a Module Host's environment is `runtime.module_host_env`'s allow-list, empty by default, so a name reaches the library only when an operator lists it, which the README and DEPLOYMENT §26 forbid. Variables the library's dependencies read, such as tokio's `TOKIO_WORKER_THREADS`, are not covered, and the README says so. **Tests:** T4 (each name, alternately empty, refused and named, nothing laid out), T9 (logosd's own environment holds every name, malformed, and no `module_host_env`: the hosted module starts, answers `cryptarchia_info` and `deployment_info`, and stops cleanly), `test_units` | 2026-11-22 |
 | R6 | SCOPE (revises R1; Tier 5 plan A6) | CI legs from Tier 5 | Linux x86_64, Linux aarch64 and macOS arm64 in the `nix` and `nimble` jobs; Windows x86_64 in the `windows` job, on the Nimble path with its own toolchain, the library suites under orc, blocking since step 5-4c (G123 as revised, G334). Android and iOS join with M12, with G105 and G125. Owner's approval of the Tier 5 plan, batch A (A6), 2026-11-16. | 2026-11-16 |
 | R7 | SCOPE (Tier 5 restructure; plan `tier5-plans/restructure-in-place.md`) | The SDK inside this repository | `sdk/` is the package `logos_sdk`, this implementation's layer 1: the base set (CBOR, cdCDDLe, hashing, commitments, INTERFACE), the generators, the module kit and `logos_sdk/testing`. Core (`src/logos_core/`), the daemon and the CLI are built on it. `tools/lint/layers.py` (the check `lint-layers`, strict) holds the import direction with no recorded exception. Each spec's ledger has one owning package: CDE, CMT and HSH are under `sdk/conformance/`, the rest, IFC included until its claims are split, under `conformance/`; `spectrace owners` holds that a unit has one owner. No behaviour, claim or gate result changed. | 2026-11-18 |
 | R8 | SCOPE (Tier 5 restructure R9 with R10b; plan `tier5-plans/stepW2-X-plan.md` X0.1; amends R7) | Which package claims a unit, and where its evidence is | Each live gated unit is claimed by the package that implements its rule, and its evidence is in that package's own tree: a tagged test in its test tree (`tests/` for core, `sdk/tests/` for the SDK) or an item in its `conformance/inspection/`. `spectrace gate`, `owners` and `deploydoc` count only the owner's tree. `owners` also reports a unit that both packages claim, one that neither claims with different statuses in the two files, and one tested or inspected only outside its owner's tree. A spec's ledger stays with one package (R7); where both packages claim units of a spec, each has a claims file, and each gives the other's units `out-of-scope:<owner>`. INTERFACE's ledger, main claims file and inspection file move to `sdk/conformance/`. Core claims the Runtime's 143 IFC units in `conformance/claims/IFC.toml`, 13 of them through 8 items in `conformance/inspection/IFC.toml`; two shared items are split by unit. The SDK claims 124 RUN units in `sdk/conformance/claims/RUN.toml`, 114 of them §9.2–§9.3's shared types and Runtime Control schema (the header `codegen/hostgen` writes), and the kit's 7 CFG units of §6 and §8 in `sdk/conformance/claims/CFG.toml`. The 11 IFC units the SDK implements whose only evidence was in core's suites gain SDK tests: IFC-0210, IFC-0513, IFC-0516, IFC-0517, IFC-0671, IFC-0717, IFC-0724, IFC-0735, IFC-0736 and IFC-0776 in `test_kit`, `test_kit_confined` and `test_calls`, and IFC-0577 in a new audit-build suite, `sdk/tests/test_wipe_kit.nim` (the ledger fixture's marked `seal` through the typed provider entry, the generated call helpers and the typed `prepareInvoke`, with no Runtime). IFC-0518, a negative checked by inspection, is tested there too, and its item is reworded for the SDK's two handle holders. No unit changes status: the claimed set is unchanged, unit for unit (`tools/restructure/claim_split.py --compare`, 3572 units; `claim_split.tsv` records each unit's owner and where its evidence is). Per package: IFC core 143, SDK 665; RUN core 767, SDK 124; CFG core 119, SDK 7. | 2026-11-22 |
