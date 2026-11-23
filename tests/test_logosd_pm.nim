@@ -17,9 +17,11 @@
 ## Every case leaves no Module Host of this build behind.
 
 when defined(posix):
-  import std/[json, monotimes, os, strutils, times]
+  import std/[json, monotimes, os, sequtils, strutils, times]
   import unittest2
+  import logos_sdk/cbor
   import logos_sdk/crypto/blake3
+  from logos_sdk/base/hex import nil
   import ../src/logos_core/daemon/[config, daemon_config_types, session, sessioninit]
   from ../src/logos_core/authority/scopes import sortSet
   from ../src/logos_core/durable import ensurePrivateDir
@@ -305,6 +307,41 @@ when defined(posix):
   proc resolved(c: Case, name, version: string): JsonNode =
     c.call("pmtest_module", "resolve", "name=" & name, "version=" & version){"result"}
 
+  proc answer(c: Case, args: varargs[string]): CborValue =
+    ## [5-5-4] A pmtest operation's response: `result.response`, a byte string in hex (G89),
+    ## decoded; an empty map when the call failed.
+    result = cborMap()
+    let bytes =
+      hex.fromHex(c.call(@["pmtest_module"] & @args){"result"}{"response"}.getStr)
+    check bytes.isOk
+    if bytes.isOk:
+      let v = decodeCbor(bytes.get)
+      check v.isOk
+      if v.isOk:
+        result = v.get
+
+  func codeOf(v: CborValue): string =
+    ## The response's `package_error` code; empty for a success.
+    let e = v.lookup("error")
+    if e.isSome:
+      let code = e.get.lookup("code")
+      if code.isSome:
+        return code.get.getText.get("")
+
+  func identityOf(v: CborValue): string =
+    ## `{installed: record}`'s identity, as `package@version`.
+    let r = v.lookup("installed")
+    if r.isSome:
+      let id = r.get.lookup("identity")
+      if id.isSome:
+        return
+          id.get.lookup("package").get(cbor("")).getText.get("") & "@" &
+          id.get.lookup("version").get(cbor("")).getText.get("")
+
+  proc records(c: Case): int =
+    ## The record directories below the Package Manager's `install/r/`.
+    toSeq(walkDir(c.s.modulesDir / PmState / "install" / "r")).len
+
   proc packagesOf(r: JsonNode): seq[string] =
     for p in r{"packages"}.getElems:
       result.add(p{"package"}.getStr & "@" & p{"version"}.getStr)
@@ -431,5 +468,43 @@ when defined(posix):
       let l = c.resolved("lib", "1.2.0")
       checkpoint($l)
       check l{"error"}.getStr == "signature-verification-failed"
+      check second.stopped == 0
+      check hostsGone()
+
+    test "[IMPL-DECISION G449] an installed record is kept across logosd's restart: the next start reads the records back from the index, a remove sees the dependency, and the removed records are collected":
+      let c = newCase()
+      check c.initPm().code == 0
+      c.stock()
+      check c.ctl(
+        "trust", "anchor", "add", "--kid", "org", "--key", hexOf(orgPub), "app", "lib"
+      ).code == 0
+      let first = c.ready()
+      check c.setReadiness("ready")
+      check eventually(
+        "the catalog",
+        first,
+        proc(): bool =
+          not c.status(){"catalog"}.isNil,
+      )
+      let a = c.answer("install", "package=app", "version=1.0.0")
+      checkpoint("the install: " & a.identityOf & " " & a.codeOf)
+      check a.identityOf == "app@1.0.0"
+      check c.records == 2
+      # [G449] The operation's log line: its time and the archive bytes it retrieved.
+      check "package-manager: install_package ended after " in first.errText
+      check "archive bytes retrieved: committed" in first.errText
+      check first.stopped == 0
+      # The next start: the fake is not made ready, so nothing is retrieved; the records
+      # come from the index.
+      let second = c.ready()
+      check c.answer("remove", "package=lib", "version=1.2.0").codeOf == "package-in-use"
+      check c.answer("remove", "package=app", "version=1.0.0").codeOf == ""
+      check c.answer("remove", "package=lib", "version=1.2.0").codeOf == ""
+      check eventually(
+        "the removed records to be collected",
+        second,
+        proc(): bool =
+          c.records == 0,
+      )
       check second.stopped == 0
       check hostsGone()

@@ -40,7 +40,7 @@ reason = "No Core profile is defined by a string, key, backend name or label: ea
 # bcp-deploy-doc (DECISIONS I97, G309, G310)
 [[item]]
 ids = ["BCP-0038", "BCP-0039"]
-reason = "docs/DEPLOYMENT.md is logosd's §5.4 document (G310: logosd claims no complete system, owner decision 10 (a), and publishes the document as a deployment that owes it would). Its item table has one row per §5.4 item (rows 0 to 25, split where a part is supported and another is not) and indexes every applicable choice. Its second table is the sweep BCP l.360 needs: a search of the pinned specifications (6cac8335) for 'MUST document', 'MUST be documented', 'documentation MUST', 'MUST identify', 'MUST state', 'MUST describe' and 'documented', read hit by hit, whose hits that assign a choice to a deployment are rows: R l.178, R l.1317, R l.2946, R l.3252, R l.3632, R l.3900, IF l.853, IF l.1473, IF l.3104, CA l.104-106, CA l.404-405, CA l.406, CA l.752, CA l.1207-1208, CA l.1364, T l.803-804, T l.1329-1331, CFG l.134, CFG l.266, PM l.408, PM l.1252. At 6cac8335 the search was run again over the lines that revision changed; it added IF l.1473, PM l.1727, the Credential Store's duties and BCP l.374 and l.383 (rows 24 and 25). The Package Manager's own duties (PM l.834, l.857, l.931, l.1183, l.1727, l.1731) belong to a Package Manager, which is not deployed (Tier 5), and the Credential Store's (CS l.319, l.370, l.476) to a Credential Store, which is not deployed either (row 24); the document says so. The other hits are duties of a specification, a record or a message. The items answered None or Not supported are listed under their own units below."
+reason = "docs/DEPLOYMENT.md is logosd's §5.4 document (G310: logosd claims no complete system, owner decision 10 (a), and publishes the document as a deployment that owes it would). Its item table has one row per §5.4 item (rows 0 to 25, split where a part is supported and another is not) and indexes every applicable choice. Its second table is the sweep BCP l.360 needs: a search of the pinned specifications (6cac8335) for 'MUST document', 'MUST be documented', 'documentation MUST', 'MUST identify', 'MUST state', 'MUST describe' and 'documented', read hit by hit, whose hits that assign a choice to a deployment are rows: R l.178, R l.1317, R l.2946, R l.3252, R l.3632, R l.3900, IF l.853, IF l.1473, IF l.3104, CA l.104-106, CA l.404-405, CA l.406, CA l.752, CA l.1207-1208, CA l.1364, T l.803-804, T l.1329-1331, CFG l.134, CFG l.266, PM l.408, PM l.926-931, PM l.950, PM l.1181-1183, PM l.1252, PM l.1721-1727. At 6cac8335 the search was run again over the lines that revision changed; it added IF l.1473, PM l.1727, the Credential Store's duties and BCP l.374 and l.383 (rows 24 and 25). The Package Manager's catalogs and bindings (PM l.834, l.857) are documented in docs/PACKAGE-MANAGER.md §3 and §4; its installation duties (PM l.926-931, l.950, l.1181-1183, l.1721-1727) are rows since step 5-5-4, which installs; the retention policy of its installed-state snapshots (PM l.1731) is step 5-6b's (Tier 5); and the Credential Store's (CS l.319, l.370, l.476) to a Credential Store, which is not deployed either (row 24); the document says so. The other hits are duties of a specification, a record or a message. The items answered None or Not supported are listed under their own units below."
 
 # bcp-deploy-duty-r2946 (DECISIONS I97)
 [[item]]
@@ -95,7 +95,7 @@ reason = "PM l.1252 (PKG-0597): the maximum value supported for each resolver li
 # bcp-deploy-pm-sources (DECISIONS I97, G309)
 [[item]]
 ids = ["BCP-0040"]
-reason = "docs/DEPLOYMENT.md row 1 and §1: no Package Manager is deployed, so there is no source kind and no package-provenance profile; lcn-pkg, the LGX parser and the resolver are tools (I49, I69). Answered None; Tier 5 (the Package Manager) is expected to change it."
+reason = "docs/DEPLOYMENT.md row 1 and §1: no Package Manager is packaged (a test build until step 5-6a), so a deployment has no source kind and no package-provenance profile. The hosted test build realizes lgx sources and answers nix unsupported-source (G449; tests [BCP-0033] and [PKG-0190] in tests/test_pm_install.nim); lcn-pkg, the LGX parser and the resolver are tools (I49, I69). Answered None; Tier 5 (step 5-6a) is expected to change it."
 
 # bcp-deploy-protected-inputs (DECISIONS I97, G309)
 [[item]]
@@ -152,10 +152,30 @@ reason = "docs/DEPLOYMENT.md row 11 and §11: the attribute-source integration o
 ids = ["BCP-0101"]
 reason = "docs/DEPLOYMENT.md row 24 and §25: no Credential Store is deployed or claimed, so every part of BCP l.374 (credential, format and sealing profiles; backend durability and recovery; operation-record retention; protected delivery and activation) is answered None. The Credential Store is optional (BCP l.287-288) and no tier plans one, so no change is expected. §25 says why none can be deployed by an operator: its module name is reserved, and binding refuses a provider of that name outside the Runtime's own static registrations (test [BCP-0102] in tests/test_deployment.nim)."
 
+# bcp-duty-pm-installation (step 5-5-4, DECISIONS G444, G449, I121)
+[[item]]
+ids = ["BCP-0038"]
+reason = "PM l.926-931 (PKG-0487 to PKG-0489): the installation and inventory scope, shared installation state and the root's path-comparison rules are documented in docs/DEPLOYMENT.md §1, The installation root (the instance's own install/, one inventory per instance, never shared, refused to a second writer by its lock; the rules found at each start), indexed by the duty table since step 5-5-4 (G444, the owner's Q5 (a))."
+
+# bcp-duty-pm-platform (step 5-5-4, DECISIONS G453, G73, I121)
+[[item]]
+ids = ["BCP-0038"]
+reason = "PM l.950 (PKG-0493): the supported os, architecture and abi values and their matching rules are documented in docs/DEPLOYMENT.md §1, The target platform (the host the Package Manager runs on; G73's values and rules), indexed by the duty table since step 5-5-4 (G453)."
+
+# bcp-duty-pm-resources (step 5-5-4, DECISIONS G444, G93, I121)
+[[item]]
+ids = ["BCP-0038"]
+reason = "PM l.1181-1183 (PKG-0498): how a module reaches its packaged resources and data is documented in docs/DEPLOYMENT.md §1, Resource access (through its schema-typed configuration only), indexed by the duty table since step 5-5-4."
+
+# bcp-duty-pm-storage-model (step 5-5-4, DECISIONS G445, I121)
+[[item]]
+ids = ["BCP-0038"]
+reason = "PM l.1721-1727 (PKG-0610): the storage failure model under which installed state is committed is documented in docs/DEPLOYMENT.md §19, The storage failure model (a write is complete once synced: syncfs on Linux ext4 from 5.8, fsync of each file and directory elsewhere, F_FULLFSYNC on Darwin; the index replaced by one atomic rename), indexed by the duty table since step 5-5-4 (G445)."
+
 # bcp-deploy-bounds (DECISIONS I97, G309)
 [[item]]
 ids = ["BCP-0047"]
-reason = "docs/DEPLOYMENT.md rows 12a and 12b and §12: the Runtime's, the Transport's, the Module Loader's and schema processing's bounds are Supported and linked (docs/HOST-CONFIG.md Runtime limits; docs/CONFORMANCE.md Transport limits; max_payload_depth, G241). Package Manager bounds and dependency-resolution limits are None: no Package Manager is deployed. Tier 5 is expected to change it."
+reason = "docs/DEPLOYMENT.md rows 12a and 12b and §12: the Runtime's, the Transport's, the Module Loader's and schema processing's bounds are Supported and linked (docs/HOST-CONFIG.md Runtime limits; docs/CONFORMANCE.md Transport limits; max_payload_depth, G241). Package Manager bounds and dependency-resolution limits are None: no Package Manager is packaged (a test build until step 5-6a), though the hosted one's bounds, resolver limits, queues, operation deadline and budget are listed in §12 (G446, G447, G449, G477). Tier 5 (step 5-6a) is expected to change it."
 
 # bcp-deploy-deadlines (DECISIONS I97, G309, G61, G269)
 [[item]]
@@ -175,7 +195,7 @@ reason = "docs/DEPLOYMENT.md row 15 and §15: no presentation profile is selecte
 # bcp-deploy-installation (DECISIONS I97, G309, G146)
 [[item]]
 ids = ["BCP-0080"]
-reason = "docs/DEPLOYMENT.md rows 16a and 16b and §16: Package Manager installation and inventory scope and shared-state coordination are None (no Package Manager; Tier 5 is expected to change it). The protected administration of the operating-system integration material is Supported: a systemd user unit and a launchd agent, installed by the owner, never as root (G146)."
+reason = "docs/DEPLOYMENT.md rows 16a and 16b and §16: Package Manager installation and inventory scope and shared-state coordination are None (no packaged Package Manager, a test build until step 5-6a; Tier 5 is expected to change it); §1 states the hosted one's: its own instance's install/ root, one inventory per instance, never shared (G444). The protected administration of the operating-system integration material is Supported: a systemd user unit and a launchd agent, installed by the owner, never as root (G146)."
 
 # bcp-deploy-admin-path (DECISIONS I97, G309)
 [[item]]

@@ -6534,6 +6534,13 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
     10.1 s (20,000 files, each `fsync`ed), `commit` 26 ms, `openStore` 15.5 s (one record's load and check:
     decoding, `matchesManifest`, the admission bound; not measured apart) and deleting the record 5.0 s. The reader
     is 5-5-2b's; the start's cost per record goes to CONFORMANCE with 5-5-4.
+  - **The start's time, measured in 5-5-4** (`tools/pmbench.nim start`; CONFORMANCE "The operations"): about 1 ms
+    of CPU a record under orc on the Mac and 1.5 ms under refc. Half of it is the manifest's commitment, computed to
+    check each record against its manifest (PKG-0471). The start runs in `_MODULE_init`, so the default startup
+    deadline (120 s) holds about 120,000 records under orc and 80,000 under refc, below the index's 200,000. **A
+    limit, stated:** a larger installed state needs a larger `runtime.startup_deadline_ms` (DEPLOYMENT §12). Not
+    changed here: the commitment's cost is the commitment library's (`schemaRoot` encodes and hashes the whole PM §4
+    schema at each `normalize`, 0.1 ms of the 0.5 ms), told to planning with 5-5-4's report.
 - **Decision (the spool, 5-5-3; Q2 (d), the owner's answer; plan §4.3):** no archive is held in memory.
   - **Where** (`pm/spool.nim`): `<state_dir>/install/spool/`, a directory of the installation root (G444) made 0700
     at `_MODULE_init`, after the store's start empties it (PKG-0611). A file is `<request>-<n>.lgx`, the root
@@ -6555,7 +6562,8 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
     mutation's selected archives for extraction under its own budget (4 × `archive_bytes` an operation, plan
     §4.3: the root's archive never evicted, ineligible ones first, a package's file deleted after its commit), and
     the share then bounds the inspections' archives only, as the plan has it. The host's spool is then at most 8 ×
-    `archive_bytes` (DEPLOYMENT §12).
+    `archive_bytes` (DEPLOYMENT §12). **Built in 5-5-4** (G449): an evicted selected archive is fetched again from
+    its source by its judged digest, so the budget never changes a result; another digest is `package-unavailable`.
   - **A write that fails** (`ENOSPC` included) ends the retrieval: the archive is unavailable, as a failed read is
     (PM l.1094, PKG-0271), so its operation fails `package-unavailable`, and the operator's log names the state
     filesystem and the cause. It is not exhaustion (PM l.1279-1280). The first failure is kept and every later
@@ -6621,8 +6629,8 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
     builders moved to `tests/support/lgxcorpus.nim`, and its last suite runs the comparison on every archive it builds.
     The oracle carries one fix: the copied `readTar` indexed past the end of an archive whose tar ends inside an
     entry's padding; it now gives "an entry's data is truncated", the streaming reader's message.
-- **Status:** the writing half built in part 5-5-2, the reader in part 5-5-2b, the spool in part 5-5-3 (I121); a
-  mutation's spool budget and the extraction from the spool come with the operations in 5-5-4.
+- **Status:** the writing half built in part 5-5-2, the reader in part 5-5-2b, the spool in part 5-5-3, a mutation's
+  spool budget and the extraction from the spool with the operations in part 5-5-4 (I121, G449).
 
 ### G447 — The worker thread, and the verification cache's byte bound
 - **Kind:** IMPL (Tier 5 step 5-5-3; plan §4.4 and §4.13; the owner's Q1 (a), 2026-11-22; Fable's recheck of draft 2
@@ -6693,6 +6701,48 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
     file it holds, and is joined. Then a drain the kit still holds is waited for, at most 10 s (`StopWait`), since
     the kit runs a posted callback while `_MODULE_destroy` runs and drops it after (G437); if one is still queued
     the shared block is left allocated rather than freed under it. Answers still queued are dropped.
+    - **Corrected in 5-5-4** (Fable's stop check; G449): the flag bounds the destroy, not the stop. The destroy
+      comes once the instance's calls have ended, and a call that awaits an operation ends at the stop only through
+      the Runtime's cancel, which needs the kit's asynchronous provider API. A stop's path is the cancel, then the
+      destroy, then one piece: 0.49 s measured with an install's call in flight.
+- **Decision (who encodes a reply;** 5-5-4; Fable's store-thread check, kept by planning's ruling of 2026-11-23 in
+  place of its earlier one to encode on the module thread**):** the worker encodes at the stage and in the reply
+  job, and the module thread carries opaque bytes. `{installed}` is encoded at `wjStage` and `wjStageSigner` and
+  in `wjReply`, the handoff's response in `wjHandoff`, and an inspection's root candidate's `{inspection}` in
+  `wjOpen`; it crosses as the result's `reply`, and the engine answers it as `oaEncoded`, never decoding or
+  encoding it again. pmtest passes the bytes on as its `response`; 5-6a's facade carries the worker's encoded
+  bytes, never re-encoding them. A maximal `{installed}` (16 MiB) takes the worker 76.6-77.2 ms of CPU under orc
+  and 127-131 ms under refc on the Mac (185-187 ms and 351-352 ms on server.lan), in its queue: another
+  operation's file work can wait that long behind it.
+  - **The exception: a large response's way out** (found by the measurement planning asked for; its ruling of
+    2026-11-23; Fable's check `tier5-plans/fable-checks/large-response-completion.md`). On their way out the bytes
+    still hold the module thread longer than a turn, and not because of the Package Manager (RUNTIME §4.1
+    l.838-840).
+    - **Scope: confined kit modules,** storage_module, blockchain_module, pmtest and 5-6a's facade. With the
+      asynchronous API the kit completes on the module thread (`confinedrt.nim:1024-1086`), and the Module Host
+      copies and checks the response inline on that thread (`host/endpoint.nim:519-562`, `:443-468`;
+      `runtime/callcheck.nim:81-98`: the schema check and the response's commitment). The Runtime's own
+      completion does the same (`runtime/asynccall.nim:562-597`). A confined kit without the API pays it on the
+      host's call worker instead (`host/endpoint.nim:480-512`).
+    - **The wait** (read from the code, not run): the completing thread also waits with no bound of its own.
+      `commit` sleeps while the I/O loop has no room (`host/endpoint.nim:222-238`), which happens once 64 MiB is
+      submitted and not yet committed (`transport/io/loop.nim:379-408`), and a consumer that stops reading is
+      closed only at the write stall timeout, 30 s by default. So a few maximal replies to a stalled consumer can
+      hold a confined module's thread for up to 30 s.
+    - **The figures** (`tools/pmbench.nim reply`; the Mac, CPU time, at a load average of 60 to 80; and
+      server.lan, a Ryzen 5 4500U, inside the bench's Nix build, at 2.6 to 3.8).
+      A maximal `{installed}` holds the module thread 98.6-99.1 ms under orc and 174.9-175.7 ms under refc in
+      one turn on the Mac, nine to sixteen times 5-3c's longest turn there (under 11 ms), and 198-204 ms and
+      388-399 ms on server.lan; a 4 MiB one 24 ms and 44 ms on the Mac, 51 ms and 95 ms on server.lan.
+      Of the 16 MiB figure under orc on the Mac: the host's check 54 ms, the SDK's copy into the completion's
+      block a byte at a time 22 ms, and the kit's second encoding of pmtest's `{response: bstr}` 19-20 ms; under refc also
+      `respond`'s channel copy, 55 ms. The I/O thread then computes the same commitment again (52-53 ms,
+      `CalleeConn.respond`). CONFORMANCE "The operations" has each step.
+    - **The fix is the core item "large-response completion",** held by the pause (planning; designed with
+      Fable): the facade passing the bytes through, which removes only the kit's second encoding (5-6a's part);
+      completing off the module thread (INTERFACE §2.9.2 lets a completion come from any thread); the SDK's
+      completion copy; the response's commitment, computed twice, and its speed; and the wait. Nothing is
+      changed in 5-5-4.
 - **Decision (the verification cache's byte bound;** plan §4.13, Fable's review of draft 3.2 §1): an inspection
   whose estimate is over `MaxCachedInspectionBytes`, 256 KiB, answers its call and is not cached (`uncached`, beside
   `evicted`). The estimate is fixed by rule over the resolver's walk (`inputUnits`, G477): a constant for each
@@ -6739,8 +6789,185 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   `testing/storagefetch.readAll`. A Nim issue
   (`build/scratch/upstream/ISSUES.md` 195, its second shape); the fix at the source, a Nim-visible layout for
   `blake3_hasher` in the SDK, is not made here.
-- **Not here:** extraction from the spool, a mutation's spool budget, the retained hash, the handoff's reads, the
-  retirements and the cancel of pending jobs (`cmCancelJobs`) come with the operations (5-5-4, G449).
+- **Not here:** extraction from the spool, a mutation's spool budget, the retained hash (G448), the handoff's reads
+  and the retirements came with the operations (5-5-4, G449). The cancel of pending jobs (`cmCancelJobs`) is not
+  built: G449 states the limit with its figure.
+
+### G448 — The retained check
+- **Kind:** IMPL (Tier 5 step 5-5-4; plan §4.5; the owner's Q6 (a), 2026-11-22) · **Specs:** PACKAGE MANAGER §11
+  l.1302-1303 (an installed candidate whose retained artifacts are absent or changed is `artifact-integrity-failed`),
+  §10 l.1176-1195 (PKG-0181, PKG-0293: an installed path stays bound to its verified bytes).
+- **Decision:**
+  - **On the worker.** 5-3c's `need retained (record)` (`dsRetained`) becomes a `wjRetained` job carrying the record's
+    `a/` directory, identity and artifacts from the operation's snapshot. The worker runs
+    `store.checkRetainedFiles`: each artifact opened below `a/` descriptor-relative with no link followed, required to
+    be a regular file, and its BLAKE3 compared with the signed `hash`. A file that is missing, not regular or of
+    another digest is the error the resolver turns into `artifact-integrity-failed`, through the suspension
+    (`supplyRetained`). The driver's synchronous `retained` input is `noRetained`, never called.
+  - **Once per record and operation:** the run asks for each installed record it examines once (5-3c §3.5).
+  - **The files are the snapshot's:** deferred retirement (G445 R1) keeps a record's directory while any held
+    snapshot names it, so a remove committed during the operation does not delete what it hashes.
+  - **The cost** (Q6 (a)): every installed record an operation examines is hashed again, on the worker, at each
+    operation. The module thread sends one job and receives one answer per record. The hash runs at about G446's
+    "hit" rate (0.86-0.95 s for 1 GiB on the Mac, the append included).
+  - The handoff's schema and default reads hash what they read the same way (G451), on the worker (`wjHandoff`, G449).
+- **Tests:** `test_pm_install` "[IMPL-DECISION G448] an installed record's retained bytes are hashed on the worker:
+  intact, the resolution goes on; altered, artifact-integrity-failed".
+
+### G449 — The operations
+- **Kind:** IMPL (Tier 5 step 5-5-4; plan §4.6, §4.11, §4.13; planning's rulings Q-C and Q-E of 2026-11-22, held by
+  Fable's review of draft 3.2 §3 and §4; Fable's checks of 5-5-4: the store's thread,
+  `fable-checks/step5-5-4-store-thread.md`, design A, and the stop, `fable-checks/step5-5-4-stop-drain.md`) ·
+  **Specs:** PACKAGE MANAGER §15 l.1662-1728 (inspect, install, remove, update, serialization), §4.3 l.539 (the signer
+  kept with installed state), §5 l.824 (PKG-0470), §7 l.880-883 (profiles), §11 l.1308 and l.1331, §14 l.1495 and
+  l.1514-1517 (`MODULE_ERROR`); INTERFACE l.2112 (cancellation promises no rollback), l.2114-2115 (a provider must
+  not depend on `_MODULE_destroy` to drain its calls).
+- **Decision (the slots;** `pm/slots.nim`**):**
+  - **Two slots per instance,** each running one operation at a time, first in, first out, neither waiting for the
+    other: the mutation slot (`install_package`, `remove_package`, `update_package`) and the inspection slot
+    (`inspect_package`). So at most two resolutions are in flight per instance. The MAY for disjoint mutations
+    (PKG-0411) is not taken.
+  - **Each queue holds at most 16 waiting requests** (`MaxQueuedOperations`), the running one not counted. A request
+    past that is refused at once with the invocation error `MODULE_ERROR` ("the Package Manager's mutation queue is
+    full", or "inspection queue"; PM l.1516-1517), before any work and with no snapshot taken.
+  - **A waiting request** that is cancelled, or whose caller's route ends, leaves its queue without running, and the
+    next moves up. A request id already in use is `invalid-request`, and the operation that holds it goes on.
+- **Decision (the snapshot):**
+  - **Immutable** (`Snapshot`, a `ref`): a new one replaces it after each index commit (PKG-0410). Its records are
+    `SnapRecord`s, immutable `ref`s shared by every snapshot that names them, so a commit inserts the new record in
+    identity order and drops the old ones (`next`) without copying the rest (Fable's check §4).
+  - **Each operation holds the snapshot current when it takes its slot,** and a query the one current when it is
+    asked, until it ends. What a commit stops naming is retired with that commit's sequence; the engine sends
+    `wjCollect` once no held snapshot older than the retirement remains (G445 R1), one collect at a time. The holds,
+    the retired list and the snapshot are the module thread's; the worker refuses, and reports, a collect of a
+    directory its index entries name.
+  - **The resolver's input is a copy:** `packages()` copies the records into the run's `installed`, since 5-3c's
+    resolver holds `InstalledPackage` by value (5-3c's note). Measured below; 5-3c has the figure.
+  - `installedChanges` counts each installed-state change, a signer replacement included, for 5-6b's watch.
+- **Decision (the store's thread, design A,** Fable's check**):** the worker owns the store's file half
+  (`store.StoreFiles`: the root, the path rules, the sync mode, the `install/r/` descriptor, the sequence, the index
+  entries, the broken mark); the start runs on the module thread at `_MODULE_init`, builds the snapshot, and hands the
+  file half over in `wjStart`; the module thread keeps the lock and never touches the descriptor after.
+  - **`wjStage`** carries what the module thread decided (the identity, commitment, signer, variant, source, edges,
+    rid and generation). The worker judges the kept spool file again under its own trust copy, compares, and fails
+    `sfSource` on a difference; then it stages. Its answer carries what the module thread lacks: each selected module
+    declaration as its own encoding, decoded one a turn on the module thread (the hold is one module's decode, below);
+    the artifacts; the manifest's dependencies in D1's form; and, for the root, the `{installed}` response, encoded on
+    the worker. A decode that fails is a Defect.
+  - **An inspection's root** is judged by `wjOpen`, which also encodes the `{inspection}` response from the bytes it
+    judged; a root candidate of an inspection skips the verification cache's lookup so that it has those bytes. So the
+    module thread decodes no manifest for a reply.
+  - **The commit** (`wjCommit`) answers the new sequence and what it retired; the module thread asserts its own plus
+    one.
+- **Decision (the operations;** plan §4.6**):**
+  - **`inspect_package`** (PKG-0389 to 0394): the request checks are the resolver's (`invalid-request`;
+    `invalid-package` for a source whose manifest does not match); the closure is resolved against the snapshot,
+    nothing is written, the spool files are deleted, and the verification cache keeps what it may.
+  - **`install_package`** (PKG-0395 to 0398, 0608, 0609): the root installed with another commitment is
+    `package-conflict`. Installed with the same one, the answer is the current record (`wjReply`), or, if the source
+    selected for it (the request's, or the catalog's under §11 when the request has none) verifies under an accepted
+    signer other than the retained one, a signer replacement: `m/record.<g+1>` with only `signer` changed, the
+    admission bound checked first, one commit that names the next generation (PKG-0608, 0609; G166's C5 and C6; only
+    the named identity, never its dependencies). Otherwise the missing packages are installed in a post-order walk
+    from the root over `resolvedDependencies`, children in name byte order: each staged from its kept spool file and
+    committed on its own, the root last. A failure stops there: committed dependencies stay and the root stays
+    uninstalled. An installed record's retained source is never a candidate (PM l.1331).
+  - **`remove_package`** (PKG-0399 to 0402): an absent identity succeeds with `{}`; one that another record's
+    recorded closure holds is `package-in-use`; otherwise one commit drops it and retires its directory. No
+    dependency is removed.
+  - **`update_package`** (PKG-0403 to 0408, 0534 to 0537): `current` absent is `package-not-installed`; one another
+    record depends on is `package-in-use`, checked before resolution. No newer version answers the current record.
+    A target installed with another commitment is `package-conflict`; with the same one, equal recorded edges give
+    one commit that drops the current root and answers the target, and other edges `dependency-unavailable`, with
+    nothing changed. Otherwise the dependencies install as in install, the target is staged, and one commit adds it
+    and drops the current root. Any failure keeps the current root.
+  - **`get_runtime_handoff`** (`engine.handoff`) is a query: it takes no slot, holds the snapshot current when asked,
+    and the worker builds the handoff from the record's directory (`wjHandoff`: `readRecordFiles`, then
+    `buildHandoff`, G451).
+  - **The spool** (G446): a mutation keeps its judged archives for extraction within `SpoolBudgetArchives` (4) ×
+    `archive_bytes` of its own; past it the oldest are deleted, ineligible ones first and the root's never. An
+    evicted selected archive is fetched again from its source and must have the judged digest; another digest is
+    `package-unavailable`. A package's file goes once its commit returns, and every kept file when the operation ends.
+- **Decision (a fault, as the caller sees it;** `failStore`**):** the detail goes to the operator's log only
+  (PKG-0360).
+
+  | Store fault | Answer |
+  |---|---|
+  | `sfSource`, `sfStopped`, `sfWrite` at staging | `package-unavailable` (PM l.1094) |
+  | `sfEscaped`, `sfIntegrity` | `artifact-integrity-failed` |
+  | `sfPaths` (paths that collide under the root's rules) | `invalid-package` |
+  | `sfConflict` | `package-conflict` |
+  | `sfAdmission` (PKG-0470), `sfIndexBound`, `sfDamaged`, `sfWrite` at the commit | `MODULE_ERROR`, nothing committed |
+
+- **Decision (the deadline;** Q-E**):** `operation_deadline_ms` (default 1 h) runs from when an operation takes its
+  slot. At expiry the operation ends `package-unavailable`, "the operation's time bound was reached" (PM l.1308,
+  l.1495; the value is not stated, l.1514): its run is dropped, its retrieval call cancelled, its kept archives and
+  any staged directory deleted, its snapshot released and its slot passed on; the log has "a root operation stopped
+  at the operation deadline operation_deadline_ms (<value>)". A dependency's commit already running completes, and
+  that dependency stays installed. **The last commit** (Fable's §4): once the root's commit (install), the swap
+  (update) or the drop (remove) has begun, neither the deadline nor a cancel applies, and the answer is the commit's.
+- **Decision (the log):** at each operation's end, "<method> ended after <n> ms, <n> archive bytes retrieved:
+  <outcome>", so the deadline's default can later be set from real figures.
+- **Decision (a stop):** `_MODULE_destroy` answers every operation and query, running or waiting,
+  `package-unavailable`, "the Package Manager is stopping" (G405's stop).
+- **Decision (how the operations are reached before 5-6a;** plan §4.11**):** `pmtest_module` gains `inspect`,
+  `install`, `remove`, `update` and `handoff`, each returning the §15 response value as bytes, or `MODULE_ERROR`.
+  - **Its kit has the asynchronous provider API** (`asyncApi: true`, G338; Fable's stop check). The Runtime cancels
+    a provider's admitted calls at its stop (`endRoute`; a hosted call's cancel is forwarded as `call_cancel`), but the
+    host runs a module's `request_cancel` only for a deferred call: a kit without the API dispatches synchronously,
+    and a handler awaiting an operation never learns of the cancel. With the API the kit cancels the handler's
+    future; `shell.ask`'s cancel callback cancels the operation in the engine; the call ends; `_MODULE_destroy`
+    follows; and the worker's stop flag ends its job within one piece. A stop with an install's call in flight
+    took 0.49 s with the API and 10.08 s without it, the second ending at the stop deadline with `cleanup-timeout`.
+    Both run in hosted direct mode (no routing rule: logosd's default for the Package Manager); local transport
+    is not covered.
+    **5-6a's kit has the API too** (written into plan §4.11): a synchronous call also holds one of the host's call
+    slots for its operation's life, up to `operation_deadline_ms`.
+  - **The shell's futures are `Raising([CancelledError])`,** and each handler turns a cancel into an `ecCancelled`
+    failure: a `raises: []` future that ends cancelled is chronos' assertion "Error set on a non-raising future".
+  - **W2, corrected** (plan l.953-956, and G447): the stop flag bounds the destroy. A stop's path is the Runtime's
+    cancel, then the destroy, then one piece.
+- **Limits, stated:**
+  - **No job cancel** (the plan's `cmCancelJobs` is not built; Fable's §3 left the choice to its size, and it is not
+    small: the reader's stop is one flag, `LgxStop`, and each job kind would need its request). An operation that
+    ends by its deadline or its caller's cancel leaves its worker job, queued or running, to run to its end for
+    nobody: a stage writes its directory, which is then abandoned; a judgment is freed in turns. It is bounded: one
+    job for each ended operation, and at most two slots' jobs. After an operation ends the worker may spend one more
+    extraction of the largest archive on it: a 16 MiB install took 0.86-0.91 s end to end in a test build on the Mac,
+    so about a minute for 1 GiB. The hosted test of the deadline shows it.
+  - **A call cancelled after its last commit began** ends cancelled while the commit goes on (INTERFACE l.2112: no
+    rollback), so that caller may find the package installed.
+  - **A large response's way out** holds the module thread longer than a turn: G447's exception (99 ms under orc
+    for a 16 MiB `{installed}` on the Mac, about 200 ms on server.lan), a confined kit module's, left to the core
+    item "large-response completion".
+  - **A worker that hangs** in a write or a sync: the destroy joins it, so a stop ends at the stop deadline with
+    `cleanup-timeout` and the host's end, and the next start deletes the unnamed directory (PKG-0611).
+- **Measured** (the Mac, `-d:release`, `tools/pmbench.nim installed`, `module` and `commit`; three runs each):
+
+  | Measure | orc | refc |
+  |---|---|---|
+  | one module declaration's decode, a 4 MiB module of 22,076 commitments (the hold between turns) | 21 ms | 38 ms |
+  | a snapshot of 200,000 records at the longest identities, no dependencies (the index's bound) | 188 MiB, 985 B a record | 259 MiB, 1,356 B a record |
+  | `packages()` (the resolver's copy) at 200,000 records | 45-54 ms, 147 MiB | 195-210 ms, 261 MiB |
+  | 10,000 records with 4 dependencies each: snapshot / `packages()` | 35 MiB / 6.3-8.5 ms | 42.5 MiB / 38 ms |
+  | `next()` (a commit's new snapshot) at 200,000 / 10,000 records | 6-13 ms / 0.1-0.35 ms | 7 ms / 0.1-0.35 ms |
+  | the worker's commit at 10,000 records (a 3.27 MB index): CPU, wall | 35-43 ms, 39-49 ms | 42-49 ms, 48-59 ms |
+  | the worker's commit at 200,000 records (a 65.4 MB index): CPU | 771 ms | — |
+
+  The resolver's copy shows at the index's bound (5-5's plan asked to tell 5-3c if it did): told to planning for
+  5-3c with 5-5-4's report. A record held by a snapshot costs about 1 KiB under orc.
+- **Tests:** `test_pm_install` (39, through `pmworld`, single-threaded, with a store and the worker's jobs inline):
+  the slots and queues, the deadline and the last commit, the checks before resolution, the spool budget and the
+  refetch, the retained check, install, remove, update and inspect, failures at each step, signer replacement and
+  C6, the request checks, the admission failure, `nix`, messages and the handoff; after each mutation kind and each
+  failure point the live snapshot equals the one a restart builds from disk (Fable's check §2). `test_pm_hosted`
+  "[IMPL-DECISION G449]" (3): install, remove and handoff over a hosted instance with the fake provider, across a
+  restart; during a paced extraction (the `LCN_TEST_EXTRACT_PACE_MS` hook), a second operation and a route renewal
+  answered, then a stop with the install's call in flight within 5 s (0.49 s measured); an operation's deadline
+  answering while the worker extracts, then a stop within 5 s (0.37 s). `test_logosd_pm` "[IMPL-DECISION G449]": an
+  installed record kept across logosd's restart. I121 lists the PKG units claimed.
+- **Not here:** the queries and `list_installed_packages` (5-6b), the Package Manager's own module and its methods
+  (5-6a), the Runtime side of the handoff (5-8).
 
 ### G450 — The Package Manager's responses and messages
 - **Kind:** IMPL (Tier 5 step 5-5; plan §4.7) · **Specs:** PACKAGE MANAGER l.1467-1470 (a success variant holds no
@@ -6856,8 +7083,14 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   - DEPLOYMENT §12 states the rule, the reader's working set and the spool's bound.
   - Tests: `test_pm_input`, the scaled limits at the preset (the table), at 256 MiB, at 1,000 bytes (an entry
     within the decompressed bound) and at 1 byte.
-- **Not here:** the target platform (the host the instance runs on, G73's profile, PKG-0493) and DEPLOYMENT §1's
-  values come with the operations (5-5-4).
+- **Decision (the target platform, 5-5-4;** plan §12**):** the target is the host the Package Manager runs on,
+  `lgx.hostPlatform`, because the Loader that uses the artifacts runs on the same host. It is fixed for the instance:
+  the verification cache and the worker get it at the start (`wjStart`), and inspection and staging select the
+  variant by it. The values and the matching rules are G73's (each field a variant names matches a defined value
+  byte for byte, a value with no defined rule never matches, a field left out constrains nothing, the first compatible
+  variant in declared order wins); a package with no variant for the host is `incompatible-platform`. DEPLOYMENT §1
+  lists them for the hosts the Package Manager runs on (linux and darwin, x86_64 and aarch64, abi `gnu` or `musl` on
+  Linux and none on Darwin; PKG-0493, an inspection item).
 
 ### G454 — The resolver's incremental search
 - **Kind:** IMPL (Tier 5 step 5-3c-1; plan `tier5-plans/step5-3c-plan.md` §3.1 to §3.4, §3.6 and §4, planning's
@@ -10961,6 +11194,8 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G445 | the installed-state store: the record file, the index and the commit | IMPL | 9 |
 | G446 | extraction, the spool and the reader | IMPL | 9 |
 | G447 | the worker thread, and the verification cache's byte bound | IMPL | 9 |
+| G448 | the retained check | IMPL | 9 |
+| G449 | the operations | IMPL | 9 |
 | G450 | the Package Manager's responses and messages | IMPL | 9 |
 | G451 | the handoff's construction, and package configuration at inspection | Reading and IMPL | 9 |
 | G452 | the admission bound | IMPL | 9 |
@@ -11119,7 +11354,7 @@ of work follows the tiers in `docs/SPEC-STATUS.md`: most settled areas first.
 | I118 | IMPL | Tier 5 step N-3: the blockchain node as a Logos Core module (G419-G424, G441; D10 revised, G97 and G144 amended, G111 and G340 cited; plan `tier5-plans/stepN-3-plan.md`, spike `tier5-plans/stepN-3-spike.md`) | **Where.** The library's clone `logos-blockchain` (no push URL), from master at `e0d79cc25`. Branches: `lcn/n3-1-embedded` (`4ff155b9a`: the embedded start `start_lb_node_embedded` without `SystemSig` and the HTTP service, the static packages, the cargo tests), `lcn/n3-2-module` (`c77ce98cf`: the module; `56192e5e4`: G441) and `lcn/n3-3-hosted` (`718606723`: the late-post report written through a rename; `72a011436`: T9; `7162acef2`: T9's permission case cites G110; `5b7c03d23`: condition (d)'s wording), `lcn/n3-4-sdk` (`b8bf31fe7`: the SDK required as the nimble package `logos_sdk`, G434, G436; `b2b8967e1`: `report_failure`'s completion registers its thread, G339) and `lcn/n3-5-prover-log` (`9ad0cedba`: the working directory, G421; `4df729c3e`: T9 removes a passing case's directory), each merged `--no-ff` into `lcn/blockchain-module` (`154774268`, `52e60e13a`, `95a76de53`, `8b13199a7`, `01e403c72`). Its `logos_module/` directory moves to the module's own repository unchanged. Core: docs only, on `stepN-3` (`ffa12fa`: G441; then this row's commit). **Built.** `logos-blockchain-c-static` and `-static-test` (G419); contract v1 and the configuration (G424, G422); the C glue and the confined kit (G420); D6's rule (G423); the placement (G421); the deployment digest (G441); the SDK as an installed package (N-3.4's first half); the working directory and the prover's bounded log (G421, G422); the suites T1 to T9, T11, T20 and `test_units`, each a flake check `blockchain-module-<suite>-<orc|refc|orcrelease>` on x86_64-linux and aarch64-darwin (T20's not yet run as one: no per-step full flake); the cargo tests. **Measured** (F7, T5, T7, T9). Init 17.5-55.1 ms on the Mac and 31.5-83.4 ms on framework.lan; destroy 1.2-12.7 ms and 1.4-2.8 ms; an unprepared destroy on an idle node 1.2 ms and 1.3 ms. Over ten cycles the other threads stay at 4 and the `tracing-appender` threads equal the starts; after the last cycle the Mac keeps `tracing-appender` and `futures-timer`, Linux `rocksdb:low`, `rocksdb:high`, `tracing-appende` and `futures-timer` (G421's grounds). Destroy with a job running waits 2.7 s for T7's 3 s hook, every count balanced. Under logosd in a Module Host: destroys 0.5-670 ms on the Mac and 1.9-3.5 ms on framework.lan; T9 runs 15-27 s. **Checks.** N-3.1: the archives, the cargo tests (11 passed, 0 failed, 22 ignored) and the release output free of test hooks, on framework.lan and the Mac. N-3.2 on `56192e5e4`: the ten suites x orc/refc/orc-release on the Mac (30/30) and framework.lan (30/30), the library-side cargo test (2/2); the flake check on framework.lan: 29 of 30 suite checks, the cargo tests and `logos-blockchain-utils-lcn-tests`, the failure a test race in T7 under orc-release (it read the late-post report before the glue wrote it), fixed in `718606723`. N-3.3: T7 and T9 x orc/refc/orc-release on the Mac (6/6) and T7, T8 and T9 x 3 on framework.lan (9/9), T9's refc case a skip (G277); T9 again under orc on the merged tree's `5b7c03d23` (2/2); the library's flake check on framework.lan (`72a011436`, rc 0, 1063 s): the 33 suite checks, the three `blockchain-module-hosted-*` ones in the sandbox on core's packaged logosd, logosctl, `lcn_call` and Module Host; `spectrace deploydoc` and `pending`. N-3.4's first half, package mode (the SDK from core `c6f9ed4`): on `b2b8967e1` the Mac 33/33, framework.lan 33/33 with T1's Nix build, T9 orc-release x3 on the Mac (3/3), `nimble --useSystemNim --offline -l test` on the Mac (11 suites, 53 tests), path mode on the Mac (4/4); on `b8bf31fe7` framework.lan 33/33 and the Mac 32/33, T9 under orc-release the G339 fault `b2b8967e1` fixes. N-3.5 on `9ad0cedba`: the twelve suites (T20 new) x orc/refc/orc-release on the Mac (36/36; T1 in a second run with the release archive, which the first omitted) and framework.lan (36/36, with T1's Nix build of the module package); T20 on framework.lan: under each variant the logger held the instance's `prover/MyLogFile.log`, which was emptied twice (the leftover at `_init`, then past the 16 KiB test bound), and no `MyLogFile.log` appeared in the suites' working directory. On `4df729c3e` (T9's case directories): T9 x orc/refc/orc-release on framework.lan (3/3, refc the G277 skip) and the Mac (3/3, refc the G277 skip), no `lbh` directory left; a scratch copy with a forced failure kept exactly the failed case's directory and printed its path. Measured: rapidsnark's Linux log is 29 lines, about 1.4 KB a proof, and the devnet node makes about one proof a second (765 in 777 s), some 124 MB a day; the bound is 1 MiB, checked every 5 s by the watchdog. **Upstream.** Nim draft #195 in `build/scratch/upstream/ISSUES.md` (an `importc` struct in a refc case object copied as zeros; G420's `JobResult`); #197, the circuits' Linux archives built with rapidsnark's logger on. Not filed. **Downloads** (reported after, the owner's rule of 2026-11-22): the Rust 1.100.0 toolchain through rustup (1.4 GB, for rustfmt), the workspace's git dependencies (`~/.cargo/git` 410 to 885 MB) and a crates.io index update on the Mac, all deleted when N-3 ends; the core input at `349f4a5` through the git fetcher; Nimble's package list (`packages_official.json`, about 1 MB) on N-3.4's first install. **Left.** N-3.4's second half (the lock entry, the Nix reader and the core address, at the extraction); the per-module stop field and the orchestrator's preparation call (wave 3); NP-14 (G421); a bound blend port, which needs two nodes (N-6a) | 2026-11-22 |
 | I119 | IMPL | Tier 5 step N-4: storage_module, the Storage node as a Logos Core module (plan `tier5-plans/stepN-4-plan.md`, spike record `tier5-plans/stepN-4-spike.md`, Fable's checks `tier5-plans/fable-checks/stepN-4-*.md`; G425-G432, G480; G91, G97, G99, G100, G136 and G147 amended). Built as N-4.1 to N-4.5 in `logos_module/` on the branch `logos-core-module` of `logos-storage-nim`, over `4fe02344`, merged there at `ca6b8687` (N-4.5, the freeze of G480); nothing pushed | **N-4.1, the spike** (scratch copies only): S1 to S12 in the spike record, among them chronos `2d81a762` against the kit's range (P7), storage's `closeThreadDispatcher` against the kit's teardown, `StorageServer` on a confined kit thread (S3), the read strategies (S4), the environment lookups (S6) and the switch set (S8); they set G431's toolchain and G428's one download per object. **N-4.2, the module** (`e8efa1a6`, readiness `69ebdd18`, storage as it is `4221d6ac`): the confined refc kit with `--async-api` (G431), typed configuration with `extip` as the NAT default (G426), one start phase and readiness (G427), `storage.stop` and `storage.start`, the strict destroy with its one bounded exception, and `stopParts` after a partial start (G430). L1 and L3 are reverted under the owner's rule, so storage's files equal `4fe02344` (G432). **N-4.3, `lcn.storage_fetch`** (`3e3409bf`): `fetchserve`, reads bound through a store view of one background download per object, the idle rule and A1 to A3 (G428). **N-4.4, the data methods** (`f835f6a8`): the upload and download sessions, `fetch`, `remove`, `exists` and the paths (G429); the contract amended in place (G425, G147, G480). **N-4.5, the runs over core** (storage `a536b833` and the hosted suite's fix `34ac61e3`, core `ebc500e`): `tools/corebuild.nim` builds the library with a core checkout's SDK, and core's programs as its packages build them (orc release; orc and refc for the legs of plan §8). `tools/fetch_bundle.nim` writes the provider bundle, and core's `test_storage_fetch` runs storage_module as the provider, opt in (`LCN_STORAGE_FETCH_PROVIDER`; G428). `test_module_hosted` drives a `hosted_dynamic` instance under core's logosd with logosctl and `lcn_call` (G430, G432):<br>- ready with no call;<br>- an object through the upload and download sessions;<br>- logosd's restart;<br>- `storage.stop`, then `module stop`, unloaded in 0.11 to 1.9 s, then `module start`;<br>- the host killed mid-upload, and at the close (after its log line, before the stop answered), each followed by a restart that finds the repository consistent;<br>- the poisoning environment changing nothing.<br>`test_env_switches`, the item that N-4.2 left (G426 item E): S6's lookups as a static test, `NO_COLOR` hosted, S8's codecs. Two unit cases for placed key files. The README's sections on keys, expiry, the environment, running under logosd and the frozen schema. Upstream drafts 221 and 222. **Found, no gap:**<br>- `module stop` cancels an instance's requested intent, so logosd's next start leaves it unloaded (RUNTIME l.1735; DAEMON.md §7a);<br>- storage readiness turns `ready` at its first tick, after the instance's own `ready`, so the suites poll `storage.status`;<br>- `lcn_call`'s host runs the same program with the same argv and environment, so the suites find storage's host by the node's LevelDB `LOCK`, which it holds open under the instance state;<br>- the orchestrator's default restart policy realizes a killed host's instance again at once; on a slow build the instance is `ready` again before a poll sees `host-terminated`, so the suites wait for the Runtime's diagnostic in logosd's log. | 2026-11-23 |
 | I120 | IMPL | Tier 5 step W2-P: the repository split's packaging (`tier5-plans/wave2-plan.md`; plan `tier5-plans/stepW2-P-plan.md`, spike record `tier5-plans/stepW2-P-spike.md`; G433-G436). Parts W2-P.2: the two packages; W2-P.1: Nimble 0.26.2, the lock and the Nim pin | **W2-P.2.** `sdk/` is the Nimble package `logos_sdk` 0.1.0, with `lcn-gen` as its program and ranges for its requirements (G433, `acf7fb0`). Kits build, and test data is read, from an installed SDK as from a checkout (G435, `ac561f5`). `lint-packaging` checks the install lists, the requirements, the lock and the addresses (`cfd2a96`). A module repository requires the SDK by name, one SDK revision per Nimble directory (G434, `4458360`; `sdk/docs/MODULE-KIT.md` §9). **W2-P.1.** Nimble 0.26.2 built from the copy Nim 2.2.14 ships, in place of nixpkgs' 0.20.1 (`931a306`); every Nimble command passes `--useSystemNim`, the lock has no `nim` entry and is regenerated byte for byte, both nimble files refuse a Nimble older than 0.26, and the Nim pin has one home (`806fd6d`); CI and `tools/ci/windows.ps1` run with them, and `workflow_dispatch` gains `nimble_only` for the trial push (G436, `b8f305f`). `test_kit_dylib`'s installed-package case reads the build record under its Windows name too (`4374de4`). Nimble checks none of a lock's checksums (draft #191, found by N-4), so `tools/check_installs.nim`, through `logos_sdk/testing/lockcheck`, compares every install `nimble.paths` names with the lock before every `nimble test*` task, `build_runtime_lib` and, in a checkout with `nimbledeps/`, `nimble build`, and as its own step after setup in CI and `windows.ps1` (first in `1c4b9ee`; G436, Fable's §10 on the plan). Test: `test_lockcheck`. The Nimble drafts the step found, #189 (two installs of one version) and #191, are in `build/scratch/upstream/ISSUES.md`, not filed. The checks on each host are in the spike record's §4 and the merge note | 2026-11-21 |
-| I121 | IMPL | Tier 5 step 5-5: Installation, A3 (PACKAGE MANAGER §5, §7.1, §8, §10, §12, §14, §15's inspect, install, remove and update; plan `tier5-plans/step5-5-plan.md` draft 2, planning's rulings §15; review `fable-checks/step5-5-plan.md`). Built as 5-5-1 (records and responses), 5-5-2 (the store and extraction), 5-5-2b (the reader), 5-5-3 (the worker and the spool) and 5-5-4 (the operations) | **Open.** **5-5-1, records and responses** (G445's files, G450, G451, G452): `src/logos_core/pm/`: `installed` and `installed.cddl` (the record file, the index, `matchesManifest`, App A as the contract schema), `responses` (the §15 encoders, public messages, `moduleError`), `handoff` (`buildHandoff`, `resolveConfiguration`, `checkConfigurations`) and `admission` (the exact bound); `vcache.inspect` checks PKG-0060 after `openLgx`. `tests/support/lgxbuild.nim` builds packages with modules and configuration (the tuner schema). Suite `test_pm_records`, and cases in `test_pm_vcache`. 27 PKG units claimed (PKG 306/306): PKG-0060, 0172, 0177, 0178, 0291, 0337, 0339-0344, 0348, 0356, 0357, 0359-0362, 0438, 0468, 0469, 0618-0620, 0624, 0628. **5-5-2, the store and extraction** (G444, the rest of G445, G446's writing half): `src/logos_core/pm/store.nim` (the root, its lock and probe, staging, the commit in two sync modes, the start, retirement, the retained hash) and `extract.nim` (descriptor-relative writes and reads); `LgxPackage.signature` keeps `manifest.cose`'s bytes; `handoff.admissionHandoffs` gives the bound each module's handoff; `admission.admissionLimitForTests` (hooks only); `durable.nim` unchanged. Suite `test_pm_store` (POSIX only). 14 PKG units claimed: PKG-0181, 0182, 0204, 0219, 0274, 0292, 0293, 0471, 0487, 0489, 0499, 0500, 0610, 0611, with TXT-0472; PKG-0488 and PKG-0498 are inspection items. PKG-0487 to 0489 rest on Q5 (a). The owner answered the plan's §14 on 2026-11-22: Q1 (a), Q2 (d), Q3 (d), Q4 (b), the streaming reader (part 5-5-2b, plan §4.3a), Q5 (a), Q6 (a). **5-5-2b, the streaming reader** (G446's reader, G75's sixth row, G29's note of 2026-11-22): `package/lgx.nim` reads an archive in one pass of 1 MiB pieces from a file or from bytes (`inspectLgx`, `openLgx` and `readLgx` over it) and extracts in a second (`extractLgx`, to a sink); `pm/extract.nim`'s `FileWriter` writes a file in pieces; `store.stage` takes the archive's source (`sfSource` when it no longer gives the judged package); `handoff` and the store read `LgxPackage.documents`. Suites `test_lgx_equiv` (against the in-memory reader, `tests/support/lgxoracle.nim`) and `test_lgx_peak`; `test_lgx`'s builders in `tests/support/lgxcorpus.nim`; spool cases in `test_pm_store`. No PKG unit moves. **5-5-3, the worker and the spool** (G447, G446's spool half, G453's limits, G75's note, G477's key): `pm/worker.nim` (one thread per instance, started after the store's start, which moved here from 5-5-4, and joined at destroy), `pm/jobs.nim` (what crosses, checked free of references at compile time; the judgment encoded and decoded a turn at a time, D1; no failure event, D2), `pm/spool.nim`; the fetcher hands each piece to the worker, at most `SpoolLag` ahead; the inspections' share of the spool; the verification cache's byte bound (256 KiB an entry by the walk's estimate); `lcn.pm_limits` gains `operation_entries` and `operation_deadline_ms`; the LGX limits scale with `archive_bytes`. `tools/pmbench.nim` `spool` and `receive`. Suite "the worker and the spool" in `test_pm_driver`, cases in `test_pm_input` and `test_pm_vcache`. 4 PKG units claimed (PKG 327/327): PKG-0011, 0012, 0192, 0271. | 2026-11-23 |
+| I121 | IMPL | Tier 5 step 5-5: Installation, A3 (PACKAGE MANAGER §5, §7.1, §8, §10, §12, §14, §15's inspect, install, remove and update; plan `tier5-plans/step5-5-plan.md` draft 2, planning's rulings §15; review `fable-checks/step5-5-plan.md`). Built as 5-5-1 (records and responses), 5-5-2 (the store and extraction), 5-5-2b (the reader), 5-5-3 (the worker and the spool) and 5-5-4 (the operations) | **Closed 2026-11-23** (5-5-4). **5-5-1, records and responses** (G445's files, G450, G451, G452): `src/logos_core/pm/`: `installed` and `installed.cddl` (the record file, the index, `matchesManifest`, App A as the contract schema), `responses` (the §15 encoders, public messages, `moduleError`), `handoff` (`buildHandoff`, `resolveConfiguration`, `checkConfigurations`) and `admission` (the exact bound); `vcache.inspect` checks PKG-0060 after `openLgx`. `tests/support/lgxbuild.nim` builds packages with modules and configuration (the tuner schema). Suite `test_pm_records`, and cases in `test_pm_vcache`. 27 PKG units claimed (PKG 306/306): PKG-0060, 0172, 0177, 0178, 0291, 0337, 0339-0344, 0348, 0356, 0357, 0359-0362, 0438, 0468, 0469, 0618-0620, 0624, 0628. **5-5-2, the store and extraction** (G444, the rest of G445, G446's writing half): `src/logos_core/pm/store.nim` (the root, its lock and probe, staging, the commit in two sync modes, the start, retirement, the retained hash) and `extract.nim` (descriptor-relative writes and reads); `LgxPackage.signature` keeps `manifest.cose`'s bytes; `handoff.admissionHandoffs` gives the bound each module's handoff; `admission.admissionLimitForTests` (hooks only); `durable.nim` unchanged. Suite `test_pm_store` (POSIX only). 14 PKG units claimed: PKG-0181, 0182, 0204, 0219, 0274, 0292, 0293, 0471, 0487, 0489, 0499, 0500, 0610, 0611, with TXT-0472; PKG-0488 and PKG-0498 are inspection items. PKG-0487 to 0489 rest on Q5 (a). The owner answered the plan's §14 on 2026-11-22: Q1 (a), Q2 (d), Q3 (d), Q4 (b), the streaming reader (part 5-5-2b, plan §4.3a), Q5 (a), Q6 (a). **5-5-2b, the streaming reader** (G446's reader, G75's sixth row, G29's note of 2026-11-22): `package/lgx.nim` reads an archive in one pass of 1 MiB pieces from a file or from bytes (`inspectLgx`, `openLgx` and `readLgx` over it) and extracts in a second (`extractLgx`, to a sink); `pm/extract.nim`'s `FileWriter` writes a file in pieces; `store.stage` takes the archive's source (`sfSource` when it no longer gives the judged package); `handoff` and the store read `LgxPackage.documents`. Suites `test_lgx_equiv` (against the in-memory reader, `tests/support/lgxoracle.nim`) and `test_lgx_peak`; `test_lgx`'s builders in `tests/support/lgxcorpus.nim`; spool cases in `test_pm_store`. No PKG unit moves. **5-5-3, the worker and the spool** (G447, G446's spool half, G453's limits, G75's note, G477's key): `pm/worker.nim` (one thread per instance, started after the store's start, which moved here from 5-5-4, and joined at destroy), `pm/jobs.nim` (what crosses, checked free of references at compile time; the judgment encoded and decoded a turn at a time, D1; no failure event, D2), `pm/spool.nim`; the fetcher hands each piece to the worker, at most `SpoolLag` ahead; the inspections' share of the spool; the verification cache's byte bound (256 KiB an entry by the walk's estimate); `lcn.pm_limits` gains `operation_entries` and `operation_deadline_ms`; the LGX limits scale with `archive_bytes`. `tools/pmbench.nim` `spool` and `receive`. Suite "the worker and the spool" in `test_pm_driver`, cases in `test_pm_input` and `test_pm_vcache`. 4 PKG units claimed (PKG 327/327): PKG-0011, 0012, 0192, 0271. **5-5-4, the operations** (G448, G449, G453's target platform; G446's spool budget built; G447's stop corrected): `pm/slots.nim` (two slots, queues of 16, `MODULE_ERROR` past them); the engine's operations (`submit`, `handoff`, the snapshot of shared immutable records, holds, the retired list and `wjCollect`, the deadline and the last-commit rule, the fault map, the log line per operation, the mutation's spool budget with the refetch by digest, the retained check on the worker); the store split in two halves (`StoreFiles`, the worker's after `handOver`; Fable's design A), with `wjStage`, `wjStageSigner`, `wjAbandon`, `wjCommit`, `wjCollect`, `wjReply`, `wjRetained` and `wjHandoff`; `shell.operate` and `shell.handoff`, their futures cancellable; `pmtest_module`'s `inspect`, `install`, `remove`, `update` and `handoff`, its kit with the asynchronous provider API (Fable's stop check: a stop now cancels an operation's call, 0.49 s against 10.08 s); `LCN_TEST_EXTRACT_PACE_MS` (test hooks only); `tools/pmbench.nim installed`, `module`, `commit`, `start` and `reply`. Suites `test_pm_install` (new, 39 cases), cases in `test_pm_hosted` and `test_logosd_pm`. Limits stated in G449: no job cancel (one more extraction of the largest archive, about a minute for 1 GiB on the Mac), a call cancelled after its last commit began, a worker that hangs. The worker encodes each response and the module thread carries the bytes (G447); their way out is G447's stated exception, a confined kit module's (99 ms under orc on the Mac and about 200 ms on server.lan for a 16 MiB `{installed}`), left to the core item "large-response completion". 40 PKG units claimed (PKG 367/367): PKG-0080, 0189, 0190, 0222 (inspection), 0363 (inspection), 0389-0410, 0436, 0437, 0439, 0440, 0441 (inspection), 0470, 0493 (inspection), 0534-0537, 0608, 0609; PKG-0411 is `out-of-scope` (a MAY not taken); TXT-0493 to TXT-0495 leave the re-pin's deferred list with PKG-0608. BCP-0033 and BCP-0035 claimed (BCP 53/53). The test-hook markers `pm_store`, `pm_jobs` and `pm_admission`, which the hooks of 5-5-2 and 5-5-3 lacked (I89's rule 3; CONFORMANCE "Test hooks"). `pm/spool.nim`'s failure text is POSIX only, as its callers are: 5-5-3 left it unguarded, a Windows build failure that `nim check --os:windows` found (Windows is not run here; the PM suites and `pmtest_impl` pass that check). The engine's clock takes an explicit `Clock` conversion, which Linux needs (`build/scratch/upstream/ISSUES.md` 223). The store's start measured (G445's note, `tools/pmbench.nim start`): about 1 ms a record under orc, so the default startup deadline holds about 120,000 records, a limit stated in DEPLOYMENT §12. | 2026-11-23 |
 | I122 | IMPL | Tier 5 step 5-3c: the resolver's cost (PACKAGE MANAGER §11 l.1241-1280; plan `tier5-plans/step5-3c-plan.md` and its revision log, with planning's rulings of 2026-11-22 on its Q1 to Q6; review `fable-checks/step5-3c-plan.md`). Built as 5-3c-1 (the incremental search, G454) and 5-3c-2 (the resumable run and slicing, G455), gated before 5-5-3 (G443) | **5-3c-1 built 2026-11-22** (G454). `package/resolver.nim`: numbered names, the unresolved names on a heap, depths with parents, bound dependencies and a trail, propagation in ascending depth before the bind, the depth limit over what a bind changed, versions tested as they come, the cycle walk pruned by depth, and work counted (a `resolve` overload reports it); 5-3b-2's `perDependencyWalk` hook and the module's test-hook marker are gone. `tests/support/oracle_resolver.nim`, the frozen oracle (the search at `10cc598`), and `test_resolver`'s suite "the resolver gives the frozen oracle's results" (2,000 seeded catalogs with a coverage check, 1,000 seeded acyclic catalogs, the bench's shapes at the preset and the maxima), which replaces the walk comparison; 13 mutations of the four parts each fail it. `tests/support/pmshapes.nim` gains the `lift` shape (propagation's worst case) and the synchronous input `inputOf`; `tools/pmbench.nim` gains `--sync new|oracle|input`; the closure is read in place, which was cubic in a dense closure; `test_pm_driver` counts the `lift` shape (with a deepening past the depth limit). For 5-5 (the plan's §5), `tools/pmbench.nim archive` and `inspect` measure the verification cache's inspection with the in-memory reader at 1 MiB, 64 MiB and 1 GiB (CONFORMANCE "The archive's inspection"; 5-5-2b measures its streaming reader at the same sizes). The probe `tests/test_iterprobe.nim` checks the closure-iterator rules I1 to I6 that 5-3c-2 relies on under orc, refc and orc-release, and runs on the Windows leg. No unit changes status. **5-3c-2 built 2026-11-22** (G455). `package/resolver.nim`: the search as a resumable run (`startRun`, `resume`, `supply`, `supplyRetained`, `release`; closure iterators under the rules I1 to I6, `Resolver` acyclic), sliced at `ResolverTurnWork` work units, the retained check a suspension (§5), F4's kept partial evaluation, and its state freed a turn at a time; the synchronous `resolve` drives it with no budget. `pm/driver.nim` holds the run (no rerun; `dsRetained`, `dsTurn`, `release`); `pm/engine.nim` issues `cmContinue`, releases finished and cancelled runs by continues of id 0, `cancel` and an answering `stop`; `pm/shell.nim` runs each continue from its own `callSoon` (F2) and cancels an operation its caller gave up (F3); `pmtest_module` takes turns of one work unit. Tests: `test_resolver` "the resumable run" (2,000 seeded catalogs under six budgets against the oracle); `test_pm_driver` "engine turns" and each shape under every budget; `test_pm_hosted`'s sliced case (F2). `tools/pmbench.nim --budget`, with the turns and the release timed (CONFORMANCE "The resumable run"). G405, G443 and G454 (what work counts) amended. No unit changes status. **5-3c-2's second part** (G477): the operation bound's resolver half: the walk `inputUnits` beside `Inspection`, `ResolverInput.operationEntries` with its count, its stop over the bound and `ResolverCounters.entries` and `bound`; `initDriver` takes it and `tools/pmbench.nim` prints the count; tests in `test_resolver` and `test_pm_driver`. No unit changes status. | 2026-11-22 |
 | I124 | IMPL | Tier 5 step N-1 follow-up: the module kit's foreign-thread entry rule (planning's rulings 1-9 on the kit-foreign-entry analysis; G464-G467) | **Steps.** 1: `enterForeignThread`, `{.lcnCallback.}`, `{.lcnModuleThread.}` and `Entered[F]`; `rcclient`'s and `post`'s raw overloads removed (G464, G465). 2: `lcn-gen lint-callbacks` and the flake check `lint-callbacks`, the marks and exemptions across `sdk/src`, `src` and `tests/kit` (G467). 3: `logos_sdk/testing/freshthread`, the probe and `test_entry` (G466). 4: the first delivery to each callback on a new thread under test hooks (G466). 5: `prepareRc` (G464). Direct-route events stay on the publishing thread, so (d2) does not move them (planning); `test_hosted_routes` C-15 publishes one on a fresh thread to a subscriber that is a library of its own (G466). Docs: MODULE-KIT §10 and §6; upstream draft 12a (an allocation on a thread with no region should fail with a message; not filed). **Fixed on the way:** step 2 marked the deferred adapters without importing the marks, so six suites stopped compiling; `kitEnter` moved below `clearLastFailure` in `kitrt`, so the template binds it where it is defined. **Not here:** a confined `prepareRc` case (the confined handoff is `prepareTyped`'s, tested in `test_kit_confined`); the blockchain module's move to `prepareRc` is N-3's. | 2026-11-22 |
 | I125 | IMPL | The LGX reader on a tar that ends inside an entry's padding (PACKAGE MANAGER §7.1, §8; PKG-0269) | **The fault.** `readTar` checked an entry's padding with `for i in pos + n ..< pos + padded: tar[i]` and never checked `pos + padded` against the tar's length. An archive whose inflated tar ends inside an entry's padding (527 bytes: `manifest.cbor`'s header, its 10 bytes and 5 of its padding) raised an IndexDefect, which the reader's callers do not catch, so the process ended. It was reached from `openLgx`, so through the verification cache's inspection, the resolver's eligibility, `lcn-pkg verify` and the hosted Package Manager. Found in step 5-5-2b's equivalence tests. **The fix.** Before the loop, `pos + padded > tar.len` is "an entry's data is truncated: <path>", `invalid-package` like every format check. **The audit** of `gunzip`, `readTar` and the header fields found no other read that untrusted bytes can push past a buffer: each header is copied only after `pos + 512` is checked, each field lies inside that copy, the end blocks are read only after their length is checked, and the gzip header's optional fields are bounded before they are read. One wrong result of the same kind is fixed with it: zlib's `crc32` takes a `cuint` length, so a tar of exactly 4 GiB (the default decompressed limit) had its CRC-32 taken over no bytes; the reader now takes it in pieces of at most 1 GiB (`crc32Of`). The writer's own CRC and `avail_in` keep the `cuint` length; its inputs are the packager's. **Tests** (`test_lgx`): the 527-byte case; every proper prefix of a small archive's tar, and of its gzip member, is refused; each byte of each of its eight headers set to three values, with the checksum as it was and set again, never crashes. Without the check the new test ends with "index 527 not in 0 .. 526 [IndexDefect]". Step 5-5-2b replaces `readTar` with the streaming tar cursor and keeps these tests. | 2026-11-22 |

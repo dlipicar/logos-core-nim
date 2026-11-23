@@ -126,8 +126,11 @@ proc modulePackage*(
     config = Opt.some(tunerSpec()),
     contracts = true,
     deps: openArray[(string, string)] = [],
+    allHosts = false,
 ): ModulePackage =
-  ## The package described above; `deps` as `compatible` requirements.
+  ## The package described above; `deps` as `compatible` requirements. With `allHosts`, also
+  ## `linux-aarch64` and `darwin-x86_64`, each with its OS's files, so that a hosted suite
+  ## selects a variant on every host it runs on.
   var linuxFiles = @[("lib/libalpha.so", bytesOf("ALPHA " & name & "@" & version))]
   var darwinFiles = @[
     ("lib/libalpha.dylib", bytesOf("ALPHA darwin " & name & "@" & version)),
@@ -196,10 +199,27 @@ proc modulePackage*(
     )
   if ds.len > 0:
     entries.add((cbor("dependencies"), cborArray(ds)))
-  ModulePackage(
-    manifest: cborMap(entries),
-    files: @[("linux-x86_64", linuxFiles), ("darwin-aarch64", darwinFiles)],
-  )
+  var files = @[("linux-x86_64", linuxFiles), ("darwin-aarch64", darwinFiles)]
+  if allHosts:
+    for e in entries.mitems:
+      if e[0].getText == Opt.some("variants"):
+        for (id, os, arch, arts) in [
+          ("linux-aarch64", "linux", "aarch64", linuxArts),
+          ("darwin-x86_64", "darwin", "x86_64", darwinArts),
+        ]:
+          e[1].items.add(
+            cborMap(
+              (cbor("id"), cbor(id)),
+              (
+                cbor("platform"),
+                cborMap((cbor("os"), cbor(os)), (cbor("architecture"), cbor(arch))),
+              ),
+              (cbor("artifacts"), cborArray(arts)),
+            )
+          )
+    files.add(("linux-aarch64", linuxFiles))
+    files.add(("darwin-x86_64", darwinFiles))
+  ModulePackage(manifest: cborMap(entries), files: files)
 
 proc withFiles*(
     p: ModulePackage, variant: string, files: openArray[(string, seq[byte])]

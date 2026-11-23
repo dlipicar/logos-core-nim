@@ -357,7 +357,8 @@ This implementation applies the mandatory package-signature and artifact-verific
   checked against its signed manifest and its admission bound at the current path (PKG-0471); a
   failure stops the start and names the identity. Then what no record names is deleted.
 - **Retirement:** what a commit stops naming is deleted once no holder of an older snapshot that reads
-  files remains (`collect`); running it on the worker, and the holders, are 5-5-4's.
+  files remains: the engine sends the collect to the worker (§11), which refuses a directory its index
+  still names.
 - **The retained hash** (`checkRetained`; PKG-0181, PKG-0293): each artifact file, opened below `a/`
   with no link followed, against its signed digest. A packaged native library is one of them.
 - **A damaged record** fails every operation that reaches it with `artifact-integrity-failed`; the
@@ -424,14 +425,69 @@ Part 5-5-3 (DECISIONS G446's spool half, G447; `pm/worker.nim`, `pm/jobs.nim`, `
   Either way the file is deleted. Nothing in the spool is executed, mapped or synced.
 - **Its share:** the archives spooled at once are at most 4 × `archive_bytes` in all, 4 GiB at the
   default. A retrieval whose archive would pass it waits, first in, first out, until a file is deleted;
-  the first always fits. With the operations (5-5-4) a mutation keeps its selected archives for
-  extraction under a budget of its own, and the host's spool is at most 8 × `archive_bytes`
-  ([DEPLOYMENT.md](DEPLOYMENT.md) §12).
+  the first always fits. A mutation keeps its selected archives for extraction under a budget of its
+  own (§11), so the host's spool is at most 8 × `archive_bytes` ([DEPLOYMENT.md](DEPLOYMENT.md) §12).
 - **A full disk:** a spool write that fails makes the archive unavailable, as a failed read does (PM
   l.1094), so its operation fails `package-unavailable`; the operator's log names the state directory's
   file system and the cause. It is not resource exhaustion.
 - **At `_MODULE_destroy`** the worker stops after its current piece or header, deletes its spool files
-  and is joined before the instance's state is freed.
+  and is joined before the instance's state is freed. The destroy comes once the instance's calls have
+  ended; an operation's call ends at a stop through the Runtime's cancel (§11), so a stop takes the
+  cancel, the destroy, then one piece.
+
+## 11. The operations
+
+Part 5-5-4 (DECISIONS G448, G449; `pm/slots.nim`, `pm/engine.nim`). Until step 5-6a they are reached
+through the test module `pmtest_module` (`inspect`, `install`, `remove`, `update`, `handoff`), whose
+kit has the asynchronous provider API, so that a caller's cancel and a stop reach the operation.
+
+- **Two slots:** one installed-state mutation at a time (`install_package`, `remove_package`,
+  `update_package`) and, beside it, one `inspect_package`; neither waits for the other. Each runs first
+  in, first out, and holds at most 16 waiting requests: the 17th is refused at once with the
+  invocation error `MODULE_ERROR` (PM l.1516-1517), before any work. A waiting request that is
+  cancelled, or whose caller's route ends, never runs.
+- **A snapshot** of the installed state replaces the last after each commit, and nothing reads a
+  partial one (PKG-0410). An operation reads the one current when it takes its slot, until it ends; a
+  directory a later commit retired stays while a snapshot that names it is held.
+- **`inspect_package`** resolves the complete closure against the snapshot and writes nothing. Its
+  root's record is the one the worker judged, with the signer its verification established.
+- **`install_package`** installs each missing package of the closure, dependencies first, each
+  extracted and committed on its own, the root last. A failure stops there: the dependencies committed
+  before it stay, and the root is not installed. The root installed with the same commitment answers
+  its record; if the selected source verifies under another accepted signer, only the record's signer
+  is replaced (PKG-0608). Installed with another commitment, it is `package-conflict`.
+- **`remove_package`** removes one record in one commit, unless another record's recorded closure
+  holds it (`package-in-use`). An absent identity succeeds; no dependency is removed.
+- **`update_package`** checks `package-in-use` before resolving, answers the current record when no
+  newer version applies, and otherwise swaps the current root for the target in one commit after its
+  dependencies are installed. A target already installed with the same commitment and the same
+  recorded edges replaces the current root in one commit; with other edges it is
+  `dependency-unavailable`, and with another commitment `package-conflict`. A failure keeps the current
+  root.
+- **`get_runtime_handoff`** is a query: it takes no slot, and the worker builds the handoff from the
+  record's directory (§13).
+- **The retained check:** an installed record an operation examines is hashed again on the worker
+  against its signed digests; a changed or missing file is `artifact-integrity-failed` (G448).
+- **Each archive an install or update selects** stays in the spool until its package is committed,
+  within 4 × `archive_bytes` for the operation; past that the oldest go, never the root's, and one that
+  is needed again is fetched again by digest.
+- **The operation deadline:** `operation_deadline_ms` (1 h by default) from taking the slot; past it
+  the operation ends `package-unavailable`, its retrieval call cancelled and its slot passed on. Once
+  an operation's last commit has begun, neither the deadline nor a cancel applies, and its answer is
+  the commit's.
+- **Faults:** a staging that fails for room, I/O or a changed source is `package-unavailable`; files
+  that escape or do not match their digests are `artifact-integrity-failed`; paths that collide under
+  the root's rules are `invalid-package`; an admission bound, the index's bound, a damaged state or a
+  commit that cannot be written are `MODULE_ERROR`, with nothing committed. Details go to the
+  operator's log, never to the caller (§12).
+- **The operator's log** has each operation's end: its method, its time, the archive bytes it
+  retrieved and its outcome.
+- **At a stop** every operation, running or waiting, is answered `package-unavailable`.
+- **Limits** (G449): an operation that ends by its deadline or its caller's cancel leaves its worker
+  job to finish for nobody (at most one more extraction of the largest archive); a call cancelled after
+  its last commit began ends cancelled while the commit completes, so its caller may find the package
+  installed (cancellation promises no rollback); a worker that hangs in a write or a sync makes a stop
+  end at the stop deadline.
 
 ## 12. Responses, messages and the admission bound
 
@@ -475,6 +531,7 @@ Part 5-5-3 (DECISIONS G446's spool half, G447; `pm/worker.nim`, `pm/jobs.nim`, `
   declared. Both artifacts are checked against their signed digests before anything parses them, and
   the result must pass the Runtime's own configuration acceptance. No artifact id or path is carried.
 
+The worker builds it from the record's directory (`wjHandoff`), so the module thread reads no file.
 It is refused, by cause: the package not installed (`package-not-installed`); a module the record does
 not select (`invalid-request`); the retained signer no longer accepted by the active trust
 (`signature-verification-failed`, PKG-0341, PKG-0080); a schema or default artifact absent or changed

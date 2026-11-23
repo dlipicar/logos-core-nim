@@ -19,10 +19,13 @@
 import std/strutils
 import results
 import logos_sdk/cbor
+import logos_sdk/base/testhooks
 import ../transport/[envelope, framing]
 import ./installed
 
 export results, installed
+
+testHooksMarker("pm_admission")
 
 const
   MaxCallId* = high(uint64) ## [SPEC TRANSPORT §1.1] the largest `call-id`

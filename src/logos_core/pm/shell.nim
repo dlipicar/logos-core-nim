@@ -118,7 +118,11 @@ type
     scheduled: bool ## a drain of `events` is queued or running
     timers: Table[uint64, Future[void].Raising([])]
     tasks: seq[Future[void].Raising([])] ## running calls
-    replies: Table[uint64, Future[Result[Resolution, PackageError]].Raising([])]
+    replies:
+      Table[uint64, Future[Result[Resolution, PackageError]].Raising([CancelledError])]
+    answers: Table[uint64, Future[OperationAnswer].Raising([CancelledError])]
+      ## [G449] by request
+    calls: Table[uint64, FutureBase] ## [G449] outstanding calls, by the engine's call id
     nextRequest: uint64
     closed: bool
     worker: Worker ## [G447]
@@ -421,7 +425,9 @@ proc callTask(s: Shell, l: Link, c: Command) {.async: (raises: []).} =
       LcnNSStorageFetchStatObjectRequest(`object`: c.locator), uint64(c.deadlineMs)
     )
     l.inflight.add(FutureBase(f))
+    s.calls[c.call] = FutureBase(f)
     let r = await f
+    s.calls.del(c.call)
     l.drop(FutureBase(f))
     answer =
       if r.isErr:
@@ -440,7 +446,9 @@ proc callTask(s: Shell, l: Link, c: Command) {.async: (raises: []).} =
       uint64(c.deadlineMs),
     )
     l.inflight.add(FutureBase(f))
+    s.calls[c.call] = FutureBase(f)
     let r = await f
+    s.calls.del(c.call)
     l.drop(FutureBase(f))
     answer =
       if r.isErr:
@@ -501,7 +509,7 @@ proc exec(s: Shell, c: var Command) =
     if w.isErr:
       s.say("the kept catalog was not written: " & w.error)
   of cmReply:
-    var f: Future[Result[Resolution, PackageError]].Raising([])
+    var f: Future[Result[Resolution, PackageError]].Raising([CancelledError])
     if s.replies.pop(c.request, f):
       f.complete(move c.outcome)
   of cmLog:
@@ -513,6 +521,15 @@ proc exec(s: Shell, c: var Command) =
     callSoon(continueSoon, cast[pointer](t))
   of cmWork:
     s.worker.submit(move c.job)
+  of cmAnswer:
+    var f: Future[OperationAnswer].Raising([CancelledError])
+    if s.answers.pop(c.answerTo, f):
+      f.complete(move c.answer)
+  of cmCancelCall:
+    # [G449] Through the Interface's cancel; the call's answer still comes back.
+    let f = s.calls.getOrDefault(c.cancelled)
+    if not f.isNil:
+      f.cancelSoon()
 
 proc onWorkerResult(
     owner: pointer, r: sink WorkerResult
@@ -583,14 +600,16 @@ proc openShell*(
     input, kept, freshKey, platform, pathRules = pathRules, turnWork = turnWork
   )
   let s = Shell(engine: move e, routeSet: routeSet, stateDir: dir, log: log)
+  var config = s.engine.workerConfig(spoolDir)
   when defined(posix):
     s.store = move store
-  let started = startWorker(
-    init.services.poster,
-    cast[pointer](s),
-    onWorkerResult,
-    s.engine.workerConfig(spoolDir),
-  )
+    s.engine.setSnapshot(snapshotOf(s.store))
+    # [Fable's 5-5-4 check §1.2] The file half, the descriptor with it, is the worker's
+    # from now on; the shell keeps the lock, released after the worker is joined.
+    config.store = s.store.handOver()
+    config.hasStore = true
+  let started =
+    startWorker(init.services.poster, cast[pointer](s), onWorkerResult, move config)
   if started.isErr:
     discard s.routeSet.close()
     when defined(posix):
@@ -606,11 +625,11 @@ proc openShell*(
 
 proc resolveRoot*(
     s: Shell, root: RootReference
-): Future[Result[Resolution, PackageError]].Raising([]) =
+): Future[Result[Resolution, PackageError]].Raising([CancelledError]) =
   ## [G405] One root operation through the driver; completes with its outcome.
   ## [G455; Fable F3] Cancelled by its caller, it is cancelled in the engine,
   ## so it takes no more turns, and the future ends cancelled.
-  let f = Future[Result[Resolution, PackageError]].Raising([]).init(
+  let f = Future[Result[Resolution, PackageError]].Raising([CancelledError]).init(
       "pm resolve", {FutureFlag.OwnCancelSchedule}
     )
   if s.closed:
@@ -624,12 +643,59 @@ proc resolveRoot*(
   let id = s.nextRequest
   s.replies[id] = f
   f.cancelCallback = proc(arg: pointer) {.gcsafe, raises: [].} =
-    var held: Future[Result[Resolution, PackageError]].Raising([])
+    var held: Future[Result[Resolution, PackageError]].Raising([CancelledError])
     if s.replies.pop(id, held):
       s.run(s.engine.cancel(id))
       held.cancelAndSchedule()
   s.run(s.engine.resolve(id, root))
   f
+
+proc ask(
+    s: Shell,
+    issue: proc(e: var Engine, id: uint64): seq[Command] {.gcsafe, raises: [].},
+): Future[OperationAnswer].Raising([CancelledError]) =
+  ## One operation or query through the engine; completes with its answer. Cancelled by its
+  ## caller, it is cancelled in the engine (leaving its queue, or ending at its next
+  ## suspension), and the future ends cancelled.
+  let f = Future[OperationAnswer].Raising([CancelledError]).init(
+      "pm operation", {FutureFlag.OwnCancelSchedule}
+    )
+  if s.closed:
+    f.complete(
+      OperationAnswer(
+        kind: oaResponse,
+        response: errorResult(pecPackageUnavailable, "the Package Manager is stopping"),
+      )
+    )
+    return f
+  inc s.nextRequest
+  let id = s.nextRequest
+  s.answers[id] = f
+  f.cancelCallback = proc(arg: pointer) {.gcsafe, raises: [].} =
+    var held: Future[OperationAnswer].Raising([CancelledError])
+    if s.answers.pop(id, held):
+      s.run(s.engine.cancel(id))
+      held.cancelAndSchedule()
+  s.run(issue(s.engine, id))
+  f
+
+proc operate*(
+    s: Shell, op: OperationRequest
+): Future[OperationAnswer].Raising([CancelledError]) =
+  ## [G449] One operation through the engine's slots.
+  s.ask(
+    proc(e: var Engine, id: uint64): seq[Command] {.gcsafe, raises: [].} =
+      e.submit(id, op)
+  )
+
+proc handoff*(
+    s: Shell, identity: PackageIdentity, module: string
+): Future[OperationAnswer].Raising([CancelledError]) =
+  ## [SPEC PM §12; 5-5-4] `get_runtime_handoff`, a query that does not queue.
+  s.ask(
+    proc(e: var Engine, id: uint64): seq[Command] {.gcsafe, raises: [].} =
+      e.handoff(id, identity, module)
+  )
 
 proc shellStatus*(s: Shell): ShellStatus =
   ## The catalog in use, each binding's route, and the running operations.
@@ -675,9 +741,13 @@ proc closeShell*(s: Shell): Future[void] {.async: (raises: []).} =
   s.tasks.setLen(0)
   for c in answers.mitems:
     if c.kind == cmReply:
-      var f: Future[Result[Resolution, PackageError]].Raising([])
+      var f: Future[Result[Resolution, PackageError]].Raising([CancelledError])
       if s.replies.pop(c.request, f):
         f.complete(move c.outcome)
+    elif c.kind == cmAnswer:
+      var f: Future[OperationAnswer].Raising([CancelledError])
+      if s.answers.pop(c.answerTo, f):
+        f.complete(move c.answer)
   # None is left: every operation the shell holds a future for is the engine's.
   for _, f in s.replies:
     f.complete(
@@ -686,6 +756,14 @@ proc closeShell*(s: Shell): Future[void] {.async: (raises: []).} =
       )
     )
   s.replies.clear()
+  for _, f in s.answers:
+    f.complete(
+      OperationAnswer(
+        kind: oaResponse,
+        response: errorResult(pecPackageUnavailable, "the Package Manager is stopping"),
+      )
+    )
+  s.answers.clear()
   for _, l in s.links:
     l.retiring = true
   for l in s.retired:

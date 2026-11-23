@@ -52,14 +52,55 @@ default = "deferred:tier-5"
 # by the reader alone, and the selected files only the record directory (5-5-2, PKG-0219, PKG-0499).
 "PKG-0011" = "claimed"
 "PKG-0012" = "claimed"
-# Stay deferred past the re-pin to 6cac8335; work item 5-5 owns them (spec/repin-pending.toml [deferred]).
 # §15's durable commit and the restart after a crash (PKG-0610, PKG-0611) are claimed by step 5-5-2, the
-# store (DECISIONS G445; tests/test_pm_store.nim); the signer replacement's operation (PKG-0608, PKG-0609)
-# is 5-5-4's.
-"PKG-0608" = "deferred:tier-5"
-"PKG-0609" = "deferred:tier-5"
+# store (DECISIONS G445; tests/test_pm_store.nim).
+# §15: inspect, install, remove and update, and their serialization, are claimed by step 5-5-4, the
+# operations (DECISIONS G449; tests/test_pm_install.nim, through pmworld; tests/test_pm_hosted.nim and
+# tests/test_logosd_pm.nim over a hosted instance). The signer replacement (PKG-0608, PKG-0609) left the
+# re-pin's [deferred] list with them, and TXT-0493 to TXT-0495 with it. The MAY for disjoint mutations
+# (PKG-0411) is not taken: every mutation waits for the one slot. The rest of §15 (the queries, the
+# handoff method, snapshots and progress) is 5-6a's, 5-6b's and 5-8's.
+"PKG-0389" = "claimed"
+"PKG-0390" = "claimed"
+"PKG-0391" = "claimed"
+"PKG-0392" = "claimed"
+"PKG-0393" = "claimed"
+"PKG-0394" = "claimed"
+"PKG-0395" = "claimed"
+"PKG-0396" = "claimed"
+"PKG-0397" = "claimed"
+"PKG-0398" = "claimed"
+"PKG-0399" = "claimed"
+"PKG-0400" = "claimed"
+"PKG-0401" = "claimed"
+"PKG-0402" = "claimed"
+"PKG-0403" = "claimed"
+"PKG-0404" = "claimed"
+"PKG-0405" = "claimed"
+"PKG-0406" = "claimed"
+"PKG-0407" = "claimed"
+"PKG-0408" = "claimed"
+"PKG-0409" = "claimed"
+"PKG-0410" = "claimed"
+"PKG-0411" = "out-of-scope:a MAY not taken: every installed-state mutation is serialized in one slot (DECISIONS G449)"
+"PKG-0534" = "claimed"
+"PKG-0535" = "claimed"
+"PKG-0536" = "claimed"
+"PKG-0537" = "claimed"
+"PKG-0608" = "claimed"
+"PKG-0609" = "claimed"
 "PKG-0610" = "claimed"
 "PKG-0611" = "claimed"
+# §7 and §7.2: the LGX realization profile is supported and `nix` is not (PKG-0189, PKG-0190), claimed by
+# step 5-5-4 (DECISIONS G449; tests/test_pm_install.nim); one profile's requirements are the other's
+# (PKG-0222), an inspection item until 5-10 builds `nix`. The rest of §7.2 is 5-10's.
+"PKG-0189" = "claimed"
+"PKG-0190" = "claimed"
+"PKG-0222" = "claimed"
+# §14: backend-specific cache, root and collection mechanics (PKG-0363), a MAY the operations take: the
+# verification cache, the installation root and deferred retirement (DECISIONS G403, G444, G449), an
+# inspection item.
+"PKG-0363" = "claimed"
 # App A (re-pin P7a, G363): the appendix repeats each contract rule of the sections in one block, and a
 # copy takes its twin's status. The claim is of the schema text only: the App A test compares all 38 rules
 # with the section excerpts, so a copy is claimed where its twin's rule is built.
@@ -120,10 +161,10 @@ default = "deferred:tier-5"
 # (PKG-0076, PKG-0077, PKG-0079, PKG-0081, PKG-0082) are claimed through "§4.1" by step
 # 5-3b-1 (DECISIONS G403). PKG-0080, a removed or revoked anchor never used for a new
 # resolution, installation, update or handoff, is step 5-5's: 5-3b carries its inspection
-# half under [PKG-0080]. PKG-0083 (a development deployment's own anchor through the same
+# half under [PKG-0080]; step 5-5-4 claims it through "§4.1" with the operations (DECISIONS G449; C6 in
+# tests/test_pm_install.nim) and 5-5-1's handoff (G451). PKG-0083 (a development deployment's own anchor through the same
 # protected path) is claimed through "§4.1" by step 5-3a-2: the package trust file's
 # development anchor (DECISIONS G137, G396; tests [PKG-0083]).
-"PKG-0080" = "deferred:tier-5"
 # §4.3: PKG-0112 (no freshness from a signature alone) is claimed through "§4.3" by step
 # 5-3b-1, with the catalog's sequence (DECISIONS G401, G404).
 # §4.3: key separation across package signing, provenance (§4.5), call evidence (CA
@@ -135,12 +176,10 @@ default = "deferred:tier-5"
 # one, comes under the same rule.
 # §4.3: the signer record is derived (signerRecord) but retained with installed
 # state, reported by inspections and carried by handoffs only with installation.
-# PKG-0438, the handoff's retained signer, is claimed through "§4.3" by step 5-5-1 (G451).
-"PKG-0436" = "deferred:tier-5"
-"PKG-0437" = "deferred:tier-5"
-"PKG-0439" = "deferred:tier-5"
-"PKG-0440" = "deferred:tier-5"
-"PKG-0441" = "deferred:tier-5"
+# PKG-0438, the handoff's retained signer, is claimed through "§4.3" by step 5-5-1 (G451). The signer
+# kept with installed state and reported by inspections (PKG-0436, PKG-0437), replaced only by a
+# verification (PKG-0439, PKG-0440), are claimed through "§4.3" by step 5-5-4 (G449;
+# tests/test_pm_install.nim); no `kid` is retained (PKG-0441), an inspection item.
 # §4.1: trust-input continuity. PKG-0418 to PKG-0421 are claimed through "§4.1" by
 # step 5-3a-2 (DECISIONS G396, G397, I114): the package trust file, whose one
 # revision covers the profile, every anchor's key and exact names and the
@@ -175,8 +214,8 @@ default = "deferred:tier-5"
 # admission bound's check (PKG-0468, PKG-0469) are claimed through "§5" by step 5-5-1 (DECISIONS
 # G445, G452; tests/test_pm_records.nim). Retention (PKG-0181), one commitment per identity
 # (PKG-0182) and the bound kept at start (PKG-0471) are claimed through "§5" by step 5-5-2, the store
-# (G445; tests/test_pm_store.nim). The bound's failure before an operation writes (PKG-0470) is 5-5-4's.
-"PKG-0470" = "deferred:tier-5"
+# (G445; tests/test_pm_store.nim). The bound's failure before an operation writes (PKG-0470) is claimed
+# through "§5" by step 5-5-4 (G449; tests/test_pm_install.nim).
 # §7.1: installation and extraction; Runtime and Module Loader execution. The destination checked inside
 # the root (PKG-0204) and the selected artifacts extracted before any use (PKG-0219) are claimed through
 # "§7.1" by step 5-5-2 (DECISIONS G446; tests/test_pm_store.nim); nothing built or executed from an
@@ -188,8 +227,8 @@ default = "deferred:tier-5"
 # "§7.1" the refused shared root (PKG-0487) and the documented root and path rules (PKG-0489), tested in
 # tests/test_pm_store.nim, and shared artifact storage (PKG-0488), which does not arise (an inspection
 # item). All three rest on the owner's Q5 (a), answered 2026-11-22 (DECISIONS G444). The
-# platform profile (PKG-0493) is 5-5-4's.
-"PKG-0493" = "deferred:tier-5"
+# platform profile (PKG-0493) is claimed through "§7.1" by step 5-5-4, an inspection item: docs/DEPLOYMENT.md
+# §1 lists the values and the rules (G453).
 # §8: materialization through a source profile. Claimed by step 5-5-3: a spool file that cannot be
 # written makes the archive unavailable, and its operation `package-unavailable` (G446; tests/test_pm_driver.nim).
 # An extraction write that fails is the store's `sfWrite` (5-5-2), answered by 5-5-4's operations.

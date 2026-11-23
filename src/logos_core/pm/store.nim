@@ -1,8 +1,16 @@
 ## The installed-state store (Tier 5 step 5-5-2; DECISIONS G444, G445, G446's writing half;
 ## docs/PACKAGE-MANAGER.md §8, §9; DEPLOYMENT §1, §9, §19; PACKAGE MANAGER §5 l.818-830, §7.1
-## l.922-933, §10 l.1176-1195, §15 l.1721-1728). A synchronous library over one instance's
-## installation root; the worker and the operations that call it are steps 5-5-3 and 5-5-4. POSIX
-## only.
+## l.922-933, §10 l.1176-1195, §15 l.1721-1728). A library over one instance's installation root;
+## the worker and the operations that call it are steps 5-5-3 and 5-5-4. POSIX only.
+##
+## - **Two halves** (5-5-4; DECISIONS G449; Fable's check of the store's thread, design A):
+##   `StoreFiles` is what only file work reads (the root, the path rules, the sync mode, the
+##   `install/r/` descriptor, the sequence, the index entries, the broken mark), and after the
+##   start it is the worker's alone (`handOver`, sent in `wjStart`): its entries are the only
+##   copy. `InstalledStore` wraps it for the start, which runs on the module thread at
+##   `_MODULE_init`, and for `test_pm_store`; it keeps the lock. The procedures that end in
+##   `Files` are the worker's; the module thread holds the snapshot, the holds and the retired
+##   list (`engine.nim`).
 ##
 ## - **The root** (G444) is `<state_dir>/install/`: `lock` (held for the store's life, so a
 ##   second writer on the same root is refused: PKG-0487), `index` (the committed set),
@@ -27,7 +35,8 @@
 ##   is installed once (PKG-0182).
 ## - **Retirement** (R1): a directory or a record generation the new index no longer names is
 ##   retired with that commit's sequence and deleted by `collect` once no holder of an older
-##   snapshot remains. The holders are the operations' (5-5-4).
+##   snapshot remains. The holders are the engine's operations and queries (5-5-4), and
+##   `collectFiles` refuses, and reports, an item the index still names.
 ## - **The start** (`openStore`): the lock, the probe, then the index. No index and an empty `r/`
 ##   is a fresh root; no index while `r/` holds entries stops the start and deletes nothing (S6).
 ##   Each named record is read, checked against its signed manifest and its admission bound at
@@ -36,12 +45,14 @@
 ## - **The retained hash** (`checkRetained`, PKG-0181, PKG-0293): each artifact file of a record,
 ##   opened below `a/` with no link followed, against its signed digest. Nothing rewrites a
 ##   committed file (PKG-0500).
+## - **A test hook** (`-d:lcnTestHooks` only): `LCN_TEST_EXTRACT_PACE_MS` pauses the extraction
+##   sink that long for each MiB written, so the hosted tests can stop an instance mid-extraction.
 
 {.push raises: [].}
 
 import std/[algorithm, os, sets, strutils, sysrand, tables]
 import results
-import logos_sdk/base/hex
+import logos_sdk/base/[hex, testhooks]
 import ../durable
 import ../package/[lgx, manifest, records, signing]
 import ./[admission, extract, handoff, installed]
@@ -50,6 +61,8 @@ when defined(posix):
   import std/posix
 
 export installed, extract, handoff, admission
+
+testHooksMarker("pm_store")
 
 const
   InstallDir* = "install"
@@ -70,25 +83,6 @@ const
     ## default value (a schema is at most 1 MiB)
 
 type
-  StoreFault* = enum
-    sfInUse = "the installation root is in use"
-    sfDamaged = "the installed state is damaged"
-    sfWrite = "a write to the state filesystem failed"
-    sfEscaped = "an extracted path escaped its realization root"
-    sfIntegrity = "retained artifact bytes are absent or changed"
-    sfPaths = "the package's paths are not installable under this root's rules"
-    sfAdmission = "a required result does not fit the admission bound"
-    sfIndexBound = "the index would pass its bound"
-    sfConflict = "the identity is already installed"
-    sfSource = "the archive's source no longer gives the judged package"
-      ## [G446] the extraction pass met a difference: `package-unavailable` (PM §8 l.1094)
-    sfStopped = "stopped"
-
-  StoreError* = object
-    fault*: StoreFault
-    identity*: Opt[PackageIdentity] ## the record concerned, when there is one (R3)
-    detail*: string ## for the operator's log only: paths and system errors
-
   SyncMode* = enum
     smEachFile = "fsync on each file and directory"
     smSyncfs = "one syncfs on the installation root's filesystem"
@@ -115,31 +109,42 @@ type
     cpAfterIndexTmp ## the new index written to `index.tmp`, not renamed
     cpAfterRename ## the new index in place, the store's memory not yet changed
 
-  Retired = object
-    sequence: uint64 ## the commit that retired it
-    rid: string
-    generation: uint64 ## 0: the whole directory; else `m/record.<generation>`
-
-  Collected* = object
-    deleted*: int
-    failures*: seq[string]
-      ## for the operator's log; each is tried again at the next collect
-
-  InstalledStore* = object
-    stateDir*: string
+  StoreFiles* = object
+    ## [G445; Fable's 5-5-4 check §1] The installation root's file half: what only file work
+    ## reads. After the start it is the worker's alone (`handOver`), and its index entries are
+    ## the only copy in memory. Plain data: it crosses in `wjStart`.
     root*: string ## `<stateDir>/install`
     rules*: PathRules ## the root's path-comparison rules
     syncMode*: SyncMode
     sequence*: uint64 ## commits so far
+    entries*: seq[IndexEntry] ## the committed set, in index order
+    rFd: cint
+    broken: string ## why the store needs a restart: a commit whose outcome is unknown
+    when defined(lcnTestHooks):
+      crashAt*: CrashPoint
+
+  StagedFiles* = object
+    ## A staging's outcome on the file half: a new record directory, or a committed record's
+    ## next generation, written and synced.
+    rid*: string
+    file*: RecordFile
+    base*: string ## its `a/` directory
+    newDir*: bool
+
+  Committed* = object
+    sequence*: uint64 ## the new index's
+    retired*: seq[RetiredItem] ## what it no longer names
+
+  InstalledStore* = object
+    ## The synchronous store: the start, and `test_pm_store`. Its file half goes to the
+    ## worker after the start (`handOver`); the module thread keeps the lock.
+    stateDir*: string
+    files: StoreFiles
     records*: seq[Installed] ## the committed set, in index order
     notes*: seq[string]
       ## the start's notes for the operator's log: what it deleted and what it could not
     lock: DurableLock
-    rFd: cint
     retired: seq[Retired]
-    broken: string ## why the store needs a restart: a commit whose outcome is unknown
-    when defined(lcnTestHooks):
-      crashAt*: CrashPoint
 
 func storeError(
     f: StoreFault, detail: string, identity = Opt.none(PackageIdentity)
@@ -155,13 +160,39 @@ func toStore(e: ExtractError, identity: PackageIdentity): StoreError =
     of efStopped: sfStopped
   storeError(f, e.detail, Opt.some(identity))
 
+func root*(s: InstalledStore): string =
+  s.files.root
+
+func rules*(s: InstalledStore): PathRules =
+  s.files.rules
+
+func syncMode*(s: InstalledStore): SyncMode =
+  s.files.syncMode
+
+func sequence*(s: InstalledStore): uint64 =
+  s.files.sequence
+
+when defined(lcnTestHooks):
+  proc `crashAt=`*(s: var InstalledStore, at: CrashPoint) =
+    s.files.crashAt = at
+
+  proc rules*(s: var InstalledStore): var PathRules =
+    ## A test's change to the root's rules.
+    s.files.rules
+
+  proc `syncMode=`*(s: var InstalledStore, m: SyncMode) =
+    s.files.syncMode = m
+
 func recordName*(generation: uint64): string =
   RecordPrefix & $generation
 
-func recordDir*(s: InstalledStore, rid: string): string =
-  s.root / RecordsDir / rid
+func recordDir*(f: StoreFiles, rid: string): string =
+  f.root / RecordsDir / rid
 
-func baseOf(root, rid: string): string =
+func recordDir*(s: InstalledStore, rid: string): string =
+  s.files.recordDir(rid)
+
+func baseOf*(root, rid: string): string =
   root / RecordsDir / rid / ArtifactsDir & "/"
 
 func find*(s: InstalledStore, identity: PackageIdentity): Opt[int] =
@@ -274,6 +305,16 @@ when defined(posix):
         return ok(p[].documents.getOrDefault(a.id))
       err("artifact " & a.id & " is not a document the reader kept")
 
+  when defined(lcnTestHooks):
+    let extractPaceMs =
+      try:
+        parseInt(getEnv("LCN_TEST_EXTRACT_PACE_MS", "0"))
+      except ValueError:
+        0
+      ## [IMPL] A hosted test's pause for each MiB an extraction writes, in milliseconds (0:
+      ## none): a slow disk, so that the suite can act while the worker is inside a long
+      ## extraction (5-5-4; `test_pm_hosted`). Read once, when the library is loaded.
+
   type StoreSink = object
     ## `extractLgx`'s sink: each artifact a new file below the record's `a/` (G446).
     tree: ptr DirTree
@@ -282,6 +323,8 @@ when defined(posix):
     sync: bool
     stop: StopFlag
     failure: ExtractError
+    when defined(lcnTestHooks):
+      paced: int ## bytes written since the last pause
 
   proc sinkBegin(k: var StoreSink, path: string): bool =
     let w = k.tree[].createFile(path, k.stop)
@@ -293,6 +336,12 @@ when defined(posix):
     true
 
   proc sinkWrite(k: var StoreSink, data: openArray[byte]): bool =
+    when defined(lcnTestHooks):
+      if extractPaceMs > 0:
+        k.paced += data.len
+        while k.paced >= 1 shl 20:
+          k.paced -= 1 shl 20
+          sleep(extractPaceMs)
     let r = k.writer.append(data, k.stop)
     if r.isErr:
       k.failure = r.error
@@ -351,9 +400,11 @@ when defined(posix):
 
   # The start ----------------------------------------------------------------------------
 
-  proc loadRecord(
-      root: string, e: IndexEntry, notes: var seq[string]
-  ): Result[Installed, StoreError] =
+  proc readRecordFiles*(
+      root: string, e: IndexEntry
+  ): Result[(Manifest, RecordFile), StoreError] =
+    ## The record `e` names, read from its `m/`: its signed manifest and its record file,
+    ## each checked against the other and against `e`.
     let id = Opt.some(e.identity)
     let dir = root / RecordsDir / e.rid / MetaDir
     template damaged(msg: string): untyped =
@@ -375,6 +426,12 @@ when defined(posix):
       return err(damaged("its record file holds generation " & $f.generation))
     if f.record.identity != e.identity:
       return err(damaged("its record file is of " & $f.record.identity))
+    ok((m, f))
+
+  proc loadRecord(
+      root: string, e: IndexEntry, notes: var seq[string]
+  ): Result[Installed, StoreError] =
+    let (m, f) = ?readRecordFiles(root, e)
     let i = Installed(rid: e.rid, file: f, manifest: m, base: baseOf(root, e.rid))
     # [PKG-0471] the bound at the current path
     ?admit(f.record, i.base, m, i.reader, atStart = true, notes)
@@ -410,11 +467,23 @@ when defined(posix):
     removeTree(s.root / SpoolDir).isOkOr:
       s.notes.add(error)
 
+  proc close*(f: var StoreFiles) =
+    ## Releases the file half's descriptor (the worker's end).
+    closeFd(f.rFd)
+    f.rFd = -1
+
   proc close*(s: var InstalledStore) =
-    ## Releases the root: its descriptor and its lock.
-    closeFd(s.rFd)
-    s.rFd = -1
+    ## Releases the root: its descriptor, if not handed over, and its lock.
+    s.files.close()
     s.lock.release()
+
+  proc handOver*(s: var InstalledStore): StoreFiles =
+    ## [Fable's 5-5-4 check §1.2] After the start, once the snapshot is built from `records`:
+    ## the file half, the descriptor with it, for the worker's `wjStart`. The store keeps the
+    ## lock and no longer holds the records or their manifests.
+    result = move s.files
+    s.files = StoreFiles(root: result.root, rFd: -1)
+    s.records.setLen(0)
 
   proc openStore*(stateDir: string): Result[InstalledStore, StoreError] =
     ## [G444, G445] Opens the installation root of the instance whose state directory is
@@ -422,7 +491,7 @@ when defined(posix):
     let root = stateDir / InstallDir
     ensurePrivateDir(root).isOkOr:
       return err(storeError(sfWrite, error))
-    var s = InstalledStore(stateDir: stateDir, root: root, rFd: -1)
+    var s = InstalledStore(stateDir: stateDir, files: StoreFiles(root: root, rFd: -1))
     s.lock = acquire(root).valueOr:
       if "in use" in error:
         return err(storeError(sfInUse, root & ": " & error))
@@ -433,8 +502,8 @@ when defined(posix):
 
     let folds = probeIgnoresCase(root).valueOr:
       fail(storeError(sfWrite, error))
-    s.rules = hostPathRules()
-    s.rules.ignoreCase = s.rules.ignoreCase or folds
+    s.files.rules = hostPathRules()
+    s.files.rules.ignoreCase = s.files.rules.ignoreCase or folds
     let rPath = root / RecordsDir
     let held = readBounded(root / IndexName, MaxIndexBytes).valueOr:
       fail(storeError(sfDamaged, error))
@@ -464,44 +533,47 @@ when defined(posix):
     else:
       let index = decodeIndex(held.get).valueOr:
         fail(storeError(sfDamaged, root / IndexName & ": " & error))
-      s.sequence = index.sequence
+      s.files.sequence = index.sequence
       for e in index.records:
         let i = loadRecord(root, e, s.notes).valueOr:
           fail(error)
         s.records.add(i)
+      s.files.entries = index.records
       ensurePrivateDir(rPath).isOkOr:
         fail(storeError(sfWrite, error))
-    s.rFd = openDir(rPath).valueOr:
+    s.files.rFd = openDir(rPath).valueOr:
       fail(storeError(sfWrite, error))
-    s.syncMode = syncModeOf(s.rFd)
+    s.files.syncMode = syncModeOf(s.files.rFd)
     s.deleteUnnamed()
     ok(s)
 
   # Staging ------------------------------------------------------------------------------
 
-  proc usable(s: InstalledStore): Result[void, StoreError] =
-    if s.broken.len > 0:
-      return err(storeError(sfDamaged, "the store needs a restart: " & s.broken))
+  proc usable(f: StoreFiles): Result[void, StoreError] =
+    ## [Fable's 5-5-4 check §1.4] After a commit whose outcome is unknown the file half refuses
+    ## every later stage and commit itself, so no job queued behind it writes.
+    if f.broken.len > 0:
+      return err(storeError(sfDamaged, "the store needs a restart: " & f.broken))
     ok()
 
   proc syncStaged(
-      s: InstalledStore, dirFd, metaFd: cint, identity: PackageIdentity
+      f: StoreFiles, dirFd, metaFd: cint, identity: PackageIdentity
   ): Result[void, StoreError] =
     ## [G445] Step 1's end: what the record directory holds reaches the medium, or, on Darwin,
     ## the drive, whose flush is the index's `F_FULLFSYNC`.
-    case s.syncMode
+    case f.syncMode
     of smSyncfs:
       when defined(linux):
-        syncFs(s.rFd).isOkOr:
+        syncFs(f.rFd).isOkOr:
           return err(
             storeError(
-              sfWrite, "syncfs on " & s.root & ": " & error, Opt.some(identity)
+              sfWrite, "syncfs on " & f.root & ": " & error, Opt.some(identity)
             )
           )
       else:
         raiseAssert "syncfs is Linux's"
     of smEachFile:
-      for (fd, what) in [(metaFd, "m/"), (dirFd, "the record directory"), (s.rFd, "r/")]:
+      for (fd, what) in [(metaFd, "m/"), (dirFd, "the record directory"), (f.rFd, "r/")]:
         if fd < 0:
           continue
         fsyncOnly(fd).isOkOr:
@@ -512,14 +584,14 @@ when defined(posix):
           )
     ok()
 
-  proc crashed(s: InstalledStore, at: CrashPoint): bool =
+  proc crashed(f: StoreFiles, at: CrashPoint): bool =
     when defined(lcnTestHooks):
-      s.crashAt == at
+      f.crashAt == at
     else:
       false
 
   proc writeRecord(
-      s: InstalledStore,
+      f: StoreFiles,
       p: LgxPackage,
       archive: LgxSource,
       fileBytes: seq[byte],
@@ -531,7 +603,7 @@ when defined(posix):
     ## extraction pass over `archive`, then `m/` with the signed manifest and `m/record.1`; then
     ## the sync.
     let m = p.verified.manifest
-    let sync = s.syncMode == smEachFile
+    let sync = f.syncMode == smEachFile
     aFd = makeDirAt(dirFd, ArtifactsDir).valueOr:
       return err(error.toStore(m.identity))
     var tree = initTree(aFd)
@@ -555,25 +627,29 @@ when defined(posix):
       return err(error.toStore(m.identity))
     meta.extractFile(recordName(1), fileBytes, sync, stop).isOkOr:
       return err(error.toStore(m.identity))
-    if s.crashed(cpAfterFiles):
+    if f.crashed(cpAfterFiles):
       return
         err(storeError(sfStopped, "crash hook: after the files", Opt.some(m.identity)))
-    s.syncStaged(dirFd, mFd, m.identity)
+    f.syncStaged(dirFd, mFd, m.identity)
 
-  proc stage*(
-      s: var InstalledStore,
+  proc newRecordId*(): Result[string, string] =
+    ## [G444] A new record directory's name: 128 bits from the OS random source.
+    newRid()
+
+  proc stageFiles*(
+      f: var StoreFiles,
       p: LgxPackage,
       archive: LgxSource,
-      source: PackageSource,
-      edges: seq[ResolvedDependency],
+      record: InstalledRecord,
+      rid: string,
       archiveDigest: Blake3Digest,
       stop: StopFlag = nil,
-  ): Result[Staged, StoreError] =
-    ## [SPEC PM §7.1 l.926-933, l.963] The record of the opened archive `p` (selected for
-    ## installation, verified under the current trust), written in full in a new directory and
-    ## synced. Its files come from the extraction pass over `archive`, the source `p` was judged
-    ## from (G446). Nothing names it until `commit`.
-    ?s.usable()
+  ): Result[StagedFiles, StoreError] =
+    ## [SPEC PM §7.1 l.926-933, l.963] `record`, the record of the opened archive `p`
+    ## (selected for installation, verified under the current trust), written in full in the
+    ## new directory `rid` and synced. Its files come from the extraction pass over `archive`,
+    ## the source `p` was judged from (G446). Nothing names it until a commit.
+    ?f.usable()
     let m = p.verified.manifest
     let id = Opt.some(m.identity)
     # [SPEC PM l.924] the root's own rules, which may be stricter than the host's
@@ -587,49 +663,81 @@ when defined(posix):
     for d in dirs:
       paths.add(d)
     paths.sort()
-    checkInstallPaths(paths, s.rules).isOkOr:
+    checkInstallPaths(paths, f.rules).isOkOr:
       return err(storeError(sfPaths, "variant " & p.variant.id & ": " & error, id))
-    let record = installedRecord(p, source, edges)
-    let rid = newRid().valueOr:
-      return err(storeError(sfWrite, error, id))
-    let base = baseOf(s.root, rid)
+    let base = baseOf(f.root, rid)
     # [G452] Before any write.
     var notes: seq[string]
     ?admit(record, base, m, packageReader(unsafeAddr p), atStart = false, notes)
     let file = RecordFile(record: record, generation: 1, archiveDigest: archiveDigest)
     let fileBytes = encodeRecordFile(file).valueOr:
       return err(storeError(sfAdmission, error, id))
-    let dir = s.recordDir(rid)
-    let dirFd = makeDirAt(s.rFd, rid).valueOr:
+    let dir = f.recordDir(rid)
+    let dirFd = makeDirAt(f.rFd, rid).valueOr:
       return err(error.toStore(m.identity))
     var aFd, mFd = -1.cint
-    let r = s.writeRecord(p, archive, fileBytes, dirFd, aFd, mFd, stop)
+    let r = f.writeRecord(p, archive, fileBytes, dirFd, aFd, mFd, stop)
     closeFd(aFd)
     closeFd(mFd)
     closeFd(dirFd)
     if r.isErr:
-      if not s.crashed(cpAfterFiles):
+      if not f.crashed(cpAfterFiles):
         # Nothing names it: deleted now, or at the next start.
         discard removeTree(dir)
       return err(r.error)
-    ok(Staged(rid: rid, file: file, manifest: m, base: base, newDir: true))
+    ok(StagedFiles(rid: rid, file: file, base: base, newDir: true))
 
-  proc stageSigner*(
-      s: var InstalledStore, at: int, signer: PackageSigner, stop: StopFlag = nil
+  proc stage*(
+      s: var InstalledStore,
+      p: LgxPackage,
+      archive: LgxSource,
+      source: PackageSource,
+      edges: seq[ResolvedDependency],
+      archiveDigest: Blake3Digest,
+      stop: StopFlag = nil,
   ): Result[Staged, StoreError] =
-    ## [SPEC PM §5; G445] The committed record `records[at]` with `signer` retained instead, as
-    ## its next generation `m/record.<g+1>`, synced. The artifacts are not touched.
-    ?s.usable()
-    let cur = s.records[at]
-    let id = Opt.some(cur.file.record.identity)
-    var file = cur.file
+    ## `stageFiles` with the record built from `p` and a new rid.
+    let rid = newRid().valueOr:
+      return err(storeError(sfWrite, error, Opt.some(p.verified.manifest.identity)))
+    let st = ?s.files.stageFiles(
+      p, archive, installedRecord(p, source, edges), rid, archiveDigest, stop
+    )
+    ok(
+      Staged(
+        rid: st.rid,
+        file: st.file,
+        manifest: p.verified.manifest,
+        base: st.base,
+        newDir: true,
+      )
+    )
+
+  proc stageSignerFiles*(
+      f: var StoreFiles,
+      rid: string,
+      generation: uint64,
+      identity: PackageIdentity,
+      signer: PackageSigner,
+      stop: StopFlag = nil,
+  ): Result[StagedFiles, StoreError] =
+    ## [SPEC PM §5; G445] The committed record `rid` at `generation` with `signer` retained
+    ## instead, as its next generation `m/record.<g+1>`, synced. The record and its manifest
+    ## are read from its directory (Fable's 5-5-4 check §1.3); the artifacts are not touched.
+    ?f.usable()
+    let id = Opt.some(identity)
+    let (m, cur) = ?readRecordFiles(
+      f.root, IndexEntry(rid: rid, generation: generation, identity: identity)
+    )
+    var file = cur
     file.record.signer = signer
-    file.generation = cur.file.generation + 1
+    file.generation = cur.generation + 1
+    let base = baseOf(f.root, rid)
+    let held = Installed(rid: rid, file: cur, manifest: m, base: base)
     var notes: seq[string]
-    ?admit(file.record, cur.base, cur.manifest, cur.reader, atStart = false, notes)
+    ?admit(file.record, base, m, held.reader, atStart = false, notes)
     let bytes = encodeRecordFile(file).valueOr:
       return err(storeError(sfAdmission, error, id))
-    let dir = s.recordDir(cur.rid)
+    let dir = f.recordDir(rid)
     let dirFd = openDir(dir).valueOr:
       return err(storeError(sfWrite, error, id))
     defer:
@@ -640,77 +748,98 @@ when defined(posix):
       closeFd(mFd)
     var meta = initTree(mFd)
     let name = recordName(file.generation)
-    let made = meta.extractFile(name, bytes, s.syncMode == smEachFile, stop)
+    let made = meta.extractFile(name, bytes, f.syncMode == smEachFile, stop)
     if made.isErr:
       if made.error.fault != efExists:
         discard removeTree(dir / MetaDir / name)
-      return err(made.error.toStore(file.record.identity))
-    s.syncStaged(-1, mFd, file.record.identity).isOkOr:
+      return err(made.error.toStore(identity))
+    f.syncStaged(-1, mFd, identity).isOkOr:
       discard removeTree(dir / MetaDir / name)
       return err(error)
-    ok(Staged(rid: cur.rid, file: file, manifest: cur.manifest, base: cur.base))
+    ok(StagedFiles(rid: rid, file: file, base: base))
+
+  proc stageSigner*(
+      s: var InstalledStore, at: int, signer: PackageSigner, stop: StopFlag = nil
+  ): Result[Staged, StoreError] =
+    ## `stageSignerFiles` for the committed record `records[at]`.
+    let cur = s.records[at]
+    let st = ?s.files.stageSignerFiles(
+      cur.rid, cur.file.generation, cur.file.record.identity, signer, stop
+    )
+    ok(Staged(rid: st.rid, file: st.file, manifest: cur.manifest, base: cur.base))
+
+  proc abandonFiles*(
+      f: StoreFiles, rid: string, generation: uint64, newDir: bool
+  ): Result[void, string] =
+    ## Deletes what a staging wrote; nothing names it.
+    if newDir:
+      removeTree(f.recordDir(rid))
+    else:
+      removeTree(f.recordDir(rid) / MetaDir / recordName(generation))
 
   proc abandon*(s: var InstalledStore, st: Staged): Result[void, string] =
-    ## Deletes what `st` wrote; nothing names it.
-    if st.newDir:
-      removeTree(s.recordDir(st.rid))
-    else:
-      removeTree(s.recordDir(st.rid) / MetaDir / recordName(st.file.generation))
+    s.files.abandonFiles(st.rid, st.file.generation, st.newDir)
 
   # The commit ---------------------------------------------------------------------------
 
-  proc commit*(
-      s: var InstalledStore, add: openArray[Staged], drop: openArray[string]
-  ): Result[uint64, StoreError] =
+  proc commitFiles*(
+      f: var StoreFiles, add: openArray[IndexEntry], drop: openArray[string]
+  ): Result[Committed, StoreError] =
     ## [SPEC PM §15 l.1721-1728 (PKG-0610); G445] One replacement of the index: the records
-    ## of `drop` (rids) go, each of `add` is named (a new record, or a committed one's next
-    ## generation). Returns the new sequence. What the new index no longer names is retired.
-    ?s.usable()
+    ## of `drop` (rids) go, each of `add` is named (a new record, or, when its rid is named
+    ## already, that record's next generation). Answers the new sequence and what the new
+    ## index no longer names, to be retired.
+    ?f.usable()
     var gone = initHashSet[string]()
     for rid in drop:
       gone.incl(rid)
-    var next: seq[Installed]
-    var replaced: seq[Retired]
-    for r in s.records:
-      if r.rid in gone:
+    var next: seq[IndexEntry]
+    var retired: seq[RetiredItem]
+    var named = initHashSet[string]()
+    for e in f.entries:
+      named.incl(e.rid)
+      if e.rid in gone:
+        retired.add(RetiredItem(rid: e.rid))
         continue
-      var kept = r
-      for st in add:
-        if not st.newDir and st.rid == r.rid:
-          replaced.add(Retired(rid: r.rid, generation: r.file.generation))
-          kept.file = st.file
-      next.add(kept)
-    for st in add:
-      if st.newDir:
-        for r in next:
-          if r.file.record.identity == st.file.record.identity:
-            # [PKG-0182] one record, and so one commitment, per identity
+      var kept = e
+      for a in add:
+        if a.rid == e.rid:
+          if a.identity != e.identity:
+            # [Fable's 5-5-4 check §1.4] the identity check stays with the commit
             return err(
               storeError(
                 sfConflict,
-                $st.file.record.identity & " is installed as " & r.rid,
-                Opt.some(st.file.record.identity),
+                e.rid & " holds " & $e.identity & ", not " & $a.identity,
+                Opt.some(a.identity),
               )
             )
-        next.add(
-          Installed(rid: st.rid, file: st.file, manifest: st.manifest, base: st.base)
-        )
+          retired.add(RetiredItem(rid: e.rid, generation: e.generation))
+          kept.generation = a.generation
+      next.add(kept)
+    for a in add:
+      if a.rid in named:
+        continue
+      for e in next:
+        if e.identity == a.identity:
+          # [PKG-0182] one record, and so one commitment, per identity
+          return err(
+            storeError(
+              sfConflict,
+              $a.identity & " is installed as " & e.rid,
+              Opt.some(a.identity),
+            )
+          )
+      next.add(a)
     next.sort(
-      proc(a, b: Installed): int =
-        identityOrder(a.file.record.identity, b.file.record.identity)
+      proc(a, b: IndexEntry): int =
+        identityOrder(a.identity, b.identity)
     )
-    var index = InstalledIndex(sequence: s.sequence + 1)
-    for r in next:
-      index.records.add(
-        IndexEntry(
-          rid: r.rid, generation: r.file.generation, identity: r.file.record.identity
-        )
-      )
+    let index = InstalledIndex(sequence: f.sequence + 1, records: next)
     let bytes = encodeIndex(index).valueOr:
       return err(storeError(sfIndexBound, error))
     when defined(lcnTestHooks):
-      if s.crashAt == cpAfterIndexTmp:
-        let tmp = s.root / IndexName & TmpSuffix
+      if f.crashAt == cpAfterIndexTmp:
+        let tmp = f.root / IndexName & TmpSuffix
         var text = newString(bytes.len)
         for i, b in bytes:
           text[i] = char(b)
@@ -719,66 +848,124 @@ when defined(posix):
         except CatchableError as e:
           return err(storeError(sfWrite, e.msg))
         return err(storeError(sfStopped, "crash hook: after index.tmp"))
-    writeAtomic(s.root, IndexName, bytes).isOkOr:
+    writeAtomic(f.root, IndexName, bytes).isOkOr:
       # The rename may have happened: only a restart knows which index is in place.
-      s.broken = error
+      f.broken = error
       return err(storeError(sfWrite, error))
     when defined(lcnTestHooks):
-      if s.crashAt == cpAfterRename:
+      if f.crashAt == cpAfterRename:
         return err(storeError(sfStopped, "crash hook: after the rename"))
-    s.sequence = index.sequence
-    s.records = next
+    f.sequence = index.sequence
+    f.entries = index.records
+    ok(Committed(sequence: f.sequence, retired: retired))
+
+  proc commit*(
+      s: var InstalledStore, add: openArray[Staged], drop: openArray[string]
+  ): Result[uint64, StoreError] =
+    ## `commitFiles`, with the store's records and retired list following it.
+    var entries: seq[IndexEntry]
+    for st in add:
+      entries.add(
+        IndexEntry(
+          rid: st.rid, generation: st.file.generation, identity: st.file.record.identity
+        )
+      )
+    let c = ?s.files.commitFiles(entries, drop)
+    var gone = initHashSet[string]()
     for rid in drop:
-      s.retired.add(Retired(sequence: s.sequence, rid: rid))
-    for r in replaced:
-      s.retired.add(Retired(sequence: s.sequence, rid: r.rid, generation: r.generation))
-    ok(s.sequence)
+      gone.incl(rid)
+    var next: seq[Installed]
+    for r in s.records:
+      if r.rid in gone:
+        continue
+      var kept = r
+      for st in add:
+        if not st.newDir and st.rid == r.rid:
+          kept.file = st.file
+      next.add(kept)
+    for st in add:
+      if st.newDir:
+        next.add(
+          Installed(rid: st.rid, file: st.file, manifest: st.manifest, base: st.base)
+        )
+    next.sort(
+      proc(a, b: Installed): int =
+        identityOrder(a.file.record.identity, b.file.record.identity)
+    )
+    s.records = next
+    for item in c.retired:
+      s.retired.add(Retired(sequence: c.sequence, item: item))
+    ok(c.sequence)
 
   # Retirement and the retained hash -----------------------------------------------------
 
   func retiredCount*(s: InstalledStore): int =
     s.retired.len
 
-  proc collect*(s: var InstalledStore, oldestHeld: Opt[uint64]): Collected =
-    ## [R1] Deletes what was retired at or before `oldestHeld`, the oldest snapshot sequence
-    ## still held (none: every retired item). A snapshot at that sequence no longer names it.
-    var keep: seq[Retired]
-    for r in s.retired:
-      if oldestHeld.isSome and oldestHeld.get < r.sequence:
-        keep.add(r)
+  proc collectFiles*(f: StoreFiles, items: openArray[RetiredItem]): Collected =
+    ## [R1] Deletes each retired item. One the index names (a whole record directory, or its
+    ## current generation) is refused and reported: the one mistake that would lose a
+    ## committed package (Fable's 5-5-4 check §1.4).
+    for it in items:
+      var named = false
+      for e in f.entries:
+        if e.rid == it.rid and (it.generation == 0 or it.generation == e.generation):
+          named = true
+          break
+      if named:
+        result.refused.add(it)
         continue
       let path =
-        if r.generation == 0:
-          s.recordDir(r.rid)
+        if it.generation == 0:
+          f.recordDir(it.rid)
         else:
-          s.recordDir(r.rid) / MetaDir / recordName(r.generation)
+          f.recordDir(it.rid) / MetaDir / recordName(it.generation)
       let done = removeTree(path)
       if done.isOk:
         inc result.deleted
       else:
         result.failures.add(done.error)
+        result.failed.add(it)
+
+  proc collect*(s: var InstalledStore, oldestHeld: Opt[uint64]): Collected =
+    ## [R1] Deletes what was retired at or before `oldestHeld`. A snapshot at that sequence
+    ## no longer names it.
+    result = s.files.collectFiles(due(s.retired, oldestHeld))
+    var keep: seq[Retired]
+    for r in s.retired:
+      if (oldestHeld.isSome and oldestHeld.get < r.sequence) or r.item in result.failed:
         keep.add(r)
     s.retired = keep
 
-  proc checkRetained*(i: Installed, stop: StopFlag = nil): Result[void, StoreError] =
-    ## [SPEC PM §5 l.818, §10 l.1176 (PKG-0181, PKG-0293); G445] Each artifact of `i` still
-    ## holds its signed bytes: hashed below `a/`, no link followed.
-    let r = i.file.record
-    let root = openDir(i.base).valueOr:
-      return err(storeError(sfIntegrity, error, Opt.some(r.identity)))
+  proc checkRetainedFiles*(
+      base: string,
+      identity: PackageIdentity,
+      artifacts: openArray[InstalledArtifact],
+      stop: StopFlag = nil,
+  ): Result[void, StoreError] =
+    ## [SPEC PM §5 l.818, §10 l.1176 (PKG-0181, PKG-0293); G445, G448] Each artifact still
+    ## holds its signed bytes: hashed below `base` (a record's `a/`), no link followed. The
+    ## worker's half of the retained check (5-5-4): plain data, no `Installed`.
+    let root = openDir(base).valueOr:
+      return err(storeError(sfIntegrity, error, Opt.some(identity)))
     defer:
       closeFd(root)
-    for a in r.artifacts:
+    for a in artifacts:
       let h = hashBelow(root, a.path, stop).valueOr:
-        return err(error.toStore(r.identity))
+        return err(error.toStore(identity))
       if h != a.hash:
         return err(
           storeError(
             sfIntegrity,
-            localPath(i.base, a) & " does not match its signed digest",
-            Opt.some(r.identity),
+            localPath(base, a) & " does not match its signed digest",
+            Opt.some(identity),
           )
         )
     ok()
+
+  proc checkRetained*(i: Installed, stop: StopFlag = nil): Result[void, StoreError] =
+    ## [SPEC PM §5 l.818, §10 l.1176 (PKG-0181, PKG-0293); G445] Each artifact of `i` still
+    ## holds its signed bytes: hashed below `a/`, no link followed.
+    checkRetainedFiles(i.base, i.file.record.identity, i.file.record.artifacts, stop)
 
 {.pop.}

@@ -35,6 +35,37 @@
 ## the first, sent on a channel as the worker sends it and received as the module thread does, then
 ## decoded a budget at a time. It prints the send, the receive, the turns and the longest.
 ##
+## `installed <records> <dependencies>` (5-5-4, G449; plan §9's measurements; Fable's 5-5-4 check §4)
+## builds a snapshot of that many records at the longest identities (a 128-byte name, PM §4's bound, and a
+## 128-byte version), each with that many dependencies and their recorded edges and one artifact, as the
+## module thread holds it. It prints the heap the snapshot takes, the resolver's copy of it (`packages`,
+## made at each resolution's start) in time and heap, and a commit's new snapshot (`next`, one record
+## added, then one dropped).
+##
+## `module <KiB>` (5-5-4; Fable's check §3) times the hold for one selected module's declaration: its
+## encoding, about <KiB> KiB of `implements` commitments, decoded and typed on the module thread
+## (`moduleDeclaration`); and the copy of one installed record that holds it, which the resolver's
+## `evaluate` makes for each installed record it reads (5-3c's note).
+##
+## `commit <records> <dir>` (5-5-4; Fable's check §4) times the worker's commit over an index of that
+## many records at the longest identities: an installed state in `<dir>` given those entries, one record
+## dropped (`commitFiles`: the new set sorted, the index encoded and replaced with `writeAtomic`).
+##
+## `start <records> <dir>` (5-5-4; G445's note) times the store's start over that many data records
+## written directly into `<dir>` (`openStore`: each record read, decoded, checked against its
+## manifest and its admission bound; no signature is verified at the start).
+##
+## `reply` (5-5-4, G447; planning's ruling of 2026-11-23) times a maximal `{installed}` response (the
+## 16 MiB body, PM l.824) from the worker's encoding to its frame, each step as the code runs it and
+## timed alone, best of five in CPU time: on the worker the value, its encoding and the channel's send;
+## on the module thread the receive, the answer through the shell's future to pmtest's bytes, the kit's
+## `encode`, the confined runtime's completion block (filled a byte at a time, `confinedrt.nim`), the
+## outcome's wipe, the host's copy, its `checkResponse` against pmtest's contract, the block's release
+## and `respond`'s channel send; on the I/O thread the receive, `decodeValue`, the transport's
+## commitment, the Response's encoding and the frame. Two shapes: 65,536 artifacts whose paths fill the
+## body, and one module whose declaration is 4 MiB of `implements` commitments. The completion block,
+## the host's copy, the block's release and the frame repeat their code here, which is private.
+##
 ## Through the driver (5-3c-2, G455) the run is resumed turn by turn: a step ends at each inspection
 ## and at each spent turn, so the longest step is the longest hold on the module thread. `--budget
 ## <work>` sets the work of one turn (`ResolverTurnWork` by default; 0: no turns), and the steps line
@@ -51,10 +82,28 @@
 ##   pmbench archive 64 /tmp/a64.lgx && pmbench inspect /tmp/a64.lgx
 ##   pmbench spool /tmp/a64.lgx /tmp/spool
 ##   pmbench receive 80000 0 && pmbench receive 1 22000
+##   pmbench installed 200000 0 && pmbench installed 10000 4
+##   pmbench module 4096
+##   pmbench commit 10000 /tmp/installed
+##   pmbench start 10000 /tmp/installed
+##   pmbench reply
 
-import std/[monotimes, os, strutils, times]
-import ../src/logos_core/pm/[engine, vcache]
+import std/[algorithm, monotimes, os, strutils, times]
+import logos_sdk/cbor
+import ../src/logos_core/package/[manifest, records, resolver, signing, trust]
+import ../src/logos_core/pm/[engine, installed, vcache]
+when defined(posix):
+  import ../src/logos_core/pm/store
 import ../tests/support/[lgxbuild, oracle_resolver, pmfixture, pmshapes]
+import chronos
+import logos_sdk/base/wipe
+import logos_sdk/codegen/kitrt
+import logos_sdk/iface/[accept, outcome]
+import ../src/logos_core/pm/[admission, jobs, responses]
+import ../src/logos_core/runtime/callcheck
+import ../src/logos_core/transport/envelope
+import ../src/logos_core/transport/io/api
+import ../tests/generated/pmtest_module_types
 
 proc sync(which: string, s: Shape, limits: ResolverLimits) =
   ## One synchronous resolution by the resolver (`new`) or the oracle.
@@ -359,8 +408,427 @@ proc receive(deps, contracts: int) =
     " decode_ms=",
     ms(decode.cpu)
 
+proc longestIdentity(i: int): PackageIdentity =
+  ## A name at PM §4's 128-byte bound and a version as long, distinct for each `i`.
+  let tag = align($i, 8, '0')
+  PackageIdentity(
+    package: repeat('n', MaxPackageNameBytes - tag.len) & tag,
+    version: "1.0.0-" & repeat('p', 128 - 6 - tag.len) & tag,
+  )
+
+proc ridOf(i: int): string =
+  toHex(i, RidChars).toLowerAscii
+
+proc benchRecord(i, deps: int): SnapRecord =
+  ## One record as a snapshot holds it.
+  var p = InstalledPackage(identity: longestIdentity(i))
+  p.commitment.commitmentModel = "logos.commitment.bench"
+  p.signer = PackageSigner(profile: "logos.package-signing.bench")
+  p.source = lgxSource("main", "fetch-fake/state/" & $i)
+  for d in 0 ..< deps:
+    let dep = longestIdentity(i + d + 1)
+    p.dependencies.add(
+      PackageDependency(package: dep.package, kind: rkCompatible, version: "1.0.0")
+    )
+    p.resolvedDependencies.add(ResolvedDependency(identity: dep))
+  let rid = ridOf(i)
+  SnapRecord(
+    package: p,
+    rid: rid,
+    generation: 1,
+    base: "/var/lib/logos/session/modules/pm-1/install/r/" & rid & "/a/",
+    artifacts: @[InstalledArtifact(id: "data", kind: akData, path: "data/payload.bin")],
+  )
+
+proc mib(bytes: int): string =
+  formatFloat(bytes.float / 1048576.0, ffDecimal, 1)
+
+proc installedBench(records, deps: int) =
+  ## [G449] A snapshot of `records` records, the resolver's copy of it, and a commit's next one.
+  let before = getOccupiedMem()
+  var snap = Snapshot(sequence: 1)
+  for i in 0 ..< records:
+    snap.records.add(benchRecord(i, deps))
+  let held = getOccupiedMem() - before
+  var copy: Clock
+  var installed: seq[InstalledPackage]
+  let beforeCopy = getOccupiedMem()
+  copy.timedOn:
+    installed = snap.packages()
+  let copied = getOccupiedMem() - beforeCopy
+  doAssert installed.len == records
+  var added, dropped: Clock
+  var after: Snapshot
+  added.timedOn:
+    after = snap.next(2, Opt.some(benchRecord(records, deps)), [])
+  dropped.timedOn:
+    after = after.next(3, Opt.none(SnapRecord), [ridOf(records div 2)])
+  doAssert after.records.len == records
+  echo "installed records=",
+    records,
+    " dependencies=",
+    deps,
+    " snapshot_mib=",
+    mib(held),
+    " bytes_per_record=",
+    held div max(records, 1),
+    " packages_ms=",
+    ms(copy.cpu),
+    " packages_mib=",
+    mib(copied),
+    " next_add_ms=",
+    ms(added.cpu),
+    " next_drop_ms=",
+    ms(dropped.cpu)
+
+proc moduleBench(kib: int) =
+  ## [Fable's check §3] One module declaration's decode and typing, and a record's copy.
+  var implements: seq[CborValue]
+  var root = newSeq[byte](32)
+  var total = 0
+  while total < kib * 1024:
+    let i = implements.len
+    for k in 0 ..< 4:
+      root[k] = byte((i shr (8 * k)) and 0xff)
+    let c = commitmentValue(root)
+    total += encodeCbor(c).len
+    implements.add(c)
+  let declaration = cborMap(
+    (cbor("module"), cbor("bench_module")),
+    (cbor("artifact"), cbor("bench")),
+    (cbor("implements"), cborArray(implements)),
+  )
+  let bytes = encodeCbor(declaration)
+  var decode: Clock
+  var typed: ModuleDeclaration
+  decode.timedOn:
+    typed = moduleDeclaration(decodeCbor(bytes).get)
+  doAssert typed.implements.len == implements.len
+  let p = InstalledPackage(identity: longestIdentity(0), modules: @[typed])
+  var copy: Clock
+  var copied: InstalledPackage
+  copy.timedOn:
+    copied = p
+  doAssert copied.modules[0].implements.len == implements.len
+  doAssert p.modules[0].implements.len == implements.len # a copy, not a move
+  echo "module bytes=",
+    bytes.len,
+    " implements=",
+    implements.len,
+    " decode_ms=",
+    ms(decode.cpu),
+    " record_copy_ms=",
+    ms(copy.cpu)
+
+when defined(posix):
+  proc commitBench(records: int, dir: string) =
+    ## [Fable's check §4] The worker's commit over an index of `records` records.
+    removeDir(dir)
+    createDir(dir)
+    var store = openStore(dir).get
+    var f = store.handOver()
+    store.close()
+    for i in 0 ..< records:
+      f.entries.add(
+        IndexEntry(rid: ridOf(i), generation: 1, identity: longestIdentity(i))
+      )
+    var commit: Clock
+    var c: Committed
+    commit.timedOn:
+      c = f.commitFiles([], [ridOf(records div 2)]).get
+    let wall0 = getMonoTime()
+    discard f.commitFiles([], [ridOf(records div 3)]).get
+    let wall = getMonoTime() - wall0
+    doAssert c.retired.len == 1
+    echo "commit records=",
+      records,
+      " index_bytes=",
+      getFileSize(dir / "install" / "index"),
+      " cpu_ms=",
+      ms(commit.cpu),
+      " wall_ms=",
+      wall.inMilliseconds
+    f.close()
+    removeDir(dir)
+
+  proc startBench(records: int, dir: string) =
+    ## [G445's note] The store's start over `records` data records, written directly: each one's
+    ## manifest, an empty signature file (the start reads it and verifies nothing) and its record
+    ## file, then the index. Times `openStore`, which reads, decodes and cross-checks each record
+    ## and checks its admission bound.
+    removeDir(dir)
+    createDir(dir)
+    block:
+      var fresh = openStore(dir).get
+      fresh.close()
+    let root = dir / InstallDir
+    let signer =
+      PackageSigner(profile: "logos.package-signing.cose-sign1-slh-dsa-sha2-192s")
+    var entries: seq[IndexEntry]
+    for i in 0 ..< records:
+      let name = "bench-" & align($i, 8, '0')
+      let bytes = encodeCbor(dataManifest(name, "1.0.0"))
+      let m = decodeManifest(bytes).get
+      let r = installedRecord(
+        m,
+        m.commitment.get,
+        m.variants[0],
+        signer,
+        lgxSource("main", name & "@1.0.0"),
+        @[],
+      )
+      let rid = ridOf(i)
+      let meta = root / RecordsDir / rid / MetaDir
+      createDir(meta)
+      createDir(root / RecordsDir / rid / ArtifactsDir)
+      writeFile(meta / ManifestFile, bytes)
+      writeFile(meta / SignatureFile, "")
+      writeFile(
+        meta / recordName(1), encodeRecordFile(RecordFile(record: r, generation: 1)).get
+      )
+      entries.add(IndexEntry(rid: rid, generation: 1, identity: m.identity))
+    entries.sort(
+      proc(a, b: IndexEntry): int =
+        identityOrder(a.identity, b.identity)
+    )
+    writeFile(
+      root / IndexName, encodeIndex(InstalledIndex(sequence: 1, records: entries)).get
+    )
+    var start: Clock
+    var s: InstalledStore
+    let wall0 = getMonoTime()
+    start.timedOn:
+      s = openStore(dir).get
+    let wall = getMonoTime() - wall0
+    doAssert s.records.len == records
+    echo "start records=",
+      records,
+      " cpu_ms=",
+      ms(start.cpu),
+      " wall_ms=",
+      wall.inMilliseconds,
+      " us_per_record=",
+      wall.inMicroseconds div max(records, 1)
+    s.close()
+    removeDir(dir)
+
+const PmtestContract = staticRead("../tests/kit/pmtest_module.cddl")
+  ## pmtest's contract, whose `install_response` the host checks
+const ReplyBase =
+  "/var/lib/logos/session/modules/pm-1/install/r/0123456789abcdef0123456789abcdef/a/"
+
+proc c_calloc(n, s: csize_t): pointer {.importc: "calloc", header: "<stdlib.h>".}
+proc c_free(p: pointer) {.importc: "free", header: "<stdlib.h>".}
+
+proc replyRecord(): InstalledRecord =
+  InstalledRecord(
+    signer: PackageSigner(profile: "logos.package-signing.cose-sign1-slh-dsa-sha2-192s"),
+    identity: PackageIdentity(package: "bench", version: "1.0.0"),
+    source: lgxSource("main", "bench@1.0.0"),
+    variant: "linux-x86_64",
+  )
+
+proc artifactsReply(target: int): InstalledRecord =
+  ## 65,536 artifacts, the most an archive holds, each path lengthened until the response's body
+  ## is about `target` bytes.
+  result = replyRecord()
+  let n = 65_536
+  for i in 0 ..< n:
+    result.artifacts.add(
+      InstalledArtifact(id: "a" & align($i, 6, '0'), kind: akData, path: "p/" & $i)
+    )
+  let first = envelopeBytes(installedResult(result, ReplyBase)).get
+  let per = max(0, (target - first) div n)
+  for a in result.artifacts.mitems:
+    a.path.add(repeat('x', per))
+
+proc moduleReply(kib: int): InstalledRecord =
+  ## One module whose declaration holds about `kib` KiB of `implements` commitments.
+  result = replyRecord()
+  var implements: seq[CborValue]
+  var root = newSeq[byte](32)
+  var total = 0
+  while total < kib * 1024:
+    let i = implements.len
+    for k in 0 ..< 4:
+      root[k] = byte((i shr (8 * k)) and 0xff)
+    let c = commitmentValue(root)
+    total += encodeCbor(c).len
+    implements.add(c)
+  let declaration = cborMap(
+    (cbor("module"), cbor("bench_module")),
+    (cbor("artifact"), cbor("bench")),
+    (cbor("implements"), cborArray(implements)),
+  )
+  result.modules = @[moduleDeclaration(declaration)]
+  result.artifacts =
+    @[InstalledArtifact(id: "bench", kind: akModuleBinary, path: "lib/libbench.so")]
+
+proc pmtestRun(
+    f: Future[OperationAnswer]
+): Future[Result[seq[byte], InvocationFailure]] {.async: (raises: []).} =
+  ## `tests/kit/pmtest_impl.nim`'s `run` for an encoded answer.
+  let a =
+    try:
+      await f
+    except CatchableError:
+      return err(failure(ecModule, "bench"))
+  var b = newSeq[byte](a.encoded.len)
+  if b.len > 0:
+    copyMem(addr b[0], unsafeAddr a.encoded[0], b.len)
+  ok(b)
+
+const ReplySteps = [
+  "worker: the value", "worker: its encoding", "worker: the channel's send",
+  "module: the channel's receive", "module: the answer to pmtest's bytes",
+  "module: the kit's encode", "module: the completion block",
+  "module: the outcome's wipe", "module: the host's copy",
+  "module: the host's checkResponse", "module: the block's release",
+  "module: respond's channel send", "io: the channel's receive", "io: decodeValue",
+  "io: the commitment", "io: the Response's encoding", "io: the frame",
+]
+
+proc replyOnce(
+    r: InstalledRecord, sel: Selected, spent: var array[ReplySteps.len, float]
+): int =
+  ## One response's way, each step's CPU time in `spent`; the body's length.
+  var t = cpuTime()
+  template lap(i: int) =
+    let now = cpuTime()
+    spent[i] = now - t
+    t = now
+
+  # The worker.
+  let v = installedResult(r, ReplyBase)
+  lap(0)
+  let enc = encodeCbor(v)
+  var reply = newString(enc.len)
+  copyMem(addr reply[0], unsafeAddr enc[0], enc.len)
+  lap(1)
+  result = reply.len
+  var wch: Channel[WorkerResult]
+  wch.open()
+  t = cpuTime()
+  wch.send(WorkerResult(kind: wrReply, reply: move reply))
+  lap(2)
+  # The module thread.
+  var got = wch.recv()
+  lap(3)
+  wch.close()
+  t = cpuTime()
+  let fut = newFuture[OperationAnswer]("pmbench")
+  fut.complete(OperationAnswer(kind: oaEncoded, encoded: move got.reply))
+  let rf = pmtestRun(fut)
+  var pmBytes = move(rf.internalValue)
+  lap(4)
+  var outcome =
+    encodedResponse(encode(PmtestInstallResponse(response: move pmBytes.get)))
+  lap(5)
+  doAssert outcome.isOk
+  let n = outcome.get.len
+  let blk = cast[ptr UncheckedArray[uint8]](c_calloc(1, csize_t(16 + n)))
+  let d = cast[ptr UncheckedArray[uint8]](cast[uint](blk) + 16)
+  for i in 0 ..< n:
+    d[i] = outcome.get[i]
+  lap(6)
+  wipe(outcome)
+  lap(7)
+  var hostBytes = newSeq[byte](n)
+  copyMem(addr hostBytes[0], d, n)
+  lap(8)
+  var trail: CallTrail
+  let checked = sel.checkResponse("install", hostBytes, trail)
+  lap(9)
+  doAssert checked.isOk
+  secureZero(blk, 16 + n)
+  c_free(blk)
+  lap(10)
+  var ich: Channel[IoCommand]
+  ich.open()
+  var cmd = IoCommand(
+    kind: IoCommandKind.cmdRespond,
+    requestId: 7,
+    outcome: CallOutcome(ok: true, result: move hostBytes),
+    workEnded: true,
+  )
+  t = cpuTime()
+  ich.send(move cmd)
+  lap(11)
+  # The I/O thread.
+  var io = ich.recv()
+  lap(12)
+  ich.close()
+  t = cpuTime()
+  let dv = decodeValue(io.outcome.result, 128)
+  lap(13)
+  doAssert dv.isOk
+  let commitment = sel.boundary.commitResponse("install", dv.get)
+  lap(14)
+  doAssert commitment.isOk
+  let body = encodeCbor(
+    toCbor(
+      Message(
+        kind: mkResponse,
+        response:
+          Response(id: 7, ok: true, resultMap: dv.get, commitment: commitment.get),
+      )
+    )
+  )
+  lap(15)
+  var frame = newSeqUninit[byte](body.len + 4)
+  copyMem(addr frame[4], unsafeAddr body[0], body.len)
+  lap(16)
+  doAssert frame.len > n
+
+proc replyBench() =
+  ## [G447; planning's ruling of 2026-11-23] A maximal response's way out, step by step.
+  let set = acceptContractSet(PmtestContract).get
+  let sel = buildSelected(set, set.primary.root, 128).get
+  for (name, r) in [
+    ("artifacts-65536", artifactsReply(AdmissionLimit - 4096)),
+    ("module-4MiB", moduleReply(4096)),
+  ]:
+    var best: array[ReplySteps.len, float]
+    for s in best.mitems:
+      s = Inf
+    var bytes = 0
+    for run in 0 ..< 5:
+      var spent: array[ReplySteps.len, float]
+      bytes = replyOnce(r, sel, spent)
+      for i in 0 ..< best.len:
+        best[i] = min(best[i], spent[i])
+    var worker, module, io: float
+    for i, s in ReplySteps:
+      if s.startsWith("worker"):
+        worker += best[i]
+      elif s.startsWith("module"):
+        module += best[i]
+      else:
+        io += best[i]
+    echo "reply shape=", name, " body=", bytes, " admission=", AdmissionLimit
+    for i, s in ReplySteps:
+      echo "  ", alignLeft(s, 38), " cpu_ms=", ms(best[i])
+    echo "  worker_cpu_ms=",
+      ms(worker), " module_cpu_ms=", ms(module), " io_cpu_ms=", ms(io)
+
 proc main() =
   var args = commandLineParams()
+  if args.len == 1 and args[0] == "reply":
+    replyBench()
+    return
+  if args.len == 3 and args[0] == "installed":
+    installedBench(parseInt(args[1]), parseInt(args[2]))
+    return
+  if args.len == 2 and args[0] == "module":
+    moduleBench(parseInt(args[1]))
+    return
+  when defined(posix):
+    if args.len == 3 and args[0] == "commit":
+      commitBench(parseInt(args[1]), args[2])
+      return
+    if args.len == 3 and args[0] == "start":
+      startBench(parseInt(args[1]), args[2])
+      return
   if args.len == 3 and args[0] == "receive":
     receive(parseInt(args[1]), parseInt(args[2]))
     return

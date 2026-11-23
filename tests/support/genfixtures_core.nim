@@ -61,6 +61,9 @@ const
     ),
     # [DECISIONS G405] The Package Manager's shell under a test name (Tier 5
     # step 5-3b, F5): a confined kit, since the shell runs on its module thread.
+    # [G449; Fable's 5-5-4 stop check] With the asynchronous provider API (G338),
+    # so that a Runtime's cancel reaches an operation's handler: a stop ends its
+    # calls through `request_cancel`, not at the stop deadline.
     NimFixture(
       home: coreGeneratedDir,
       module: "pmtest_module_types.nim",
@@ -72,6 +75,7 @@ const
       primary: "tests/kit/pmtest_module.cddl",
       kit: true,
       confined: true,
+      asyncApi: true,
     ),
     NimFixture(
       home: coreGeneratedDir,

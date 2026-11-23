@@ -161,6 +161,44 @@ proc estimatedBytes*(x: Inspection): int =
   for u in x.inputUnits:
     result += unitBytes(u.kind) + u.bytes
 
+proc judgePackage*(
+    source: LgxSource,
+    trust: TrustInput,
+    platform: Platform,
+    limits: LgxLimits,
+    pathRules: PathRules,
+    stop: LgxStop = nil,
+): (Opened, Opt[LgxPackage]) =
+  ## [G403, G447] One archive judged where its bytes are read (the worker, over a spool
+  ## file): the inspection pass (`inspectLgx`), then PKG-0060 last in G29/P7a order. A source
+  ## that cannot be read, or a stop, is `ikUnavailable`; a refused archive `ikIneligible`.
+  ## An eligible one comes with its opened package, for what the worker builds from it.
+  let p = inspectLgx(source, trust, platform, limits, pathRules, stop).valueOr:
+    if error.code == pecPackageUnavailable:
+      return (
+        Opened(inspection: Inspection(kind: ikUnavailable, reason: error.msg)),
+        Opt.none(LgxPackage),
+      )
+    return (
+      Opened(inspection: Inspection(kind: ikIneligible, error: error)),
+      Opt.none(LgxPackage),
+    )
+  # [SPEC PM §4 l.362-364 (PKG-0060); G451] Last in G29/P7a order: each selected module's
+  # configuration declaration resolves, or the archive is `invalid-package`.
+  checkConfigurations(p).isOkOr:
+    return (
+      Opened(inspection: Inspection(kind: ikIneligible, error: error)),
+      Opt.none(LgxPackage),
+    )
+  let o = Opened(
+    inspection: inspection(p),
+    profile: signingProfile(),
+    kid: p.verified.signer.kid,
+    key: p.verified.signer.key,
+    variant: p.variant.id,
+  )
+  (o, Opt.some(p))
+
 proc judge*(
     source: LgxSource,
     trust: TrustInput,
@@ -169,24 +207,8 @@ proc judge*(
     pathRules: PathRules,
     stop: LgxStop = nil,
 ): Opened =
-  ## [G403, G447] One archive judged where its bytes are read (the worker, over a spool
-  ## file): the inspection pass (`inspectLgx`), then PKG-0060 last in G29/P7a order. A source
-  ## that cannot be read, or a stop, is `ikUnavailable`; a refused archive `ikIneligible`.
-  let p = inspectLgx(source, trust, platform, limits, pathRules, stop).valueOr:
-    if error.code == pecPackageUnavailable:
-      return Opened(inspection: Inspection(kind: ikUnavailable, reason: error.msg))
-    return Opened(inspection: Inspection(kind: ikIneligible, error: error))
-  # [SPEC PM §4 l.362-364 (PKG-0060); G451] Last in G29/P7a order: each selected module's
-  # configuration declaration resolves, or the archive is `invalid-package`.
-  checkConfigurations(p).isOkOr:
-    return Opened(inspection: Inspection(kind: ikIneligible, error: error))
-  Opened(
-    inspection: inspection(p),
-    profile: signingProfile(),
-    kid: p.verified.signer.kid,
-    key: p.verified.signer.key,
-    variant: p.variant.id,
-  )
+  ## `judgePackage`'s judgment alone.
+  judgePackage(source, trust, platform, limits, pathRules, stop)[0]
 
 proc lookup*(
     c: var VerificationCache, digest: Blake3Digest, trust: TrustInput
@@ -207,6 +229,16 @@ proc lookup*(
   c.entries.del(digest)
   inc c.counters.dropped
   Opt.none(Inspection)
+
+func entryOf*(c: VerificationCache, digest: Blake3Digest): Opt[CacheEntry] =
+  ## The entry `lookup` just answered: its signer and variant, for an installation
+  ## (5-5-4).
+  if digest in c.entries:
+    try:
+      return Opt.some(c.entries[digest])
+    except KeyError:
+      discard
+  Opt.none(CacheEntry)
 
 proc admit*(
     c: var VerificationCache, digest: Blake3Digest, o: sink Opened, estimate: int

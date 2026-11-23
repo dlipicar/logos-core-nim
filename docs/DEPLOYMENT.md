@@ -42,7 +42,7 @@ CONFORMANCE and `conformance/`.
 | Item | BCP | Part | Verdict | Changes in | Answer | Section | Units |
 |---|---|---|---|---|---|---|---|
 | 0 | l.360-361 | this document, its two tables, every applicable choice indexed | Supported | — | this page; the second table sweeps the other specifications | [§0](#0-this-document) | BCP-0038, BCP-0039 |
-| 1 | l.363 | Package Manager source kinds; provenance profiles | None | Tier 5 | no packaged Package Manager (a test build until step 5-6a); no source kind for package-backed creation, no provenance profile | [§1](#1-package-manager) | BCP-0040 |
+| 1 | l.363 | Package Manager source kinds; provenance profiles | None | Tier 5 | no packaged Package Manager (a test build until step 5-6a); the hosted one realizes `lgx` sources and answers `nix` `unsupported-source`; no source kind for package-backed creation, no provenance profile | [§1](#1-package-manager) | BCP-0040 |
 | 2 | l.364 | protected inputs: representations, provisioning, validation, replacement, revocation | Supported | — | owner-only session files, checked at start, replaced offline for the next start | [§2](#2-protected-inputs) | BCP-0074 |
 | 3 | l.365 | authority-policy format, administration, permissions of bootstrap and system instances | Supported | — | `authority-policy.v1` in daemon-config; system rules S1–S5, and S6–S8 with the CLI module; host-ambient for system instances | [§3](#3-authority-policy) | BCP-0075 |
 | 4a | l.366 | local transport profile | Supported | — | `logos.local.unix-stream` | [§4](#4-transport) | BCP-0041 |
@@ -62,11 +62,11 @@ CONFORMANCE and `conformance/`.
 | 11 | l.373 | attribute-source integration | Supported | — | the Runtime's registry, in process: instance id and module name | [§11](#11-the-attribute-source) | BCP-0077 |
 | 24 | l.374 | Credential Store: credential, format and sealing profiles; backend durability and recovery; operation-record retention; protected delivery and activation | None | — | no Credential Store is deployed or claimed | [§25](#25-credential-store) | BCP-0101 |
 | 12a | l.375 | bounds of the Runtime, Transport, Module Loader and schema processing | Supported | — | finite, listed with their scope and exhaustion behaviour; the CLI module's in DAEMON.md §7a | [§12](#12-resource-bounds) | BCP-0047 |
-| 12b | l.375 | Package Manager bounds, dependency resolution | None | Tier 5 | no packaged Package Manager; the hosted one's bounds and resolver limits are listed | [§12](#12-resource-bounds) | BCP-0047 |
+| 12b | l.375 | Package Manager bounds, dependency resolution | None | Tier 5 | no packaged Package Manager (a test build until step 5-6a); the hosted one's bounds, resolver limits, queues, operation deadline and budget are listed | [§12](#12-resource-bounds) | BCP-0047 |
 | 13 | l.376 | deadlines: start points, phases, effects, escalation, shared-process limits | Supported | — | five deadlines; a Module Host may be ended by force; a direct realization never | [§13](#13-deadlines) | BCP-0078 |
 | 14 | l.377 | configuration-preserving upgrade; verified defaults | Supported | — | the operator carries configuration; defaults come from accepted declarations | [§14](#14-upgrade-and-verified-defaults) | BCP-0079 |
 | 15 | l.378 | presentation profile | None | — | none selected (BCP l.346); the CLI writes to the launcher's terminal, which is not a presentation profile | [§15](#15-presentation) | BCP-0048 |
-| 16a | l.380 | Package Manager installation, inventory, shared state | None | Tier 5 | no installation, inventory or shared package state | [§1](#1-package-manager) | BCP-0080 |
+| 16a | l.380 | Package Manager installation, inventory, shared state | None | Tier 5 | no packaged Package Manager (a test build until step 5-6a); the hosted one installs into its own instance's state directory, one inventory per instance, never shared | [§1](#1-package-manager) | BCP-0080 |
 | 16b | l.380 | operating-system integration material | Supported | — | a systemd user unit and a launchd agent, owner-installed | [§16](#16-facilities-that-cannot-be-supplied) | BCP-0080 |
 | 17 | l.380-382 | a facility or constraint that cannot be supplied fails | Supported | — | the dependent realization fails; nothing falls back | [§16](#16-facilities-that-cannot-be-supplied) | BCP-0081 |
 | 25 | l.383 | each finite admission pool shared by consumers or providers: whether a per-consumer or per-provider limit applies | Supported | — | each pool with its total and its per-consumer or per-provider limit, or none | [§12](#admission-pools) | BCP-0102 |
@@ -112,13 +112,16 @@ over the lines the revision changed: it added IF l.1473 and PM l.1727, the Crede
 | PM | l.1252 | the maximum value supported for each resolver limit | [CONFORMANCE.md](CONFORMANCE.md), "Resolver limits" | PKG-0597 |
 | CFG | l.266 | the configuration-preserving upgrade workflow | [§14](#14-upgrade-and-verified-defaults) | CFG-0134, CFG-0135 |
 | PM | l.408 | whether continued execution depends on current package-signing trust | no ([§1](#1-package-manager)) | PKG-0422 |
+| PM | l.926-931 | the installation and inventory scope, shared state, and the root's path-comparison rules | the instance's own `install/`, never shared, its rules found at each start ([§1](#1-package-manager)) | PKG-0487, PKG-0488, PKG-0489 |
+| PM | l.950 | the supported `os`, `architecture` and `abi` values and their matching rules | the host's platform, G73's values and rules ([§1](#1-package-manager)) | PKG-0493 |
+| PM | l.1181-1183 | how a module reaches its packaged resources and data | through its schema-typed configuration only ([§1](#1-package-manager)) | PKG-0498 |
+| PM | l.1721-1727 | the storage failure model under which installed state is committed | a write is complete once synced; the index replaced atomically ([§19](#19-state-at-rest)) | PKG-0610 |
 
 The Package Manager's catalogs (PM l.834) and its bindings' retrieval and locators (PM l.854-857) are
 documented in [PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) §3 and §4, with the locator encodings in
-`sdk/docs/STORAGE-FETCH.md` §5. Its duties of l.931 (installation scope), l.1183 (resource access) and
-l.1727 (the storage failure model) are answered in [§1](#1-package-manager) and [§19](#19-state-at-rest) for
-the store step 5-5-2 builds; they become rows of this table with step 5-5-4, when installation runs. l.1731
-(retention) comes with a later step of Tier 5. The Credential
+`sdk/docs/STORAGE-FETCH.md` §5. Its duties of l.926-931 (installation scope), l.950 (the platform profile),
+l.1183 (resource access) and l.1727 (the storage failure model) are rows of this table since step 5-5-4,
+when installation runs. l.1731 (the retention policy of installed-state snapshots) comes with step 5-6b. The Credential
 Store's (CS l.319, l.370, l.476) belong to a Credential Store, which it does not have either (§25).
 The other hits of the search are duties of a specification, a record or a message (for example HASH
 l.35, R l.3265, T l.564), not choices of a deployment.
@@ -131,15 +134,25 @@ Items 1, 5b, 5c, 10b, 12b and 16a.
   §3; DECISIONS G399), logosd designates one operator instance, `hosted_dynamic`, as the Package
   Manager and hands it its `lcn.pm_input` as protected realization input (G400): the bindings to its
   Storage providers, the protected catalog, the resolver limits and a copy of the trust file the start
-  accepted. It acquires the catalog over its own routes (G401, G402) and resolves roots against it
-  ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md)). Until step 5-6a its module is a test build
-  (`pmtest_module`), so a packaged deployment has none, and nothing installs, inventories or selects a
-  package: there is no package-backed creation, installation scope, inventory or shared package state.
-  A module still comes from daemon-config as an artifact path with its digest (§10). `lcn-pkg`, the
-  LGX parser and the resolver are also tools (DECISIONS I49, I69).
+  accepted. It acquires the catalog over its own routes (G401, G402) and inspects, installs, removes
+  and updates packages against it ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) §11; DECISIONS G449). Until
+  step 5-6a its module is a test build (`pmtest_module`), so a packaged deployment has none, and no
+  package is selected for execution: there is no package-backed creation, and nothing reads the
+  inventory but the Package Manager. A module still comes from daemon-config as an artifact path with
+  its digest (§10). `lcn-pkg`, the LGX parser and the resolver are also tools (DECISIONS I49, I69).
+- **Source kinds** (BCP l.343-349): `lgx` is realized, from a Storage binding's object (PM §7.1, §13);
+  `nix` is not, and a request that selects it is answered `unsupported-source` (PKG-0190). No
+  provenance profile is selected (below).
+- **The target platform** (PM l.950; DECISIONS G453, G73). The Package Manager installs for the host it
+  runs on, since the Loader that uses the artifacts runs there too. The values: `os` `linux` or
+  `darwin`, `architecture` `x86_64` or `aarch64`, `abi` `gnu` or `musl` on Linux (as the build) and
+  none on Darwin. The values the profile defines are those and `windows`, `android`, `ios`, `mingw`
+  and `msvc`. The rules: each field a variant names matches a defined value byte for byte, a value with
+  no defined rule never matches, a field it leaves out constrains nothing, and the first compatible
+  variant in declared order is selected; with none, `incompatible-platform`.
 - **The installation root** (PM l.924-934; DECISIONS G444). Step 5-5-2 builds it and step 5-5-4's
-  operations use it, so until then no root exists. Its scope is choice (a) of the owner's question Q5,
-  answered on 2026-11-22.
+  operations install into it. Its scope is choice (a) of the owner's question Q5, answered on
+  2026-11-22.
   - **Place and scope:** `install/` in the Package Manager instance's own state directory
     (`state/modules/<assignment>/install/`, [§9](#9-directories-and-state)). The inventory is the service
     instance's (PM l.927): one per Package Manager instance, and two instances never share one, since
@@ -445,10 +458,13 @@ reached:
   judged by the worker thread, never held in memory: the budget below), the catalog document (4 MiB) and
   its entries (65,536), the verification cache (256 entries, each at most 256 KiB by its estimate),
   the records, entries and contracts one operation reads (`operation_entries`, 262,144) and one
-  operation's time (`operation_deadline_ms`, 1 h; checked from 5-5-4). A larger archive leaves its
+  operation's time (`operation_deadline_ms`, 1 h, from taking its slot). A larger archive leaves its
   candidate unavailable; a larger catalog is refused and the one in use stays; the cache drops its
   least recently used entry, and keeps no inspection over its estimate's bound; an operation past
-  `operation_entries` ends `package-unavailable`, and the log names the key;
+  `operation_entries` ends `package-unavailable`, and the log names the key; one past
+  `operation_deadline_ms` ends `package-unavailable` too, its retrieval cancelled, unless its last
+  commit has begun. Each slot queues at most 16 requests, and the next is refused with `MODULE_ERROR`
+  at once (DECISIONS G449);
 - the LGX reader's table (DECISIONS G75, `DefaultLgxLimits`): compressed 1 GiB, decompressed 4 GiB,
   65,536 entries, one entry 1 GiB, the selected variant's files 4 GiB, and its kept contract and
   configuration documents 64 MiB in all (fixed, not derived from `archive_bytes`; G446). The table is
@@ -459,20 +475,27 @@ reached:
 
 ### The Package Manager's budget
 
-What one Package Manager instance holds, by part (DECISIONS G446, G447, G477; plan 5-5 §4.13). The rows
-marked 5-5-4 come with the operations: until then the instance installs nothing, and `pmtest_module`'s
-`resolve` runs any number of resolutions at once.
+What one Package Manager instance holds, by part (DECISIONS G446, G447, G449, G477; plan 5-5 §4.13).
+`pmtest_module`'s `resolve`, a 5-3b test method outside the slots, still runs any number of resolutions
+at once; the operations run in the slots.
 
 | Part | Resource | Lives for | Bound |
 |---|---|---|---|
-| The spool | disk, the state directory's file system | an archive's judgment | the archives spooled at once are at most 4 × `archive_bytes`, 4 GiB at the default; a retrieval that would pass it waits. With 5-5-4 a mutation keeps its selected archives under 4 × `archive_bytes` of its own, so the host's spool is at most 8 × `archive_bytes`, 8 GiB. Not synced; the start empties it |
+| The spool | disk, the state directory's file system | an archive's judgment; a mutation's selected archives until their commits | the inspections' archives spooled at once are at most 4 × `archive_bytes`, 4 GiB at the default; a retrieval that would pass it waits. A mutation keeps its selected archives under 4 × `archive_bytes` of its own, the oldest deleted past it and fetched again by digest when needed, so the host's spool is at most 8 × `archive_bytes`, 8 GiB. Not synced; the start empties it |
 | The reader's working set | worker memory | one inspection | 1 MiB pieces, a 4 MiB manifest, at most 64 MiB of documents: 10.6 MiB measured at 1 GiB under orc, 13.2 MiB under refc. One worker per instance, one job at a time; the benchmark's whole process, both sides, peaked at 13.8 MiB under orc judging 1 GiB (CONFORMANCE "The worker and the spool") |
-| The resolver's state | module thread memory | an operation | `operation_entries` × the bytes a unit takes: at the default at most about 460 MiB (1.8 KiB a unit, the worst measured, with the corrected unit); at the maximum, 2^24, about 29 GiB for one operation (DECISIONS G477). With 5-5-4's two slots, two in flight per instance, about 0.9 GiB at the default |
+| The resolver's state | module thread memory | an operation | `operation_entries` × the bytes a unit takes: at the default at most about 460 MiB (1.8 KiB a unit, the worst measured, with the corrected unit); at the maximum, 2^24, about 29 GiB for one operation (DECISIONS G477). With the two slots, two in flight per instance, about 0.9 GiB at the default. Each takes a copy of the installed records it resolves against: 147 MiB under orc and 261 MiB under refc at the index's bound (200,000 records) |
 | The verification cache | module thread memory | the instance | `cache_entries` × 256 KiB by the estimate: 64 MiB at the default, 1 GiB at the maximum |
 | The catalog | module thread memory | the instance, and a copy for each operation | the catalog in use, from at most `catalog_bytes` (4 MiB): about 43 MiB under orc and 66 MiB under refc for the most entries 4 MiB holds (49,930 short ones), its document's bytes included. Each running operation's resolver takes its own copy of the entries (`pm/driver.nim` `initDriver`), about 20 MiB under orc at that size |
 | A judgment in flight | both threads | one hand-over, then its decoding turns | one encoded judgment, at most the manifest's 4 MiB of bytes, moved under orc and copied under refc (up to about 23 ms of the module thread for 80,000 entries), then decoded at most 1,024 entries and contracts a turn; one whose operation went is freed at the same rate |
 | An archive's pieces in flight | memory, the worker's queue | one retrieval | at most 4 pieces of 1 MiB (`SpoolLag`) per retrieval, one retrieval at a time per binding |
-| The installed-state snapshots, a response being built, retired directories, the queues, a request's wait, an operation's time | | | 5-5-4 |
+| The installed-state snapshots | module thread memory | an operation | each running operation and query holds the snapshot current when it began, so with two slots and queries up to a few are alive; they share every record they have in common, so a commit adds one record's size. One snapshot at the index's bound (`MaxIndexBytes`, 64 MiB encoded; 200,000 records at the longest identities) is 188 MiB under orc and 259 MiB under refc |
+| The installed state's start | time, inside `_MODULE_init` | each start | every record read, decoded and checked against its manifest (PKG-0471): about 1 ms of CPU a record under orc on the Mac, half of it the manifest's commitment, and 1.5 ms under refc (CONFORMANCE, "The operations"). 50 s at 50,000 records under orc, so the default startup deadline (120 s, item 13) holds about 120,000 records under orc and 80,000 under refc, below the index's bound of 200,000; a larger installed state needs a larger `runtime.startup_deadline_ms` (DECISIONS G445) |
+| A module declaration being decoded | module thread | one turn | one selected module's declaration a turn: 21 ms under orc and 38 ms under refc for a 4 MiB module of 22,076 commitments |
+| A response being built | module thread memory | one call | within the 16 MiB body (PM l.824, the admission bound), one for each running call; the root's `{installed}` and an inspection's `{inspection}` are encoded on the worker. On its way out a 16 MiB body holds the module thread about 99 ms under orc and 175 ms under refc on the Mac, about 200 ms and 390 ms on server.lan, more than a turn (DECISIONS G447's exception, a confined kit module's) |
+| Retired directories | disk, the installation root | while a snapshot older than their retirement is held | a removed or replaced package's directory, each within the extracted bound, 4 GiB at the default |
+| The queues | module thread memory | while waiting | 2 × 16 decoded requests; the 17th in a slot is refused with `MODULE_ERROR` |
+| A request's wait | time | while queued | 16 × `operation_deadline_ms`, 16 h at the defaults, for a caller with no deadline of its own; in work, 16 operations each within `operation_entries` |
+| An operation | time | from taking its slot | `operation_deadline_ms`, 1 h at the default; then `package-unavailable`, unless its last commit has begun. A worker job it leaves runs to its end: at most one more extraction of the largest archive (DECISIONS G449) |
 
 ### Admission pools
 

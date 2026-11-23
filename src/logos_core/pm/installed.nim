@@ -69,6 +69,42 @@ type
     resolvedDependencies*: seq[ResolvedDependency]
       ## one edge per direct manifest dependency, in declaration order (PM l.1337-1341)
 
+  StoreFault* = enum
+    sfInUse = "the installation root is in use"
+    sfDamaged = "the installed state is damaged"
+    sfWrite = "a write to the state filesystem failed"
+    sfEscaped = "an extracted path escaped its realization root"
+    sfIntegrity = "retained artifact bytes are absent or changed"
+    sfPaths = "the package's paths are not installable under this root's rules"
+    sfAdmission = "a required result does not fit the admission bound"
+    sfIndexBound = "the index would pass its bound"
+    sfConflict = "the identity is already installed"
+    sfSource = "the archive's source no longer gives the judged package"
+      ## [G446] the extraction pass met a difference: `package-unavailable` (PM §8 l.1094)
+    sfStopped = "stopped"
+
+  StoreError* = object
+    fault*: StoreFault
+    identity*: Opt[PackageIdentity] ## the record concerned, when there is one (R3)
+    detail*: string ## for the operator's log only: paths and system errors
+
+  RetiredItem* = object
+    ## [R1] What a commit stopped naming: a record directory, or one generation of a record.
+    rid*: string
+    generation*: uint64 ## 0: the whole directory; else `m/record.<generation>`
+
+  Retired* = object
+    sequence*: uint64 ## the commit that retired it
+    item*: RetiredItem
+
+  Collected* = object
+    deleted*: int
+    failures*: seq[string]
+      ## for the operator's log; each is tried again at the next collect
+    failed*: seq[RetiredItem] ## not deleted: retired still, for the next collect
+    refused*: seq[RetiredItem]
+      ## [Fable's 5-5-4 check §1.4] named by the index: never deleted, and reported
+
   RecordFile* = object ## [G445] `m/record.<generation>`.
     record*: InstalledRecord
     generation*: uint64 ## from 1
@@ -452,5 +488,12 @@ proc decodeIndex*(bytes: openArray[byte]): Result[InstalledIndex, string] =
     )
   ?checkEntries(i.records)
   ok(i)
+
+func due*(retired: openArray[Retired], oldestHeld: Opt[uint64]): seq[RetiredItem] =
+  ## [R1] What a collect may delete: retired at or before `oldestHeld`, the oldest snapshot
+  ## sequence still held (none: every retired item).
+  for r in retired:
+    if oldestHeld.isNone or r.sequence <= oldestHeld.get:
+      result.add(r.item)
 
 {.pop.}

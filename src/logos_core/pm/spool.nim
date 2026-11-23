@@ -70,9 +70,10 @@ func isSpoolName*(name: string): bool =
       return false
   true
 
-proc fail(w: var SpoolWriter, what: string, code: cint) =
-  if w.failure.len == 0:
-    w.failure = what & " " & w.path & ": " & $strerror(code)
+when defined(posix):
+  proc fail(w: var SpoolWriter, what: string, code: cint) =
+    if w.failure.len == 0:
+      w.failure = what & " " & w.path & ": " & $strerror(code)
 
 proc createSpool*(dir, name: string): SpoolWriter =
   ## [G446] A new spool file `dir/name`; a failure is kept in `failure`.

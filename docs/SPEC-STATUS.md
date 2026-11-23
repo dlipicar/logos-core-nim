@@ -709,6 +709,35 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
 
   Claimed: PKG-0011, PKG-0012, PKG-0192 and PKG-0271. 4 units. PKG 327/327.
 
+- 2026-11-23, Tier 5 step 5-5-4 (I121; G448, G449, G453's target platform; G446's spool budget; G447's stop
+  corrected), the operations. Step 5-5 is complete with it:
+  - `pm/slots.nim`: two slots, inspections and installed-state mutations, each with a queue of 16 behind it;
+    `MODULE_ERROR` past that.
+  - The engine's operations: `inspect`, `install`, `remove`, `update` and the `handoff` query; the snapshot of
+    shared immutable records with its holds, the retired list and `wjCollect`; `operation_deadline_ms` and the
+    last-commit rule; the fault map; a log line for each operation; the mutation's spool budget with the refetch
+    by digest; the retained check on the worker.
+  - The store in two halves (Fable's design A): the worker owns the files from the start's hand-over, the module
+    thread owns the snapshot.
+  - `pmtest_module` gains the five methods, and its kit the asynchronous provider API, so that a stop cancels an
+    operation's call (0.49 s, against 10.08 s without it).
+  - Suite `test_pm_install` (39 cases), cases in `test_pm_hosted` and `test_logosd_pm`; `tools/pmbench.nim
+    installed`, `module`, `commit`, `start` and `reply`; CONFORMANCE "The operations"; DEPLOYMENT rows 1, 12b
+    and 16a, §1, §12 and four duty rows; PACKAGE-MANAGER §11.
+  - Limits stated in G449: no job cancel, a call cancelled after its last commit began, a worker that hangs. And
+    in G445: the store's start takes about 1 ms a record under orc on the Mac, so the default startup deadline
+    holds about 120,000 records, below the index's 200,000 (DEPLOYMENT §12).
+  - The worker encodes each response, and the module thread carries the bytes (G447). Their way out is a stated
+    exception, a confined kit module's: a 16 MiB `{installed}` holds the module thread 99 ms under orc and 175 ms
+    under refc on the Mac, about 200 ms and 390 ms on server.lan (the host's check and commitment, the SDK's
+    completion copy, the kit's second encoding), left to the core item "large-response completion".
+
+  Claimed: PKG-0080, PKG-0189, PKG-0190, PKG-0389 to PKG-0410, PKG-0436, PKG-0437, PKG-0439, PKG-0440, PKG-0470,
+  PKG-0534 to PKG-0537, PKG-0608 and PKG-0609 by test; PKG-0222, PKG-0363, PKG-0441 and PKG-0493 by inspection;
+  BCP-0033 and BCP-0035. 40 PKG units and 2 BCP units. PKG-0411 is `out-of-scope`: a MAY not taken, since every
+  installed-state mutation is serialized in one slot (G449). TXT-0493 to TXT-0495 and PKG-0608 and PKG-0609 leave
+  the re-pin's deferred list. PKG 367/367, BCP 53/53. Areas A3 and A4's 5-5 units are all claimed.
+
 ## Tiers at f4f83471 (the original plan)
 
 | Tier | Area | Verdict |

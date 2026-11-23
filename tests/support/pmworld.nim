@@ -14,11 +14,17 @@ import ../../src/logos_core/package/resolver
 import ../../src/logos_core/pm/engine
 import ./pmfixture
 
+when defined(posix):
+  import ../../src/logos_core/pm/store
+
 export engine, tables
 
 type
   KeyCounter* = ref object
     n*: int
+
+  FakeClock* = ref object ## [G449] the world's monotonic milliseconds
+    ms*: int64
 
   World* = object
     e*: Engine
@@ -26,7 +32,9 @@ type
     logs*: seq[string]
     kept*: seq[seq[byte]]
     replies*: seq[Command]
+    answers*: seq[Command] ## [G449] `cmAnswer`s, in order
     keys*: KeyCounter
+    clock*: FakeClock
     continues*: seq[uint64]
       ## [G455] `cmContinue`s issued and not yet run, oldest first: each runs
       ## as a later event (`turn`), as the shell's own `callSoon` runs it
@@ -84,6 +92,8 @@ proc emit*(w: var World, cmds: seq[Command]) =
       w.kept.add(c.kept)
     of cmReply:
       w.replies.add(c)
+    of cmAnswer:
+      w.answers.add(c)
     of cmContinue:
       w.continues.add(c.operation)
     of cmWork:
@@ -138,6 +148,7 @@ proc newWorld*(
     trust = defaultTrust(),
     resolverLimits = MaxResolverLimits,
     turnWork = ResolverTurnWork,
+    spoolBudgetArchives = SpoolBudgetArchives,
 ): World =
   let input = decodePmInput(
     pmValue(
@@ -152,14 +163,34 @@ proc newWorld*(
   let keys: KeySource = proc(): string {.gcsafe, raises: [].} =
     inc counter.n
     "key-" & $counter.n
+  let fake = FakeClock()
+  let clock: Clock = proc(): int64 {.gcsafe, raises: [].} =
+    fake.ms
   let (e, cmds) = initEngine(
-    input, kept, keys, linuxHost, pathRules = PathRules(), turnWork = turnWork
+    input,
+    kept,
+    keys,
+    linuxHost,
+    pathRules = PathRules(),
+    turnWork = turnWork,
+    clock = clock,
+    spoolBudgetArchives = spoolBudgetArchives,
   )
-  result = World(e: e, keys: counter, spoolDir: spoolDirOf())
+  result = World(e: e, keys: counter, clock: fake, spoolDir: spoolDirOf())
   discard result.worker.runJob(
     WorkerJob(kind: wjStart, config: result.e.workerConfig(result.spoolDir)), nil
   )
   result.emit(cmds)
+
+when defined(posix):
+  proc attachStore*(w: var World, store: var InstalledStore) =
+    ## [5-5-4] The installed state `store` opened: the engine's snapshot is built from it,
+    ## and its file half goes to the inline worker, as the shell's open does.
+    w.e.setSnapshot(snapshotOf(store))
+    var config = w.e.workerConfig(w.spoolDir)
+    config.store = store.handOver()
+    config.hasStore = true
+    discard w.worker.runJob(WorkerJob(kind: wjStart, config: config), nil)
 
 proc bringUp*(w: var World, binding = "main", route = "route-1", ready = true) =
   ## Answers the binding's establishment and its readiness.
