@@ -30,10 +30,13 @@
 
 {.push raises: [].}
 
-import std/[algorithm, sequtils, sets, tables]
+import std/[algorithm, hashes, sequtils, sets, tables]
 import results
 import logos_sdk/cbor
+import logos_sdk/base/testhooks
 import ./[errors, lgx, manifest, records, semver, signing, trust]
+
+testHooksMarker("resolver")
 
 export results, errors, records, signing
 
@@ -386,14 +389,35 @@ func provided*(modules: openArray[ModuleDeclaration]): seq[CborValue] =
 # The search state ------------------------------------------------------------------
 
 type
+  Span = object
+    ## [IMPL-DECISION G455] (5-3c-3) A run of contract numbers in one read
+    ## record's list (`Resolver.lists`), read in place: requirements and
+    ## candidates hold one instead of a copy of the contracts.
+    list: int32 ## the record's list; -1: none
+    at, len: int32
+
+  Numbers = object
+    ## [IMPL-DECISION G455] (5-3c-3) One read record's contracts, numbered:
+    ## each dependency entry's as it lists them, then the contracts the record
+    ## provides, once each and in ascending number order.
+    list: seq[int32]
+    entryAt: seq[int32]
+      ## where each dependency entry's contracts start in `list`, then where the
+      ## provided ones start: one more than the entries
+
+  InternNeed = object
+    ## [IMPL-DECISION G455] (5-3c-3) A record read within the operation bound
+    ## whose contracts are not numbered yet.
+    installed: int ## the installed record, or -1: the catalog record of `source`
+    source: seq[byte] ## the catalog record's source encoding
+
   Req = object
     kind: RequirementKind
     version: string
     pin: Opt[ManifestCommitment]
       ## [SPEC PM §11 l.1304] the commitment of an installed dependent's
       ## recorded edge
-    contracts: seq[seq[byte]]
-      ## [SPEC PM §11 l.1215] the encodings of the contracts it lists
+    contracts: Span ## [SPEC PM §11 l.1215] the numbers of the contracts it lists
 
   NameId = int32
     ## [IMPL-DECISION G454] A package name's number in one run (Fable F5): the
@@ -410,13 +434,14 @@ type
     depIds: seq[NameId] ## `depNames`' numbers, set when it is bound
     deps: seq[Req]
     edges: Opt[seq[ResolvedDependency]] ## an installed candidate's recorded edges
-    provides: HashSet[seq[byte]]
+    provides: Span ## the numbers of the contracts it provides, ascending
 
   CatalogPick = object
     commitment: ManifestCommitment
     source: PackageSource
     deps: seq[PackageDependency]
-    provides: HashSet[seq[byte]]
+    numbers: int32 ## its record's numbers (`Resolver.lists`)
+    provides: Span ## the numbers of the contracts it provides, ascending
 
   Eval = object
     picks: seq[CatalogPick]
@@ -433,11 +458,23 @@ type
       ## which do not change while the frame is on the stack (G454)
     depth: int ## the name's depth, -1 until a version is first tried
     bound: bool
+    # [IMPL-DECISION G455] (5-3c-3) What its requirements ask of every
+    # candidate, gathered once when it is pushed (`needSteps`):
+    need: seq[int32] ## the contracts they list, once each
+    pin: Opt[ManifestCommitment] ## the first commitment they pin
+    pinConflict: bool ## they pin two commitments: no candidate is allowed
 
   Bind = object
     id: NameId
     trail: int ## where the depth changes of its propagation start on `trail`
     linked: bool ## it passed both checks: its edges are in `kids`
+
+  Blocks[T] = object
+    ## [IMPL-DECISION G455] (5-3c-3) A list kept in blocks of `BlockLen`: it
+    ## grows without copying what it holds, so no append is a step of its
+    ## length.
+    blocks: seq[seq[T]]
+    len: int
 
   Resolver {.acyclic.} = object
     ## [IMPL-DECISION G455] Acyclic: it holds no reference back to its run or
@@ -483,6 +520,34 @@ type
     work: int64
       ## [IMPL-DECISION G454] the work units counted so far (5-3c's plan §3.6):
       ## each O(1) or O(log n), the same total for the same inputs
+    checkedAt: int64 ## the work count at the last turn check
+    largestStep: int64
+      ## [IMPL-DECISION G455] (5-3c-3) the most work between two turn checks:
+      ## what one turn can overrun its budget by
+    # [IMPL-DECISION G455] (5-3c-3) Contracts, numbered once in a run, by their
+    # deterministic encoding (the equality the oracle pins):
+    encodings: Blocks[seq[byte]] ## by number, its encoding
+    hashes: Blocks[Hash] ## by number, its encoding's hash
+    slots: seq[seq[int32]]
+      ## open addressing over the numbers, one more than each (0: free), in
+      ## blocks of `BlockLen` (one shorter while there are fewer slots), each
+      ## allocated when first written: an unallocated block's slots are free
+    slotCount: int ## the slots, a power of two
+    oldSlots: seq[seq[int32]]
+      ## the slots before their last growth, while the numbers move out of
+      ## them a few at a time: a growth moves none at once
+    oldCount: int ## their count; 0: none
+    moved: int ## the numbers moved out of `oldSlots`, in number order
+    marks: Blocks[uint32] ## by number, a deduplication's epoch
+    markEpoch: uint32
+    lists: seq[Numbers] ## the read records' numbers
+    numbered: Table[seq[byte], int32]
+      ## by catalog source encoding, its record's numbers (`lists`)
+    installedNumbers: seq[int32]
+      ## by installed record, one more than its numbers' index (0: not yet)
+    intern: Opt[InternNeed] ## a record read whose contracts are not numbered yet
+    allowed: seq[int] ## `allowSteps`' answer: the picks a candidate may take
+    installedCovers: bool ## `allowSteps`' answer: the installed record does
     root: NameId
     charged: HashSet[(string, string)]
     considered: Table[string, int]
@@ -521,10 +586,6 @@ func unavailableDependency(msg: string): PackageError =
 
 func invalidRequest(msg: string): PackageError =
   packageError(pecInvalidRequest, msg)
-
-func contractKeys(cs: openArray[CborValue]): HashSet[seq[byte]] =
-  for c in cs:
-    result.incl(encodeCbor(c))
 
 func full(l: int): bool =
   ## Whether a list of `l` elements, grown by appends, is at its capacity:
@@ -636,6 +697,7 @@ proc initResolver(r: var Resolver, input: sink ResolverInput) =
   )
   r.buckets.setLen(l.depth + 1)
   r.installedRead.setLen(r.installed.len)
+  r.installedNumbers.setLen(r.installed.len)
 
 func pending(): PackageError =
   ## [IMPL-DECISION G455] What a helper returns when the search needs something
@@ -685,6 +747,237 @@ proc takeMiss(r: var Resolver): Suspension =
   result = r.miss.get
   r.miss = Opt.none(Suspension)
 
+# Contracts, numbered (5-3c-3) --------------------------------------------------------
+
+const
+  FirstContractSlots = 64
+  BlockBits = 12
+  BlockLen = 1 shl BlockBits
+  BlockMask = BlockLen - 1
+
+template at(b: Blocks, i: int): untyped =
+  b.blocks[i shr BlockBits][i and BlockMask]
+
+proc add[T](b: var Blocks[T], x: sink T) =
+  if (b.len and BlockMask) == 0:
+    b.blocks.add(newSeqOfCap[T](BlockLen))
+  b.blocks[^1].add(x)
+  inc b.len
+
+proc dropLast[T](b: var Blocks[T]) =
+  b.blocks[^1].setLen(b.blocks[^1].len - 1)
+  dec b.len
+  if b.blocks[^1].len == 0:
+    b.blocks.setLen(b.blocks.len - 1)
+
+func slotAt(slots: seq[seq[int32]], i: int): int32 {.inline.} =
+  if slots[i shr BlockBits].len == 0:
+    0
+  else:
+    slots[i shr BlockBits][i and BlockMask]
+
+func entrySpan(r: Resolver, list: int32, i: int): Span =
+  ## Dependency entry `i`'s contracts in a record's numbers. A record with no
+  ## contracts keeps no `entryAt` (`internSteps`): every span of it is empty.
+  template l(): untyped =
+    r.lists[list].entryAt
+
+  if l.len == 0:
+    return Span(list: list, at: 0, len: 0)
+  Span(list: list, at: l[i], len: l[i + 1] - l[i])
+
+func providedSpan(r: Resolver, list: int32): Span =
+  ## The contracts a record provides, in its numbers.
+  if r.lists[list].entryAt.len == 0:
+    return Span(list: list, at: 0, len: 0)
+  let at = r.lists[list].entryAt[^1]
+  Span(list: list, at: at, len: int32(r.lists[list].list.len) - at)
+
+func lookup(r: Resolver, s: Span, x: int32): (bool, int) =
+  ## [IMPL-DECISION G455] (5-3c-3) Whether the ascending span holds `x`, by
+  ## binary search, and the probes it made (one at least): the work is the
+  ## steps walked.
+  result[1] = 1
+  if s.list < 0:
+    return
+  var lo = int(s.at)
+  var hi = int(s.at) + int(s.len)
+  while lo < hi:
+    inc result[1]
+    let mid = (lo + hi) shr 1
+    let v = r.lists[s.list].list[mid]
+    if v == x:
+      result[0] = true
+      return
+    if v < x:
+      lo = mid + 1
+    else:
+      hi = mid
+
+type
+  Cursor = object
+    ## Where `internSteps` is in a record: `stage` 0 is its dependency entries
+    ## (entry `i`, contract `j`); for a catalog record 1 is its provided
+    ## contracts, and for an installed record 1 to 3 are module `i`'s primary
+    ## contract, `implements` and `extends`; 4 is the end.
+    stage, i, j: int
+
+  ContractStep = enum
+    csDone ## the record's contracts are all numbered
+    csEntry ## the walk moved to another entry or module: a unit
+    csContract ## a contract, encoded
+
+template dependencyStage(deps: untyped, freeing: static bool) =
+  if c.i >= deps.len:
+    nums.entryAt.add(int32(nums.list.len)) # where the provided ones start
+    c.stage = 1
+    c.i = 0
+    c.j = 0
+    return csEntry
+  if c.j == 0 and nums.entryAt.len == c.i:
+    nums.entryAt.add(int32(nums.list.len))
+    return csEntry
+  if c.j < deps[c.i].contracts.len:
+    enc = encodeCbor(deps[c.i].contracts[c.j])
+    when freeing:
+      deps[c.i].contracts[c.j] = CborValue()
+    inc c.j
+    return csContract
+  when freeing:
+    deps[c.i].contracts = @[]
+  inc c.i
+  c.j = 0
+  return csEntry
+
+proc nextCatalog(
+    x: var Inspection, c: var Cursor, nums: var Numbers, enc: var seq[byte]
+): ContractStep =
+  ## A catalog record's next contract, encoded, and freed: nothing in the run
+  ## reads it again.
+  case c.stage
+  of 0:
+    dependencyStage(x.dependencies, true)
+  of 1:
+    if c.j < x.provides.len:
+      enc = encodeCbor(x.provides[c.j])
+      x.provides[c.j] = CborValue()
+      inc c.j
+      return csContract
+    x.provides = @[]
+    c.stage = 4
+    return csEntry
+  else:
+    return csDone
+
+proc nextInstalled(
+    p: InstalledPackage, c: var Cursor, nums: var Numbers, enc: var seq[byte]
+): ContractStep =
+  ## An installed record's next contract, encoded: each its dependency
+  ## entries list, then each its module declarations name (PM l.1213).
+  case c.stage
+  of 0:
+    dependencyStage(p.dependencies, false)
+  of 1, 2, 3:
+    if c.i >= p.modules.len:
+      c.stage = 4
+      return csEntry
+    template m(): untyped =
+      p.modules[c.i]
+
+    if c.stage == 1:
+      c.stage = 2
+      c.j = 0
+      if m.primaryContract.isSome:
+        enc = encodeCbor(m.primaryContract.get)
+        return csContract
+      return csEntry
+    if c.stage == 2:
+      if c.j < m.implements.len:
+        enc = encodeCbor(m.implements[c.j])
+        inc c.j
+        return csContract
+      c.stage = 3
+      c.j = 0
+      return csEntry
+    if c.j < m.extends.len:
+      enc = encodeCbor(m.extends[c.j])
+      inc c.j
+      return csContract
+    c.stage = 1
+    c.j = 0
+    inc c.i
+    return csEntry
+  else:
+    return csDone
+
+const EntryStepsPerLookup = 32
+  ## [IMPL-DECISION G455] (5-3c-3) The most walk steps `nextContract` takes
+  ## for one lookup of a catalog record.
+
+proc nextContract(
+    r: var Resolver,
+    need: InternNeed,
+    c: var Cursor,
+    nums: var Numbers,
+    enc: var seq[byte],
+    steps: var int,
+): ContractStep =
+  ## [IMPL-DECISION G455] (5-3c-3) The next steps of `internSteps`' walk, up to
+  ## and with its next contract: `steps` of them, each a unit. A catalog record
+  ## is looked up for each call, so no view of the table is held across a
+  ## yield (rule I2); one lookup takes up to `EntryStepsPerLookup` steps, none
+  ## of which yields, so an entry that lists nothing costs no lookup of its own.
+  steps = 1
+  if need.installed >= 0:
+    return nextInstalled(r.installed[need.installed], c, nums, enc)
+  result = csDone
+  steps = 0
+  r.inspected.withValue(need.source, v):
+    while true:
+      result = nextCatalog(v[], c, nums, enc)
+      inc steps
+      if result != csEntry or steps >= EntryStepsPerLookup:
+        break
+
+func listsNoContract(x: Inspection): bool =
+  ## [IMPL-DECISION G455] (5-3c-3) Whether an eligible catalog record lists and
+  ## provides no contract.
+  if x.provides.len > 0:
+    return false
+  for d in x.dependencies:
+    if d.contracts.len > 0:
+      return false
+  true
+
+func listsNoContract(p: InstalledPackage): bool =
+  ## Whether an installed record lists and declares no contract.
+  for d in p.dependencies:
+    if d.contracts.len > 0:
+      return false
+  for m in p.modules:
+    if m.primaryContract.isSome or m.implements.len > 0 or m.extends.len > 0:
+      return false
+  true
+
+proc numberedEmpty(r: var Resolver, need: InternNeed, walked: int): int32 =
+  ## [IMPL-DECISION G455] (5-3c-3) Numbers a record that lists and provides no
+  ## contract, in place and in the step that reads it, as `internSteps` would:
+  ## its numbers are empty, and so is every span of them (`entrySpan`). The
+  ## walk that found none read the length of each of its `walked` entries and
+  ## modules: a unit, and one for each 16 of them (each read costs far less
+  ## than a unit); a growth of the lists is counted too. The next check ends
+  ## the turn.
+  let l = r.lists.len
+  r.work += int64(1 + walked shr 4)
+  if full(l):
+    r.work += int64(l)
+  result = int32(l)
+  r.lists.add(Numbers())
+  if need.installed >= 0:
+    r.installedNumbers[need.installed] = result + 1
+  else:
+    r.numbered[need.source] = result
+
 func known(r: Resolver, id: PackageIdentity): bool =
   id.key in r.installedAt or id.key in r.entries
 
@@ -720,7 +1013,21 @@ proc evaluate(r: var Resolver, id: PackageIdentity): Result[int, PackageError] =
         r.installedRead[e.installed] = true
         r.countRead(r.installed[e.installed].inputCount)
       ?r.pastBound()
-      let p = r.installed[e.installed]
+      template p(): untyped =
+        r.installed[e.installed] # read in place: a copy would copy its lists
+
+      if r.installedNumbers[e.installed] == 0:
+        # [IMPL-DECISION G455] (5-3c-3) Its contracts are numbered once it is
+        # read within the bound: the evaluation is made again after. Without
+        # any, here.
+        if p.listsNoContract:
+          discard r.numberedEmpty(
+            InternNeed(installed: e.installed), p.dependencies.len + p.modules.len
+          )
+        else:
+          r.intern = Opt.some(InternNeed(installed: e.installed))
+          return err(pending())
+
       if not p.commitment.supportsManifestSchema:
         # [SPEC PM §11 l.1217-1218] Ineligible, and not an integrity failure:
         # its retained bytes are not judged.
@@ -756,6 +1063,21 @@ proc evaluate(r: var Resolver, id: PackageIdentity): Result[int, PackageError] =
     if x.isNil:
       r.partial[id.key] = (move e, next)
       return err(pending())
+    var numbers = -1'i32
+    if x[].kind == ikEligible and x[].identity == id:
+      let k = source.encoded
+      numbers = r.numbered.getOrDefault(k, -1)
+      if numbers < 0:
+        # [IMPL-DECISION G455] (5-3c-3) Its contracts are numbered once it is
+        # read within the bound; the walk goes on from it after. Without any,
+        # here.
+        if x[].listsNoContract:
+          numbers =
+            r.numberedEmpty(InternNeed(installed: -1, source: k), x[].dependencies.len)
+        else:
+          r.intern = Opt.some(InternNeed(installed: -1, source: k))
+          r.partial[id.key] = (move e, next)
+          return err(pending())
     inc next
     case x[].kind
     of ikUnavailable:
@@ -781,7 +1103,8 @@ proc evaluate(r: var Resolver, id: PackageIdentity): Result[int, PackageError] =
             commitment: x[].commitment,
             source: source,
             deps: move x[].dependencies,
-            provides: contractKeys(x[].provides),
+            numbers: numbers,
+            provides: r.providedSpan(numbers),
           )
         )
   r.evals.add(move e)
@@ -808,17 +1131,18 @@ func unsupportedOnly(e: Eval): bool =
   e.errors.allIt(it.code == pecUnsupportedManifest) and
     (e.installedError.isSome or e.errors.len > 0)
 
-func fresh(deps: seq[PackageDependency]): (seq[string], seq[Req]) =
+func fresh(
+    r: Resolver, deps: seq[PackageDependency], numbers: int32
+): (seq[string], seq[Req]) =
   # [IMPL-DECISION G455] Sized once: growing them took a third of the build of
-  # a maximum-size manifest's list.
+  # a maximum-size manifest's list. (5-3c-3) A requirement's contracts are a
+  # span of its record's numbers: none is copied or encoded.
   result[0] = newSeqOfCap[string](deps.len)
   result[1] = newSeqOfCap[Req](deps.len)
-  for d in deps:
+  for i, d in deps:
     result[0].add(d.package)
     result[1].add(
-      Req(
-        kind: d.kind, version: d.version, contracts: d.contracts.mapIt(encodeCbor(it))
-      )
+      Req(kind: d.kind, version: d.version, contracts: r.entrySpan(numbers, i))
     )
 
 func pinned(edges: seq[ResolvedDependency]): (seq[string], seq[Req]) =
@@ -828,61 +1152,60 @@ func pinned(edges: seq[ResolvedDependency]): (seq[string], seq[Req]) =
   for e in edges:
     result[0].add(e.identity.package)
     result[1].add(
-      Req(kind: rkExact, version: e.identity.version, pin: Opt.some(e.commitment))
+      Req(
+        kind: rkExact,
+        version: e.identity.version,
+        pin: Opt.some(e.commitment),
+        contracts: Span(list: -1),
+      )
     )
 
-func meets(c: Cand, q: Req): bool =
+func meetsVersionAndPin(c: Cand, q: Req): bool =
+  ## A requirement's version and pin; its contracts are `bindSteps`' walk.
   satisfies(q.kind, q.version, c.identity.version) and
-    (q.pin.isNone or q.pin.get == c.commitment) and q.contracts.allIt(it in c.provides)
+    (q.pin.isNone or q.pin.get == c.commitment)
 
-func pinsFor(r: Resolver, x: NameId): seq[ManifestCommitment] =
-  for q in r.reqs[x]:
-    if q.pin.isSome and q.pin.get notin result:
-      result.add(q.pin.get)
+func allows(f: Frame, c: ManifestCommitment): bool =
+  ## [SPEC PM §11 l.1304] Whether the frame's pins allow commitment `c`: it has
+  ## none, or one and `c` is it. Two distinct pins allow none, as each excludes
+  ## the other.
+  f.pin.isNone or (not f.pinConflict and f.pin.get == c)
 
-func allows(pins: seq[ManifestCommitment], c: ManifestCommitment): bool =
-  pins.allIt(it == c)
-
-func needed(r: Resolver, x: NameId): seq[seq[byte]] =
-  for q in r.reqs[x]:
-    for c in q.contracts:
-      if c notin result:
-        result.add(c)
-
-func excludedByKnownCommitment(
-    r: Resolver, id: PackageIdentity, pins: seq[ManifestCommitment]
-): bool =
+proc excludedByKnownCommitment(r: var Resolver, id: PackageIdentity, f: int): bool =
   ## [SPEC PM §11 l.1305-1306] Every record of the identity has a known
-  ## commitment that a pin excludes: it is neither considered nor charged. A
-  ## catalog record not yet inspected has no known commitment.
-  if pins.len == 0:
+  ## commitment that frame `f`'s pins exclude: it is neither considered nor
+  ## charged. A catalog record not yet inspected has no known commitment.
+  ## [IMPL-DECISION G455] (5-3c-3) Its records are read in place: a copy of
+  ## an inspection copied its lists.
+  if r.stack[f].pin.isNone:
     return false
   let at = r.installedAt.getOrDefault(id.key, -1)
-  if at >= 0 and pins.allows(r.installed[at].commitment):
+  if at >= 0 and r.stack[f].allows(r.installed[at].commitment):
     return false
-  for i in r.entries.getOrDefault(id.key):
-    let k = r.catalog[i].source.encoded
-    if k notin r.inspected:
-      return false
-    let x = r.inspected.getOrDefault(k)
-    if x.kind != ikEligible or x.identity != id or pins.allows(x.commitment):
-      return false
-  true
+  result = true
+  r.entries.withValue(id.key, g):
+    for i in g[]:
+      let k = r.catalog[i].source.encoded
+      var known = false
+      r.inspected.withValue(k, x):
+        known =
+          x.kind == ikEligible and x.identity == id and
+          not r.stack[f].allows(x.commitment)
+      if not known:
+        return false
 
 proc dependencyCandidate(
-    r: Resolver, x: NameId, id: PackageIdentity, e: Eval
+    r: Resolver, f: int, id: PackageIdentity, e: Eval
 ): Result[Opt[Cand], PackageError] =
   ## [SPEC PM §11 l.1294-1310] The candidate for a reached dependency identity,
   ## after eligibility, the accumulated pins and contracts, commitment
-  ## selection and the installed-identity conflict check.
-  let pins = r.pinsFor(x)
-  let need = r.needed(x)
-  var allowed: seq[int] ## indexes in `e.picks`, read in place
-  for i, p in e.picks:
-    # [IMPL-DECISION I110] Pins apply per record (Q8): a pinned version the
-    # catalog lists under another commitment is not a candidate.
-    if pins.allows(p.commitment) and need.allIt(it in p.provides):
-      allowed.add(i)
+  ## selection and the installed-identity conflict check. [IMPL-DECISION
+  ## G455] (5-3c-3) The pins and contracts are `allowSteps`': the picks they
+  ## allow (`r.allowed`, indexes in `e.picks`) and whether the installed
+  ## record provides the contracts (`r.installedCovers`).
+  template allowed(): untyped =
+    r.allowed
+
   for i in allowed:
     if e.picks[i].commitment != e.picks[allowed[0]].commitment:
       # [SPEC PM §11] [IMPL-DECISION G74] No protected catalog policy selects
@@ -894,7 +1217,9 @@ proc dependencyCandidate(
         )
       )
   if e.installed >= 0:
-    let p = r.installed[e.installed]
+    template p(): untyped =
+      r.installed[e.installed] # read in place: a copy would copy its lists
+
     if allowed.len > 0 and e.picks[allowed[0]].commitment != p.commitment:
       # [SPEC PM §11 l.1296-1298] Compared with the installed record whether or
       # not it is eligible; not skipped and not resolved by backtracking.
@@ -911,10 +1236,9 @@ proc dependencyCandidate(
       depNames: names,
       deps: deps,
       edges: Opt.some(p.resolvedDependencies),
-      provides: contractKeys(provided(p.modules)),
+      provides: r.providedSpan(r.installedNumbers[e.installed] - 1),
     )
-    if e.installedError.isNone and pins.allows(p.commitment) and
-        need.allIt(it in c.provides):
+    if e.installedError.isNone and r.stack[f].allows(p.commitment) and r.installedCovers:
       return ok(Opt.some(c))
     if allowed.len > 0:
       # [IMPL-DECISION I110] B7: an eligible catalog record of the installed
@@ -925,7 +1249,7 @@ proc dependencyCandidate(
     return ok(Opt.none(Cand))
   if allowed.len > 0:
     let a = allowed[0]
-    let (names, deps) = fresh(e.picks[a].deps)
+    let (names, deps) = r.fresh(e.picks[a].deps, e.picks[a].numbers)
     return ok(
       Opt.some(
         Cand(
@@ -956,7 +1280,7 @@ proc rootCandidate(
       )
   if e.picks.len > 0:
     # Read in place: a copy would copy its dependency list.
-    let (names, deps) = fresh(e.picks[0].deps)
+    let (names, deps) = r.fresh(e.picks[0].deps, e.picks[0].numbers)
     return ok(
       Opt.some(
         Cand(
@@ -973,8 +1297,11 @@ proc rootCandidate(
       )
     )
   if e.installed >= 0 and e.installedError.isNone:
-    let p = r.installed[e.installed]
-    let (names, deps) = fresh(p.dependencies)
+    template p(): untyped =
+      r.installed[e.installed] # read in place: a copy would copy its lists
+
+    let numbers = r.installedNumbers[e.installed] - 1
+    let (names, deps) = r.fresh(p.dependencies, numbers)
     return ok(
       Opt.some(
         Cand(
@@ -983,11 +1310,23 @@ proc rootCandidate(
           installed: true,
           depNames: names,
           deps: deps,
-          provides: contractKeys(provided(p.modules)),
+          provides: r.providedSpan(numbers),
         )
       )
     )
   ok(Opt.none(Cand))
+
+template turnCheck(r: ref Resolver) =
+  ## [IMPL-DECISION G455] Ends the turn once its work is spent. (5-3c-3) It
+  ## keeps the most work counted between two checks (`largestStep`): what one
+  ## turn can overrun its budget by, which the suites bound.
+  block:
+    let d = r.work - r.checkedAt
+    if d > r.largestStep:
+      r.largestStep = d
+    r.checkedAt = r.work
+  if r.work >= r.turnEnd:
+    yield Suspension(kind: suTurn)
 
 template tick(r: ref Resolver) =
   ## [IMPL-DECISION G455] One work unit (5-3c's plan §3.6). The turn is spent
@@ -995,15 +1334,13 @@ template tick(r: ref Resolver) =
   ## run's iterators; a helper that is not one counts with `inc r.work`, and the
   ## next unit an iterator counts ends the turn.
   inc r.work
-  if r.work >= r.turnEnd:
-    yield Suspension(kind: suTurn)
+  turnCheck(r)
 
 template spendBy(r: ref Resolver, n: int) =
   ## [IMPL-DECISION G455] `n` work units at once: what copying or freeing a
   ## list of `n` elements costs.
   r.work += int64(n)
-  if r.work >= r.turnEnd:
-    yield Suspension(kind: suTurn)
+  turnCheck(r)
 
 template growing(r: ref Resolver, list: untyped) =
   ## [IMPL-DECISION G455] Before an append: an append to a full list copies
@@ -1219,6 +1556,9 @@ proc bindSteps(r: ref Resolver, x: NameId): RunSteps =
           r[].push(n)
         growing(r, r.reqs[n])
         growing(r, r.parents[n])
+        # [IMPL-DECISION G455] (5-3c-3) A copy of the requirement: its contracts
+        # are a span, and its version text a unit for each 64 bytes copied.
+        spendBy(r, r.cands[x].deps[i].version.len shr 6)
         r.reqs[n].add(r.cands[x].deps[i])
         r.parents[n].add(x)
         inc i
@@ -1227,8 +1567,20 @@ proc bindSteps(r: ref Resolver, x: NameId): RunSteps =
       while i < r.cands[x].depIds.len:
         tick(r)
         let n = r.cands[x].depIds[i]
-        if r.bound[n] and not r.cands[n].meets(r.cands[x].deps[i]):
-          return
+        if r.bound[n]:
+          if not r.cands[n].meetsVersionAndPin(r.cands[x].deps[i]):
+            return
+          # [SPEC PM §11 l.1215] [IMPL-DECISION G455] (5-3c-3) Each contract
+          # the entry lists, looked up in what `n` provides, its probes spent.
+          let q = r.cands[x].deps[i].contracts
+          var j = 0
+          while j < q.len:
+            let (found, probes) =
+              r[].lookup(r.cands[n].provides, r.lists[q.list].list[q.at + j])
+            spendBy(r, probes)
+            if not found:
+              return
+            inc j
         inc i
     # Both checks only reject, so their order does not change the answer.
     # [IMPL-DECISION G454] The cycle walk: whether a bound dependency reaches a
@@ -1512,8 +1864,19 @@ proc sourceRoot(
     return err(
       packageError(pecInvalidPackage, "the source's manifest declares " & $x[].identity)
     )
+  let k = root.source.get.encoded
+  var numbers = r.numbered.getOrDefault(k, -1)
+  if numbers < 0:
+    # [IMPL-DECISION G455] (5-3c-3) Its contracts are numbered once it is read
+    # within the bound: it is called again after. Without any, here.
+    if x[].listsNoContract:
+      numbers =
+        r.numberedEmpty(InternNeed(installed: -1, source: k), x[].dependencies.len)
+    else:
+      r.intern = Opt.some(InternNeed(installed: -1, source: k))
+      return err(pending())
   ?r.charge(x[].identity.package, x[].identity.version)
-  let (names, deps) = fresh(x[].dependencies)
+  let (names, deps) = r.fresh(x[].dependencies, numbers)
   let at = r.installedAt.getOrDefault(x[].identity.key, -1)
   ok(
     Cand(
@@ -1523,7 +1886,7 @@ proc sourceRoot(
       source: root.source,
       depNames: names,
       deps: deps,
-      provides: contractKeys(x[].provides),
+      provides: r.providedSpan(numbers),
     )
   )
 
@@ -1698,6 +2061,336 @@ template sub(r: ref Resolver, steps: RunSteps) =
   for s in nested():
     yield s
 
+when defined(lcnTestHooks):
+  var contractHashShiftForTests* {.threadvar.}: int
+    ## Test hook (D27; DECISIONS I89) [IMPL-DECISION G455] (5-3c-3): when not 0, each
+    ## contract's hash is shifted left by it, so that every encoding's first slot is the same
+    ## and all of them probe one chain, as encodings chosen to collide would. Inert at 0; set
+    ## by a suite on its own thread.
+
+proc contractHash(enc: seq[byte]): Hash {.inline.} =
+  ## [IMPL-DECISION G455] (5-3c-3) An encoding's hash: std/hashes', unkeyed, so the same
+  ## inputs give the same probes, work and turns in every run (Fable's review of 5-3c-3 §1).
+  ## Its keys are chosen by a signer; a chain of collisions costs probes, each a unit and a
+  ## turn check, never a step of its own.
+  result = hash(enc)
+  when defined(lcnTestHooks):
+    {.cast(gcsafe).}:
+      if contractHashShiftForTests != 0:
+        result = result shl contractHashShiftForTests
+
+template probeSteps(
+    r: ref Resolver, old: bool, h: Hash, enc: seq[byte], found: var int32
+) =
+  ## [IMPL-DECISION G455] (5-3c-3) The number of the contract encoded as `enc` in the slots
+  ## (`old`: the slots before their last growth), or -1. Each probe is a unit and a turn
+  ## check, so a chain of colliding hashes suspends where the turn is spent. Only inside a
+  ## run's iterator; nothing else changes the table while it is suspended.
+  found = -1
+  block probing:
+    let count = if old: r.oldCount else: r.slotCount
+    if count == 0:
+      break probing
+    let m = count - 1
+    var i = h and m
+    while true:
+      tick(r)
+      let n =
+        if old:
+          slotAt(r.oldSlots, i) - 1
+        else:
+          slotAt(r.slots, i) - 1
+      if n < 0:
+        break probing
+      if r.hashes.at(n) == h and r.encodings.at(n) == enc:
+        found = n
+        break probing
+      i = (i + 1) and m
+
+template placeSteps(r: ref Resolver, h: Hash, n: int32) =
+  ## [IMPL-DECISION G455] (5-3c-3) Puts number `n` in the first free slot from its hash's.
+  ## Each probe is a unit and a turn check, and a block's allocation its zeroing, a cache
+  ## line a unit.
+  block placing:
+    let m = r.slotCount - 1
+    var i = h and m
+    while true:
+      tick(r)
+      let b = i shr BlockBits
+      if r.slots[b].len == 0:
+        r.slots[b] = newSeq[int32](min(r.slotCount, BlockLen))
+        spendBy(r, min(r.slotCount, BlockLen) div 16)
+      if r.slots[b][i and BlockMask] == 0:
+        r.slots[b][i and BlockMask] = n + 1
+        break placing
+      i = (i + 1) and m
+
+template numberSteps(r: ref Resolver, enc: var seq[byte], num: var int32) =
+  ## [IMPL-DECISION G455] (5-3c-3) The number of the contract encoded as `enc`, numbered now
+  ## if it is new (`enc` is then moved into the table). Each probe and each number moved is
+  ## a unit and a turn check: the work is the steps walked (Fable's review of 5-3c-3 §1).
+  ## Nothing it does is a step of the table's size:
+  ## - the lists by number are `Blocks`, which grow without copying;
+  ## - the slots double when the numbers would fill half of them, as a list of unallocated
+  ##   blocks; and the numbers then move into the new slots two for each new number, so the
+  ##   old ones are empty before the new ones fill half. Until then a number is looked for
+  ##   in both.
+  block numbering:
+    let h = contractHash(enc)
+    probeSteps(r, false, h, enc, num)
+    if num < 0 and r.oldCount > 0:
+      probeSteps(r, true, h, enc, num)
+    if num >= 0:
+      break numbering
+    if (r.encodings.len + 1) * 2 > r.slotCount:
+      doAssert r.oldCount == 0,
+        "the numbers have moved out of the old slots before the slots grow again"
+      r.oldSlots = move r.slots
+      r.oldCount = r.slotCount
+      r.moved = 0
+      r.slotCount = max(FirstContractSlots, 2 * r.slotCount)
+      r.slots = newSeq[seq[int32]](max(1, r.slotCount shr BlockBits))
+      spendBy(r, 1 + r.slots.len shr 2) # the blocks' list, zeroed
+    num = int32(r.encodings.len)
+    r.encodings.add(move enc)
+    r.hashes.add(h)
+    r.marks.add(0'u32)
+    placeSteps(r, h, num)
+    if r.oldCount > 0:
+      let before = r.oldCount div 2 # the numbers the old slots held
+      var k = 0
+      while k < 2 and r.moved < before:
+        placeSteps(r, r.hashes.at(r.moved), int32(r.moved))
+        inc r.moved
+        inc k
+      if r.moved >= before:
+        spendBy(r, r.oldSlots.len) # its blocks, freed
+        r.oldSlots = @[]
+        r.oldCount = 0
+
+proc internSteps(r: ref Resolver): RunSteps =
+  ## [IMPL-DECISION G455] (5-3c-3) Numbers the contracts of the record
+  ## `r.intern` names, read within the operation bound (G477): each dependency
+  ## entry's as it lists them, then the record's provided ones, once each and
+  ## ascending. A contract costs a unit and its encoded bytes (an overcount is
+  ## safe; Fable's review of the contract turns), its probes and its marks; an
+  ## entry or a module a unit. A catalog record's contracts are freed as they
+  ## are numbered: nothing in the run reads them again.
+  iterator body(): Suspension {.closure, gcsafe, raises: [].} =
+    let need = r.intern.get
+    r.intern = Opt.none(InternNeed)
+    var nums: Numbers
+    block:
+      # Sized once, so neither list grows: its contracts and its entries,
+      # counted by its entries and modules.
+      var contracts, entries, modules = 0
+      if need.installed >= 0:
+        template p(): untyped =
+          r.installed[need.installed]
+
+        entries = p.dependencies.len
+        modules = p.modules.len
+        for d in p.dependencies:
+          contracts += d.contracts.len
+        for m in p.modules:
+          contracts += int(m.primaryContract.isSome) + m.implements.len + m.extends.len
+      else:
+        r.inspected.withValue(need.source, v):
+          entries = v.dependencies.len
+          contracts = v[].inputCount - 1 - entries
+      spendBy(r, 1 + entries + modules)
+      nums.list = newSeqOfCap[int32](contracts)
+      nums.entryAt = newSeqOfCap[int32](entries + 1)
+    var cur: Cursor
+    while true:
+      var enc: seq[byte]
+      var steps: int
+      let step = r[].nextContract(need, cur, nums, enc, steps)
+      spendBy(r, steps - 1) # the entry steps before this one
+      case step
+      of csDone:
+        break
+      of csEntry:
+        tick(r)
+      of csContract:
+        spendBy(r, 1 + enc.len)
+        var num: int32
+        numberSteps(r, enc, num)
+        nums.list.add(num)
+    # Its provided contracts once each, then ascending: in order already
+    # unless an earlier record numbered some of them.
+    let start = int(nums.entryAt[^1])
+    inc r.markEpoch
+    let e = r.markEpoch
+    var w = start
+    var k = start
+    while k < nums.list.len:
+      tick(r)
+      let n = nums.list[k]
+      if r.marks.at(n) != e:
+        r.marks.at(n) = e
+        nums.list[w] = n
+        inc w
+      inc k
+    nums.list.setLen(w)
+    var ordered = true
+    k = start + 1
+    while k < w and ordered:
+      tick(r)
+      ordered = nums.list[k - 1] < nums.list[k]
+      inc k
+    if not ordered:
+      # A merge sort, bottom up through a buffer, a unit for each number it
+      # moves, so it suspends where its turn is spent.
+      let n = w - start
+      var buf = newSeq[int32](n)
+      spendBy(r, 1 + n div 16) # its zeroing
+      var inBuf = false # where the runs being merged are
+      var width = 1
+      while width < n:
+        var lo = 0
+        while lo < n:
+          let mid = min(lo + width, n)
+          let hi = min(lo + 2 * width, n)
+          var a = lo
+          var b = mid
+          var o = lo
+          while o < hi:
+            tick(r)
+            template src(i: int): int32 =
+              (if inBuf: buf[i] else: nums.list[start + i])
+
+            let takeA = b >= hi or (a < mid and src(a) <= src(b))
+            let v =
+              if takeA:
+                src(a)
+              else:
+                src(b)
+            if takeA:
+              inc a
+            else:
+              inc b
+            if inBuf:
+              nums.list[start + o] = v
+            else:
+              buf[o] = v
+            inc o
+          lo = hi
+        inBuf = not inBuf
+        width *= 2
+      if inBuf:
+        var k = 0
+        while k < n:
+          tick(r)
+          nums.list[start + k] = buf[k]
+          inc k
+      buf = @[]
+    let at = int32(r.lists.len)
+    growing(r, r.lists)
+    r.lists.add(move nums)
+    if need.installed >= 0:
+      r.installedNumbers[need.installed] = at + 1
+    else:
+      r.numbered[need.source] = at
+
+  body
+
+proc needSteps(r: ref Resolver, f: int): RunSteps =
+  ## [SPEC PM §11 l.1213-1215, l.1304] [IMPL-DECISION G455] (5-3c-3) What frame
+  ## `f`'s requirements ask of every candidate: the contracts they list, once
+  ## each, and the commitments they pin, as the first and whether another
+  ## differs. Gathered once, when the frame is pushed: its requirements do not
+  ## change while it is on the stack (G454). A unit for each requirement and
+  ## each contract listed.
+  iterator body(): Suspension {.closure, gcsafe, raises: [].} =
+    let x = r.stack[f].id
+    block:
+      # Sized once, for every contract listed, so it does not grow.
+      var listed = 0
+      var i = 0
+      while i < r.reqs[x].len:
+        tick(r)
+        listed += r.reqs[x][i].contracts.len
+        inc i
+      r.stack[f].need = newSeqOfCap[int32](listed)
+    inc r.markEpoch
+    let e = r.markEpoch
+    var i = 0
+    while i < r.reqs[x].len:
+      tick(r)
+      if r.reqs[x][i].pin.isSome:
+        if r.stack[f].pin.isNone:
+          r.stack[f].pin = r.reqs[x][i].pin
+        elif r.stack[f].pin.get != r.reqs[x][i].pin.get:
+          r.stack[f].pinConflict = true
+      let q = r.reqs[x][i].contracts
+      var j = 0
+      while j < q.len:
+        tick(r)
+        let n = r.lists[q.list].list[q.at + j]
+        if r.marks.at(n) != e:
+          r.marks.at(n) = e
+          r.stack[f].need.add(n)
+        inc j
+      inc i
+
+  body
+
+proc allowSteps(r: ref Resolver, f: int, at: int): RunSteps =
+  ## [SPEC PM §11 l.1213-1215, l.1304] [IMPL-DECISION G455] (5-3c-3) Which
+  ## catalog records of evaluation `at` frame `f`'s pins allow and provide
+  ## every contract its requirements list (`r.allowed`), and whether the
+  ## installed record, eligible and allowed, provides them
+  ## (`r.installedCovers`). [IMPL-DECISION I110] Pins apply per record (Q8): a
+  ## pinned version the catalog lists under another commitment is not a
+  ## candidate. Each contract is looked up by binary search, its probes spent.
+  iterator body(): Suspension {.closure, gcsafe, raises: [].} =
+    r.allowed.setLen(0)
+    r.installedCovers = false
+    var i = 0
+    while i < r.evals[at].picks.len:
+      tick(r)
+      if r.stack[f].allows(r.evals[at].picks[i].commitment):
+        var covers = true
+        var j = 0
+        while covers and j < r.stack[f].need.len:
+          let (found, probes) =
+            r[].lookup(r.evals[at].picks[i].provides, r.stack[f].need[j])
+          spendBy(r, probes)
+          covers = found
+          inc j
+        if covers:
+          r.allowed.add(i)
+      inc i
+    let k = r.evals[at].installed
+    if k >= 0 and r.evals[at].installedError.isNone and
+        r.stack[f].allows(r.installed[k].commitment):
+      let span = r[].providedSpan(r.installedNumbers[k] - 1)
+      var covers = true
+      var j = 0
+      while covers and j < r.stack[f].need.len:
+        let (found, probes) = r[].lookup(span, r.stack[f].need[j])
+        spendBy(r, probes)
+        covers = found
+        inc j
+      r.installedCovers = covers
+
+  body
+
+proc allowPinned(r: var Resolver, f: int, at: int) =
+  ## [IMPL-DECISION G455] (5-3c-3) `allowSteps` for a frame whose requirements
+  ## list no contract: which records the pins allow, in place, a unit for each
+  ## (`allowSteps`' count). The next check ends the turn.
+  r.allowed.setLen(0)
+  r.work += int64(r.evals[at].picks.len)
+  for i in 0 ..< r.evals[at].picks.len:
+    if r.stack[f].allows(r.evals[at].picks[i].commitment):
+      r.allowed.add(i)
+  let k = r.evals[at].installed
+  r.installedCovers =
+    k >= 0 and r.evals[at].installedError.isNone and
+    r.stack[f].allows(r.installed[k].commitment)
+
 proc runSteps(r: ref Resolver, root: RootReference): RunSteps =
   ## [SPEC PM §11, §15] [IMPL-DECISION G455] The search, as a run that
   ## suspends where it needs an inspection or a retained-bytes answer and
@@ -1713,6 +2406,9 @@ proc runSteps(r: ref Resolver, root: RootReference): RunSteps =
       var got = r[].selectRoot(root)
       if r.miss.isSome:
         yield r[].takeMiss()
+        continue
+      if r.intern.isSome:
+        sub(r, internSteps(r))
         continue
       if got.isErr:
         fail(r, got.error)
@@ -1755,12 +2451,12 @@ proc runSteps(r: ref Resolver, root: RootReference): RunSteps =
           next = top
           break
         r[].popTop()
-        if r.work >= r.turnEnd:
-          yield Suspension(kind: suTurn)
+        turnCheck(r)
       if next < 0:
         sub(r, closureSteps(r))
         finish(r, Result[Resolution, PackageError].ok(move r.resolution))
       r.stack.add(Frame(id: next, depth: -1))
+      sub(r, needSteps(r, r.stack.high))
       var placed = false
       while r.stack.len > 0 and not placed:
         let f = r.stack.len - 1
@@ -1785,8 +2481,7 @@ proc runSteps(r: ref Resolver, root: RootReference): RunSteps =
             )
           let name = r.names[x]
           let id = PackageIdentity(package: name, version: version)
-          if (name, version) notin r.charged and
-              r[].excludedByKnownCommitment(id, r[].pinsFor(x)):
+          if (name, version) notin r.charged and r[].excludedByKnownCommitment(id, f):
             continue
           block:
             let ch = r[].charge(name, version)
@@ -1798,11 +2493,18 @@ proc runSteps(r: ref Resolver, root: RootReference): RunSteps =
             if r.miss.isSome:
               yield r[].takeMiss()
               continue
+            if r.intern.isSome:
+              sub(r, internSteps(r))
+              continue
             if got.isErr:
               fail(r, got.error)
             at = got.get
             break
-          var dc = r[].dependencyCandidate(x, id, r.evals[at])
+          if r.stack[f].need.len == 0:
+            r[].allowPinned(f, at)
+          else:
+            sub(r, allowSteps(r, f, at))
+          var dc = r[].dependencyCandidate(f, id, r.evals[at])
           if dc.isErr:
             fail(r, dc.error)
           if dc.get.isNone:
@@ -1831,6 +2533,7 @@ proc runSteps(r: ref Resolver, root: RootReference): RunSteps =
             break
           sub(r, unbindSteps(r, x))
         if not placed:
+          tick(r) # its need is a list of numbers: freed in one go, walking none
           discard r.stack.pop()
       if not placed:
         fail(r, unavailableDependency("no complete dependency closure exists"))
@@ -1879,11 +2582,34 @@ proc releaseSteps(r: ref Resolver): RunSteps =
     while keys.len > 0:
       var size = 1
       r.inspected.withValue(keys[^1], v):
-        if v[].kind == ikEligible:
-          size += v[].dependencies.len + v[].provides.len
+        # (5-3c-3) With the contracts its entries list: one not numbered still
+        # holds them.
+        size = v[].inputCount
         v[] = Inspection(kind: ikUnavailable)
       keys.setLen(keys.len - 1)
       spendBy(r, size)
+    # [IMPL-DECISION G455] (5-3c-3) The numbered contracts: a record's numbers
+    # and an encoding at a time, then the slots, hashes and marks, each in one
+    # go (no keys).
+    while r.lists.len > 0:
+      spendBy(r, 2)
+      r.lists.setLen(r.lists.len - 1)
+    while r.encodings.len > 0:
+      spendBy(r, 1)
+      r.encodings.dropLast()
+    spendBy(
+      r,
+      5 + r.numbered.len + r.hashes.blocks.len + r.marks.blocks.len + r.slots.len +
+        r.oldSlots.len,
+    )
+    r.numbered.clear()
+    r.hashes = Blocks[Hash]()
+    r.marks = Blocks[uint32]()
+    r.slots = @[]
+    r.oldSlots = @[]
+    r.slotCount = 0
+    r.oldCount = 0
+    r.installedNumbers = @[]
     spendBy(r, r.inspected.len + r.ids.len + r.evalAt.len + r.partial.len)
     r.inspected.clear()
     r.ids.clear()
@@ -1958,6 +2684,17 @@ proc startRun*(
   let r = new Resolver
   r[].initResolver(input) # its setup is the run's first steps
   ResolverRun(r: r, steps: runSteps(r, root), budget: budget)
+
+func largestStep*(run: ResolverRun): int64 =
+  ## [IMPL-DECISION G455] (5-3c-3) The most work the run counted between two
+  ## turn checks: what one of its turns can overrun the budget by. For the
+  ## suites and the bench.
+  run.r.largestStep
+
+func numbered*(run: ResolverRun): tuple[records, contracts: int] =
+  ## [IMPL-DECISION G455] (5-3c-3) The records whose contracts the run has
+  ## numbered, and the contracts numbered: each once. For the suites.
+  (run.r.lists.len, run.r.encodings.len)
 
 proc resume*(run: ResolverRun): Suspension =
   ## [IMPL-DECISION G455] Runs one turn: until the run needs something, its

@@ -61,6 +61,9 @@ type
     turns*: int ## steps that ended with the turn spent
     counters*: ResolverCounters ## the run's, once it is done
     work*: int64 ## the work units the run counted, once it is done
+    largestStep*: int64
+      ## [IMPL-DECISION G455] (5-3c-3) the most work it counted between two turn
+      ## checks, once it is done
 
 proc noRetained(p: InstalledPackage): Result[void, string] {.gcsafe, raises: [].} =
   ## Never called: the run asks for each answer (`dsRetained`).
@@ -116,6 +119,7 @@ proc step*(d: Driver): DriverStep =
     of suDone:
       d.counters = d.run.counters
       d.work = d.run.work
+      d.largestStep = d.run.largestStep
       d.done = true
       # Moved, not copied: a closure at the maxima holds millions of edges.
       return DriverStep(kind: dsDone, outcome: move s.outcome)
