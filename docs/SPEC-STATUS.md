@@ -601,6 +601,19 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   hold (one permission, host-ambient), and rows 8b, 9 and 21 hold for the node's state, keystore and spend
   records. No unit changes status.
 
+- 2026-11-23, Tier 5 step N-4 (I119; G425-G432, G480; G91, G97, G99, G100, G136 and G147 amended), storage_module,
+  sub-parts N-4.1 to N-4.5. The Storage node is a `hosted_dynamic` module in `logos_module/` on storage's
+  `logos-core-module` branch (`ca6b8687`), with storage's files as they are at `4fe02344` (G432):
+  - the module: the confined refc kit, typed configuration with the `extip` default, one start phase, `storage.stop`
+    and the strict destroy (G426, G427, G430, G431);
+  - it provides `lcn.storage_fetch` (G428), and core's `test_storage_fetch` runs it as the provider, opt in, under orc,
+    refc and orc-release;
+  - its data methods and paths (G425, G429);
+  - its lifecycle under logosd (`test_module_hosted`).
+
+  Its contract and configuration schema freeze at N-4.5's merge (G480). No unit changes status: the module's hosted
+  case adds evidence for RUN-0815, claimed since step 4b-3.2.
+
 ## Tiers at f4f83471 (the original plan)
 
 | Tier | Area | Verdict |
