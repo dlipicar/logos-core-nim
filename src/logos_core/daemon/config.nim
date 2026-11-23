@@ -10,12 +10,16 @@
 
 {.push raises: [].}
 
-import std/[os, sets]
+import std/[os, sets, tables]
 import results
 import logos_sdk/cbor
 import ../loader/contract
+from ../pm/input import
+  decodePmInput, PmInputFormat, PmInput, ResolverLimits, names, depth, candidates,
+  attempts
 from ../runtime/authscopes import AuthorityModule
 from ../orchestration/settings import OrchestratorModule
+from ../runtime/host_config import checkProgramFile
 import ./[daemon_config_types, evkey, session, trustfile]
 
 export results, daemon_config_types
@@ -24,6 +28,9 @@ const
   DaemonConfigFormat* = "logos-core-nim.daemon-config.v1"
   HooksBuild* = defined(lcnTestHooks)
     ## [G300] This build holds test hooks; a packaged logosd never does.
+  TestSigningBuild* = defined(logosTestSigning)
+    ## [G410] This build accepts `remote.signing` "process-copy"; a packaged
+    ## logosd never does.
   OrchestratorInstance* = "orchestrator" ## [G294] the system instances' fixed ids
   AuthorityInstance* = "authority"
   CtlInstance* = "logosctl"
@@ -60,6 +67,17 @@ const
   DefaultStoreQueue* = 4096 ## [U6]
   MinStoreQueue* = 16
   MaxStoreQueue* = 1_048_576
+  PresetPartialClosureNames* = 256'u64
+  PresetDependencyDepth* = 32'u64
+  PresetCandidatesPerName* = 256'u64
+  PresetAssignmentAttempts* = 1_024'u64
+    ## [IMPL-DECISION G399, G443] logosd's preset of the resolver limits, for
+    ## a `package_manager` section that names none: four constants, the same
+    ## on every platform and build mode, never computed from the machine (PM
+    ## l.1279-1280), chosen by what honest closures need. A change of them is
+    ## a change of resolution results for an unchanged configuration (PM
+    ## l.1314-1315): a new decision row and a release note. DAEMON.md §3
+    ## states them; docs/CONFORMANCE.md, "Resolver limits", what they cost.
 
 type
   CtlSettings* = object ## [G296] the logosctl instance's socket
@@ -77,19 +95,48 @@ type
     maxAgeDays*: int
     queue*: int
 
+  RemoteSigning* = enum ## [G410] what signs the remote TLS handshakes
+    rsLogosd = "logosd" ## logosd itself (the default)
+    rsKeyHolder = "key-holder" ## `logos_keyholder`, relayed through logosd
+    rsProcessCopy = "process-copy"
+      ## each TLS process with its own copy: test builds only
+
+  RemoteSettings* = object ## [G407, G410] `remote`
+    enabled*: bool
+    signing*: RemoteSigning
+    keyHolder*: string ## `rsKeyHolder`: the program's absolute path
+
   HookSelection* = object ## [G300] what `test_hooks` selects, in a hook build
     ctlCommandDelayMs*: Opt[uint32]
     loaderFailureAfterMs*: Opt[uint32]
     loaderFailureOnFile*: Opt[string] ## once this file exists
     diagnostics*: Opt[LcnDcTestDiagnostics] ## [I95 amended 2026-11-16]
 
+  LimitsOrigin* = enum
+    ## [G399; ruling C3] Where the resolver limits a start composed came from.
+    loOperator = "package_manager.resolver_limits"
+    loPreset = "logosd's preset"
+
+  PmSettings* = object
+    ## [IMPL-DECISION G399] The checked `package_manager` section: the
+    ## instance, its `lcn.pm_input` exactly as compose hands it over (the trust
+    ## bytes are the v2 encoding of the trust state the start checked), and
+    ## what the system rules and the start's log line need.
+    instance*: string
+    input*: seq[byte] ## deterministic CBOR, passed by the Package Manager's own decoder
+    providers*: seq[string] ## each binding's provider instance, in binding order
+    resolverLimits*: ResolverLimits
+    limitsOrigin*: LimitsOrigin
+
   DaemonConfig* = object ## A decoded daemon-config that passed checks 1 to 4.
     value*: LcnDaemonConfig
     ctl*: CtlSettings
     cli*: CliSettings
+    pm*: Opt[PmSettings] ## [G399] the `package_manager` section, checked
     production*: bool ## the trust file's development switch is off
     store*: Opt[StoreSettings]
     hooks*: HookSelection
+    remote*: RemoteSettings
 
 func isReservedInstance*(id: string): bool =
   id in ReservedInstances
@@ -187,6 +234,110 @@ proc checkNames(dc: LcnDaemonConfig): Result[void, string] =
             "(logosd provisions those itself)"
         )
   ok()
+
+func presetResolverLimits*(): LcnPmResolverLimits =
+  ## [G399] logosd's preset, as `lcn.pm_resolver_limits`.
+  LcnPmResolverLimits(
+    partial_closure_names: PresetPartialClosureNames,
+    dependency_depth: PresetDependencyDepth,
+    candidates_per_name: PresetCandidatesPerName,
+    assignment_attempts: PresetAssignmentAttempts,
+  )
+
+func isHosted(m: LcnAppModule): bool =
+  m.implementation.kind == LcnAppImplementationKind.Process_hosted_dynamic
+
+proc pmInputBytes(
+    p: LcnDcPackageManager, trust: TrustFileState, limits: LcnPmResolverLimits
+): Result[seq[byte], string] =
+  ## [G399] The instance's `lcn.pm_input`: the section's bindings, catalog and
+  ## bounds, the resolver limits it names or the preset, and the trust state's
+  ## deterministic v2 bytes.
+  let trustBytes = trust.file.encode.valueOr:
+    return err("the trust file does not encode: " & error)
+  var entries: seq[CborEntry] = @[
+    (cbor("format"), cbor(PmInputFormat)),
+    (cbor("trust"), cbor(trustBytes)),
+    (cbor("resolver_limits"), toCbor(limits)),
+  ]
+  for (k, v) in toCbor(p).entries:
+    let name = k.getText.get("")
+    if name in ["storage", "catalog", "limits"]:
+      entries.add((k, v))
+  ok(encodeCbor(cborMap(entries)))
+
+proc checkPackageManager(
+    dc: LcnDaemonConfig, trust: TrustFileState
+): Result[Opt[PmSettings], string] =
+  ## [IMPL-DECISION G399] Check 2's `package_manager` part: its instance and
+  ## its bindings' providers are operator entries, all `hosted_dynamic`, so no
+  ## archive enters logosd's process (C1); then the composed `lcn.pm_input`
+  ## passes the Package Manager's own decoder, which checks the bindings, the
+  ## catalog, the bounds, the resolver limits and the trust bytes again
+  ## (ruling C4). Each refusal names the field and quotes no bytes.
+  if dc.package_manager.isNone:
+    return ok(Opt.none(PmSettings))
+  let p = dc.package_manager.get
+  var byId = initTable[string, LcnAppModule]()
+  for m in dc.modules.get(@[]):
+    byId[m.instance] = m
+  let what = "package_manager.instance: " & p.instance
+  if p.instance notin byId:
+    return err(what & " is not an entry of modules")
+  let m = byId.getOrDefault(p.instance)
+  if not m.isHosted:
+    return
+      err(what & " is not hosted_dynamic (the Package Manager runs in its own process)")
+  if m.state_assignment.isNone:
+    return err(what & " has no state_assignment")
+  if m.configuration.isSome or m.provisioned_configuration.isSome:
+    return err(
+      what &
+        " has configuration: the Package Manager has none, and its trust input is never configuration (CONFIGURATION l.58)"
+    )
+  if p.storage.len == 0:
+    return err("package_manager.storage holds no binding")
+  var names = initHashSet[string]()
+  var providers: seq[string]
+  for b in p.storage:
+    let w = "package_manager.storage: binding " & b.binding
+    if names.containsOrIncl(b.binding):
+      return err(w & " is named twice")
+    if b.instance == p.instance:
+      return err(w & " names the Package Manager's own instance")
+    if b.instance notin byId:
+      return err(w & ": " & b.instance & " is not an entry of modules")
+    if not byId.getOrDefault(b.instance).isHosted:
+      return err(w & ": " & b.instance & " is not hosted_dynamic")
+    providers.add(b.instance)
+  if p.catalog.storage notin names:
+    return
+      err("package_manager.catalog.storage: " & p.catalog.storage & " is not a binding")
+  let origin = (if p.resolver_limits.isSome: loOperator else: loPreset)
+  let limits = p.resolver_limits.get(presetResolverLimits())
+  let bytes = ?pmInputBytes(p, trust, limits)
+  let checked = decodePmInput(bytes).valueOr:
+    return err("package_manager: " & error)
+  ok(
+    Opt.some(
+      PmSettings(
+        instance: p.instance,
+        input: bytes,
+        providers: providers,
+        resolverLimits: checked.resolverLimits,
+        limitsOrigin: origin,
+      )
+    )
+  )
+
+func pmStartLine*(s: PmSettings): string =
+  ## [G399; ruling C3] The start's log line: the resolver limits it composed
+  ## and where they came from. For the operator's log only: protected policy
+  ## input never reaches an error a caller sees (PM l.1514).
+  let l = s.resolverLimits
+  "package_manager: " & s.instance & " gets resolver limits partial_closure_names " &
+    $l.names & ", dependency_depth " & $l.depth & ", candidates_per_name " &
+    $l.candidates & ", assignment_attempts " & $l.attempts & " (" & $s.limitsOrigin & ")"
 
 proc checkGates(
     dc: LcnDaemonConfig, trust: TrustFileState, hooksBuild: bool
@@ -303,6 +454,53 @@ proc checkAudit(
       return err("call_audit.store.queue must be 16 to 1048576")
   ok(Opt.some(r))
 
+func isUuidV4*(s: string): bool =
+  ## [SPEC RUNTIME l.2592-2593] A lowercase canonical UUID version 4 (RFC
+  ## 9562): 8-4-4-4-12 lowercase hex digits, version 4, variant `10`.
+  if s.len != 36:
+    return false
+  for i, c in s:
+    if i in [8, 13, 18, 23]:
+      if c != '-':
+        return false
+    elif c notin {'0' .. '9', 'a' .. 'f'}:
+      return false
+  s[14] == '4' and s[19] in {'8', '9', 'a', 'b'}
+
+proc checkRemote*(
+    dc: LcnDaemonConfig, testSigningBuild = TestSigningBuild
+): Result[RemoteSettings, string] =
+  ## [IMPL-DECISION G407, G410] `remote`: who signs, and with `enabled` the
+  ## Runtime id the remote profiles require. `testSigningBuild` is this
+  ## build's: a test passes `false` to check a packaged logosd's refusal.
+  var r = RemoteSettings(signing: rsLogosd)
+  if dc.remote.isNone:
+    return ok(r)
+  let x = dc.remote.get
+  r.enabled = x.enabled
+  if x.signing.isSome:
+    r.signing =
+      case x.signing.get.kind
+      of LcnDcRemoteSigningKind.Logosd: rsLogosd
+      of LcnDcRemoteSigningKind.Key_holder: rsKeyHolder
+      of LcnDcRemoteSigningKind.Process_copy: rsProcessCopy
+  if r.signing == rsProcessCopy and not testSigningBuild:
+    return err(
+      "remote.signing \"process-copy\" is accepted only by a logosd built for tests"
+    )
+  if x.key_holder.isSome:
+    if r.signing != rsKeyHolder:
+      return err("remote.key_holder needs remote.signing \"key-holder\"")
+    ?checkProgramFile("remote.key_holder", x.key_holder.get)
+    r.keyHolder = x.key_holder.get
+  elif r.signing == rsKeyHolder:
+    return err("remote.signing \"key-holder\" needs remote.key_holder")
+  if r.enabled and not isUuidV4(dc.runtime.runtime_instance_id):
+    return err(
+      "runtime.runtime_instance_id must be a lowercase UUID version 4 with remote.enabled"
+    )
+  ok(r)
+
 proc checkDaemonConfig*(
     dc: LcnDaemonConfig, trust: TrustFileState, hooksBuild = HooksBuild, checkKey = true
 ): Result[DaemonConfig, string] =
@@ -311,18 +509,22 @@ proc checkDaemonConfig*(
   ## `checkKey` false skips reading the key file, for a value checked before
   ## its key exists (`logosctl init`).
   ?checkNames(dc)
+  let pm = ?checkPackageManager(dc, trust)
   let hooks = ?checkGates(dc, trust, hooksBuild)
   let ctl = ?checkCtl(dc)
   let cli = ?checkCli(dc)
   let store = ?checkAudit(dc, checkKey)
+  let remote = ?checkRemote(dc)
   ok(
     DaemonConfig(
       value: dc,
       ctl: ctl,
       cli: cli,
+      pm: pm,
       production: not trust.file.development,
       store: store,
       hooks: hooks,
+      remote: remote,
     )
   )
 

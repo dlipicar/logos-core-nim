@@ -7,6 +7,8 @@ import logos_sdk/cbor
 import logos_sdk/crypto/blake3
 import ../../src/logos_core/crypto/slhdsa
 import ../../src/logos_core/package/[lgx, manifest, records, signing, trust, trustdoc]
+from ../../src/logos_core/package/resolver import
+  MaxResolverLimits, names, depth, candidates, attempts
 import ../../src/logos_core/pm/[input, catalog]
 
 export
@@ -66,12 +68,23 @@ proc pinOf*(
 ): PmCatalogRef =
   PmCatalogRef(storage: storage, locator: bytesOf(locator), digest: blake3(document))
 
+func limitsValue*(l: ResolverLimits): LcnPmResolverLimits =
+  ## [G399] `l` as `lcn.pm_input`'s `resolver_limits`.
+  LcnPmResolverLimits(
+    partial_closure_names: uint64(l.names),
+    dependency_depth: uint64(l.depth),
+    candidates_per_name: uint64(l.candidates),
+    assignment_attempts: uint64(l.attempts),
+  )
+
 proc pmValue*(
     trust: seq[byte],
     document: openArray[byte],
     bindings: openArray[(string, string)] = [("main", "storage_module")],
     catalogStorage = "main",
     limits = Opt.none(LcnPmLimits),
+    resolverLimits = limitsValue(MaxResolverLimits),
+    catalogLocator = "catalog",
 ): LcnPmInput =
   var storage: seq[LcnPmBinding]
   for (b, i) in bindings:
@@ -80,8 +93,11 @@ proc pmValue*(
     trust: trust,
     storage: storage,
     catalog: LcnPmCatalogRef(
-      storage: catalogStorage, `object`: bytesOf("catalog"), digest: @(blake3(document))
+      storage: catalogStorage,
+      `object`: bytesOf(catalogLocator),
+      digest: @(blake3(document)),
     ),
+    resolver_limits: resolverLimits,
     limits: limits,
   )
 

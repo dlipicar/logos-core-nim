@@ -128,7 +128,7 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-5 | the no-op install and update while the retained signer is not accepted (TF-07's second point); a D9 stop | fail with `signature-verification-failed` | decided (C6: fail); built at re-pin P7b, the update half in the resolver and the install half at resolution (G166) |
 | 5-6a | where the Package Manager runs | hosted in its own process, the engine's binding over TRANSPORT §8.1.2 | open (C1) |
 | 5-6b | package record observation | deny by default; the grant is protected deployment input | open (C4) |
-| 5-7a | the remote trust input: its own input and revision, apart from the package trust file | — | decided (C2) |
+| 5-7a | the remote trust input: its own input and revision, apart from the package trust file | — | decided (C2); built 2026-11-22 by 5-7a-1 (G408): `remote/trust.cbor` and its mark, `logosctl remote trust` |
 | 5-7a | NF-06 (G81), the authority part | G81 (a) narrowed | decided (B5); compared with CA l.77-78 at 6cac8335 (re-pin P6a): the enrolled half of TXT-0359 (claimed for the half with no Runtime enrolled) and TXT-0360 (riding RUN-1125) are 5-7a's |
 | 5-7a | NA-04 (G255); TF-30 point 1 (G194) | kept | decided (B9) |
 | 5-7a | enrollment and trust-anchor changes (G87) | offline, under the session lock, at the next start | decided (B3) |
@@ -485,6 +485,53 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   (PKG-0354 deferred to 5-8, PKG-0513 and PKG-0514 to 5-6a); PKG-0019, PKG-0021, PKG-0069, PKG-0076, PKG-0077,
   PKG-0079, PKG-0081, PKG-0082, PKG-0112, PKG-0167, PKG-0472 and PKG-0473. 25 units, PKG-0085, PKG-0089 and
   PKG-0449 by inspection. PKG-0474 waits for 5-3b-2; PKG-0080 stays with 5-5, its inspection half tagged here.
+
+- 2026-11-22, Tier 5 step 5-3b-2 (I116 closed; G399's daemon section, G400, G402's grants and hosted case, G405's
+  shell, G443; G140 and G361 amended), the Package Manager as a hosted module:
+  - The protected realization input (G400): `protected_inputs` in `app-config.v1`. At each realization attempt the
+    Module Loader writes an instance's input to `<state_dir>/.lcn-protected-input`, and removes it when
+    initialization returns, at release and at retirement (`runtime/protinput.nim`).
+  - logosd's `package_manager` section (G399): its checks, and the composed `lcn.pm_input`, the instance's only
+    protected input, with the trust file the start accepted. The resolver limits are the operator's, or logosd's
+    preset when the section has none (G443: 256, 32, 256, 1,024); the start line names which.
+  - S9 to S11 (G402; DAEMON.md §5): the Package Manager's routes to its Storage providers, the three calls, the
+    readiness event, and `list_modules`. S9's Runtime Control rule names no `targets`, so the Package Manager can
+    read every module record; a rule with `targets`, allow or deny, never matches a list (AUTHORITY-POLICY.md).
+  - `pm/shell.nim` runs the engine in a hosted module (G405); `pmtest_module` is the test module that wraps it.
+    The fake provider serves `fetch-fake/state/<name>` from its state directory (STORAGE-FETCH §5).
+  - The resolver limits (planning's rulings M1 to M6 and of 2026-11-22): `tests/support/pmshapes.nim` holds the
+    wide, dense, layered, chain and hub shapes, `tools/pmbench.nim` times them and `test_pm_driver` asserts their
+    counts; `docs/CONFORMANCE.md`, "Resolver limits", gives the measured cost at the preset and at the maxima, on
+    macOS and Linux, and DEPLOYMENT §12 what raising a limit costs. `bindCand` makes one cycle walk per bind (G361's
+    amendment), checked against the old walk on seeded catalogs. The cost fix is a step of its own after 5-3b,
+    gated before 5-5.
+  - Suites `test_protected_input`, `test_pm_hosted` and `test_logosd_pm`, and cases in `test_daemon_config`,
+    `test_loader`, `test_authority`, `test_resolver` and `test_pm_driver`.
+
+  Claimed: PKG-0474 (the bindings' retrieval API and locator encodings: PACKAGE-MANAGER.md §4, STORAGE-FETCH §5,
+  DAEMON.md §3), and PKG-0353's hosted half, under logosd. PKG 279/279.
+
+- 2026-11-22, Tier 5 step 5-7a-1 (I117; G407-G411; G264 amended; G86, G87, G194, G255 and G324 noted),
+  remote Runtimes' foundations, with no remote process yet:
+  - The Module Host binds itself to the pid its spawner names (`logos_sdk/base/parentwatch.nim`).
+  - The daemon configuration's `remote` section; with `remote.enabled` the Runtime id must be a
+    lowercase UUIDv4 (G407).
+  - The remote trust input `remote/trust.cbor` and its mark, RUNTIME's enrollment schema held unchanged,
+    G299's start table and the rules per key (two stricter than the text), the loader report,
+    `logosctl remote trust`, and the verifier's snapshot (G408). The carried 5-3a item is closed.
+  - The TLS credential and `logosctl remote credential new|show|rotate`, rotation as a cutover taken up
+    at the next start (G409).
+  - The remote control channel's CDDL, logosd's signing service, the relay to `logos_keyholder` with its
+    own checks, limit and count, and the test-only process copy (G410, G411). Handshakes signed all
+    three ways in `test_remote_tls`. logosd spawning the holder, and the remote processes, are 5-7a-2's.
+  - `libcrypto` is split from `libssl` (`transport/tls/p256.nim`), and logosd imports no libssl binding
+    (lint `daemon-no-ssl`). Its link drops libssl's objects, and its binary is checked to hold no libssl
+    code (G409: `test_logosd` on plain builds, the flake check `logosd-no-ssl` on the deployed logosd).
+  - `docs/REMOTE.md` (new), `docs/DAEMON.md` §2, §3, §6a, §6b, `docs/DEPLOYMENT.md` §2 and §5 (row 5d
+    Supported), `docs/HOST-CONFIG.md` (the host's argv).
+
+  Claimed: RUN-0493 to RUN-0500, RUN-0869, RUN-0928, RUN-0929, TRN-0217, TRN-0369 and PKG-0435 (14
+  units).
 
 ## Tiers at f4f83471 (the original plan)
 
