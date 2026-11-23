@@ -133,6 +133,9 @@ type
     state*: Opt[string] ## `state.assignment`
     services*: InitServices
     configuration*: Opt[ConfigurationHandoff]
+    protectedDigest*: string
+      ## [G400] the hex BLAKE3-256 of the attempt's protected realization
+      ## input, part of the private handoff L l.368-370 compares; empty: none
 
   RealizationStatus* = enum
     rsActive = "active"
@@ -268,6 +271,9 @@ type
     destroy*: ModuleDestroyFn
     context*: ptr LogosModuleContext
     host*: pointer
+    stateDir*: Opt[string]
+      ## [G400] the realization's state directory, where the caller removes
+      ## the protected realization input's file again once it is released
 
   ApplyHook* = object
     ## [SPEC LOADER §8] The one `_MODULE_apply_configuration` call an apply
@@ -419,6 +425,8 @@ func keyOf(req: RealizeRequest): string =
         d.placement
     )
   result.add("\0" & req.state.get("-"))
+  # [G400] The protected realization input is a private handoff too.
+  result.add("\0" & req.protectedDigest)
   if req.configuration.isSome:
     # [SPEC LOADER §6] A retry with another snapshot is another request.
     let c = req.configuration.get
@@ -888,12 +896,14 @@ proc beginRelease*(
   if found.hosted:
     if found.host == nil:
       return ok(Opt.none(Teardown))
-    let t = Teardown(host: found.host)
+    let t = Teardown(host: found.host, stateDir: found.stateDir)
     found.host = nil # the caller ends the host
     return ok(Opt.some(t))
   if found.context == nil:
     return ok(Opt.none(Teardown))
-  let t = Teardown(destroy: found.binding.destroy, context: found.context)
+  let t = Teardown(
+    destroy: found.binding.destroy, context: found.context, stateDir: found.stateDir
+  )
   found.context = nil # destruction begins: the context is consumed
   ok(Opt.some(t))
 

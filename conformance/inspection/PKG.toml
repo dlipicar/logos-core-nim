@@ -20,3 +20,12 @@ reason = "A documentation requirement (PM l.1252). docs/CONFORMANCE.md 'Resolver
 ids = ["PKG-0604", "PKG-0605"]
 reason = "A permission not taken (PM l.1311-1312). The catalog carries no platform metadata in this implementation: a catalog entry is an identity and a source (src/logos_core/package/records.nim), so no candidate is excluded before its material is obtained. Every reached record goes to the Inspector, which judges the platform from the verified manifest (lgxInspector and openLgx; the [PKG-0584] test in tests/test_resolver.nim). PKG-0605's condition, such metadata, never arises."
 
+# pm-baseline-only (step 5-3b-1, DECISIONS G404, I116)
+[[item]]
+ids = ["PKG-0085", "PKG-0449"]
+reason = "A permission not taken (PM l.457, PKG-0085) and a deployment duty met by the baseline (PM l.594, PKG-0449). No package-signing or catalog profile beyond the baseline exists: the package trust file's catalog section has only `selected`, and a file that selects anything is refused by checkTrust (src/logos_core/package/trustdoc.nim; G398) at logosd's start and again by the Package Manager's input check (decodePmInput, src/logos_core/pm/input.nim; tests [PKG-0086] in tests/test_pm_input.nim). The catalog document is closed (src/logos_core/pm/catalog.cddl) and has no profile, key, log or checkpoint field. docs/PACKAGE-MANAGER.md §6 documents that the implementation provides no authenticated catalog ordering, freshness or external anchoring, so a deployment that requires them cannot be built from it."
+
+# pm-no-freshness-requirement (step 5-3b-1, DECISIONS G404, I116)
+[[item]]
+ids = ["PKG-0089"]
+reason = "A conditional duty whose condition never arises (PM l.467). The trust input cannot require revocation, a minimum accepted version or fresh external-anchor evidence: the package trust file (lcn.package_trust, src/logos_core/package/trustdoc.cddl) is closed and has no such field, and a catalog or provenance selection is refused (G398, G404; tests [PKG-0086] and [PKG-0090] in tests/test_pm_input.nim). The only active requirement is the package's own signature under the accepted anchors, checked on every use, cached or not (G403; tests [PKG-0077] in tests/test_pm_vcache.nim). docs/PACKAGE-MANAGER.md §6 states it."

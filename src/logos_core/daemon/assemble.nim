@@ -343,6 +343,10 @@ proc assembleDaemon*(
     )
   else:
     logInfo("lcn_call: no CLI module (no cli.artifact and no compiled library hash)")
+  if c.pm.isSome:
+    # [G399; ruling C3] Which resolver limits this start composed, and where
+    # they came from: the operator's log only (PM l.1514).
+    logInfo(pmStartLine(c.pm.get))
   # Step 9.
   let comp = prepared.composition
   var cfg = LogosRuntimeConfig(

@@ -104,7 +104,7 @@ control channel and waits for the signature (owner decision B1; DECISIONS G410).
 | `remote.signing` | Who holds the key | |
 |---|---|---|
 | absent or `logosd` | logosd's signing service | the default |
-| `key-holder` | `logos_keyholder`, a separate process (`remote.key_holder` names the program) | logosd never opens `key.p8` |
+| `key-holder` | `logos_keyholder`, a separate process (`remote.key_holder` names the program; logosd's package installs it at `../libexec/logos-core/logos_keyholder`) | logosd never opens `key.p8` |
 | `process-copy` | each TLS process | tests only: a packaged logosd refuses it |
 
 Either signer checks every request before it signs: a TLS 1.3 CertificateVerify input for the role

@@ -282,7 +282,14 @@ A pattern covers a requested scope when everything the scope asks for is inside 
   instance backing the requested provider. `access`, when present, must hold every requested method
   and event root; when absent, any.
 - **`runtime-control`.** Runtime Control methods and events, and the instances they target. An absent
-  list is any; an empty list is none.
+  list is any; an empty list is none. A pattern with `targets` covers only a request that names its
+  subjects (instances, modules or providers) and no route. So it never covers a request that names no
+  subject: a list method (`list_modules`, `list_routes`, `list_remote_listeners`), a Runtime Control
+  subscription, a Runtime-wide method or `establish_route`. Nor does it cover `renew_route` or
+  `close_route`, which name a route. Deny rules match the same way: a `deny` with `targets` does not
+  apply to a list, so a list that an allow rule permits shows every record, the deny's targets'
+  included (see "Never narrowing" below; DECISIONS G402). To keep a module from seeing records, grant
+  it no list method.
 - **`module-execution`.** Starting or stopping instances matching `targets`. `modes` and `placements`
   restrict how; `placements` needs `modes` to be exactly `["local-transport"]`.
 - **`permission`.** A permission the selected permission profile defines (`docs/PERMISSIONS.md`), with

@@ -32,9 +32,10 @@
 
 {.push raises: [].}
 
-import std/[algorithm, os, sets, strutils, tables]
+import std/[algorithm, os, sequtils, sets, strutils, tables]
 import results
 import logos_sdk/cbor
+from logos_sdk/cbor/encode import cmpBytes
 import ../loader/contract
 from logos_sdk/base/hex import fromHex
 from logos_sdk/abi/host import AppConfigFormat
@@ -44,6 +45,8 @@ from ../runtime/host_config import parseHostConfig
 from ../permissions import HostAmbient
 from ../transport/tls/trustsnap import TrustSnapshot, newTrustSnapshot
 import ../remote/carrier
+from logos_sdk/pins import CommitmentModelId, HashProfileId, HashSuiteId
+import logos_sdk/contracts/generated/lcn_storage_fetch_root
 import ../orchestration/[settings, needs]
 import ../cli/callsettings
 import ./[config, remoteexposure, session, trustfile]
@@ -194,13 +197,35 @@ func bareEvent(name: string): string =
 
 # The system rules -------------------------------------------------------------------
 
+func storageFetchContract(): CborValue =
+  ## [G402] `lcn.storage_fetch`'s schema commitment, as a policy names it.
+  cborMap(
+    (t("commitment_model"), t(CommitmentModelId)),
+    (t("schema_root"), cbor(@LcnStorageFetchRoot)),
+    (t("hash_profile"), t(HashProfileId)),
+    (t("hash_suite"), t(HashSuiteId)),
+  )
+
+func roots(xs: openArray[array[32, byte]]): CborValue =
+  ## Declaration roots as a policy set: strictly ascending (AUTHORITY-POLICY.md).
+  var sorted = xs.mapIt(@it)
+  sorted.sort(
+    proc(a, b: seq[byte]): int =
+      cmpBytes(a, b)
+  )
+  var a = newCborArray(0)
+  for x in sorted:
+    a.items.add(cbor(x))
+  a
+
 proc systemRules*(
-    orch: OrchestratorSettings, cli = false
+    orch: OrchestratorSettings, cli = false, pm = Opt.none(PmSettings)
 ): Result[seq[CborValue], string] =
   ## [G295] S1 to S5 (DAEMON.md §5), and S6 to S8 when the lcn_call instance
   ## is composed (`cli`; G345, G346). Every start rule holds its execution scope and
   ## the host-ambient permission scope together (G207); an absent `modes`
   ## covers direct and hosted starts alike.
+  ## [G402] S9 to S11 with a `package_manager` section (`pm`).
   let n = ?orchestratorNeeds(orch)
   var rules: seq[CborValue]
   # S1: the authority publishes its change notices.
@@ -334,14 +359,97 @@ proc systemRules*(
         Opt.some(subjectOf("modules", [CliModule])),
       ),
     )
+  if pm.isSome:
+    # [G402] The Package Manager's routes to its Storage providers, which are
+    # ordinary module routes: logosd issues each and decides its Hello.
+    let pmSubject = subjectOf("instances", [pm.get.instance])
+    # A subject's list is a set: each provider once, ascending.
+    var named = pm.get.providers.toHashSet.toSeq
+    named.sort()
+    let providers = subjectOf("instances", named)
+    # S9 (the first three): the Runtime Control methods that hold a route,
+    # and `list_modules` (a route names a provider record, not an instance),
+    # no Runtime Control event (as S3), and the route and the three calls.
+    # The Runtime Control rule names no `targets`: `establish_route` and a
+    # list decide with no target, `renew_route` and `close_route` name a route,
+    # and this authority never narrows an allow (AUTHORITY-POLICY.md; CA l.124
+    # permits it, nothing requires it), so a targeted rule would allow none of
+    # them. The provider-access rule names the providers.
+    rules.add rule(
+      "allow",
+      pmSubject,
+      rcScope(
+        ["close_route", "establish_route", "list_modules", "renew_route"],
+        Opt.none(seq[string]),
+      ),
+    )
+    rules.add denyRule(
+      "consumer-denied", pmSubject, rcScope(newSeq[string](), Opt.none(seq[string]))
+    )
+    rules.add rule(
+      "allow",
+      pmSubject,
+      cborMap(
+        (t("kind"), t("provider-access")),
+        (t("contract"), storageFetchContract()),
+        (t("actions"), texts(["call", "establish-route", "renew-route"])),
+        (t("providers"), providers),
+        (
+          t("access"),
+          cborMap(
+            (
+              t("methods"),
+              roots(
+                [
+                  LcnStorageFetchStatObjectRoot, LcnStorageFetchReadObjectRoot,
+                  LcnStorageFetchFetchReadinessRoot,
+                ]
+              ),
+            )
+          ),
+        ),
+      ),
+    )
+    # S10: its subscription to fetch_readiness_changed on those routes.
+    rules.add rule(
+      "allow",
+      pmSubject,
+      cborMap(
+        (t("kind"), t("provider-access")),
+        (t("contract"), storageFetchContract()),
+        (t("actions"), texts(["subscribe-event"])),
+        (t("providers"), providers),
+        (
+          t("access"),
+          cborMap((t("subscribe_events"), roots([LcnStorageFetchReadinessChangedRoot]))),
+        ),
+      ),
+    )
+    # S11: the providers publish that event (STORAGE-FETCH §8).
+    rules.add rule(
+      "allow",
+      providers,
+      cborMap(
+        (t("kind"), t("provider-access")),
+        (t("contract"), storageFetchContract()),
+        (t("actions"), texts(["publish-event"])),
+        (
+          t("access"),
+          cborMap((t("publish_events"), roots([LcnStorageFetchReadinessChangedRoot]))),
+        ),
+      ),
+    )
   ok(rules)
 
 proc mergedPolicy*(
-    p: LcnDcPolicyARCapabilityAuthorityMap, orch: OrchestratorSettings, cli = false
+    p: LcnDcPolicyARCapabilityAuthorityMap,
+    orch: OrchestratorSettings,
+    cli = false,
+    pm = Opt.none(PmSettings),
 ): Result[LcnAuthorityPolicy, string] =
   ## [G295] The operator's rules and options with the system rules, as one
   ## `lcn.authority_policy`, every array canonical.
-  var rules = ?systemRules(orch, cli)
+  var rules = ?systemRules(orch, cli, pm)
   for r in p.rules:
     rules.add(toCbor(r))
   var entries: seq[CborEntry] = @[
@@ -560,6 +668,13 @@ proc cliRecord(
     )
   )
 
+func protectedInputsOf(c: DaemonConfig): Opt[seq[LcnAppProtectedInput]] =
+  ## [IMPL-DECISION G399, G400] With `package_manager`, its instance's
+  ## `lcn.pm_input`, the one protected realization input logosd writes.
+  if c.pm.isNone:
+    return Opt.none(seq[LcnAppProtectedInput])
+  Opt.some(@[LcnAppProtectedInput(instance: c.pm.get.instance, input: c.pm.get.input)])
+
 # Composition ------------------------------------------------------------------------
 
 func staticModule(instance, module, binding: string): LcnAppModule =
@@ -625,7 +740,7 @@ proc compose*(
     var ca = staticModule(AuthorityInstance, AuthorityModule, AuthorityModule)
     ca.state_assignment = Opt.some(AuthorityState)
     modules.add(ca)
-    let merged = ?mergedPolicy(p, orch, cliArt.isSome)
+    let merged = ?mergedPolicy(p, orch, cliArt.isSome, c.pm)
     policy = LcnAppPolicy(
       kind: LcnAppPolicyKind.Capability_authority,
       arm_Capability_authority: LcnAppPolicyARCapabilityAuthorityMap(
@@ -644,6 +759,7 @@ proc compose*(
   var remoteProgram = r.remote_program
   if c.remote.enabled and remoteProgram.isNone:
     remoteProgram = defaultRemoteProgram(exe)
+  let protectedInputs = protectedInputsOf(c)
   var app = LcnAppConfig(
     runtime: LcnAppRuntime(
       work_dir: s.workDir,
@@ -663,6 +779,7 @@ proc compose*(
     policy: policy,
     orchestration: OrchestratorInstance,
     modules: modules,
+    protected_inputs: protectedInputs,
     ordering: dc.ordering,
     declarations: dc.declarations,
     routing: dc.routing,

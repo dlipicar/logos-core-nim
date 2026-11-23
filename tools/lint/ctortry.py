@@ -9,14 +9,20 @@ affected: their argument temporaries are destroyed. So every `?` that is inside
 an object constructor, or inside a tuple or array constructor after its first
 element, must be hoisted into a `let` before the constructor.
 
-  python3 tools/lint/ctortry.py src tests
+  python3 tools/lint/ctortry.py [root ...]   (default: src sdk/src sdk/tests tests)
+  python3 tools/lint/ctortry.py --self-test
 
-Prints `file:line: ...` for each such `?` and exits 1 if there is any.
+Prints `file:line: ...` for each such `?` and exits 1 if there is any. A root that is not a
+directory, or a run that finds no `.nim` file at all, exits 2: run from the wrong folder or with a
+mistyped path, the lint would otherwise check nothing and pass.
 """
 
+import contextlib
+import io
 import os
 import re
 import sys
+import tempfile
 
 KEYWORDS = {
     "and", "or", "not", "xor", "if", "elif", "when", "case", "of", "return",
@@ -122,18 +128,65 @@ def findings(path):
     return out
 
 
-def main(roots):
-    count = 0
+def lint(roots):
+    """The exit status over `roots`: 0 clean, 1 a finding, 2 nothing to check."""
+    for root in roots:
+        if not os.path.isdir(root):
+            print(f"ctortry: {root}: not a directory", file=sys.stderr)
+            return 2
+    count = scanned = 0
     for root in roots:
         for d, _, files in os.walk(root):
             for name in sorted(files):
                 if name.endswith(".nim"):
+                    scanned += 1
                     path = os.path.join(d, name)
                     for line, what in findings(path):
                         print(f"{path}:{line}: {what}; hoist it into a let")
                         count += 1
+    if not scanned:
+        print(f"ctortry: no .nim file under {' '.join(roots)}", file=sys.stderr)
+        return 2
     return 1 if count else 0
 
 
+# The self-test: the two runs that check nothing, a planted `?` and its hoisted form.
+PLANTED = "proc f(): Result[Foo, string] =\n  ok(Foo(a: ?g()))\n"
+HOISTED = "proc f(): Result[Foo, string] =\n  let a = ?g()\n  ok(Foo(a: a))\n"
+
+
+def self_test():
+    failures = []
+    with tempfile.TemporaryDirectory() as tmp:
+        dirs = {}
+        for name, text in (("empty", None), ("planted", PLANTED), ("hoisted", HOISTED)):
+            dirs[name] = os.path.join(tmp, name)
+            os.mkdir(dirs[name])
+            if text is not None:
+                with open(os.path.join(dirs[name], "a.nim"), "w", encoding="utf-8") as f:
+                    f.write(text)
+        missing = os.path.join(tmp, "missing")
+        cases = [
+            ("a missing root", [missing], 2),
+            ("a missing root beside a good one", [dirs["hoisted"], missing], 2),
+            ("an empty root", [dirs["empty"]], 2),
+            ("a planted `?`", [dirs["planted"]], 1),
+            ("its hoisted form", [dirs["hoisted"]], 0),
+        ]
+        for what, roots, want in cases:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                got = lint(roots)
+            if got != want:
+                failures.append(f"{what}: exit {got}, want {want}")
+    for failure in failures:
+        print("self-test:", failure)
+    if failures:
+        return 1
+    print(f"ctortry self-test: {len(cases)} cases")
+    return 0
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:] or ["src", "sdk/src", "sdk/tests", "tests"]))
+    if sys.argv[1:] == ["--self-test"]:
+        sys.exit(self_test())
+    sys.exit(lint(sys.argv[1:] or ["src", "sdk/src", "sdk/tests", "tests"]))

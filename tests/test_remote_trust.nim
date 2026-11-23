@@ -136,7 +136,7 @@ when defined(posix):
       ).get
       check decodeRemoteTrust(encodeCbor(otherFormat)).isErr
       # The records' rules are the mirror's text with only the names changed.
-      let mirrored = enrollmentRules(readFile(repoDir / remoteEnrollmentMirror))
+      let mirrored = enrollmentRules(readFile(remoteEnrollmentMirror))
       check remoteTrustDocuments()[0].endsWith(mirrored)
       check "logos.runtime_enrollment." notin mirrored
       # A record as another implementation writes it, in diagnostic notation.

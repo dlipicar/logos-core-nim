@@ -26,7 +26,7 @@
 
 {.push raises: [].}
 
-import std/[locks, os, sets]
+import std/[locks, os, sequtils, sets]
 when defined(posix):
   import std/posix
 import results
@@ -520,6 +520,7 @@ proc launch(h: ptr HostRuntime): LogosResult =
     moduleHostEnv: c.moduleHostEnv,
     permissions: c.permissions,
     initialSettings: c.initialSettings,
+    protectedInputs: c.protectedInputs.mapIt((it.instance, it.input)),
     onTerminationRequired: h.terminationHook,
     terminationData: h.terminationData,
     callRecordSink: h.recordSink,

@@ -123,6 +123,7 @@ from logos_sdk/base/logtext import oneLine, supplied
 import logos_sdk/cbor/[decode, utf8]
 import logos_sdk/commitment
 from ../durable import syncDir
+from ./protinput import removeProtectedInput, MaxProtectedInputBytes
 import logos_sdk/iface/[accept, outcome, surface]
 from logos_sdk/iface/provider import matchesContracts
 import logos_sdk/kit/rc_arms
@@ -596,6 +597,10 @@ type
     callBusy: int ## call jobs dispatched and not yet answered
     callClock: MonoTime ## [I88] the same for the call pool
     callOrder: int ## [I88] calls dispatched so far
+    callTakenSeen: int ## [G242 revised] `Shared.callTaken` when last read
+    callMoved: MonoTime
+      ## [G242 revised] the last time a call worker was seen to take a job, or
+      ## one finished
     liveAttempts: HashSet[string]
       ## attempt tokens whose bindings are valid: from acceptance until the
       ## context they made is destroyed, or their outcome is final
@@ -858,18 +863,52 @@ proc callWorkerLoop(s: ptr Shared) =
       job = s.calls.recv()
     except Exception:
       return
+    if job.kind == cjQuit:
+      return
+    # [G242 revised] Inside a job from here until its completion message is
+    # sent, a refused call it only discards included.
+    s.callInJob += 1
+    s.callTaken += 1
     case job.kind
     of cjQuit:
-      return
+      discard
     of cjRun:
       runCall(job.call)
       s.post(Msg(kind: mkCallJobDone, target: job.call))
     of cjActivate:
       activation(s, job)
       s.post(Msg(kind: mkCallJobDone, target: nil))
+    s.callInJob -= 1
+
+when defined(lcnTestHooks):
+  var
+    lateCallWorker: Atomic[int] ## its index + 1; 0: none
+    lateCallWorkerMs: Atomic[int]
+    lateCallWorkerArmed: Atomic[bool]
+
+  proc setLateCallWorkerForTests*(index, ms: int) =
+    ## [G242 revised] The call worker spawned as the `index`-th one, counted
+    ## from 0, waits `ms` before it takes its first job, as one a loaded host
+    ## starts late, or with a negative `ms` until this is called again; a
+    ## negative `index` turns it off. The next call worker to start after that
+    ## spawn waits.
+    lateCallWorkerMs.store(ms)
+    lateCallWorker.store(max(index + 1, 0))
+
+  proc armLateCallWorker(s: ptr Shared) =
+    if lateCallWorker.load == s.callSpawned + 1:
+      lateCallWorkerArmed.store(true)
 
 proc callWorkerMain(s: ptr Shared) {.thread.} =
   markRuntimeThread()
+  when defined(lcnTestHooks):
+    if lateCallWorkerArmed.exchange(false):
+      let ms = lateCallWorkerMs.load
+      if ms >= 0:
+        sleep(ms)
+      else:
+        while lateCallWorkerMs.load < 0:
+          sleep(1)
   callWorkerLoop(s)
   releasePerThread()
 
@@ -899,12 +938,15 @@ proc sendCallJob(st: State, job: sink CallJob) =
   let s = st.shared
   if st.callBusy > s.callSpawned and s.callSpawned < MaxCallWorkers:
     try:
+      when defined(lcnTestHooks):
+        armLateCallWorker(s)
       createThread(s.callWorkers[s.callSpawned], callWorkerMain, s)
       inc s.callSpawned
     except ResourceExhaustedError:
       discard # the job waits for a busy call worker
   if st.callBusy == s.callSpawned + 1:
     st.callClock = getMonoTime() # [I88] the queue was empty until now
+    st.callMoved = st.callClock
   try:
     s.calls.send(job)
   except Exception:
@@ -922,6 +964,8 @@ proc overflow(st: State, calls: bool) =
   let s = st.shared
   try:
     if calls:
+      when defined(lcnTestHooks):
+        armLateCallWorker(s)
       createThread(s.callWorkers[s.callSpawned], callWorkerMain, s)
       inc s.callSpawned
     else:
@@ -1494,10 +1538,11 @@ proc endByRoute(st: State, a: AsyncRec) =
   else:
     st.endCall(a, revokedResult(), okEnded, cancel = false)
 
-proc refuseQueuedCall(st: State) =
+proc refuseQueuedCall(st: State, stalled = false) =
   ## [IMPL; I88, deviation 5] The oldest call no call worker has begun is
   ## decided MODULE_ERROR (INTERFACE l.2041, a capacity limit, by analogy);
-  ## its completion is an ordinary completion job (l.2053).
+  ## its completion is an ordinary completion job (l.2053). [G242 revised]
+  ## `stalled`: the long bound's refusal, while a call worker takes no job.
   var waiting: seq[AsyncRec]
   for a in st.asyncCalls.values:
     if a.executing and not a.terminal:
@@ -1508,9 +1553,17 @@ proc refuseQueuedCall(st: State) =
   )
   for a in waiting:
     if asyncOf(a.call).refuseQueued(failure(ecModule, "no call worker is available")):
-      st.diagnose("a queued call was refused: every call worker is busy")
+      st.diagnose(
+        if stalled:
+          "a queued call was refused: a call worker did not take a queued call"
+        else:
+          "a queued call was refused: every call worker is busy"
+      )
       st.asyncTerminal(a)
       return
+
+const CallStallFactor = 10
+  ## [IMPL; G242 revised] The long bound, in `refuseDelay`s (10 s by default).
 
 proc checkStarvation(st: State, now: MonoTime) =
   ## [IMPL; I88, deviation 5] A pool whose queue is not empty while every
@@ -1520,6 +1573,19 @@ proc checkStarvation(st: State, now: MonoTime) =
   ## pool's bound, after `refuseDelay`, the oldest queued call is refused;
   ## lifecycle jobs are never refused, so 128 that each wait for work queued
   ## behind them can still stall.
+  ##
+  ## [G242 revised] A refusal needs every call worker inside a job
+  ## (`callInJob`): while one spawned worker is not running one, the call
+  ## pool is not starved for a refusal and its clock starts again. Otherwise
+  ## a worker that a loaded host starts late lets the oldest queued call, the
+  ## one it is about to take, be refused, and one refusal more each
+  ## `refuseDelay`, until every queued call is refused while that worker has
+  ## none. A worker that never takes a job would then leave queued calls with
+  ## no answer, so once no call worker has taken or finished a job for
+  ## `CallStallFactor` × `refuseDelay`, the oldest is refused anyway, one each
+  ## such period. Spawning still counts a spawned worker busy, in both pools:
+  ## an early spawn only adds a worker, and a worker that never starts below
+  ## the bound is covered by the next one.
   let s = st.shared
   if st.busy > s.spawned and s.spawned < MaxWorkers + MaxNestedWorkers and
       now - st.jobClock >= st.limits.starvationDelay:
@@ -1530,9 +1596,20 @@ proc checkStarvation(st: State, now: MonoTime) =
       if now - st.callClock >= st.limits.starvationDelay:
         st.overflow(calls = true)
         st.callClock = now
-    elif now - st.callClock >= st.limits.refuseDelay:
-      st.refuseQueuedCall()
-      st.callClock = now
+        st.callMoved = now
+    else:
+      let taken = s.callTaken.load
+      if taken != st.callTakenSeen:
+        st.callTakenSeen = taken
+        st.callMoved = now
+      if s.callInJob.load < s.callSpawned:
+        st.callClock = now
+        if now - st.callMoved >= st.limits.refuseDelay * CallStallFactor:
+          st.refuseQueuedCall(stalled = true)
+          st.callMoved = now
+      elif now - st.callClock >= st.limits.refuseDelay:
+        st.refuseQueuedCall()
+        st.callClock = now
 
 proc starvationDeadline(st: State): Opt[MonoTime] =
   let s = st.shared
@@ -4547,6 +4624,8 @@ proc realizeThroughLoader(st: State, a: Attempt) =
       h.setEndpoint(e.ep.listener, e.ep.path, st.runtimeId, st.shared.tport.config).isOkOr:
         st.diagnose("the endpoint of " & x.id & " cannot be handed over: " & error)
         fail("the provider's endpoint cannot be handed over")
+  # [G400] The instance's protected realization input, if it has one.
+  let (protectedBytes, protectedLen) = st.side.protectedOf(x.id)
   st.side.putInbound(
     x.id,
     InboundHandoff(
@@ -4556,6 +4635,8 @@ proc realizeThroughLoader(st: State, a: Attempt) =
       invocationAccess: s.invocationAccess,
       declareContract: cast[pointer](s.declareContract),
       host: host,
+      protectedInput: protectedBytes,
+      protectedInputLen: protectedLen,
     ),
   ).isOkOr:
     st.diagnose("the private handoff of " & x.id & " cannot be placed: " & error)
@@ -5494,6 +5575,13 @@ proc retireCommitted(st: State, y: Inst) =
       )
   st.unsettled.excl(y.id)
   st.xfers.del(y.id)
+  if st.cfg.stateRoot.isSome and y.record.stateAssignment.isSome:
+    # [IMPL-DECISION G400] The state directory stays (DEPLOYMENT §19); a copy
+    # of a protected realization input does not.
+    removeProtectedInput(dirOf(st.cfg.stateRoot.get, y.record.stateAssignment.get)).isOkOr:
+      st.diagnose(
+        "the protected input of retired " & y.id & " was not removed: " & error
+      )
   # [SPEC RUNTIME l.3417, l.3420] A membership change, judged by the retained
   # facts of the record that left.
   st.hintRc(InvKind.Modules, instanceSubject(y.record.module, y.id, y.providerId))
@@ -11972,6 +12060,7 @@ proc handle(st: State, m: sink Msg) =
   of mkCallJobDone:
     dec st.callBusy
     st.callClock = getMonoTime()
+    st.callMoved = st.callClock
     let a = st.asyncCalls.getOrDefault(m.target)
     if a != nil:
       a.executing = false
@@ -12781,6 +12870,20 @@ proc openEngine*(cfg: EngineConfig): Result[Engine, EngineError] =
   tcfg.maxPayloadDepth = depth # [G241] one payload depth for every decoder
   tcfg.terminationDrain = 0
     # [plan §2.8] the Runtime decides every call before it terminates a session
+  for i, (instance, bytes) in cfg.protectedInputs:
+    # [IMPL-DECISION G400] What the host configuration checks, for a
+    # configuration built in code.
+    if instance.len == 0 or instance.len > 128 or bytes.len == 0 or
+        bytes.len > MaxProtectedInputBytes:
+      return
+        err(engineError(ecInvalidParams, "protected_inputs: an entry is out of bounds"))
+    for j in 0 ..< i:
+      if cfg.protectedInputs[j][0] == instance:
+        return err(
+          engineError(
+            ecInvalidParams, "protected_inputs: " & instance & " has two entries"
+          )
+        )
   let tp = newTransportPorts(tcfg).valueOr:
     return err(engineError(ecInvalidParams, "transport: " & error))
   let e = createShared(Shared)
@@ -12797,6 +12900,10 @@ proc openEngine*(cfg: EngineConfig): Result[Engine, EngineError] =
   e.rcJobs.open()
   e.bell = newBell()
   e.side = newSideTable()
+  for (instance, bytes) in cfg.protectedInputs:
+    # [G400] Before any thread starts, kept until the table is freed; the
+    # entries were checked before anything was made.
+    discard e.side.addProtected(instance, bytes)
   if cfg.moduleHost.isSome:
     # [plan §2.3; G265] Its threads start with the first spawn.
     e.hosts = newSupervisor(cfg.moduleHost.get, cfg.moduleHostEnv)
