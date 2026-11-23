@@ -518,3 +518,43 @@ suite "ifc.nim-types: lcn-gen kit with a configuration (DECISIONS I87) [IMPL]":
     ]:
       check run(bad) == 1
     check not dirExists(dir / "x")
+
+  test "[IMPL-DECISION G494] --encoded-response writes a pre-encoded handler only with kit --confined --async-api, for an unmarked method":
+    let exe = "build/tools/lcn_gen_cli"
+    if not fileExists(exe):
+      let (built, code) = execCmdEx(
+        quoteShellCommand(
+          [
+            getCurrentCompilerExe(),
+            "c",
+            "--hints:off",
+            "--nimcache:build/nimcache/lcn_gen_cli",
+            "-o:" & exe,
+            "sdk/src/lcn_gen.nim",
+          ]
+        )
+      )
+      checkpoint built
+      require code == 0
+    let dir = "build/lcn_gen_cli_g494"
+    removeDir(dir)
+    proc run(args: openArray[string]): (string, int) =
+      let (output, code) =
+        execCmdEx(quoteShellCommand(@[exe] & @args), options = {poStdErrToStdOut})
+      checkpoint output
+      (output, code)
+
+    let kit =
+      @["kit", "--out:" & dir, "--import-prefix:" & fixturePrefix, ledgerDocument]
+    check run(kit & @["--confined", "--async-api", "--encoded-response:post"])[1] == 0
+    check "Result[PreEncoded, InvocationFailure]" in
+      readFile(dir / "ledger_module_kit.nim")
+    removeDir(dir)
+    let (noAsync, noAsyncCode) = run(kit & @["--confined", "--encoded-response:post"])
+    check noAsyncCode == 1
+    check "--encoded-response needs kit --confined --async-api" in noAsync
+    let (marked, markedCode) =
+      run(kit & @["--confined", "--async-api", "--encoded-response:seal"])
+    check markedCode == 1
+    check "seal's response is marked sensitive" in marked
+    check not dirExists(dir)

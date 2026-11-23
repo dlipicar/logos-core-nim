@@ -4,7 +4,8 @@
 ;
 ; An array that is present is non-empty, and the checks the schema cannot
 ; express (unique ids, ordering, the orchestration instance, the authority
-; instance) are applied at logos_runtime_create (runtime/host_config.nim).
+; instance, the package manager instance) are applied at logos_runtime_create
+; (runtime/host_config.nim).
 ; lcn.authority_policy is the Capability Authority's policy input,
 ; authority/policy.cddl (docs/AUTHORITY-POLICY.md).
 
@@ -22,6 +23,10 @@ lcn.app_config = {
   ? permissions: lcn.app_permissions,
   ? state_transfers: [* lcn.app_state_transfer],
   ? protected_inputs: [* lcn.app_protected_input],
+  ; [G490] The instance that holds the Package Manager responsibility (RUNTIME
+  ; l.293): the hosted_dynamic logos_package_manager, the one hosted module
+  ; whose reserved name the Module Host accepts.
+  ? package_manager: lcn.app_instance_id,
 }
 
 lcn.app_runtime = {

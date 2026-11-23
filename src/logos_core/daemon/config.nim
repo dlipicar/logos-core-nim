@@ -10,7 +10,7 @@
 
 {.push raises: [].}
 
-import std/[os, sets, tables]
+import std/[os, sets, strutils, tables]
 import results
 import logos_sdk/cbor
 import ../loader/contract
@@ -19,7 +19,7 @@ from ../pm/input import
   attempts
 from ../runtime/authscopes import AuthorityModule
 from ../orchestration/settings import OrchestratorModule
-from ../runtime/host_config import checkProgramFile
+from ../runtime/host_config import checkProgramFile, PackageManagerModule
 import ./[daemon_config_types, evkey, session, trustfile]
 
 export results, daemon_config_types
@@ -38,11 +38,19 @@ const
   CtlBinding* = "logosctl"
   CliInstance* = "lcn_call" ## [G343] the CLI module's instance id and name
   CliModule* = "lcn_call"
+  PmInstance* = "package_manager"
+    ## [G491] the Package Manager's reserved instance id, which logosd composes
+  PmModule* = PackageManagerModule ## [SPEC RUNTIME l.293; PM App A]
   ReservedInstances* = [
-    OrchestratorInstance, AuthorityInstance, CtlInstance, CliInstance, LoaderInstanceId
+    OrchestratorInstance, AuthorityInstance, CtlInstance, CliInstance, LoaderInstanceId,
+    PmInstance,
   ]
-  ReservedModules* =
-    [LoaderModuleName, AuthorityModule, CtlModule, CliModule, OrchestratorModule]
+  ReservedModules* = [
+    LoaderModuleName, AuthorityModule, CtlModule, CliModule, OrchestratorModule,
+    PmModule,
+  ]
+  SystemPrefix* = "logos_"
+    ## [G490] the reserved module-name prefix: only logosd composes such a module
   CtlMethods* = [
     "get_self", "list_modules", "list_routes", "get_readiness", "get_execution_summary",
     "get_permission_settings", "get_configuration_schema", "get_configuration_summary",
@@ -118,11 +126,16 @@ type
     loPreset = "logosd's preset"
 
   PmSettings* = object
-    ## [IMPL-DECISION G399] The checked `package_manager` section: the
-    ## instance, its `lcn.pm_input` exactly as compose hands it over (the trust
-    ## bytes are the v2 encoding of the trust state the start checked), and
-    ## what the system rules and the start's log line need.
-    instance*: string
+    ## [IMPL-DECISION G399, G491] The checked `package_manager` section: the
+    ## reserved instance, its state assignment and artifact, its `lcn.pm_input`
+    ## exactly as compose hands it over (the trust bytes are the v2 encoding of
+    ## the trust state the start checked), and what the system rules and the
+    ## start's log line need.
+    instance*: string ## always `PmInstance`
+    state*: string ## `package_manager.state`, the instance's state assignment
+    artifact*: Opt[LcnAppArtifact]
+      ## `package_manager.artifact`; none: the companion library installed with
+      ## logosd (`compose.pmArtifact`)
     input*: seq[byte] ## deterministic CBOR, passed by the Package Manager's own decoder
     providers*: seq[string] ## each binding's provider instance, in binding order
     resolverLimits*: ResolverLimits
@@ -151,6 +164,15 @@ proc decodeDaemonConfig*(bytes: openArray[byte]): Result[LcnDaemonConfig, string
     return err("the daemon configuration is larger than 64 MiB")
   let v = decodeCbor(bytes).valueOr:
     return err("the daemon configuration is not deterministic CBOR: " & $error)
+  # [G491] Name the replaced field before the schema's generic answer.
+  let pm = v.lookup("package_manager")
+  if pm.isSome and pm.get.lookup("instance").isSome:
+    return err(
+      "package_manager.instance is no longer a field: logosd composes the Package " &
+        "Manager itself as the instance " & PmInstance &
+        "; give package_manager.state (its state assignment) and, to override the " &
+        "companion library, package_manager.artifact"
+    )
   let dc = LcnDaemonConfig.fromCbor(v).valueOr:
     return err("the daemon configuration does not match lcn.daemon_config: " & error)
   ok(dc)
@@ -175,6 +197,9 @@ proc checkNames(dc: LcnDaemonConfig): Result[void, string] =
       return err(what & " uses a reserved instance id")
     if m.module.isReservedModule:
       return err(what & " uses the reserved module name " & m.module)
+    if m.module.startsWith(SystemPrefix):
+      # [G490] Only logosd's own composition writes a `logos_` module.
+      return err(what & " uses the reserved module-name prefix " & SystemPrefix)
     if m.implementation.isStatic:
       # [G293] logosd registers no operator binding.
       return err(
@@ -186,14 +211,20 @@ proc checkNames(dc: LcnDaemonConfig): Result[void, string] =
     let what = "declarations: module " & d.module
     if d.module.isReservedModule:
       return err(what & " uses a reserved module name")
+    if d.module.startsWith(SystemPrefix):
+      # [G490]
+      return err(what & " uses the reserved module-name prefix " & SystemPrefix)
     if d.implementation.isStatic:
       return err(
         what &
           " is direct_static; logosd hosts operator modules as direct_dynamic or hosted_dynamic"
       )
+  # [G491] The composed Package Manager may be ordered against: an operator
+  # module can then be started after it.
+  let pm = dc.package_manager.isSome
   for o in dc.ordering.get(@[]):
     for id in [o.prerequisite, o.dependent]:
-      if id notin operator:
+      if id notin operator and not (pm and id == PmInstance):
         return err("ordering: " & id & " is not an operator instance in modules")
   var sources = initHashSet[string]()
   for t in dc.state_transfers.get(@[]):
@@ -215,16 +246,23 @@ proc checkNames(dc: LcnDaemonConfig): Result[void, string] =
         return err(
           "orchestration.start: " & id & " is a state_transfers source, retired at start"
         )
+      if pm and id == PmInstance:
+        # [G491] logosd starts it itself, after the operator's list.
+        return err(
+          "orchestration.start: " & PmInstance &
+            " is started by logosd itself; it is not listed here"
+        )
       if id notin operator:
         return
           err("orchestration.start: " & id & " is not an operator instance in modules")
       if seen.containsOrIncl(id):
         return err("orchestration.start lists " & id & " twice")
     for v in o.overrides.get(@[]):
-      if v.instance notin operator and v.instance notin [CtlInstance, AuthorityInstance]:
+      if v.instance notin operator and v.instance notin [CtlInstance, AuthorityInstance] and
+          not (pm and v.instance == PmInstance):
         return err(
           "orchestration.overrides: " & v.instance &
-            " is neither an operator instance nor logosctl or authority"
+            " is neither an operator instance nor logosctl, authority or package_manager"
         )
   if dc.permissions.isSome and dc.permissions.get.initial.isSome:
     for e in dc.permissions.get.initial.get:
@@ -269,32 +307,21 @@ proc pmInputBytes(
 proc checkPackageManager(
     dc: LcnDaemonConfig, trust: TrustFileState
 ): Result[Opt[PmSettings], string] =
-  ## [IMPL-DECISION G399] Check 2's `package_manager` part: its instance and
-  ## its bindings' providers are operator entries, all `hosted_dynamic`, so no
-  ## archive enters logosd's process (C1); then the composed `lcn.pm_input`
-  ## passes the Package Manager's own decoder, which checks the bindings, the
-  ## catalog, the bounds, the resolver limits and the trust bytes again
-  ## (ruling C4). Each refusal names the field and quotes no bytes.
+  ## [IMPL-DECISION G399, G491] Check 2's `package_manager` part: logosd composes
+  ## the instance itself (`PmInstance`, hosted, C1), so the section names its state
+  ## assignment and, optionally, its artifact; its bindings' providers are operator
+  ## entries, all `hosted_dynamic`, so no archive enters logosd's process (C1); then
+  ## the composed `lcn.pm_input` passes the Package Manager's own decoder, which
+  ## checks the bindings, the catalog, the bounds, the resolver limits and the trust
+  ## bytes again (ruling C4). Each refusal names the field and quotes no bytes.
   if dc.package_manager.isNone:
     return ok(Opt.none(PmSettings))
   let p = dc.package_manager.get
   var byId = initTable[string, LcnAppModule]()
   for m in dc.modules.get(@[]):
     byId[m.instance] = m
-  let what = "package_manager.instance: " & p.instance
-  if p.instance notin byId:
-    return err(what & " is not an entry of modules")
-  let m = byId.getOrDefault(p.instance)
-  if not m.isHosted:
-    return
-      err(what & " is not hosted_dynamic (the Package Manager runs in its own process)")
-  if m.state_assignment.isNone:
-    return err(what & " has no state_assignment")
-  if m.configuration.isSome or m.provisioned_configuration.isSome:
-    return err(
-      what &
-        " has configuration: the Package Manager has none, and its trust input is never configuration (CONFIGURATION l.58)"
-    )
+  if p.artifact.isSome and not isAbsolute(p.artifact.get.local_path):
+    return err("package_manager.artifact.local_path must be an absolute path")
   if p.storage.len == 0:
     return err("package_manager.storage holds no binding")
   var names = initHashSet[string]()
@@ -303,7 +330,9 @@ proc checkPackageManager(
     let w = "package_manager.storage: binding " & b.binding
     if names.containsOrIncl(b.binding):
       return err(w & " is named twice")
-    if b.instance == p.instance:
+    if b.instance == PmInstance:
+      # [G491] The reserved id is never an operator entry, so the next check
+      # would refuse it too; this one says why.
       return err(w & " names the Package Manager's own instance")
     if b.instance notin byId:
       return err(w & ": " & b.instance & " is not an entry of modules")
@@ -321,7 +350,9 @@ proc checkPackageManager(
   ok(
     Opt.some(
       PmSettings(
-        instance: p.instance,
+        instance: PmInstance,
+        state: p.state,
+        artifact: p.artifact,
         input: bytes,
         providers: providers,
         resolverLimits: checked.resolverLimits,

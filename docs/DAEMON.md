@@ -241,17 +241,21 @@ lcn.dc_cli = {
   ? route_idle_ms: uint32,
 }
 
-; The Package Manager (DECISIONS G399; DAEMON.md §3; docs/PACKAGE-MANAGER.md):
-; instance names an operator entry of modules, hosted_dynamic with placement
-; process, with a state_assignment and no configuration; storage holds at
-; least one binding, each naming another hosted_dynamic entry, with unique
-; names; catalog.storage names one of them. resolver_limits, when present,
-; holds all four limits; absent, logosd's preset applies (DAEMON.md §3). The
-; lcn.pm_* rules are pm/input.cddl's, resolved in one document as lcn.app_*
-; are. logosd composes the instance's lcn.pm_input from this section and the
-; trust file the start accepted.
+; The Package Manager (DECISIONS G399, G491; DAEMON.md §3;
+; docs/PACKAGE-MANAGER.md): logosd composes it as the reserved hosted_dynamic
+; instance package_manager of logos_package_manager (placement process), from
+; artifact if given, else the companion library installed with logosd, whose
+; BLAKE3-256 is compiled in; with neither, the section refuses to start. state
+; is the instance's state_assignment. storage holds at least one binding, each
+; naming a hosted_dynamic entry of modules, with unique names; catalog.storage
+; names one of them. resolver_limits, when present, holds all four limits;
+; absent, logosd's preset applies (DAEMON.md §3). The lcn.pm_* rules are
+; pm/input.cddl's, resolved in one document as lcn.app_* are. logosd composes
+; the instance's lcn.pm_input from this section and the trust file the start
+; accepted. The former instance field is refused, naming state and artifact.
 lcn.dc_package_manager = {
-  instance: lcn.app_instance_id,
+  state: tstr .size (1..128),
+  ? artifact: lcn.app_artifact,
   storage: [* lcn.pm_binding],
   catalog: lcn.pm_catalog_ref,
   ? resolver_limits: lcn.pm_resolver_limits,
@@ -312,8 +316,8 @@ them ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) for the last).
 | `policy` | `allow-all`, which needs the development switch (§6), or `capability-authority`: `source`, the operator's `rules`, and the policy options; logosd adds the system rules (§5). `recovery` absent is off; `init` writes `true` (RUNTIME l.1592). |
 | `modules` | Operator instances: `lcn.app_module` with `direct_dynamic` or `hosted_dynamic`. logosd registers no operator binding, so `direct_static` is refused. |
 | `declarations` | Modules `module create` may instantiate (RUNTIME l.3481-3490), with the same strategies. |
-| `ordering` | Start-order pairs between operator instances. |
-| `orchestration` | `start`: the operator instances the orchestrator starts, in order; `restart`, `overrides`, `resync_ms`: its restart policy ([HOST-CONFIG.md](HOST-CONFIG.md), "The reference orchestration module"). An override may name `logosctl` or `authority`. |
+| `ordering` | Start-order pairs between operator instances, and with a `package_manager` section the instance `package_manager` (DECISIONS G491). |
+| `orchestration` | `start`: the operator instances the orchestrator starts, in order; `restart`, `overrides`, `resync_ms`: its restart policy ([HOST-CONFIG.md](HOST-CONFIG.md), "The reference orchestration module"). An override may name `logosctl` or `authority`, and with a `package_manager` section `package_manager`. `start` may not name `package_manager`: logosd starts it itself, after the operator's list (G491). |
 | `call_audit` | `call_records` and `evidence` as in the host configuration; `store` (§9) needs `evidence`. |
 | `routing`, `transport` | As in the host configuration. |
 | `remote` | The remote profile `logos.remote.tls-tcp` ([REMOTE.md](REMOTE.md); DECISIONS G407-G410). `enabled`: logosd starts its remote side, which reads the remote trust input (§6a) and needs `runtime.runtime_instance_id` to be a lowercase UUID version 4 (RUNTIME l.2592-2593). `signing`: what signs the TLS handshakes with the Runtime's key, `logosd` (the default) or `key-holder`, the `logos_keyholder` program at `key_holder` (an absolute path, checked as `runtime.module_host` is); `process-copy` is refused except by a logosd built for tests. |
@@ -321,7 +325,7 @@ them ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) for the last).
 | `state_transfers` | As in the host configuration: an operator instance's replacement continues from its state, applied once at the next start (§11, "Replacing an instance"). Neither side may be a system instance. |
 | `ctl` | The socket (§7): `socket_dir` (absolute; default `<session>/run`), `workers` (1–32, default 4), `idle_timeout_ms` (100–600000, default 30000). |
 | `cli` | The CLI module (§7a): `artifact` (`lcn.app_artifact`, an absolute path; default the library installed with logosd, with the hash compiled into logosd), `socket_dir` (absolute, owner-only; default `<session>/run`), `workers` (1–32, default 8), `streams` (1–64, default 8), `idle_timeout_ms` (100–600000, default 30000), `route_idle_ms` (1000–86400000, default 600000). |
-| `package_manager` | The Package Manager (DECISIONS G399; [PACKAGE-MANAGER.md](PACKAGE-MANAGER.md)): `instance`, the operator instance that runs it; `storage`, its bindings, each a name and the operator instance that provides `lcn.storage_fetch` under it; `catalog`, the binding, object locator and BLAKE3-256 digest of the catalog it acquires; `resolver_limits`, all four limits or none; `limits`, its bounds. Absent `resolver_limits` is logosd's preset (DECISIONS G443): `partial_closure_names` 256, `dependency_depth` 32, `candidates_per_name` 256 and `assignment_attempts` 1024, the same on every platform and build and never computed from the machine (PM l.1279-1280). An operator may write up to the maxima ([CONFORMANCE.md](CONFORMANCE.md), "Resolver limits"), at the cost [DEPLOYMENT.md](DEPLOYMENT.md) §12 states. A changed preset changes the results of an unchanged configuration (PM l.1314-1315), so it comes with a recorded decision and a release note. Each start logs the limits it composed and their origin, as `package_manager: <instance> gets resolver limits partial_closure_names N, dependency_depth N, candidates_per_name N, assignment_attempts N (logosd's preset)`, or `(package_manager.resolver_limits)` when the section names them. |
+| `package_manager` | The Package Manager (DECISIONS G399, G491; [PACKAGE-MANAGER.md](PACKAGE-MANAGER.md)). logosd composes it itself, as the reserved instance `package_manager` of the module `logos_package_manager`, `hosted_dynamic` with placement `process`, host-ambient, and starts it after the operator's `orchestration.start` list. `state`: its state assignment. `artifact` (`lcn.app_artifact`, an absolute path): a development or test override of its library; default the library installed with logosd at `<d>/../lib/logos-core/`, with the hash compiled into logosd. A logosd with neither refuses the section at start: "package_manager: this logosd has no Package Manager library; give package_manager.artifact" (`logosctl`'s checks cannot know which logosd starts, and leave that to the start). `storage`, its bindings, each a name and the operator instance that provides `lcn.storage_fetch` under it; `catalog`, the binding, object locator and BLAKE3-256 digest of the catalog it acquires; `resolver_limits`, all four limits or none; `limits`, its bounds. The former `instance` field is refused, naming `state` and `artifact`; an operator's old Package Manager entry and its installed state are not carried over ([DEPLOYMENT.md](DEPLOYMENT.md) §1). Absent `resolver_limits` is logosd's preset (DECISIONS G443): `partial_closure_names` 256, `dependency_depth` 32, `candidates_per_name` 256 and `assignment_attempts` 1024, the same on every platform and build and never computed from the machine (PM l.1279-1280). An operator may write up to the maxima ([CONFORMANCE.md](CONFORMANCE.md), "Resolver limits"), at the cost [DEPLOYMENT.md](DEPLOYMENT.md) §12 states. A changed preset changes the results of an unchanged configuration (PM l.1314-1315), so it comes with a recorded decision and a release note. Each start logs the limits it composed and their origin, as `package_manager: <instance> gets resolver limits partial_closure_names N, dependency_depth N, candidates_per_name N, assignment_attempts N (logosd's preset)`, or `(package_manager.resolver_limits)` when the section names them; `<instance>` is `package_manager`. |
 | `test_hooks` | Refused by a packaged logosd (§6). `ctl_command_delay_ms` holds each socket command; `loader_failure_after_ms` has the Module Loader report its failure that long after the start, and `loader_failure_on_file` once the file it names exists, whichever comes first; `diagnostics` has the Runtime record `count` diagnostics holding `text`, as text it did not write, after the start's own are logged (§12). |
 
 ### The checks
@@ -331,15 +335,17 @@ reported with the field it concerns, and logosd exits 1.
 
 1. The bytes decode as one deterministic-CBOR `lcn.daemon_config`.
 2. Names and strategies: no operator instance uses a reserved id (`orchestrator`, `authority`,
-   `logosctl`, `lcn_call`, `logos_module_loader`) and no operator module a reserved name
-   (`logos_module_loader`, `logos_capability_authority`, `logosctl`, `lcn_call`, `lcn_orchestrator`); no `direct_static`; `ordering` and
-   `orchestration.start` name operator instances, each once; `permissions.initial` names no system one;
+   `logosctl`, `lcn_call`, `logos_module_loader`, `package_manager`) and no operator module a reserved
+   name (`logos_module_loader`, `logos_capability_authority`, `logosctl`, `lcn_call`, `lcn_orchestrator`,
+   `logos_package_manager`), nor any name beginning with `logos_`, in `modules` or `declarations` (G490:
+   only logosd's own composition writes one); no `direct_static`; `ordering` and
+   `orchestration.start` name operator instances, each once, and `ordering` may also name
+   `package_manager` when the section is present; `permissions.initial` names no system one;
    `state_transfers` names no system instance on either side, and no `orchestration.start` entry is
    the source of a transfer (the transfer retires it).
-   With `package_manager`: its `instance` is an operator entry of `modules`, `hosted_dynamic` (no
-   archive enters logosd's process), with a `state_assignment` and no configuration; `storage` holds
-   at least one binding, each name once, each naming another `hosted_dynamic` operator entry; and
-   `catalog.storage` names one of them. Then the `lcn.pm_input` composed from the section, the
+   With `package_manager`: `artifact.local_path`, when given, is absolute; `storage` holds at least
+   one binding, each name once, each naming a `hosted_dynamic` operator entry (not the Package
+   Manager's own instance); and `catalog.storage` names one of them. Then the `lcn.pm_input` composed from the section, the
    resolver limits and the trust file passes the Package Manager's own decoder, which the instance
    runs again at its initialization. A refusal names the field and quotes no bytes.
 3. The development switch: `allow-all` and `test_hooks` need it (§6).
@@ -352,9 +358,9 @@ reported with the field it concerns, and logosd exits 1.
 
 ### The derived host configuration
 
-With `package_manager`, the value also carries one `protected_inputs` entry: the Package Manager's
-instance and its `lcn.pm_input`, its protected realization input (G400; [HOST-CONFIG.md](HOST-CONFIG.md)).
-No other instance gets one.
+With `package_manager`, the value also carries the Package Manager's entry (G491), the top-level
+`package_manager` mark naming it (G490; [HOST-CONFIG.md](HOST-CONFIG.md)), and one `protected_inputs` entry:
+the instance and its `lcn.pm_input`, its protected realization input (G400). No other instance gets one.
 
 logosd hands one `logos-core-nim.app-config.v1` value to `logos_runtime_create`. It supplies the bootstrap
 inputs through it: `work_dir`, `state_root`, `store_dir` and `endpoint_dir` from the session layout, the
@@ -397,7 +403,7 @@ open, not logosd's at assembly.
 Under `capability-authority`, logosd merges the operator's rules with its own system rules into one
 `logos-core-nim.authority-policy.v1` value for the `authority` instance. The system rules are derived
 from the reserved ids and the orchestrator's start list; they are not configurable. With `init`'s
-default configuration they are, one per line (S1–S5; S6–S8 below come with `lcn_call`; S9–S11 with
+default configuration they are, one per line (S1–S5; S6–S8 below come with `lcn_call`; S9–S12 with
 `package_manager`):
 
 ```text
@@ -462,8 +468,8 @@ When logosd composes the CLI module `lcn_call` (§7a), it adds four more:
   module, and neither `lcn_call` nor the `logosctl` instance calls a method outside its list.
 - **Codes:** S7 denies the consumer (`consumer-denied`), S8 protects its target (`target-denied`).
 
-With a `package_manager` section (§3), logosd adds five more, here for the instance `package_manager`
-with one binding to the instance `storage` (G402):
+With a `package_manager` section (§3), logosd adds six more, here for its instance `package_manager`
+with one binding to the instance `storage` (G402, G491):
 
 ```text
 {"kind": "allow", "subject": {"instances": ["package_manager"]}, "scopes": [{"kind": "runtime-control", "methods": ["close_route", "establish_route", "list_modules", "renew_route"]}]}
@@ -471,6 +477,7 @@ with one binding to the instance `storage` (G402):
 {"kind": "allow", "subject": {"instances": ["package_manager"]}, "scopes": [{"kind": "provider-access", "contract": {"commitment_model": "logos.commitment-model.2026-10", "schema_root": h'09f784c92559ee90dcbf3a47248fdaaf64abbfc29b766dc511edbd9587e72429', "hash_profile": "logos.hash-profile.2026-08.choice-index", "hash_suite": "logos.hash-suite.blake3-256"}, "actions": ["call", "establish-route", "renew-route"], "providers": {"instances": ["storage"]}, "access": {"methods": [h'418d34e832ad67e1cd8d7005849c23c7d999bbe7fed23bcb21699af2f5eea306', h'57c99cdac774cfd30bdd6b4b660accab99880c88f92cadbcbfeabd176ae117bc', h'cc09befbc412829dec5ec07657e71a51de1cf8497daafb99bec73568550d95b6']}}]}
 {"kind": "allow", "subject": {"instances": ["package_manager"]}, "scopes": [{"kind": "provider-access", "contract": {"commitment_model": "logos.commitment-model.2026-10", "schema_root": h'09f784c92559ee90dcbf3a47248fdaaf64abbfc29b766dc511edbd9587e72429', "hash_profile": "logos.hash-profile.2026-08.choice-index", "hash_suite": "logos.hash-suite.blake3-256"}, "actions": ["subscribe-event"], "providers": {"instances": ["storage"]}, "access": {"subscribe_events": [h'41073cd8d01b1dc9f3a6eca873f2b9e41969984b89163e2f5761d538435f3389']}}]}
 {"kind": "allow", "subject": {"instances": ["storage"]}, "scopes": [{"kind": "provider-access", "contract": {"commitment_model": "logos.commitment-model.2026-10", "schema_root": h'09f784c92559ee90dcbf3a47248fdaaf64abbfc29b766dc511edbd9587e72429', "hash_profile": "logos.hash-profile.2026-08.choice-index", "hash_suite": "logos.hash-suite.blake3-256"}, "actions": ["publish-event"], "access": {"publish_events": [h'41073cd8d01b1dc9f3a6eca873f2b9e41969984b89163e2f5761d538435f3389']}}]}
+{"kind": "deny", "subject": {"instances": ["logosctl"]}, "scopes": [{"kind": "runtime-control", "methods": ["retire_module", "update_configuration", "apply_configuration"], "targets": {"modules": ["logos_package_manager"]}}], "code": "target-denied"}
 ```
 
 - **S9** (the first three): the Package Manager may call the three Runtime Control methods that hold
@@ -488,6 +495,8 @@ with one binding to the instance `storage` (G402):
   grants no authority to call it (RUNTIME l.3217); the provider-access rule names the providers.
 - **S10**: it may subscribe to `fetch_readiness_changed` on those routes.
 - **S11**: the providers may publish that event (STORAGE-FETCH §8).
+- **S12** (G491): as S8 for `lcn_call`, `logosctl` may not retire or reconfigure the Package Manager,
+  whose instance and configuration are logosd's composition; it may start, stop and recover it.
 - **The providers** are the bindings' instances, each once and in byte order, in S9's and S10's
   `providers` and S11's subject; the contract is `lcn.storage_fetch`'s pinned
   commitment.

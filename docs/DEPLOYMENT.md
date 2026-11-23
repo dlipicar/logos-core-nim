@@ -15,9 +15,10 @@ CONFORMANCE and `conformance/`.
 ## 0. This document
 
 - **What logosd claims.** logosd follows BCP §5.1's bootstrap: it binds a Module Loader first and
-  realizes every other instance through it (BCP l.292-296). It claims no complete Logos module system:
-  it deploys no Package Manager (owner decision 10 (a); DECISIONS G310; CONFORMANCE, "Properties not
-  claimed"). It still answers every §5.4 item, as a deployment that owes this document would. Its
+  realizes every other instance through it (BCP l.292-296). It claims no complete Logos module system
+  (owner decision 10 (a); DECISIONS G310; CONFORMANCE, "Properties not claimed"): with a
+  `package_manager` section it runs the Package Manager, which installs packages, but nothing selects
+  an installed package for execution. It still answers every §5.4 item, as a deployment that owes this document would. Its
   RUNTIME claim covers its Runtime instance, the engine with the reference orchestration module
   `lcn_orchestrator` as instance `orchestrator` (BCP l.286; CONFORMANCE, "Claims"; facts
   `runtime_claim`).
@@ -42,7 +43,7 @@ CONFORMANCE and `conformance/`.
 | Item | BCP | Part | Verdict | Changes in | Answer | Section | Units |
 |---|---|---|---|---|---|---|---|
 | 0 | l.360-361 | this document, its two tables, every applicable choice indexed | Supported | — | this page; the second table sweeps the other specifications | [§0](#0-this-document) | BCP-0038, BCP-0039 |
-| 1 | l.363 | Package Manager source kinds; provenance profiles | None | Tier 5 | no packaged Package Manager (a test build until step 5-6a); the hosted one realizes `lgx` sources and answers `nix` `unsupported-source`; no source kind for package-backed creation, no provenance profile | [§1](#1-package-manager) | BCP-0040 |
+| 1 | l.363 | Package Manager source kinds; provenance profiles | None | Tier 5 | the Package Manager logosd composes with a `package_manager` section (step 5-6a-1) runs hosted; it realizes `lgx` sources and answers `nix` `unsupported-source`; no source kind for package-backed creation, no provenance profile | [§1](#1-package-manager) | BCP-0040 |
 | 2 | l.364 | protected inputs: representations, provisioning, validation, replacement, revocation | Supported | — | owner-only session files, checked at start, replaced offline for the next start | [§2](#2-protected-inputs) | BCP-0074 |
 | 3 | l.365 | authority-policy format, administration, permissions of bootstrap and system instances | Supported | — | `authority-policy.v1` in daemon-config; system rules S1–S5, and S6–S8 with the CLI module; host-ambient for system instances | [§3](#3-authority-policy) | BCP-0075 |
 | 4a | l.366 | local transport profile | Supported | — | `logos.local.unix-stream` | [§4](#4-transport) | BCP-0041 |
@@ -62,11 +63,11 @@ CONFORMANCE and `conformance/`.
 | 11 | l.373 | attribute-source integration | Supported | — | the Runtime's registry, in process: instance id and module name | [§11](#11-the-attribute-source) | BCP-0077 |
 | 24 | l.374 | Credential Store: credential, format and sealing profiles; backend durability and recovery; operation-record retention; protected delivery and activation | None | — | no Credential Store is deployed or claimed | [§25](#25-credential-store) | BCP-0101 |
 | 12a | l.375 | bounds of the Runtime, Transport, Module Loader and schema processing | Supported | — | finite, listed with their scope and exhaustion behaviour; the CLI module's in DAEMON.md §7a | [§12](#12-resource-bounds) | BCP-0047 |
-| 12b | l.375 | Package Manager bounds, dependency resolution | None | Tier 5 | no packaged Package Manager (a test build until step 5-6a); the hosted one's bounds, resolver limits, queues, operation deadline and budget are listed | [§12](#12-resource-bounds) | BCP-0047 |
+| 12b | l.375 | Package Manager bounds, dependency resolution | None | Tier 5 | the Package Manager logosd composes with a `package_manager` section (step 5-6a-1) runs hosted; its bounds, resolver limits, queues, operation deadline and budget are listed | [§12](#12-resource-bounds) | BCP-0047 |
 | 13 | l.376 | deadlines: start points, phases, effects, escalation, shared-process limits | Supported | — | five deadlines; a Module Host may be ended by force; a direct realization never | [§13](#13-deadlines) | BCP-0078 |
 | 14 | l.377 | configuration-preserving upgrade; verified defaults | Supported | — | the operator carries configuration; defaults come from accepted declarations | [§14](#14-upgrade-and-verified-defaults) | BCP-0079 |
 | 15 | l.378 | presentation profile | None | — | none selected (BCP l.346); the CLI writes to the launcher's terminal, which is not a presentation profile | [§15](#15-presentation) | BCP-0048 |
-| 16a | l.380 | Package Manager installation, inventory, shared state | None | Tier 5 | no packaged Package Manager (a test build until step 5-6a); the hosted one installs into its own instance's state directory, one inventory per instance, never shared | [§1](#1-package-manager) | BCP-0080 |
+| 16a | l.380 | Package Manager installation, inventory, shared state | None | Tier 5 | the Package Manager logosd composes with a `package_manager` section (step 5-6a-1) runs hosted; it installs into its own instance's state directory, one inventory per instance, never shared | [§1](#1-package-manager) | BCP-0080 |
 | 16b | l.380 | operating-system integration material | Supported | — | a systemd user unit and a launchd agent, owner-installed | [§16](#16-facilities-that-cannot-be-supplied) | BCP-0080 |
 | 17 | l.380-382 | a facility or constraint that cannot be supplied fails | Supported | — | the dependent realization fails; nothing falls back | [§16](#16-facilities-that-cannot-be-supplied) | BCP-0081 |
 | 25 | l.383 | each finite admission pool shared by consumers or providers: whether a per-consumer or per-provider limit applies | Supported | — | each pool with its total and its per-consumer or per-provider limit, or none | [§12](#admission-pools) | BCP-0102 |
@@ -131,14 +132,20 @@ l.35, R l.3265, T l.564), not choices of a deployment.
 Items 1, 5b, 5c, 10b, 12b and 16a.
 
 - **Hosted, when configured.** With a `package_manager` section in daemon-config ([DAEMON.md](DAEMON.md)
-  §3; DECISIONS G399), logosd designates one operator instance, `hosted_dynamic`, as the Package
-  Manager and hands it its `lcn.pm_input` as protected realization input (G400): the bindings to its
-  Storage providers, the protected catalog, the resolver limits and a copy of the trust file the start
-  accepted. It acquires the catalog over its own routes (G401, G402) and inspects, installs, removes
-  and updates packages against it ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) §11; DECISIONS G449). Until
-  step 5-6a its module is a test build (`pmtest_module`), so a packaged deployment has none, and no
-  package is selected for execution: there is no package-backed creation, and nothing reads the
-  inventory but the Package Manager. A module still comes from daemon-config as an artifact path with
+  §3; DECISIONS G399, G491), logosd composes the reserved instance `package_manager` of the module
+  `logos_package_manager`, `hosted_dynamic`, from the library installed beside it (or
+  `package_manager.artifact`), and hands it its `lcn.pm_input` as protected realization input (G400):
+  the bindings to its Storage providers, the protected catalog, the resolver limits and a copy of the
+  trust file the start accepted. It acquires the catalog over its own routes (G401, G402) and inspects,
+  installs, removes and updates packages against it ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) §11, §14;
+  DECISIONS G449). No package is selected for execution: there is no package-backed creation, and
+  nothing reads the inventory but the Package Manager.
+- **Moving from an operator entry** (5-6a-1). Before 5-6a-1 the section named an operator instance
+  (`package_manager.instance`); that field is now refused, naming `state` and `artifact`. The old
+  installed state is not carried: the old instance's record (live, or a tombstone once it is removed from
+  `modules`) keeps its state assignment, so the reserved instance starts on the new `state`, empty, and
+  the operator installs again. The old state directory is the operator's to keep or delete. There is no
+  migration code. A module still comes from daemon-config as an artifact path with
   its digest (§10). `lcn-pkg`, the LGX parser and the resolver are also tools (DECISIONS I49, I69).
 - **Source kinds** (BCP l.343-349): `lgx` is realized, from a Storage binding's object (PM §7.1, §13);
   `nix` is not, and a request that selects it is answered `unsupported-source` (PKG-0190). No
@@ -223,8 +230,8 @@ command says so.
 
 Item 3. The format is `logos-core-nim.authority-policy.v1` ([AUTHORITY-POLICY.md](AUTHORITY-POLICY.md)).
 logosd merges the operator's rules with its system rules S1–S5, S6–S8 when it composes the CLI
-module `lcn_call`, and S9–S11 with a `package_manager` section (the Package Manager's routes to its
-Storage providers), which are derived and not configurable ([DAEMON.md](DAEMON.md) §5). Administration is
+module `lcn_call`, and S9–S12 with a `package_manager` section (the Package Manager's routes to its
+Storage providers, and what `logosctl` may not do to it), which are derived and not configurable ([DAEMON.md](DAEMON.md) §5). Administration is
 the offline path of §17. The explicit permissions of the bootstrap and system instances: host-ambient for
 `orchestrator`, `logosctl`, `authority` and `lcn_call`, written by logosd; the Module Loader holds it by construction ([PERMISSIONS.md](PERMISSIONS.md), "What BCP asks to
 be documented"). `allow-all` is accepted only with the development switch on (§20).
@@ -321,8 +328,9 @@ a separate process: its own address space, a process group of its own that is ki
 of the host, an environment of only `module_host_env`, and the descriptors listed in
 [HOST-CONFIG.md](HOST-CONFIG.md), "Module Hosts". Every process runs as logosd's user. The CLI module
 `lcn_call` is such a module; the terminal descriptors a launcher hands it are its own for the command.
-The Package Manager and its Storage providers are such modules too: logosd refuses a `package_manager`
-section whose instances are not `hosted_dynamic` (DECISIONS G399), so no archive enters logosd's process.
+The Package Manager and its Storage providers are such modules too: logosd composes the Package Manager
+`hosted_dynamic` and refuses a `package_manager` section whose Storage instances are not (DECISIONS
+G399, G491), so no archive enters logosd's process.
 
 **Not supported (8b).** Placement `process` is a separate address space, **not a sandbox** (DECISIONS
 G265): a hosted module has the filesystem, network, device, process and credential access of logosd's
@@ -476,8 +484,8 @@ reached:
 ### The Package Manager's budget
 
 What one Package Manager instance holds, by part (DECISIONS G446, G447, G449, G477; plan 5-5 §4.13).
-`pmtest_module`'s `resolve`, a 5-3b test method outside the slots, still runs any number of resolutions
-at once; the operations run in the slots.
+The module's operations run in the slots; only the test module `pmtest_module`'s `resolve`, a 5-3b
+test method outside them, runs any number of resolutions at once.
 
 | Part | Resource | Lives for | Bound |
 |---|---|---|---|
@@ -775,18 +783,20 @@ would come with one.
 
 - **None by construction.** The Credential Store contract fixes its provider's module name,
   `logos_credential_store` (CS l.162; BCP l.280), and names beginning with `logos_` are reserved for
-  Logos-defined modules (RUNTIME l.292). logosd's composition holds no such module. logosd does not
-  refuse an operator's module of that name: it refuses only its own instances' names and an operator
-  `direct_static` ([DAEMON.md](DAEMON.md) §3). The module fails at its start instead: a provider is
-  bound only once its call surface is accepted, a `logos_` module name is accepted only for a Logos
-  system module, and the Runtime treats as one only its own static registrations (the Module Loader's
-  and the authority's). A Module Host, and the realizer of a `direct_dynamic` artifact, bind without
-  that option, so the start fails `abi-invalid`: the name "is reserved for Logos system modules".
-- **What is not refused.** A module that provides no contract has no call surface to accept, so one
-  named `logos_credential_store` binds. It serves no Credential Store operation, so it is no Credential
-  Store.
+  Logos-defined modules (RUNTIME l.292). logosd's composition holds no such module, and since 5-6a-1
+  logosd refuses an operator module or declaration whose name begins with `logos_` ("modules: instance
+  X uses the reserved module-name prefix logos_"; DECISIONS G490; [DAEMON.md](DAEMON.md) §3). A host
+  that configures one anyway still cannot start it: a provider is bound only once its call surface is
+  accepted, a `logos_` module name is accepted only for a Logos system module, and the Runtime treats as
+  one only its own static registrations (the Module Loader's and the authority's) and the instance the
+  host configuration's `package_manager` marks. A Module Host, and the realizer of a `direct_dynamic`
+  artifact, bind without that option, so the start fails `abi-invalid`: the name "is reserved for Logos
+  system modules".
+- **What is not refused** by the Runtime: a module that provides no contract has no call surface to
+  accept, so one named `logos_credential_store` binds under a host other than logosd. It serves no
+  Credential Store operation, so it is no Credential Store.
 - `tests/test_deployment.nim` checks the facts' `credential_store`, the default composition, logosd's
-  acceptance of the operator module and its refusal at binding.
+  refusal of the operator module and the refusal at binding.
 
 ## 26. Payload modules
 

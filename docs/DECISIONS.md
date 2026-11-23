@@ -1198,6 +1198,39 @@ whitespace, comments, declaration placement permitted by §2.1, include layout a
   sanitizer run (planning's end-of-work list).
 - **Status:** decided 2026-11-22 (planning's ruling after Fable's review); built sdk-acyclic.
 
+### G494 — Pre-encoded responses
+- **Kind:** IMPL (Tier 5 step 5-6a-1; plan `tier5-plans/step5-6-plan.md` draft 3 §4.2; planning's Q5 (a), with Fable's
+  four conditions, `fable-checks/step5-6-plan.md`) · **Specs:** RUNTIME l.798-805 (the host validates each response
+  against the method's schema and commits it); INTERFACE §4.4 (deterministic encoding).
+- **Description:** the Package Manager's worker encodes each response (G447), and before this the kit decoded nothing
+  but encoded again from a typed value, after a copy. A module that already holds a response's deterministic bytes
+  can now hand them over as they are.
+- **Decision (the option):** `KitOptions.encodedResponses: seq[string]`, the method names, and `lcn-gen kit
+  --encoded-response:METHOD` (repeatable). A listed method's handler returns
+  `Future[Result[PreEncoded, InvocationFailure]]`. `PreEncoded` (`kitrt.nim`) holds bytes and is made only by
+  `preEncoded(bytes)`; the route takes them with `takeEncoded` and encodes nothing. The name avoids
+  `encodedResponse`, which `kitrt.nim` already has.
+- **Decision (the generator's refusals):**
+  - a name that is not a method of the surface ("pre-encoded response: X is not a method of M");
+  - a method whose response is marked sensitive: the route wipes the typed value of such a response, and bytes would
+    need a wipe of their own ("… X's response is marked sensitive, and bytes would need a wipe of their own");
+  - a name given twice;
+  - the option on a kit that is not confined with the asynchronous API, the only form generated with it ("--encoded-
+    response needs kit --confined --async-api").
+- **Decision (the check stays whole):** the Module Host's boundary checks every response's bytes against the
+  method's schema before it commits them, whoever made them. Bytes off the schema, bytes that are not deterministic
+  CBOR, no bytes, more than one value or a value cut short end the call `MODULE_ERROR`, and nothing is committed.
+  The only check that goes is the kit's own, which came after the second encoding.
+- **Kits without the option are byte-identical** (`test_gen_current`).
+- **The copy that stays.** `OperationAnswer.encoded` is a `string`, so the Package Manager's facade copies it once
+  into `seq[byte]`. 5-6b changes the worker's reply to `seq[byte]`, and the copy goes (G497 states its cost).
+- **Tests:** `test_kit` (the generator's output and refusals), `test_nimgen` (the CLI flag), `test_pm_module`'s suite
+  "a pre-encoded response at the Module Host's boundary" over the test module `rawreply_module`
+  (`tests/kit/rawreply_impl.nim`, which returns the request's bytes as its response): unchanged bytes for three
+  values, `MODULE_ERROR` with no response for six bad ones. The Package Manager's replies cross unchanged and equal
+  the engine's encoded bytes, each its own deterministic encoding.
+- **Status:** built 5-6a-1 (I140).
+
 ## 4. Error codes the specs require but do not assign
 
 Background: INTERFACE §5.1 fixes a closed registry (0 OK, 1 METHOD_NOT_FOUND, 2 INVALID_PARAMS,
@@ -6093,6 +6126,9 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
     the operation (`ResolverCounters.limit`) and the engine logs it with its value ("a root operation stopped at
     the resolver limit … (N)"). The two depth refusals no longer carry the depth reached, which would show the limit
     to the caller (`pmtest_module`'s `resolve` returns the message, as the §15 methods will).
+- **Revised 2026-11-23 (5-6a-1; G491, the owner's Q2):** the section no longer names an operator instance.
+  `package_manager.instance` is replaced by `state` (the composed instance's state assignment) and `? artifact`, and
+  `logosd` composes the reserved instance `package_manager` itself. The preset line names it.
 - **Status:** decided 2026-11-21 (planning's rulings on the plan, Q3 and Q4) and 2026-11-22 (the resolver limits);
   the value and its check built in part 5-3b-1 (I116); the resolver limits, the daemon's section, its checks,
   compose and the preset in part 5-3b-2.
@@ -6315,6 +6351,9 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   where its turn's work is spent (`cmContinue`, which the shell runs from a `callSoon` of its own), its state is
   freed a turn at a time after the reply, and a cancelled operation takes no more turns. `stop` answers the
   operations still running in the engine, and the shell gives the answers.
+- **Amended 2026-11-23 (5-6a-1; G490, G491, G496):** the shell runs as `logos_package_manager`, under the system
+  mark, composed by `logosd`; `pmtest_module` stays a test probe (`status`, `resolve`, and until 5-6a-2 `install`
+  and `handoff`).
 - **Status:** decided 2026-11-21 (planning's ruling Q7 on the plan); the driver and the engine built in part 5-3b-1
   (I116); the shell and `pmtest_module` in part 5-3b-2; amended by G455 (5-3c-2).
 
@@ -7402,6 +7441,141 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   - **Costs:** CONFORMANCE "The resumable run"; DEPLOYMENT §12.
 - **Status:** decided 2026-11-22 (planning's rulings on the 5-3c plan); built 5-3c-2 (I122); contracts numbered
   once in 5-3c-3 (I122).
+
+### G490 — The Package Manager's system mark
+- **Kind:** IMPL (Tier 5 step 5-6a-1; plan `tier5-plans/step5-6-plan.md` draft 3 §4.4; planning's Q1 (a),
+  2026-11-23) · **Specs:** RUNTIME l.293 (the Package Manager is the module `logos_package_manager`), §8.1.2 (system
+  services); INTERFACE's reserved `logos_` module names and `logos.` rule names; PACKAGE MANAGER §2, C1 (hosted, never
+  co-located: PKG-0005, PKG-0006).
+- **Description:** a hosted provider named `logos_…` was refused (G405, F5), so the Package Manager ran under a test
+  name (`pmtest_module`). The Runtime needs to know which one hosted instance may carry the reserved name and surface.
+- **Decision (the mark):** the host configuration's top level gains `? package_manager: lcn.app_instance_id`, beside
+  `orchestration` and `policy.authority`. No `lcn.app_module`, `create_module` declaration or stored record gains a
+  field, so `create_module` cannot make a Package Manager.
+- **Decision (the checks at `logos_runtime_create`,** `runtime/host_config.nim`**):** the instance is an entry of
+  `modules` ("package_manager names no instance in modules"); its module is exactly `logos_package_manager`
+  ("package_manager's module is not logos_package_manager"); it is `hosted_dynamic` with placement `process` ("…
+  must be a hosted_dynamic instance with placement process"; a `direct_*` entry would be PKG-0006's case, which C1
+  rules out); it is neither the orchestration nor the authority instance (those have other module names, so the
+  module check answers first, and the explicit check stays as a guard).
+- **Decision (its effects):** `EngineConfig.packageManager` reaches `Host.setSystem`; the marked instance's
+  realizations carry `system: true` in the carrier's init; the Module Host passes it to `completeProbe`, so
+  `checkModuleName` and `checkSource` accept the `logos_` name and the `logos.` rules for that library alone; and
+  `systemBinding` is true for the marked record, so the Runtime's `acceptSurface` accepts the reserved surface. Every
+  other hosted `logos_` module is refused as before.
+- **Decision (`logosd`):** an operator `modules` entry or declaration whose module begins with `logos_` is refused
+  ("modules: instance X uses the reserved module-name prefix logos_", "declarations: module X …"). Only `logosd`'s own
+  composition (G491) writes the Package Manager's entry, and it sets the mark.
+- **Limits:**
+  - **Windows** hosts no Package Manager until 5-9: `logos.local.unix-stream` is not supported there, and a hosted
+    request is refused (CONFORMANCE, "What Tier 5 step 5-4 changes"). 5-9's row carries two listeners for a hosted Package Manager.
+  - **Mobile** has none: one process with `direct_static` modules and no Module Host, and the mark refuses a direct
+    instance. Packages there need a later decision on a direct Package Manager (`stepN-5-mobile.md` §5).
+- **Tests:** `test_host` (each check), `test_pm_module` (unmarked refused, marked ready), `test_daemon_config` and
+  `test_logosd_pm` (the `logos_` refusals).
+- **Status:** built 5-6a-1 (I140).
+
+### G491 — `logosd` composes the Package Manager
+- **Kind:** IMPL, with an owner decision (Q2, 2026-11-23: "Daemon creates it"; plan draft 3 §4.5; planning's ruling 6
+  on Fable's recheck) · **Specs:** PACKAGE MANAGER §2 (C1), §4; PKG-0513 and PKG-0514 (the module facts and the local
+  artifact come from protected deployment input, and a digest that differs is refused); RUNTIME l.3838 (the
+  orchestration start); DAEMON.md §3, §5.
+- **Description:** until now the operator listed the Package Manager's instance in `modules` and named it in
+  `package_manager.instance` (G399). `logosd` now makes and starts it, as it makes `lcn_call` (G343).
+- **Decision (the entry):** the reserved instance `package_manager` (in `ReservedInstances`), module
+  `logos_package_manager` (in `ReservedModules`), `hosted_dynamic`, placement `process`; its state assignment is
+  `package_manager.state`; no configuration (its input is protected, G400), no `requires` and no
+  `requested_permissions`, since it establishes its Storage routes through its own Runtime Control binding under
+  S9–S11; initial permissions `host-ambient`, as every composed system instance.
+- **Decision (the artifact):** `package_manager.artifact` when given (a development or test override, as
+  `cli.artifact`; `local_path` must be absolute); else the companion library
+  `<d>/../lib/logos-core/liblogos_package_manager.{so,dylib}`, `<d>` as for the Module Host, with its BLAKE3-256
+  compiled in (`-d:pmArtifactHash=<hex>`; the flake hashes the library's final store file, and copies it after the
+  fixup, as G343 does for `liblcn_call`). With neither, the start is refused, exit 1: "package_manager: this logosd
+  has no Package Manager library; give package_manager.artifact".
+- **Decision (the shell's checks):** `logosctl init`, `daemon config check` and `daemon config set` run the same
+  composition with `logosctl`'s own executable, which has no such hash. They cannot know which `logosd` will start,
+  so they compose a stand-in at the companion library's place with an all-zero digest (`pmCompanion`), as they assume
+  test hooks (G300), and the start decides. Found while writing `test_logosd_pm`: without it a packaged `logosctl`
+  refused every section without `artifact`.
+- **Decision (the start):** `logosd` appends `{logos_package_manager, package_manager}` to the orchestrator's
+  defaults, after the operator's start list and before `systemRules` derives the rules, so rule S2 authorizes its
+  start from the composed value, under `allow-all` and a Capability Authority policy alike. `orchestration.start`
+  takes operator instances only: naming `package_manager` is refused ("orchestration.start: package_manager is
+  started by logosd itself; it is not listed here"). `ordering` and `overrides` may name it when the section is
+  present, so an operator module can be ordered after it.
+- **Decision (S12):** a `deny` with `target-denied` for the subject `logosctl` on `retire_module`,
+  `update_configuration` and `apply_configuration`, its targets the module `logos_package_manager`, composed with
+  S9–S11 when the section is present. The shell may start, stop and recover the instance (as S8 says for
+  `lcn_call`), and may not retire or reconfigure it.
+- **Decision (the old field):** `package_manager.instance` is refused when the configuration is decoded, before the
+  schema's generic answer, with a message naming `state` and `artifact`. No migration code: there are no deployments.
+  The old instance's installed state is not carried: its record, live or a tombstone, keeps its state assignment, so
+  `package_manager.state` cannot name it (a reconcile refuses an assignment another instance holds), and
+  `state_transfers` refuses a system instance. DEPLOYMENT says so.
+- **Decision (the Storage check):** a binding naming the Package Manager's own instance now compares with
+  `package_manager` ("package_manager.storage: binding main names the Package Manager's own instance").
+- **The daemon configuration:** `lcn.dc_package_manager` loses `instance` and gains `state: tstr .size (1..128)` and
+  `? artifact: lcn.app_artifact`; `storage`, `catalog`, `resolver_limits` and `limits` are unchanged.
+- **The flake:** a `liblogos_package_manager` package (orc, release, `--app:lib`, no signal handlers, its own
+  `NimMain` prefix and export list, as `liblcn_call`), and `logosd` built with its hash; `logosd-smoke` checks that
+  the library is installed beside `liblcn_call`.
+- **PKG-0513, PKG-0514:** the module facts and the local artifact come from `logosd`'s own composition and the
+  compiled hash or the operator's protected daemon configuration. A library whose bytes differ from the digest is
+  refused at realization (`loader-artifact-integrity-failed`), the companion's and the override's alike.
+- **Tests:** `test_daemon_config` (the composition, the stand-in, S9–S12, the refusals); `test_logosd_pm` (end to
+  end, with a `logosd` built with the hash for the companion case: the start under a Capability Authority policy and
+  under `allow-all`, the companion library and the override, both digest checks, `ordering` and `overrides` taking
+  effect, S12, the refusals).
+- **Status:** built 5-6a-1 (I140).
+
+### G495 — What ordinary routes reach before 5-6b
+- **Kind:** IMPL, with an owner decision (Q7 (b), 2026-11-23: "Accept all three"; planning's Q6 (b); plan draft 3
+  §4.7) · **Specs:** INTERFACE l.3308-3311 (a provider answers only OK, METHOD_NOT_FOUND, INVALID_PARAMS, MODULE_ERROR
+  or CANCELLED); PACKAGE MANAGER §14, §15; C4 (readers).
+- **Decision:** `inspect_package`, `install_package`, `remove_package` and `update_package` are served on any route
+  the route authority allows. `list_packages`, `list_installed_packages`, `watch_installed_packages` and
+  `get_runtime_handoff` are refused to every ordinary caller until 5-6b's readers: `MODULE_ERROR` with no message
+  and no detail, and one operator log line, "package-manager: METHOD refused for CALLER: not a reader".
+  - A provider cannot answer `NOT_AUTHORISED`, and the Runtime does not make it either: that would need a daemon rule
+    denying the observations to every consumer not listed, which works under a Capability Authority policy and not
+    under `allow-all`. Not built.
+  - `get_runtime_handoff` on an ordinary route is for readers only, from 5-6b (the owner's Q7 (b)); it shows whether a
+    package is installed, where its files are, and its configuration schema and default. It is served to the system
+    service caller from 5-6a-2.
+  - The mutations' own results disclose the identity they touch to whoever may mutate; C4 is about the observations.
+- **Tests:** `test_pm_module` (each refusal and its line), `test_logosd_pm` (through `lcn_call`).
+- **Status:** built 5-6a-1 (I140).
+
+### G496 — pmtest after the module
+- **Kind:** IMPL (planning's Q8 (a); plan draft 3 §4.8), with one deviation, reported to planning.
+- **Decision:** `pmtest_module` keeps `status` and `resolve`, a probe of what the shell holds. Its `inspect`,
+  `remove` and `update` went; their cases are `logos_package_manager`'s (`test_pm_module`, `test_logosd_pm`), with
+  their spectrace tags. `test_pm_hosted`'s long-extraction cases moved too (the second operation and the route
+  renewal during an extraction, the stop, the deadline), and its `big` package with them.
+- **The deviation:** the plan had `handoff` go in 5-6a-1. A successful handoff through the real module needs a system
+  service caller, which 5-6a-2's binding brings, and the probe's handoff case needs an installed record. So `install`
+  and `handoff` stay in pmtest until 5-6a-2 moves that case to `test_system_binding`; the pair goes then.
+- **Status:** built 5-6a-1 (I140); the pair's removal is 5-6a-2's.
+
+### G497 — The facade's large-reply figures
+- **Kind:** IMPL (plan draft 3 §4.9; planning's Q16: one bench).
+- **Decision:** `tools/pmbench.nim reply` gains a `facade` mode: the real kit route with pre-encoded responses, then
+  the host's completion, on the same method and hosts as 5-5-4. CONFORMANCE "The operations" states: the module
+  thread in all for 16 MiB and 4 MiB `{installed}` under orc and refc; the facade's one copy, timed alone; and, with
+  5-6a-2, the receiver's check of a maximal handoff on `logosd`'s I/O thread. The 30 s wait is stated again, corrected
+  as §5.8 of the plan says.
+- **Status:** not run yet. The figures go in after master, with 5-3c-4 in, is merged into `step5-6a-1` (Q16).
+
+### G500 — `list_packages`' selection and order
+- **Kind:** IMPL (plan draft 3 §5.3; Q10 (a)) · **Specs:** PACKAGE MANAGER l.1656-1657.
+- **Decision (5-6a-1, `pm/listing.nim`):** the entries of the catalog in use whose source kind this provider
+  implements (`ListedSources`, `lgx`; a `nix` entry is omitted until 5-10's realization profile), with the optional
+  `package` filter, in the catalog's canonical order (`entryOrder`), which a catalog in use already has.
+- **5-6b** completes this row: the pages and their byte budget, the read-only worker, the page-job bounds, the
+  handoff's stage wait at the worker, and a reader's `get_runtime_handoff` as a page job (ruling A).
+- **Tests:** `test_listing`.
+- **Status:** the selection built 5-6a-1 (I140); the method is served from 5-6b.
 
 ---
 
@@ -11326,6 +11500,13 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G479 | what a module contract keeps of its library's surface: the specified, even undelivered | FREE | 11 |
 | G480 | when storage_module's contract and configuration schema freeze | FREE | 11 |
 | G481 | the blockchain module's spends carry no fee reserve: an accepted risk | FREE | 11 |
+| G490 | the Package Manager's system mark | IMPL (Q1 (a)) | 9 |
+| G491 | `logosd` composes the Package Manager | IMPL (owner, Q2) | 9 |
+| G494 | pre-encoded responses | IMPL (Q5 (a)) | 3 |
+| G495 | what ordinary routes reach before 5-6b | IMPL (owner, Q7 (b)) | 9 |
+| G496 | pmtest after the module | IMPL (Q8 (a)) | 9 |
+| G497 | the facade's large-reply figures | IMPL | 9 |
+| G500 | `list_packages`' selection and order | IMPL (Q10 (a)) | 9 |
 
 ---
 
@@ -11470,6 +11651,7 @@ of work follows the tiers in `docs/SPEC-STATUS.md`: most settled areas first.
 | I131 | IMPL | A key added after the wallet's first start: the owner's (d), no wallet patch (stepN-5 plan §4.5, §10; the owner, 2026-11-22: wrap the library as it is, draft the report) | **The fault** (Fable's reading, confirmed on the devnet in N-5.1). At its first start the wallet scans the ledger for its keys' notes; at every later start it restores its saved state beside the current key set and never scans again. So a key added after the first start never has its earlier notes indexed: its balance reads short, those funds cannot be spent, and an emptiness check passes falsely. On the devnet a key added after the first start read 0 and no notes after a restore, while the control, held from the first start, read 100000000000 in one note. **The choice, (d):** no wallet patch. v2's text and the README say what the reads mean (I130), that a key that already holds funds goes in before a new instance's first start, and that a generated key's address is not given out before the next start. `remove_key` left v2 (draft 3c): the module cannot prove such a key empty. The fault is upstream draft 211, with the repro | 2026-11-22 |
 | I133 | IMPL | The blockchain module refuses the library's environment names at `_init` (stepN-5 plan §4.6, draft 3c; planning's ruling, which dropped I132) | **The readers.** The stock `generate_user_config`, which `_init` calls, starts from clap's parse of an empty command line: it reads the init groups' environment variables, and a value clap cannot parse exits the process with status 2, past `#[panic_to_error]` (upstream draft 206). `get_deployment_info` reads them through the configuration loader (213). N-3's audit (F4) had found the embedded start reading none, and missed these two. **The refusal** [IMPL]: before any library call `_init` refuses when any of the library's 24 names is in its environment, set or empty, naming it, and lays nothing out (`libenv.nim`; a unit test compares the list with the pinned source's `env =` attributes). Under logosd a Module Host's environment is `runtime.module_host_env`'s allow-list, empty by default, so a name reaches the library only when an operator lists it, which the README and DEPLOYMENT §26 forbid. Variables the library's dependencies read, such as tokio's `TOKIO_WORKER_THREADS`, are not covered, and the README says so. **Tests:** T4 (each name, alternately empty, refused and named, nothing laid out), T9 (logosd's own environment holds every name, malformed, and no `module_host_env`: the hosted module starts, answers `cryptarchia_info` and `deployment_info`, and stops cleanly), `test_units` | 2026-11-22 |
 | I134 | IMPL | Tier 5 step N-5.4: the blockchain module on the foreign-thread entry rule (I124's item for N-3; G464, G465, G467) | **Where.** The library's clone `logos-blockchain`: `lcn/n5-4-prepare-rc` from `a834055da` (`500378866`: the entry rule; `7a657565f`: T9's package-mode paths; `7be5853ea`: T16's waits), merged into `lcn/blockchain-module` as `407dfb768`; `lcn/n5-4b-units-tmp` (`e9ca84737`: `test_units`' directories), merged as `efa4f11bb`. All signed, none pushed. No Rust. v2's contract, types, `policy-classes.json` and root (`b2e01cef…`, printed by T12) are unchanged. **Built.** `report_failure` goes through `RouteSet.prepareRc` (G464). The set is made at the first report and closed by destroy, and the completion `onReported` runs on the module thread. The module's own `rcComplete` and its `callbackEnter` are gone, so no completion procedure of the module's reaches the binding. `onDone` and `onEvent`, which the glue's workers and the library's subscriptions post through `lcn_kit_post`, are `{.lcnModuleThread.}` (G465). The regenerated kit marks its three getters `lcnNoNimHeap` (G467); the types files are unchanged. The library clone's flake check `blockchain-module-lint-callbacks` runs `lcn-gen lint-callbacks --self-test`, then the lint over `logos_module/*.nim` and `generated/`: 19 files, 47 C-callable procedures (2 marked, 42 entries, 3 `lcnNoNimHeap`, 0 `lcnOwnRuntime`), 0 findings. The suites' Runtime stubs are not linted (10 would be findings), as this repository lints only `tests/kit` of its tests. **Package mode** [IMPL]. Since `10cc598` (5-3b-2, I116), core's `daemon/config` imports `pm/input`, which imports `package/resolver`, which imports `package/lgx`, which imports zlib. A module suite that builds core's daemon from a core checkout (the blockchain module's T9 runs logosd) therefore needs core's own dependencies. With the SDK installed (MODULE-KIT §9), the module's `nimble.paths` names only the SDK's, so its `tests/config.nims` adds each package core's `nimble.paths` names that the module's does not (zlib and boringssl at `c1872dd`), and keeps the module's copy of any it names. Without that, T9 stopped compiling at `lgx.nim`'s `import zlib/zlib_api`. **Fixed on the way.** T16 paused a fixed 300 ms before checking a spend's `running` record on disk. Once, in the flake check, the store worker's durable write took longer, while the same run's T15 writes took 1-24 ms. That check and three later pauses that raced the same write now wait for the record, up to 10 s. Two `test_units` cases left their directories in TMPDIR on every run; every case's directory is now under the run's own, which an exit procedure removes. **Checks** (core overridden to `c1872dd`, the module's flake core input still `349f4a5`): the Mac's 20 suites and framework.lan's 19 under orc, refc and orc-release, T1 on the Nix package, and `nix flake check` of `7be5853ea` (60 suite checks and the lint); `test_units` x 3 on the Mac for `e9ca84737`. Upstream draft 195's second shape (5-5-3: a plain object of more than four fields with a GC'd field, copied by `genericAssign` under refc) was checked against the module: no `importc` struct of `lbffi.nim` is held by value in a Nim object, `Result`, `Opt`, `Future`, `seq` or `Table`. The library's structs appear only nested in the glue's (`LbgValue` in `LbgResult`) and are read in place. `LbgResult` is a plain procedure's local, mapped or turned into `JobResult` and released. `LbgArgs`, which has no GC'd field, is assigned into chronos environments, which are never copied whole. **Downloads:** none. **Left.** The flake's core input, re-pinned after the core push, then its flake check again. Until then the module builds only with core overridden to `c1872dd` or later | 2026-11-23 |
+| I140 | IMPL | Tier 5 step 5-6a-1: the Package Manager instance, composed by logosd (step5-6 plan draft 3, part 5-6a-1; G490, G491, G494, G495, G496, G497, G500; the owner's Q2, Q7 (b), Q11) | **Built.** The module `logos_package_manager` (`src/logos_package_manager.nim`) on a generated kit: `src/logos_core/pm/logos_package_manager_kit.nim`, `_types.nim`, `.exports` and `.map` (lcn-gen from the mirrored PM contract; the plan named `package_manager_kit.nim`, the generator names the kit after the module). `pm/requests.nim` turns each request into the core's operation, `pm/facade.nim` answers with pre-encoded responses (G494: `KitOptions.encodedResponses`, lcn-gen `--encoded-response:METHOD`; the kit's boundary still validates the bytes), and `pm/listing.nim` holds `list_packages`' selection and order (G500; 5-6b serves the method). The Runtime marks the instance (G490): a top-level host-config `package_manager`, `EngineConfig.packageManager`, the carrier's `system: true`, a completed probe as a system binding. logosd composes it (G491): `hosted_dynamic`, placement `process`, host-ambient, state `package_manager.state`, the library `package_manager.artifact` or the companion `<exe>/../lib/logos-core/liblogos_package_manager.{so,dylib}` with the hash logosd is built with (`-d:pmArtifactHash`; the flake's `pmLib`), started after the operator's list, with S12 (logosctl may not retire or reconfigure it). The former `instance` field is refused before the schema. The observation methods (`list_packages`, `list_installed_packages`, `watch_installed_packages`) and an ordinary caller's `get_runtime_handoff` get MODULE_ERROR with no message or detail (G495); the SYSTEM_SERVICE caller is 5-6a-2's, the readers 5-6b's. **Found while building.** logosctl's `init` and `daemon config check|set` composed with logosctl's own executable, which has no `pmArtifactHash`, so a packaged install refused a section without `artifact`. They now compose a stand-in for the companion library (`pmCompanion`; an all-zero hash, never started); logosd itself refuses such a section at start when it has no library (exit 1). Recorded in G491. **pmtest** keeps `status`, `resolve`, `install` and `handoff` only (G496): a successful handoff through the real module needs a SYSTEM_SERVICE caller, which 5-6a-2 brings; the long-extraction cases moved to `test_pm_module`. **Tests.** `test_pm_module` (the module through its kit), `test_listing`, `test_logosd_pm` (rewritten: composition, the companion library and its override, ordering, S12, the refusals), `test_host` (the mark), `test_daemon_config` (the section, the stand-in, S12, DAEMON.md word for word), `test_pm_hosted` (the probe's handoff), `test_kit`/`test_nimgen` (pre-encoded responses). **Claims.** 36 PKG units more (PKG-0003..0008, 0366, 0367, 0369..0377, 0379, 0519, 0521, 0513, 0514, and the copies 0630, 0631, 0633, 0637, 0639..0647, 0649); PKG-0005 and PKG-0006 also by inspection (`pm-never-co-located`); spectrace `gate` 403/403. **Not yet.** G497's facade figures wait for 5-3c-4 (Q16). |
 | R6 | SCOPE (revises R1; Tier 5 plan A6) | CI legs from Tier 5 | Linux x86_64, Linux aarch64 and macOS arm64 in the `nix` and `nimble` jobs; Windows x86_64 in the `windows` job, on the Nimble path with its own toolchain, the library suites under orc, blocking since step 5-4c (G123 as revised, G334). Android and iOS join with M12, with G105 and G125. Owner's approval of the Tier 5 plan, batch A (A6), 2026-11-16. | 2026-11-16 |
 | R7 | SCOPE (Tier 5 restructure; plan `tier5-plans/restructure-in-place.md`) | The SDK inside this repository | `sdk/` is the package `logos_sdk`, this implementation's layer 1: the base set (CBOR, cdCDDLe, hashing, commitments, INTERFACE), the generators, the module kit and `logos_sdk/testing`. Core (`src/logos_core/`), the daemon and the CLI are built on it. `tools/lint/layers.py` (the check `lint-layers`, strict) holds the import direction with no recorded exception. Each spec's ledger has one owning package: CDE, CMT and HSH are under `sdk/conformance/`, the rest, IFC included until its claims are split, under `conformance/`; `spectrace owners` holds that a unit has one owner. No behaviour, claim or gate result changed. | 2026-11-18 |
 | R8 | SCOPE (Tier 5 restructure R9 with R10b; plan `tier5-plans/stepW2-X-plan.md` X0.1; amends R7) | Which package claims a unit, and where its evidence is | Each live gated unit is claimed by the package that implements its rule, and its evidence is in that package's own tree: a tagged test in its test tree (`tests/` for core, `sdk/tests/` for the SDK) or an item in its `conformance/inspection/`. `spectrace gate`, `owners` and `deploydoc` count only the owner's tree. `owners` also reports a unit that both packages claim, one that neither claims with different statuses in the two files, and one tested or inspected only outside its owner's tree. A spec's ledger stays with one package (R7); where both packages claim units of a spec, each has a claims file, and each gives the other's units `out-of-scope:<owner>`. INTERFACE's ledger, main claims file and inspection file move to `sdk/conformance/`. Core claims the Runtime's 143 IFC units in `conformance/claims/IFC.toml`, 13 of them through 8 items in `conformance/inspection/IFC.toml`; two shared items are split by unit. The SDK claims 124 RUN units in `sdk/conformance/claims/RUN.toml`, 114 of them §9.2–§9.3's shared types and Runtime Control schema (the header `codegen/hostgen` writes), and the kit's 7 CFG units of §6 and §8 in `sdk/conformance/claims/CFG.toml`. The 11 IFC units the SDK implements whose only evidence was in core's suites gain SDK tests: IFC-0210, IFC-0513, IFC-0516, IFC-0517, IFC-0671, IFC-0717, IFC-0724, IFC-0735, IFC-0736 and IFC-0776 in `test_kit`, `test_kit_confined` and `test_calls`, and IFC-0577 in a new audit-build suite, `sdk/tests/test_wipe_kit.nim` (the ledger fixture's marked `seal` through the typed provider entry, the generated call helpers and the typed `prepareInvoke`, with no Runtime). IFC-0518, a negative checked by inspection, is tested there too, and its item is reworded for the SDK's two handle holders. No unit changes status: the claimed set is unchanged, unit for unit (`tools/restructure/claim_split.py --compare`, 3572 units; `claim_split.tsv` records each unit's owner and where its evidence is). Per package: IFC core 143, SDK 665; RUN core 767, SDK 124; CFG core 119, SDK 7. | 2026-11-22 |

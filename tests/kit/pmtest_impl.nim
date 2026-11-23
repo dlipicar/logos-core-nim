@@ -1,9 +1,8 @@
 ## The Package Manager's shell under a test name (Tier 5 step 5-3b, F5;
-## DECISIONS G405): `pmtest_module` (`tests/kit/pmtest_module.cddl`), a
-## thread-confined kit module whose body is `pm/shell.nim`. Until 5-6a lifts
-## the refusal of a hosted `logos_` provider, the hosted skeleton runs under this
-## name. Never shipped: 5-6a's `logos_package_manager` replaces it over the same
-## shell.
+## DECISIONS G405, G496): `pmtest_module` (`tests/kit/pmtest_module.cddl`), a
+## thread-confined kit module whose body is `pm/shell.nim`, kept as a probe of
+## what the shell holds. `logos_package_manager` (5-6a-1) serves the operations
+## over the same shell. Never shipped.
 ##
 ## - `status` answers the catalog in use (its sequence, digest and entry
 ##   count), each binding's route state, route id, readiness and the routes
@@ -13,13 +12,11 @@
 ##   the selected packages with their schema roots, and the resolver's
 ##   counters; or the error code and its message.
 ## - `handoff {package, version, module}` (5-5-4) answers `get_runtime_handoff`'s
-##   response bytes, a query that takes no slot.
-## - `inspect`, `install`, `remove` and `update` (5-5-4, G449) carry one
-##   operation through `shell.operate`: the request's fields become its root
-##   (`source` is a deterministic-CBOR `package_source`, PM §15), and the
-##   answer comes back as the §15 response value, deterministic CBOR in
-##   `response`; a full queue or an admission bound is the invocation error
-##   `MODULE_ERROR`.
+##   response bytes, a query that takes no slot, and `install {package, version}`
+##   (G449) makes the record it reads: one operation through `shell.operate`,
+##   its answer the §15 response value, deterministic CBOR in `response`. A
+##   successful handoff needs a system-service caller of `logos_package_manager`,
+##   which 5-6a-2 brings; this pair goes then (G496).
 
 {.used.} # imported by the tests for the C symbols it exports
 import ../generated/pmtest_module_kit
@@ -155,18 +152,6 @@ proc `resolve`(
     )
   )
 
-proc sourceOf(bytes: Opt[seq[byte]]): Result[Opt[PackageSource], InvocationFailure] =
-  ## A request's `source`: one deterministic-CBOR `package_source` (PM §15).
-  if bytes.isNone:
-    return ok(Opt.none(PackageSource))
-  let v = decodeCbor(bytes.get)
-  if v.isErr:
-    return err(failure(ecInvalidParams, "source: not one deterministic-CBOR value"))
-  let s = decodeSource(v.get)
-  if s.isErr:
-    return err(failure(ecInvalidParams, "source: " & s.error))
-  ok(Opt.some(s.get))
-
 proc run(
     m: PmTest, op: OperationRequest
 ): Future[Result[seq[byte], InvocationFailure]] {.async: (raises: []).} =
@@ -186,57 +171,15 @@ proc run(
       copyMem(addr b[0], unsafeAddr a.encoded[0], b.len)
     ok(b)
 
-proc `inspect`(
-    m: PmTest, request: PmtestInspectRequest, inv: Invocation
-): Future[Result[PmtestInspectResponse, InvocationFailure]] {.async: (raises: []).} =
-  let source = ?sourceOf(request.source)
-  let op = OperationRequest(
-    kind: opInspect,
-    root:
-      RootReference(package: request.package, version: request.version, source: source),
-  )
-  let response = ?(await m.run(op))
-  ok(PmtestInspectResponse(response: response))
-
 proc `install`(
     m: PmTest, request: PmtestInstallRequest, inv: Invocation
 ): Future[Result[PmtestInstallResponse, InvocationFailure]] {.async: (raises: []).} =
-  let source = ?sourceOf(request.source)
   let op = OperationRequest(
     kind: opInstall,
-    root: RootReference(
-      package: Opt.some(request.package), version: request.version, source: source
-    ),
+    root: RootReference(package: Opt.some(request.package), version: request.version),
   )
   let response = ?(await m.run(op))
   ok(PmtestInstallResponse(response: response))
-
-proc `remove`(
-    m: PmTest, request: PmtestRemoveRequest, inv: Invocation
-): Future[Result[PmtestRemoveResponse, InvocationFailure]] {.async: (raises: []).} =
-  let op = OperationRequest(
-    kind: opRemove,
-    identity: PackageIdentity(package: request.package, version: request.version),
-  )
-  let response = ?(await m.run(op))
-  ok(PmtestRemoveResponse(response: response))
-
-proc `update`(
-    m: PmTest, request: PmtestUpdateRequest, inv: Invocation
-): Future[Result[PmtestUpdateResponse, InvocationFailure]] {.async: (raises: []).} =
-  let source = ?sourceOf(request.source)
-  let op = OperationRequest(
-    kind: opUpdate,
-    root: RootReference(
-      package: Opt.some(request.package),
-      version: request.target_version,
-      source: source,
-      newerThan:
-        Opt.some(PackageIdentity(package: request.package, version: request.version)),
-    ),
-  )
-  let response = ?(await m.run(op))
-  ok(PmtestUpdateResponse(response: response))
 
 proc `handoff`(
     m: PmTest, request: PmtestHandoffRequest, inv: Invocation

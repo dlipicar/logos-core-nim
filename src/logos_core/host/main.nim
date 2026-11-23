@@ -125,7 +125,10 @@ proc initialize(life: var Lifecycle, m: LcnCarrierInit) =
   setConsumerTransport(m.transport.get(@[]), maxPayloadDepth)
   let code = mapStaged(m.artifact_path).valueOr:
     refuse(error, P.Bind)
-  let b = completeProbe(code, probeCode(code, m.module), false).valueOr:
+  # [G490] Only the host of the instance the host configuration's
+  # `package_manager` marks accepts a reserved `logos_` name and the `logos.`
+  # rules; every other hosted module is refused them, as before.
+  let b = completeProbe(code, probeCode(code, m.module), m.system.isSome).valueOr:
     refuse(error, P.Bind)
   when not ChannelsMove:
     # [DECISIONS G277] A refc host carries no marked payload: a provider that

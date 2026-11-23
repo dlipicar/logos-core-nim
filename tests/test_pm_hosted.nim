@@ -30,7 +30,6 @@ include ./support/routefixture
 
 when defined(posix):
   import logos_sdk/crypto/blake3
-  import std/random
   import ./support/[lgxbuild, modulehostbuild, pmfixture, sanitizerenv, shortdir]
   import ../src/logos_core/package/trustdoc_types
   import ../src/logos_core/pm/[catalog, input_types]
@@ -154,37 +153,20 @@ when defined(posix):
         pmfixture.bytesOf("fetch-fake/state/" & it[0])
       )
 
-  # [5-5-4] The installation cases' catalog: `app` and `lib` as above, `logos.example` (a module
-  # package with a variant for each host), and `big`, the same with a 16 MiB data file in this
-  # host's variant. Its bytes are random, so the archive holds them at about their size and the
-  # bounds scaled from the archive's size (G453) admit it. `big`'s extraction is slowed by the
-  # test hook `LCN_TEST_EXTRACT_PACE_MS` (`pm/store.nim`), a pause for each MiB written.
-  const
-    hostVariant =
-      (when defined(macosx): "darwin-" else: "linux-") &
-      (when defined(arm64): "aarch64" else: "x86_64")
-    BigBytes = 16 shl 20
+  # [5-5-4] The handoff case's catalog: `app` and `lib` as above, and `logos.example` (a module
+  # package with a variant for each host). [G496] The operations' own cases, `big`'s long
+  # extraction among them, are `logos_package_manager`'s (`test_pm_module`).
   let
     example = modulePackage(allHosts = true).packed("org", orgKey)
-    big = block:
-      var data = newSeq[byte](BigBytes)
-      var g = initRand(5)
-      for b in data.mitems:
-        b = byte(g.rand(255))
-      modulePackage("big", allHosts = true)
-        .withFiles(hostVariant, [("data/big.bin", data)])
-        .packed("org", orgKey)
-    installTrust = trustOf(
-      [anchorOf("org", ["app", "big", "lib", "logos.example"], orgPub)]
-    ).trustBytes
-    installObjects = objects & @[("logos.example-1.0.0", example), ("big-1.0.0", big)]
+    installTrust =
+      trustOf([anchorOf("org", ["app", "lib", "logos.example"], orgPub)]).trustBytes
+    installObjects = objects & @[("logos.example-1.0.0", example)]
     installDocument = catalogBytes(
       entries &
         @[
           entryOf(
             "logos.example", "1.0.0", locator = "fetch-fake/state/logos.example-1.0.0"
-          ),
-          entryOf("big", "1.0.0", locator = "fetch-fake/state/big-1.0.0"),
+          )
         ]
     )
 
@@ -370,9 +352,6 @@ when defined(posix):
       )
     )
 
-  proc removed(name, version: string): CborValue =
-    answerOf(invoke(addr probe, PmtestRemoveRequest(package: name, version: version)))
-
   proc handedOff(name, version, module: string): CborValue =
     answerOf(
       invoke(
@@ -380,41 +359,6 @@ when defined(posix):
         PmtestHandoffRequest(package: name, version: version, module: module),
       )
     )
-
-  # [5-5-4] The long install, invoked from a thread of its own through `probeA`: 0 while it
-  # runs, then 1 for `{installed}`, 2 for `package-unavailable`, 3 for another answer, 4 for an
-  # invocation failure.
-  var bAnswer: Atomic[int]
-
-  proc installBig() {.thread.} =
-    {.gcsafe.}:
-      let r = invoke(
-        addr probeA, PmtestInstallRequest(package: "big", version: Opt.some("1.0.0"))
-      )
-      var code = 4
-      if r.isOk:
-        let v = decodeCbor(r.get.response)
-        code =
-          if v.isErr:
-            3
-          elif v.get.lookup("installed").isSome:
-            1
-          elif v.get.codeOf == "package-unavailable":
-            2
-          else:
-            3
-      bAnswer.store(code)
-
-  proc extracting(pmDir: string): bool =
-    ## A file of a record being staged exists below `install/r/<rid>/a/`.
-    let r = pmDir / "install" / "r"
-    if not dirExists(r):
-      return false
-    for rid in walkDir(r):
-      if rid.kind == pcDir and dirExists(rid.path / "a"):
-        for f in walkDirRec(rid.path / "a"):
-          return true
-    false
 
   func digestHex(b: openArray[byte]): string =
     for x in b:
@@ -632,7 +576,9 @@ when defined(posix):
       releaseAll()
       e.finish()
 
-    test "[IMPL-DECISION G449] install over a hosted instance with the fake provider, the dependency first; installed again, the record as it is; a handoff through the probe; a remove refused while depended on; the records kept across the instance's restart":
+    test "[IMPL-DECISION G449] [IMPL-DECISION G496] a handoff through the probe: of an installed module package, refused for a module it does not declare and for an identity not installed; kept across the instance's restart":
+      # [G496] `get_runtime_handoff` served to a system-service caller is 5-6a-2's; until
+      # then the probe asks the shell, over a record its `install` made.
       let cfg = hosted(pmInputBytes(installTrust, installDocument))
       cfg.stock(installDocument, installObjects)
       let pmDir = cfg.stateDir("p")
@@ -644,18 +590,15 @@ when defined(posix):
       probe = rc.open(pmRoot, pmSchema)
       check drive(FetchFakeSetReadinessRequestReadinessChoiceKind.Ready)
       check acquired()
-      check installed("app", "1.0.0").identityOf == "app@1.0.0"
       check installed("logos.example", "1.0.0").identityOf == "logos.example@1.0.0"
-      check toSeq(walkDir(pmDir / "install" / "r")).len == 3
-      check installed("app", "1.0.0").identityOf == "app@1.0.0"
+      check toSeq(walkDir(pmDir / "install" / "r")).len == 1
       let h = handedOff("logos.example", "1.0.0", "alpha_module")
       check h.codeOf == ""
       check h.lookup("handoff").isSome
       check handedOff("logos.example", "1.0.0", "no_such_module").codeOf ==
         "invalid-request"
-      check removed("lib", "1.2.0").codeOf == "package-in-use"
-      check removed("app", "1.0.0").codeOf == ""
-      # Stopped and started again: the start reads the records back from the index.
+      check handedOff("app", "1.0.0", "alpha_module").codeOf == "package-not-installed"
+      # Stopped and started again: the start reads the record back from the index.
       probe.release()
       probe = LogosRouteHandle()
       check e.stop("pm").isOk
@@ -666,140 +609,7 @@ when defined(posix):
       check e.start("pm").tryGet.state == msReady
       probe = rc.open(pmRoot, pmSchema)
       check handedOff("logos.example", "1.0.0", "alpha_module").lookup("handoff").isSome
-      check handedOff("app", "1.0.0", "alpha_module").codeOf == "package-not-installed"
-      # An absent identity's remove succeeds with `{}` (PM §15).
-      check removed("app", "1.0.0").codeOf == ""
-      check removed("lib", "1.2.0").codeOf == ""
-      # The removed records' directories are collected after the commits that retired them.
-      check waitUntil(
-        proc(): bool =
-          toSeq(walkDir(pmDir / "install" / "r")).len == 1,
-        Answer,
-      )
       check status().pending == 0
-      releaseAll()
-      e.finish()
-
-    type Long = object
-      e: Engine
-      pmDir: string
-      rc: ptr LogosRuntimeControlBinding
-      firstRoute: typeof(PmtestBinding().route)
-
-    proc longSetup(limits = Opt.none(LcnPmLimits)): Long =
-      ## [5-5-4] The installation case's instances, `big`'s extraction paced at 1.5 s for
-      ## each MiB (about 24 s in all) by the hook the Module Host's environment passes.
-      var cfg = hosted(pmInputBytes(installTrust, installDocument, limits))
-      cfg.moduleHostEnv.add("LCN_TEST_EXTRACT_PACE_MS")
-      cfg.stock(installDocument, installObjects)
-      result.pmDir = cfg.stateDir("p")
-      result.e = fixtureEngine(cfg)
-      discard result.e.started(fakeRecord(), "hf")
-      discard result.e.started(pmRecord(), "pm")
-      result.rc = result.e.startClient("c")[1]
-      driver = result.rc.open(fakeRoot, fakeSchema)
-      probe = result.rc.open(pmRoot, pmSchema)
-      probeA = result.rc.open(pmRoot, pmSchema)
-      check drive(FetchFakeSetReadinessRequestReadinessChoiceKind.Ready)
-      check acquired()
-      result.firstRoute = status().bindingOf.route
-      check result.firstRoute.isSome
-      bAnswer.store(0)
-
-    proc stopTimed(e: Engine): Duration =
-      ## `pm` stopped, from the request to `unloaded`.
-      probe.release()
-      probe = LogosRouteHandle()
-      let at = getMonoTime()
-      check e.stop("pm").isOk
-      check waitUntil(
-        proc(): bool =
-          e.view("pm").tryGet.state == msUnloaded,
-        Answer,
-      )
-      getMonoTime() - at
-
-    test "[IMPL-DECISION G449] during a long extraction the module thread answers: a second operation and a route renewal go through; a stop with the install's call in flight cancels it and ends inside the stop deadline (W2), its directory deleted":
-      # Were the extraction not stopped, it would run about 24 s, past the 10 s stop
-      # deadline. The stop ends the route, and the Runtime's cancel reaches the handler
-      # through the kit's `request_cancel` (G338); the operation is cancelled, the call
-      # ends, `_MODULE_destroy` comes, and the worker stops at its next piece.
-      putEnv("LCN_TEST_EXTRACT_PACE_MS", "1500")
-      defer:
-        delEnv("LCN_TEST_EXTRACT_PACE_MS")
-      let l = longSetup()
-      let (e, pmDir, rc) = (l.e, l.pmDir, l.rc)
-      var t: Thread[void]
-      createThread(t, installBig)
-      check waitUntil(
-        proc(): bool =
-          extracting(pmDir),
-        Answer,
-      )
-      let began = getMonoTime()
-      # A second operation, answered on the module thread: no version 9.9.9 is listed, so it
-      # needs no file work.
-      check resolved("app", "9.9.9").errorOf.len > 0
-      # A route renewal: the fake's instance is stopped and started again (G402), and the
-      # binding gets a new route, watched for readiness.
-      driver.release()
-      driver = LogosRouteHandle()
-      check e.stop("hf").isOk
-      check waitUntil(
-        proc(): bool =
-          e.view("hf").tryGet.state == msUnloaded
-      )
-      check e.start("hf").tryGet.state == msReady
-      driver = rc.open(fakeRoot, fakeSchema)
-      check drive(FetchFakeSetReadinessRequestReadinessChoiceKind.Ready)
-      check waitUntil(
-        proc(): bool =
-          let b = status().bindingOf
-          b.route.isSome and b.route != l.firstRoute and b.readiness.isSome and
-            b.readiness.get.kind == PmtestBindingReadinessChoiceKind.Ready,
-        Answer,
-      )
-      checkpoint "the operation and the renewal took " & $(getMonoTime() - began)
-      check bAnswer.load == 0
-      check extracting(pmDir)
-      let stopped = e.stopTimed()
-      joinThread(t)
-      checkpoint "the stop took " & $stopped & "; the install's answer " & $bAnswer.load
-      check stopped < initDuration(seconds = 5)
-      check e.view("pm").tryGet.failure.isNone
-      # The route failed under the call: an invocation failure, not a response.
-      check bAnswer.load == 4
-      check not extracting(pmDir)
-      check e.start("pm").tryGet.state == msReady
-      probe = rc.open(pmRoot, pmSchema)
-      check handedOff("big", "1.0.0", "alpha_module").codeOf == "package-not-installed"
-      releaseAll()
-      e.finish()
-
-    test "[IMPL-DECISION G449] an operation's deadline answers its call while the worker extracts; a stop then ends at the worker's next piece (W2), its directory deleted":
-      # No job is cancelled when an operation ends (G449's limit): the worker goes on
-      # extracting for nobody until the destroy sets its stop flag.
-      putEnv("LCN_TEST_EXTRACT_PACE_MS", "1500")
-      defer:
-        delEnv("LCN_TEST_EXTRACT_PACE_MS")
-      let l =
-        longSetup(Opt.some(LcnPmLimits(operation_deadline_ms: Opt.some(8_000'u32))))
-      let (e, pmDir) = (l.e, l.pmDir)
-      var t: Thread[void]
-      createThread(t, installBig)
-      check waitUntil(
-        proc(): bool =
-          extracting(pmDir),
-        Answer,
-      )
-      joinThread(t)
-      check bAnswer.load == 2
-      check extracting(pmDir)
-      let stopped = e.stopTimed()
-      checkpoint "the stop took " & $stopped
-      check stopped < initDuration(seconds = 5)
-      check e.view("pm").tryGet.failure.isNone
-      check not extracting(pmDir)
       releaseAll()
       e.finish()
 

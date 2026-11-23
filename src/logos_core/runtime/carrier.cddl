@@ -110,6 +110,9 @@ lcn.carrier_failure = {
 ; A host that is no audit build takes its presence, even an empty list, as
 ; carrier loss; an audit build takes the first 8, and is not armed by an
 ; empty list. The carrier trace exempts exactly this field.
+; [DECISIONS G490] `system`: the instance is the one the host configuration's
+; `package_manager` marks, so the host accepts its reserved `logos_` name and
+; the `logos.` rules of its contracts. No other host gets it.
 lcn.carrier_init = {
   kind: "init",
   id: uint64,
@@ -123,6 +126,7 @@ lcn.carrier_init = {
   ? transport: [* uint64],
   ? runtime_id: tstr .size (1..256),
   ? wipe_audit: [* bstr .size (16..64)],
+  ? system: true,
 }
 
 lcn.carrier_apply = {

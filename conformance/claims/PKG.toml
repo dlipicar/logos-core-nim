@@ -122,31 +122,58 @@ default = "deferred:tier-5"
 "PKG-0620" = "claimed"
 "PKG-0624" = "claimed"
 "PKG-0628" = "claimed"
-# Copies of rules that 5-8 (the Runtime handoff) and 5-6a (the service methods) build; deferred by name
-# with their twins.
+# Copies of rules that 5-8 (the Runtime handoff), 5-6a-2 (the handoff's response) and 5-6b (the lists,
+# the watch and the events) build; deferred by name with their twins.
 "PKG-0626" = "deferred:tier-5"
 "PKG-0627" = "deferred:tier-5"
-"PKG-0630" = "deferred:tier-5"
-"PKG-0631" = "deferred:tier-5"
 "PKG-0632" = "deferred:tier-5"
-"PKG-0633" = "deferred:tier-5"
 "PKG-0634" = "deferred:tier-5"
 "PKG-0635" = "deferred:tier-5"
 "PKG-0636" = "deferred:tier-5"
-"PKG-0637" = "deferred:tier-5"
 "PKG-0638" = "deferred:tier-5"
-"PKG-0639" = "deferred:tier-5"
-"PKG-0640" = "deferred:tier-5"
-"PKG-0641" = "deferred:tier-5"
-"PKG-0642" = "deferred:tier-5"
-"PKG-0643" = "deferred:tier-5"
-"PKG-0644" = "deferred:tier-5"
-"PKG-0645" = "deferred:tier-5"
-"PKG-0646" = "deferred:tier-5"
-"PKG-0647" = "deferred:tier-5"
 "PKG-0648" = "deferred:tier-5"
-"PKG-0649" = "deferred:tier-5"
 "PKG-0650" = "deferred:tier-5"
+# Step 5-6a-1, the Package Manager instance (DECISIONS G490, G491, G494, G495; I140): the module
+# `logos_package_manager`, hosted under the system mark and composed by logosd. Its contract is the
+# pinned App A, so the request shapes and the operations' responses (§15) cross its boundary, and the
+# copies of those rules take their twins' status (tests/test_pm_module.nim's contract test). A Package
+# Manager provider is a local hosted instance only (PKG-0003, PKG-0007, PKG-0008: tests/test_host.nim's
+# mark checks, tests/test_pm_module.nim), with the Runtime's ordinary records (PKG-0004:
+# tests/test_logosd_pm.nim); it is never co-located (PKG-0005, PKG-0006: an inspection item, C1).
+"PKG-0003" = "claimed"
+"PKG-0004" = "claimed"
+"PKG-0005" = "claimed"
+"PKG-0006" = "claimed"
+"PKG-0007" = "claimed"
+"PKG-0008" = "claimed"
+"PKG-0366" = "claimed"
+"PKG-0367" = "claimed"
+"PKG-0369" = "claimed"
+"PKG-0370" = "claimed"
+"PKG-0371" = "claimed"
+"PKG-0372" = "claimed"
+"PKG-0373" = "claimed"
+"PKG-0374" = "claimed"
+"PKG-0375" = "claimed"
+"PKG-0376" = "claimed"
+"PKG-0377" = "claimed"
+"PKG-0379" = "claimed"
+"PKG-0519" = "claimed"
+"PKG-0521" = "claimed"
+"PKG-0630" = "claimed"
+"PKG-0631" = "claimed"
+"PKG-0633" = "claimed"
+"PKG-0637" = "claimed"
+"PKG-0639" = "claimed"
+"PKG-0640" = "claimed"
+"PKG-0641" = "claimed"
+"PKG-0642" = "claimed"
+"PKG-0643" = "claimed"
+"PKG-0644" = "claimed"
+"PKG-0645" = "claimed"
+"PKG-0646" = "claimed"
+"PKG-0647" = "claimed"
+"PKG-0649" = "claimed"
 # §15.2: progress phases; TXT-0497 and TXT-0498 ride it to 5-6b (G362).
 "PKG-0568" = "deferred:tier-5"
 # §2: the Nix profile comes with step 5-10. The catalog, Storage and backend metadata a
@@ -276,12 +303,14 @@ default = "deferred:tier-5"
 "PKG-0594" = "out-of-scope:a requirement on package producers"
 "PKG-0595" = "out-of-scope:a requirement on package producers"
 # §13: retrieval from Logos Storage (PKG-0353) is claimed through "§13" by step 5-3b-1 (DECISIONS
-# G402). Local resolved artifacts for the Runtime and Module Loader (PKG-0354) are step 5-8's; the
-# initial Package Manager's module facts and artifacts from protected input (PKG-0513, PKG-0514)
-# are step 5-6a's.
+# G402). Local resolved artifacts for the Runtime and Module Loader (PKG-0354) are step 5-8's. The
+# initial Package Manager's module facts and artifact from protected deployment input, with the
+# Runtime's acceptance of its digest (PKG-0513, PKG-0514), are claimed by step 5-6a-1 (DECISIONS G491:
+# logosd's own composition from the compiled hash or package_manager.artifact; tests/test_logosd_pm.nim,
+# tests/test_daemon_config.nim).
 "PKG-0354" = "deferred:tier-5"
-"PKG-0513" = "deferred:tier-5"
-"PKG-0514" = "deferred:tier-5"
+"PKG-0513" = "claimed"
+"PKG-0514" = "claimed"
 "PKG-0596" = "out-of-scope:a permission for package producers"
 "PKG-0335" = "deferred:tier-5"
 # §12: the handoff's construction is step 5-5-1's (planning's ruling Q-P1 (a), 2026-11-22; DECISIONS

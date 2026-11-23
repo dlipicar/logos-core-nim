@@ -658,7 +658,7 @@ when defined(posix):
         check f["started_at_boot"].getBool == false
         check comp.orchestrator.defaults.get(@[]).allIt(it.instance != CliInstance)
 
-    test "[BCP-0102] [TXT-0555] [TXT-0350] the admission pools' totals and per-consumer limits are the facts', and so is the authority's audit bound; logosd's Runtime instance is the engine with the facts' orchestration module and instance; logosd composes no Credential Store, accepts an operator module named logos_credential_store, and its start fails at binding":
+    test "[BCP-0102] [TXT-0555] [TXT-0350] the admission pools' totals and per-consumer limits are the facts', and so is the authority's audit bound; logosd's Runtime instance is the engine with the facts' orchestration module and instance; logosd composes no Credential Store and refuses an operator module named logos_credential_store; a Module Host refuses it at binding":
       # The pools (DEPLOYMENT.md §12, "Admission pools"), with logosd's
       # defaults: it sets no engine, authority or Transport limit.
       proc pool(total: int, perConsumer = -1): JsonNode =
@@ -714,8 +714,8 @@ when defined(posix):
       check a["unwritten_bound"].getInt == al.maxUnwritten
       check a["retained_records"].getInt == int(DefaultAuditRecords)
 
-      # No Credential Store (§25): none in init's composition; an operator's
-      # module of the name passes logosd's checks, and binding refuses it as a
+      # No Credential Store (§25): none in init's composition; [G490] logosd
+      # refuses an operator's module of the name, and binding refuses it as a
       # provider that is no Logos system module.
       check facts["credential_store"].getStr == "none"
       let floor = TrustFileState(file: floorTrust())
@@ -744,13 +744,10 @@ when defined(posix):
       op.modules = Opt.some(@[m])
       op.runtime.module_host = Opt.some(hostExe)
       let p = prepareDaemon(s, op.encode.get, floor)
-      check p.isOk
-      if p.isOk:
-        let mods = p.get.composition.appConfig.modules
-        check mods.anyIt(
-          it.module == CredentialStoreModule and
-            it.implementation.kind == LcnAppImplementationKind.Process_hosted_dynamic
-        )
+      check p.isErr
+      if p.isErr:
+        check "modules: instance credential-store uses the reserved module-name prefix logos_" in
+          p.error
       let cs = credentialStoreCode()
       let bound = completeProbe(cs, probeCode(cs, CredentialStoreModule), false)
       check bound.isErr

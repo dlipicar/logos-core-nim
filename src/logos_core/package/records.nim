@@ -250,7 +250,7 @@ func sourceOf(v: CborValue): PackageSource =
       lockedRef: v.optText("locked_ref"),
     )
 
-func checkSource(s: PackageSource): Result[void, string] =
+func checkSource*(s: PackageSource): Result[void, string] =
   ## [SPEC PM §6] A provenance locator differs from the archive locator.
   if s.kind == skLgx and s.provenanceLocator == Opt.some(s.objectLocator):
     return err("provenance_object equals object")

@@ -112,6 +112,11 @@ type
     protectedInputs*: seq[ProtectedInput]
       ## [IMPL-DECISION G400] `protected_inputs`, in configuration order: each
       ## names a listed instance with a state assignment, at most once
+    packageManager*: Opt[string]
+      ## [IMPL-DECISION G490] the top-level `package_manager` mark: the instance
+      ## holding the Package Manager responsibility (RUNTIME l.293), a
+      ## `hosted_dynamic` `logos_package_manager`; its host accepts the reserved
+      ## name and the Runtime its reserved surface
 
   RemoteConfig* = object
     ## [G408, G412, G415; Tier 5 step 5-7a-2] `remote`, checked: the trust
@@ -409,6 +414,44 @@ proc checkAuthority(
     )
   )
   c.authorityPolicy = bytes
+  ok()
+
+const PackageManagerModule* = "logos_package_manager"
+  ## [SPEC RUNTIME l.293; PM App A] the module name the responsibility assigns
+
+func checkPackageManagerMark(
+    c: var HostConfig, mark: Opt[string]
+): Result[void, ConfigError] =
+  ## [IMPL-DECISION G490; Q1 (a)] The top-level `package_manager` mark, as
+  ## `orchestration` and `policy.authority` name theirs: a listed instance of
+  ## exactly `logos_package_manager`, `hosted_dynamic` with placement `process`
+  ## (C1; a direct one would be PKG-0006's case), and neither the orchestration
+  ## nor the authority instance. Without it no hosted module may use the reserved
+  ## prefix: its host refuses the name, and the Runtime the surface.
+  if mark.isNone:
+    return ok()
+  let id = mark.get
+  var found = false
+  var r: ModuleRecord
+  for m in c.modules:
+    if m.instance == id:
+      found = true
+      r = m.record
+  if not found:
+    return err(configError("package_manager names no instance in modules"))
+  if r.module != PackageManagerModule:
+    return err(configError("package_manager's module is not " & PackageManagerModule))
+  if r.strategy != stHostedDynamic or r.placement != "process":
+    return err(
+      configError(
+        "package_manager must be a hosted_dynamic instance with placement process"
+      )
+    )
+  if id == c.orchestration:
+    return err(configError("package_manager names the orchestration instance"))
+  if c.authority.isSome and c.authority.get.instance == id:
+    return err(configError("package_manager names the authority instance"))
+  c.packageManager = Opt.some(id)
   ok()
 
 proc checkPermissions(
@@ -1018,6 +1061,7 @@ proc decodeHostConfig*(
           "permissions.initial does not provision the authority instance with the profile's minimum"
         )
       )
+  ?checkPackageManagerMark(c, cfg.package_manager)
   if cfg.call_audit.isSome:
     ?checkCallAudit(c, cfg.call_audit.get)
   # [I90] Transported routes: the routing rules, the I/O thread's limits and

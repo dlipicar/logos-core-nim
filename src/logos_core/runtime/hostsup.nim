@@ -163,6 +163,9 @@ type
     endpointPath, runtimeId: cstring ## shared; nil: no endpoint
     transport: array[MaxTransportWords, uint64]
     transportLen: int
+    system: bool
+      ## [G490] the instance the host configuration's `package_manager` marks;
+      ## set before the spawn, read by the Loader's thread for `init`
     dispatches: ptr DispatchObj ## under `lock`
     outQ: Channel[seq[byte]] ## lane-2 frames for the sender; empty: stop
     sender: Thread[Host]
@@ -428,6 +431,15 @@ when defined(posix):
     h.endpointPath = sharedCString(path)
     h.runtimeId = sharedCString(runtimeId)
     ok()
+
+  proc setSystem*(h: Host) =
+    ## [G490] Before the realization: the host loads the marked Package Manager,
+    ## so `init` carries `system` and the host accepts its reserved name.
+    h.system = true
+
+  proc systemInit*(h: Host): bool =
+    ## [G490] Whether `init` carries `system`.
+    h.system
 
   proc endpointInit*(
       h: Host
@@ -2001,6 +2013,12 @@ else:
       h: Host, listener: cint, path, runtimeId: string, transport: TransportConfig
   ): Result[void, string] =
     err(Unsupported)
+
+  proc setSystem*(h: Host) =
+    discard
+
+  proc systemInit*(h: Host): bool =
+    false
 
   proc endpointInit*(
       h: Host

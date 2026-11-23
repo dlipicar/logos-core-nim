@@ -13,6 +13,7 @@
 ## | `authority`    | `logos_capability_authority` | the library's static binding       | `authority` (capability-authority only) |
 ## | `logosctl`     | `logosctl`                   | `direct_static` `logosctl`         | none |
 ## | `lcn_call`     | `lcn_call`                   | `hosted_dynamic` (process), the companion library | none |
+## | `package_manager` | `logos_package_manager`   | `hosted_dynamic` (process), the companion library | `package_manager.state` |
 ## | operator ones  | daemon-config `modules`      | `direct_dynamic` or `hosted_dynamic` | as configured |
 ##
 ## `lcn_call`, the CLI module (Tier 5 step N-2; G343), is composed when its
@@ -21,10 +22,22 @@
 ## (`-d:lcnCallArtifactHash=<hex>`). It is not in the start list: the first
 ## launcher starts it (DAEMON.md §7a).
 ##
-## Under `capability-authority` logosd merges its system rules S1-S8 with the
+## `package_manager`, the Package Manager (Tier 5 step 5-6a-1; G491, C1), is
+## composed with a `package_manager` section: from `package_manager.artifact`,
+## else the companion `liblogos_package_manager` installed with logosd, whose
+## BLAKE3-256 is compiled in (`-d:pmArtifactHash=<hex>`); with neither the start
+## is refused. logosctl's checks (`init`, `daemon config check` and `set`) cannot
+## know which logosd will start: they compose a stand-in at the companion
+## library's place (`pmCompanion`), as they assume test hooks (G300), and the
+## start decides. Its state assignment is `package_manager.state`, its permissions
+## host-ambient, and the host configuration's `package_manager` mark names it
+## (G490). logosd adds it to the orchestrator's start list after the operator's,
+## so rule S2 covers its start.
+##
+## Under `capability-authority` logosd merges its system rules S1-S12 with the
 ## operator's into one `lcn.authority_policy`. They are derived from the
 ## reserved ids, not configurable, and listed in DAEMON.md §5; S6-S8 only
-## when `lcn_call` is composed.
+## when `lcn_call` is composed, S9-S12 only with a `package_manager` section.
 ##
 ## `prepareDaemon` runs DAEMON.md §3's five checks: the first four
 ## (`config.nim`) and the derived configuration through the library's own
@@ -69,6 +82,9 @@ const
   LibexecRemote* = ".." / "libexec" / "logos-core" / RemoteProgramName
   LibDir* = ".." / "lib" / "logos-core" ## [G343] the companion library's directory
   CliLibrary* = DynlibFormat.replace("$1", CliModule) ## `liblcn_call.so` or `.dylib`
+  PmLibrary* = DynlibFormat.replace("$1", PmModule)
+    ## [G491] `liblogos_package_manager.so` or `.dylib`
+  PmArtifactId* = PmModule ## [G491] the composed artifact's id
   RcEventPrefix = "logos.runtime_control."
   lcnCallArtifactHash* {.strdefine.} = ""
     ## [G343 Q3 (a)] BLAKE3-256 of the companion `liblcn_call`, in hex, compiled
@@ -80,9 +96,19 @@ const
   CliEvents* = ["module_state_changed", "execution_state_changed", "inventory_changed"]
     ## [G346] the events rule: the events `logosctl events` follows by default
 
+const pmArtifactHash* {.strdefine.} = ""
+  ## [G491] BLAKE3-256 of the companion `liblogos_package_manager`, in hex,
+  ## compiled into a packaged logosd; empty: only `package_manager.artifact`
+  ## composes the Package Manager
+
+const PmCompanion* = pmArtifactHash.len > 0
+  ## [G491] This build composes the Package Manager from its companion library
+  ## when `package_manager.artifact` is absent; a test logosd and logosctl never do
+
 static:
   doAssert lcnCallArtifactHash.len in [0, 64],
     "lcnCallArtifactHash is 64 hex digits (BLAKE3-256)"
+  doAssert pmArtifactHash.len in [0, 64], "pmArtifactHash is 64 hex digits (BLAKE3-256)"
 
 type
   Composition* = object ## What logosd hands to the Runtime.
@@ -225,7 +251,9 @@ proc systemRules*(
   ## is composed (`cli`; G345, G346). Every start rule holds its execution scope and
   ## the host-ambient permission scope together (G207); an absent `modes`
   ## covers direct and hosted starts alike.
-  ## [G402] S9 to S11 with a `package_manager` section (`pm`).
+  ## [G402] S9 to S11 with a `package_manager` section (`pm`); [G491] S12 too.
+  ## The composed Package Manager's start is S2's: `orchestratorValue` puts it in
+  ## the orchestrator's start list, so its needs include it.
   let n = ?orchestratorNeeds(orch)
   var rules: seq[CborValue]
   # S1: the authority publishes its change notices.
@@ -439,6 +467,17 @@ proc systemRules*(
         ),
       ),
     )
+    # S12 [G491]: as S8 for lcn_call, the shell may start, stop and recover the
+    # composed Package Manager, and cannot retire or reconfigure it.
+    rules.add denyRule(
+      "target-denied",
+      ctlSubject,
+      rcScope(
+        ["retire_module", "update_configuration", "apply_configuration"],
+        Opt.none(seq[string]),
+        Opt.some(subjectOf("modules", [PmModule])),
+      ),
+    )
   ok(rules)
 
 proc mergedPolicy*(
@@ -486,6 +525,10 @@ proc orchestratorValue*(dc: LcnDaemonConfig): Result[OrchestratorSettings, strin
         if m.instance == id:
           module = m.module
       defaults.add(LcnOrchestratorDefault(module: module, instance: id))
+  if dc.package_manager.isSome:
+    # [G491] The composed Package Manager starts with no operator entry, after
+    # the operator's list; S2 derives its start's authorization from this value.
+    defaults.add(LcnOrchestratorDefault(module: PmModule, instance: PmInstance))
   s.defaults = Opt.some(defaults)
   if dc.ordering.isSome:
     var pairs: seq[LcnOrchestratorOrder]
@@ -524,6 +567,7 @@ func ambient(): LcnAppPermissionSetting =
   LcnAppPermissionSetting(permission: HostAmbient, constraints: @AmbientConstraints)
 
 func permissionsOf(dc: LcnDaemonConfig, cli: bool): LcnAppPermissions =
+  ## [G491] The composed Package Manager gets host-ambient too.
   ## [G294; decision 3; G110, G284] The reference profile unless one is named;
   ## the operator's entries; host-ambient for each system instance; and, for
   ## each operator module the operator gave no module entry, the module entry
@@ -551,6 +595,12 @@ func permissionsOf(dc: LcnDaemonConfig, cli: bool): LcnAppPermissions =
     initial.add(
       LcnAppInitialSettings(
         module: CliModule, instance: Opt.some(CliInstance), permissions: @[ambient()]
+      )
+    )
+  if dc.package_manager.isSome:
+    initial.add(
+      LcnAppInitialSettings(
+        module: PmModule, instance: Opt.some(PmInstance), permissions: @[ambient()]
       )
     )
   if dc.policy.kind == LcnDcPolicyKind.Capability_authority:
@@ -605,12 +655,13 @@ proc defaultRemoteProgram*(exe: string): Opt[string] =
       return Opt.some(realPath(p))
   Opt.none(string)
 
-proc companionLibrary*(exe: string): Opt[string] =
+proc companionLibrary*(exe: string, library = CliLibrary): Opt[string] =
   ## [G343] `<d>/../lib/logos-core/liblcn_call.{so,dylib}`, `<d>` as for the
-  ## Module Host; none when `exe` is empty.
+  ## Module Host; none when `exe` is empty. [G491] `library` names another
+  ## companion library there (`PmLibrary`).
   if exe.len == 0:
     return Opt.none(string)
-  Opt.some((realPath(exe).parentDir / LibDir / CliLibrary).normalizedPath)
+  Opt.some((realPath(exe).parentDir / LibDir / library).normalizedPath)
 
 proc cliArtifact*(c: DaemonConfig, exe: string): Opt[LcnAppArtifact] =
   ## [G343] `cli.artifact`, else the companion library with the compiled hash;
@@ -625,6 +676,45 @@ proc cliArtifact*(c: DaemonConfig, exe: string): Opt[LcnAppArtifact] =
     let hash = hex.fromHex(lcnCallArtifactHash).valueOr:
       return Opt.none(LcnAppArtifact)
     Opt.some(LcnAppArtifact(id: LcnCallArtifactId, local_path: path, hash: hash))
+
+proc pmArtifact*(c: DaemonConfig, exe: string): Opt[LcnAppArtifact] =
+  ## [G491] `package_manager.artifact`, else the companion library with the
+  ## compiled hash; none: this logosd cannot compose the Package Manager.
+  if c.pm.isNone:
+    return Opt.none(LcnAppArtifact)
+  if c.pm.get.artifact.isSome:
+    return c.pm.get.artifact
+  when pmArtifactHash.len == 0:
+    Opt.none(LcnAppArtifact)
+  else:
+    let path = companionLibrary(exe, PmLibrary).valueOr:
+      return Opt.none(LcnAppArtifact)
+    let hash = hex.fromHex(pmArtifactHash).valueOr:
+      return Opt.none(LcnAppArtifact)
+    Opt.some(LcnAppArtifact(id: PmArtifactId, local_path: path, hash: hash))
+
+proc standInPmArtifact(exe: string): LcnAppArtifact =
+  ## [G491] What logosctl's checks compose for the companion library: its place
+  ## beside `exe` (an absolute path whatever `exe` is) and an all-zero digest. It
+  ## is only checked, never started.
+  let path =
+    companionLibrary(exe, PmLibrary).get("/" & "lib" / "logos-core" / PmLibrary)
+  LcnAppArtifact(id: PmArtifactId, local_path: path, hash: newSeq[byte](32))
+
+func pmRecord(pm: PmSettings, artifact: LcnAppArtifact): LcnAppModule =
+  ## [G491] The Package Manager instance: hosted in its own process (C1), its
+  ## state assignment `package_manager.state`, no configuration (its input is
+  ## protected, G400), no `requires` or `requested_permissions`.
+  LcnAppModule(
+    instance: PmInstance,
+    module: PmModule,
+    implementation: LcnAppImplementation(
+      kind: LcnAppImplementationKind.Process_hosted_dynamic,
+      arm_Process_hosted_dynamic:
+        LcnAppImplementationARProcessHostedDynamicMap(artifact: artifact),
+    ),
+    state_assignment: Opt.some(pm.state),
+  )
 
 func cliSocketPath*(s: Session, socketDir: string): string =
   ## [G344] `run/lcn_call.sock`, or in `cli.socket_dir`; logosctl's launcher
@@ -718,11 +808,17 @@ proc remoteValue*(
   )
 
 proc compose*(
-    s: Session, c: DaemonConfig, exe = "", remote = Opt.none(RemoteSeen)
+    s: Session,
+    c: DaemonConfig,
+    exe = "",
+    remote = Opt.none(RemoteSeen),
+    pmCompanion = PmCompanion,
 ): Result[Composition, string] =
   ## [G294] The derived host configuration. `exe` is logosd's executable, for
   ## the default `module_host` and `remote_program`; empty: none. `remote` is
   ## what this start read of the remote inputs (G408), with `remote.enabled`.
+  ## `pmCompanion` (G491): the logosd that will start has the companion Package
+  ## Manager library; true from logosctl, which composes a stand-in for it.
   let dc = c.value
   let orch = ?orchestratorValue(dc)
   var orchRecord =
@@ -752,6 +848,21 @@ proc compose*(
     )
   for m in dc.modules.get(@[]):
     modules.add(m)
+  var pmMark = Opt.none(string)
+  if c.pm.isSome:
+    # [G491] With neither `package_manager.artifact` nor a companion library hash,
+    # logosd cannot compose the section. logosctl, built without the hash, checks
+    # with a stand-in at the companion's place: the start decides.
+    var art = pmArtifact(c, exe)
+    if art.isNone and pmCompanion:
+      art = Opt.some(standInPmArtifact(exe))
+    if art.isNone:
+      return err(
+        "package_manager: this logosd has no Package Manager library; give " &
+          "package_manager.artifact"
+      )
+    modules.add(pmRecord(c.pm.get, art.get))
+    pmMark = Opt.some(PmInstance)
   var moduleHost = dc.runtime.module_host
   if moduleHost.isNone:
     moduleHost = defaultModuleHost(exe)
@@ -788,6 +899,7 @@ proc compose*(
     # [I96; G306; decision 9] The operator's transfers as they are: protected
     # offline input, applied once at the next start (DAEMON.md §11).
     state_transfers: dc.state_transfers,
+    package_manager: pmMark,
   )
   if dc.call_audit.isSome:
     let a = dc.call_audit.get
@@ -809,14 +921,15 @@ proc prepareDaemon*(
     checkKey = true,
     exe = "",
     remote = Opt.none(RemoteSeen),
+    pmCompanion = PmCompanion,
 ): Result[Prepared, string] =
   ## DAEMON.md §3's checks 1 to 5 on daemon-config bytes, before anything
   ## starts; `logosctl daemon config check` runs the same. `remote` is what
   ## the start read of the remote inputs (G408), passed on to the remote
-  ## processes.
+  ## processes. `pmCompanion` as for `compose`.
   let dc = ?decodeDaemonConfig(bytes)
   let c = ?checkDaemonConfig(dc, trust, hooksBuild, checkKey)
-  let comp = ?compose(s, c, exe, remote)
+  let comp = ?compose(s, c, exe, remote, pmCompanion)
   let hc = parseHostConfig(AppConfigFormat, comp.bytes).valueOr:
     return err("the derived host configuration is refused: " & error.message)
   ok(Prepared(config: c, composition: comp, policyReport: hc.policyReport))

@@ -5,12 +5,9 @@
 ## Nim callers (the caller serializes calls on one route handle, §2.8):
 ##
 ##   proc invoke*(route: ptr LogosRouteHandle, request: PmtestHandoffRequest): Result[PmtestHandoffResponse, InvocationFailure] # pmtest.handoff
-##   proc invoke*(route: ptr LogosRouteHandle, request: PmtestInspectRequest): Result[PmtestInspectResponse, InvocationFailure] # pmtest.inspect
 ##   proc invoke*(route: ptr LogosRouteHandle, request: PmtestInstallRequest): Result[PmtestInstallResponse, InvocationFailure] # pmtest.install
-##   proc invoke*(route: ptr LogosRouteHandle, request: PmtestRemoveRequest): Result[PmtestRemoveResponse, InvocationFailure] # pmtest.remove
 ##   proc invoke*(route: ptr LogosRouteHandle, request: PmtestResolveRequest): Result[PmtestResolveResponse, InvocationFailure] # pmtest.resolve
 ##   proc invoke*(route: ptr LogosRouteHandle, request: PmtestStatusRequest): Result[PmtestStatusResponse, InvocationFailure] # pmtest.status
-##   proc invoke*(route: ptr LogosRouteHandle, request: PmtestUpdateRequest): Result[PmtestUpdateResponse, InvocationFailure] # pmtest.update
 ##
 ## C callers: instantiate `exportPmtestModuleCalls()` once, at top level, to export
 ## the helpers `pmtest_module_calls.h` declares.
@@ -24,7 +21,7 @@ import ./pmtest_module_types
 export invokert, consumert, common_mirrors, pmtest_module_types
 
 const
-  primaryDocument = "; -- metadata --\x0A_module = \"pmtest_module\"\x0A\x0A; Input for tests/generated/pmtest_module_*: the Package Manager\'s shell\x0A; (src/logos_core/pm/shell.nim) hosted under a test name until 5-6a lifts the\x0A; refusal of a hosted `logos_` provider (Tier 5 step 5-3b, F5; DECISIONS G405).\x0A; Never shipped: 5-6a\'s `logos_package_manager` replaces it over the same\x0A; shell. Its probe answers what the shell holds (tests/kit/pmtest_impl.nim).\x0A\x0Apmtest.catalog = {\x0A  sequence: uint64,\x0A  digest: bstr .size 32,\x0A  entries: uint64,\x0A}\x0A\x0Apmtest.binding = {\x0A  name: tstr .size (1..64),\x0A  instance: tstr .size (1..128),\x0A  state: \"idle\" / \"establishing\" / \"ready\" / \"renewing\" / \"backoff\" / \"stopped\",\x0A  ? route: tstr .size (1..256),\x0A  ? readiness: \"starting\" / \"ready\" / \"offline\",\x0A  ; how many routes the shell established for the binding\x0A  established: uint64,\x0A}\x0A\x0Apmtest.status_request = {}\x0A\x0A; The catalog in use, if any; each binding\'s route and readiness; the root\x0A; operations still running.\x0Apmtest.status_response = {\x0A  ? catalog: pmtest.catalog,\x0A  bindings: [* pmtest.binding],\x0A  pending: uint64,\x0A}\x0A\x0A; One root operation for an exact version (PM \xC2\xA711): the driver\'s outcome.\x0Apmtest.resolve_request = {\x0A  name: tstr .size (1..256),\x0A  version: tstr .size (1..256),\x0A}\x0A\x0Apmtest.selected = {\x0A  package: tstr .size (1..256),\x0A  version: tstr .size (1..256),\x0A  schema_root: bstr .size 32,\x0A  installed: bool,\x0A}\x0A\x0Apmtest.counters = {\x0A  names: uint64,\x0A  depth: uint64,\x0A  attempts: uint64,\x0A}\x0A\x0Apmtest.resolve_response =\x0A  { packages: [* pmtest.selected], counters: pmtest.counters } /\x0A  { error: tstr .size (1..64), ? message: tstr .size (1..512) }\x0A\x0A; [Tier 5 step 5-5-4; G449] The operations, each answering its \xC2\xA715 response value as\x0A; pm/responses.nim encodes it (deterministic CBOR, in `response`); the invocation error\x0A; MODULE_ERROR is the call\'s own failure. `source` is an encoded\x0A; logos.package_manager.package_source.\x0Apmtest.inspect_request = {\x0A  ? package: tstr .size (1..256),\x0A  ? version: tstr .size (1..256),\x0A  ? source: bstr .size (1..8192),\x0A}\x0A\x0Apmtest.inspect_response = { response: bstr }\x0A\x0Apmtest.install_request = {\x0A  package: tstr .size (1..256),\x0A  ? version: tstr .size (1..256),\x0A  ? source: bstr .size (1..8192),\x0A}\x0A\x0Apmtest.install_response = { response: bstr }\x0A\x0Apmtest.remove_request = {\x0A  package: tstr .size (1..256),\x0A  version: tstr .size (1..256),\x0A}\x0A\x0Apmtest.remove_response = { response: bstr }\x0A\x0A; `update_package` with `current` = {package, version}.\x0Apmtest.update_request = {\x0A  package: tstr .size (1..256),\x0A  version: tstr .size (1..256),\x0A  ? target_version: tstr .size (1..256),\x0A  ? source: bstr .size (1..8192),\x0A}\x0A\x0Apmtest.update_response = { response: bstr }\x0A\x0Apmtest.handoff_request = {\x0A  package: tstr .size (1..255),\x0A  version: tstr .size (1..255),\x0A  module: tstr .size (1..255),\x0A}\x0A\x0Apmtest.handoff_response = { response: bstr }\x0A"
+  primaryDocument = "; -- metadata --\x0A_module = \"pmtest_module\"\x0A\x0A; Input for tests/generated/pmtest_module_*: the Package Manager\'s shell\x0A; (src/logos_core/pm/shell.nim) hosted under a test name (Tier 5 step 5-3b, F5;\x0A; DECISIONS G405), kept as a probe (G496): `logos_package_manager` serves the\x0A; operations (5-6a-1), and this probe answers what the shell holds\x0A; (tests/kit/pmtest_impl.nim). Never shipped.\x0A\x0Apmtest.catalog = {\x0A  sequence: uint64,\x0A  digest: bstr .size 32,\x0A  entries: uint64,\x0A}\x0A\x0Apmtest.binding = {\x0A  name: tstr .size (1..64),\x0A  instance: tstr .size (1..128),\x0A  state: \"idle\" / \"establishing\" / \"ready\" / \"renewing\" / \"backoff\" / \"stopped\",\x0A  ? route: tstr .size (1..256),\x0A  ? readiness: \"starting\" / \"ready\" / \"offline\",\x0A  ; how many routes the shell established for the binding\x0A  established: uint64,\x0A}\x0A\x0Apmtest.status_request = {}\x0A\x0A; The catalog in use, if any; each binding\'s route and readiness; the root\x0A; operations still running.\x0Apmtest.status_response = {\x0A  ? catalog: pmtest.catalog,\x0A  bindings: [* pmtest.binding],\x0A  pending: uint64,\x0A}\x0A\x0A; One root operation for an exact version (PM \xC2\xA711): the driver\'s outcome.\x0Apmtest.resolve_request = {\x0A  name: tstr .size (1..256),\x0A  version: tstr .size (1..256),\x0A}\x0A\x0Apmtest.selected = {\x0A  package: tstr .size (1..256),\x0A  version: tstr .size (1..256),\x0A  schema_root: bstr .size 32,\x0A  installed: bool,\x0A}\x0A\x0Apmtest.counters = {\x0A  names: uint64,\x0A  depth: uint64,\x0A  attempts: uint64,\x0A}\x0A\x0Apmtest.resolve_response =\x0A  { packages: [* pmtest.selected], counters: pmtest.counters } /\x0A  { error: tstr .size (1..64), ? message: tstr .size (1..512) }\x0A\x0A; [Tier 5 step 5-5-4; G449, G496] `install_package`, the record the handoff probe reads\x0A; (5-6a-2 moves the handoff case to `logos_package_manager` over its system binding, and\x0A; this pair goes): its \xC2\xA715 response value as pm/responses.nim encodes it\x0A; (deterministic CBOR, in `response`); the invocation error MODULE_ERROR is the call\'s\x0A; own failure. The other operations are `logos_package_manager`\'s (test_pm_module).\x0Apmtest.install_request = {\x0A  package: tstr .size (1..256),\x0A  ? version: tstr .size (1..256),\x0A}\x0A\x0Apmtest.install_response = { response: bstr }\x0A\x0Apmtest.handoff_request = {\x0A  package: tstr .size (1..255),\x0A  version: tstr .size (1..255),\x0A  module: tstr .size (1..255),\x0A}\x0A\x0Apmtest.handoff_response = { response: bstr }\x0A"
   interfaceDocuments: array[0, string] = []
   supportingDocuments: array[0, string] = []
 
@@ -36,8 +33,6 @@ perThread(
 discard callsSchema()
 
 type
-  logos_bstr_size_1_8192_t* = ptr UncheckedArray[uint8]
-
   logos_tstr_size_1_128_t* = cstring
 
   logos_tstr_size_1_255_t* = cstring
@@ -598,80 +593,22 @@ proc callClear0(p1: ptr LogosResponseOwner, p5: ptr ptr UncheckedArray[uint8], p
   resetOutput(p5)
   resetOutput(p6)
 
-proc callRequest1(p2: bool, p3: logos_tstr_size_1_256_t, p4: bool, p5: logos_bstr_size_1_8192_t, p6: csize_t, p7: bool, p8: logos_tstr_size_1_256_t): Result[seq[byte], string] =
-  ## `pmtest.inspect`'s request params from its typed inputs.
-  let depth {.used.} = 1
-  var e: seq[CborEntry]
-  if p2:
-    let value44 = ?inText(p3)
-    e.add((cbor("package"), value44))
-  if p4:
-    let value45 = ?inBytes(p5, p6)
-    e.add((cbor("source"), value45))
-  if p7:
-    let value46 = ?inText(p8)
-    e.add((cbor("version"), value46))
-  ok(encodeCbor(cborMap(e)))
-
-proc callRespond1(a: var CallArena, v: CborValue, o9: var ptr UncheckedArray[uint8], o10: var csize_t): Result[void, string] =
-  ## `pmtest.inspect`'s outputs from its checked response.
-  let depth {.used.} = 1
-  let f47 = v.lookup("response").get
-  ?a.bytes(f47.bytes, o9, o10)
-  ok()
-
-proc invoke*(route: ptr LogosRouteHandle, request: PmtestInspectRequest): Result[PmtestInspectResponse, InvocationFailure] =
-  ## `pmtest.inspect` through `route` (INTERFACE §5.2).
-  let p0 = route
-  let params = encodeCbor(toCbor(request))
-  let v = ?routeCall(p0, "inspect", params, callsSchema(), "pmtest.inspect_response")
-  ok(fromChecked(PmtestInspectResponse, v))
-
-proc callInvoke1(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: bool, p3: logos_tstr_size_1_256_t, p4: bool, p5: logos_bstr_size_1_8192_t, p6: csize_t, p7: bool, p8: logos_tstr_size_1_256_t, p9: ptr ptr UncheckedArray[uint8], p10: ptr csize_t): LogosResult =
-  ## `lcn_invoke_pmtest_Inspect` (INTERFACE §2.7.2, App A.5): `pmtest.inspect`.
-  if p0 == nil or p1 == nil or p9 == nil or p10 == nil:
-    return failureResult(moduleError("a null route, response owner or output"))
-  let params = callRequest1(p2, p3, p4, p5, p6, p7, p8).valueOr:
-    return failureResult(failure(ecInvalidParams, error))
-  let v = routeCall(p0, "inspect", params, callsSchema(), "pmtest.inspect_response").valueOr:
-    return failureResult(error)
-  var arena: CallArena
-  var o9: ptr UncheckedArray[uint8]
-  var o10: csize_t
-  callRespond1(arena, v, o9, o10).isOkOr:
-    arena.release()
-    return failureResult(moduleError("the response has no canonical C value: " & error))
-  p9[] = o9
-  p10[] = o10
-  p1[] = arena.owner
-  okResult()
-
-proc callClear1(p1: ptr LogosResponseOwner, p9: ptr ptr UncheckedArray[uint8], p10: ptr csize_t) =
-  ## `lcn_clear_pmtest_Inspect` (INTERFACE §2.7.2): clears the owner, then
-  ## resets every output object without reading it.
-  clearOwner(p1)
-  resetOutput(p9)
-  resetOutput(p10)
-
-proc callRequest2(p2: logos_tstr_size_1_256_t, p3: bool, p4: logos_bstr_size_1_8192_t, p5: csize_t, p6: bool, p7: logos_tstr_size_1_256_t): Result[seq[byte], string] =
+proc callRequest1(p2: logos_tstr_size_1_256_t, p3: bool, p4: logos_tstr_size_1_256_t): Result[seq[byte], string] =
   ## `pmtest.install`'s request params from its typed inputs.
   let depth {.used.} = 1
   var e: seq[CborEntry]
-  let value48 = ?inText(p2)
-  e.add((cbor("package"), value48))
+  let value44 = ?inText(p2)
+  e.add((cbor("package"), value44))
   if p3:
-    let value49 = ?inBytes(p4, p5)
-    e.add((cbor("source"), value49))
-  if p6:
-    let value50 = ?inText(p7)
-    e.add((cbor("version"), value50))
+    let value45 = ?inText(p4)
+    e.add((cbor("version"), value45))
   ok(encodeCbor(cborMap(e)))
 
-proc callRespond2(a: var CallArena, v: CborValue, o8: var ptr UncheckedArray[uint8], o9: var csize_t): Result[void, string] =
+proc callRespond1(a: var CallArena, v: CborValue, o5: var ptr UncheckedArray[uint8], o6: var csize_t): Result[void, string] =
   ## `pmtest.install`'s outputs from its checked response.
   let depth {.used.} = 1
-  let f51 = v.lookup("response").get
-  ?a.bytes(f51.bytes, o8, o9)
+  let f46 = v.lookup("response").get
+  ?a.bytes(f46.bytes, o5, o6)
   ok()
 
 proc invoke*(route: ptr LogosRouteHandle, request: PmtestInstallRequest): Result[PmtestInstallResponse, InvocationFailure] =
@@ -681,93 +618,43 @@ proc invoke*(route: ptr LogosRouteHandle, request: PmtestInstallRequest): Result
   let v = ?routeCall(p0, "install", params, callsSchema(), "pmtest.install_response")
   ok(fromChecked(PmtestInstallResponse, v))
 
-proc callInvoke2(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: logos_tstr_size_1_256_t, p3: bool, p4: logos_bstr_size_1_8192_t, p5: csize_t, p6: bool, p7: logos_tstr_size_1_256_t, p8: ptr ptr UncheckedArray[uint8], p9: ptr csize_t): LogosResult =
+proc callInvoke1(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: logos_tstr_size_1_256_t, p3: bool, p4: logos_tstr_size_1_256_t, p5: ptr ptr UncheckedArray[uint8], p6: ptr csize_t): LogosResult =
   ## `lcn_invoke_pmtest_Install` (INTERFACE §2.7.2, App A.5): `pmtest.install`.
-  if p0 == nil or p1 == nil or p8 == nil or p9 == nil:
+  if p0 == nil or p1 == nil or p5 == nil or p6 == nil:
     return failureResult(moduleError("a null route, response owner or output"))
-  let params = callRequest2(p2, p3, p4, p5, p6, p7).valueOr:
+  let params = callRequest1(p2, p3, p4).valueOr:
     return failureResult(failure(ecInvalidParams, error))
   let v = routeCall(p0, "install", params, callsSchema(), "pmtest.install_response").valueOr:
     return failureResult(error)
   var arena: CallArena
-  var o8: ptr UncheckedArray[uint8]
-  var o9: csize_t
-  callRespond2(arena, v, o8, o9).isOkOr:
+  var o5: ptr UncheckedArray[uint8]
+  var o6: csize_t
+  callRespond1(arena, v, o5, o6).isOkOr:
     arena.release()
     return failureResult(moduleError("the response has no canonical C value: " & error))
-  p8[] = o8
-  p9[] = o9
+  p5[] = o5
+  p6[] = o6
   p1[] = arena.owner
   okResult()
 
-proc callClear2(p1: ptr LogosResponseOwner, p8: ptr ptr UncheckedArray[uint8], p9: ptr csize_t) =
+proc callClear1(p1: ptr LogosResponseOwner, p5: ptr ptr UncheckedArray[uint8], p6: ptr csize_t) =
   ## `lcn_clear_pmtest_Install` (INTERFACE §2.7.2): clears the owner, then
   ## resets every output object without reading it.
   clearOwner(p1)
-  resetOutput(p8)
-  resetOutput(p9)
-
-proc callRequest3(p2: logos_tstr_size_1_256_t, p3: logos_tstr_size_1_256_t): Result[seq[byte], string] =
-  ## `pmtest.remove`'s request params from its typed inputs.
-  let depth {.used.} = 1
-  var e: seq[CborEntry]
-  let value52 = ?inText(p2)
-  e.add((cbor("package"), value52))
-  let value53 = ?inText(p3)
-  e.add((cbor("version"), value53))
-  ok(encodeCbor(cborMap(e)))
-
-proc callRespond3(a: var CallArena, v: CborValue, o4: var ptr UncheckedArray[uint8], o5: var csize_t): Result[void, string] =
-  ## `pmtest.remove`'s outputs from its checked response.
-  let depth {.used.} = 1
-  let f54 = v.lookup("response").get
-  ?a.bytes(f54.bytes, o4, o5)
-  ok()
-
-proc invoke*(route: ptr LogosRouteHandle, request: PmtestRemoveRequest): Result[PmtestRemoveResponse, InvocationFailure] =
-  ## `pmtest.remove` through `route` (INTERFACE §5.2).
-  let p0 = route
-  let params = encodeCbor(toCbor(request))
-  let v = ?routeCall(p0, "remove", params, callsSchema(), "pmtest.remove_response")
-  ok(fromChecked(PmtestRemoveResponse, v))
-
-proc callInvoke3(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: logos_tstr_size_1_256_t, p3: logos_tstr_size_1_256_t, p4: ptr ptr UncheckedArray[uint8], p5: ptr csize_t): LogosResult =
-  ## `lcn_invoke_pmtest_Remove` (INTERFACE §2.7.2, App A.5): `pmtest.remove`.
-  if p0 == nil or p1 == nil or p4 == nil or p5 == nil:
-    return failureResult(moduleError("a null route, response owner or output"))
-  let params = callRequest3(p2, p3).valueOr:
-    return failureResult(failure(ecInvalidParams, error))
-  let v = routeCall(p0, "remove", params, callsSchema(), "pmtest.remove_response").valueOr:
-    return failureResult(error)
-  var arena: CallArena
-  var o4: ptr UncheckedArray[uint8]
-  var o5: csize_t
-  callRespond3(arena, v, o4, o5).isOkOr:
-    arena.release()
-    return failureResult(moduleError("the response has no canonical C value: " & error))
-  p4[] = o4
-  p5[] = o5
-  p1[] = arena.owner
-  okResult()
-
-proc callClear3(p1: ptr LogosResponseOwner, p4: ptr ptr UncheckedArray[uint8], p5: ptr csize_t) =
-  ## `lcn_clear_pmtest_Remove` (INTERFACE §2.7.2): clears the owner, then
-  ## resets every output object without reading it.
-  clearOwner(p1)
-  resetOutput(p4)
   resetOutput(p5)
+  resetOutput(p6)
 
-proc callRequest4(p2: logos_tstr_size_1_256_t, p3: logos_tstr_size_1_256_t): Result[seq[byte], string] =
+proc callRequest2(p2: logos_tstr_size_1_256_t, p3: logos_tstr_size_1_256_t): Result[seq[byte], string] =
   ## `pmtest.resolve`'s request params from its typed inputs.
   let depth {.used.} = 1
   var e: seq[CborEntry]
-  let value55 = ?inText(p2)
-  e.add((cbor("name"), value55))
-  let value56 = ?inText(p3)
-  e.add((cbor("version"), value56))
+  let value47 = ?inText(p2)
+  e.add((cbor("name"), value47))
+  let value48 = ?inText(p3)
+  e.add((cbor("version"), value48))
   ok(encodeCbor(cborMap(e)))
 
-proc callRespond4(a: var CallArena, v: CborValue, o4: var logos_pmtest_Resolve_response_t): Result[void, string] =
+proc callRespond2(a: var CallArena, v: CborValue, o4: var logos_pmtest_Resolve_response_t): Result[void, string] =
   ## `pmtest.resolve`'s outputs from its checked response.
   let depth {.used.} = 1
   ?cOut_logos_pmtest_Resolve_response_t(a, v, o4, depth)
@@ -780,49 +667,49 @@ proc invoke*(route: ptr LogosRouteHandle, request: PmtestResolveRequest): Result
   let v = ?routeCall(p0, "resolve", params, callsSchema(), "pmtest.resolve_response")
   ok(fromChecked(PmtestResolveResponse, v))
 
-proc callInvoke4(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: logos_tstr_size_1_256_t, p3: logos_tstr_size_1_256_t, p4: ptr logos_pmtest_Resolve_response_t): LogosResult =
+proc callInvoke2(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: logos_tstr_size_1_256_t, p3: logos_tstr_size_1_256_t, p4: ptr logos_pmtest_Resolve_response_t): LogosResult =
   ## `lcn_invoke_pmtest_Resolve` (INTERFACE §2.7.2, App A.5): `pmtest.resolve`.
   if p0 == nil or p1 == nil or p4 == nil:
     return failureResult(moduleError("a null route, response owner or output"))
-  let params = callRequest4(p2, p3).valueOr:
+  let params = callRequest2(p2, p3).valueOr:
     return failureResult(failure(ecInvalidParams, error))
   let v = routeCall(p0, "resolve", params, callsSchema(), "pmtest.resolve_response").valueOr:
     return failureResult(error)
   var arena: CallArena
   var o4: logos_pmtest_Resolve_response_t
-  callRespond4(arena, v, o4).isOkOr:
+  callRespond2(arena, v, o4).isOkOr:
     arena.release()
     return failureResult(moduleError("the response has no canonical C value: " & error))
   p4[] = o4
   p1[] = arena.owner
   okResult()
 
-proc callClear4(p1: ptr LogosResponseOwner, p4: ptr logos_pmtest_Resolve_response_t) =
+proc callClear2(p1: ptr LogosResponseOwner, p4: ptr logos_pmtest_Resolve_response_t) =
   ## `lcn_clear_pmtest_Resolve` (INTERFACE §2.7.2): clears the owner, then
   ## resets every output object without reading it.
   clearOwner(p1)
   resetOutput(p4)
 
-proc callRequest5(): Result[seq[byte], string] =
+proc callRequest3(): Result[seq[byte], string] =
   ## `pmtest.status`'s request params: the empty map.
   ok(encodeCbor(cborMap()))
 
-proc callRespond5(a: var CallArena, v: CborValue, o2: var ptr UncheckedArray[logos_pmtest_Binding_t], o3: var csize_t, o4: var bool, o5: var logos_pmtest_Catalog_t, o6: var uint64): Result[void, string] =
+proc callRespond3(a: var CallArena, v: CborValue, o2: var ptr UncheckedArray[logos_pmtest_Binding_t], o3: var csize_t, o4: var bool, o5: var logos_pmtest_Catalog_t, o6: var uint64): Result[void, string] =
   ## `pmtest.status`'s outputs from its checked response.
   let depth {.used.} = 1
-  let f57 = v.lookup("bindings").get
-  let items58 = f57.items
-  let arr59 = ?a.list(logos_pmtest_Binding_t, items58.len)
-  o2 = arr59
-  o3 = csize_t(items58.len)
-  for i, it in items58:
-    ?cOut_logos_pmtest_Binding_t(a, it, arr59[i], depth + 1)
-  let f60 = v.lookup("catalog")
-  if f60.isSome:
+  let f49 = v.lookup("bindings").get
+  let items50 = f49.items
+  let arr51 = ?a.list(logos_pmtest_Binding_t, items50.len)
+  o2 = arr51
+  o3 = csize_t(items50.len)
+  for i, it in items50:
+    ?cOut_logos_pmtest_Binding_t(a, it, arr51[i], depth + 1)
+  let f52 = v.lookup("catalog")
+  if f52.isSome:
     o4 = true
-    ?cOut_logos_pmtest_Catalog_t(a, f60.get, o5, depth + 1)
-  let f61 = v.lookup("pending").get
-  o6 = uint64(f61.uint)
+    ?cOut_logos_pmtest_Catalog_t(a, f52.get, o5, depth + 1)
+  let f53 = v.lookup("pending").get
+  o6 = uint64(f53.uint)
   ok()
 
 proc invoke*(route: ptr LogosRouteHandle, request: PmtestStatusRequest): Result[PmtestStatusResponse, InvocationFailure] =
@@ -832,11 +719,11 @@ proc invoke*(route: ptr LogosRouteHandle, request: PmtestStatusRequest): Result[
   let v = ?routeCall(p0, "status", params, callsSchema(), "pmtest.status_response")
   ok(fromChecked(PmtestStatusResponse, v))
 
-proc callInvoke5(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: ptr ptr UncheckedArray[logos_pmtest_Binding_t], p3: ptr csize_t, p4: ptr bool, p5: ptr logos_pmtest_Catalog_t, p6: ptr uint64): LogosResult =
+proc callInvoke3(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: ptr ptr UncheckedArray[logos_pmtest_Binding_t], p3: ptr csize_t, p4: ptr bool, p5: ptr logos_pmtest_Catalog_t, p6: ptr uint64): LogosResult =
   ## `lcn_invoke_pmtest_Status` (INTERFACE §2.7.2, App A.5): `pmtest.status`.
   if p0 == nil or p1 == nil or p2 == nil or p3 == nil or p4 == nil or p5 == nil or p6 == nil:
     return failureResult(moduleError("a null route, response owner or output"))
-  let params = callRequest5().valueOr:
+  let params = callRequest3().valueOr:
     return failureResult(failure(ecInvalidParams, error))
   let v = routeCall(p0, "status", params, callsSchema(), "pmtest.status_response").valueOr:
     return failureResult(error)
@@ -846,7 +733,7 @@ proc callInvoke5(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: ptr p
   var o4: bool
   var o5: logos_pmtest_Catalog_t
   var o6: uint64
-  callRespond5(arena, v, o2, o3, o4, o5, o6).isOkOr:
+  callRespond3(arena, v, o2, o3, o4, o5, o6).isOkOr:
     arena.release()
     return failureResult(moduleError("the response has no canonical C value: " & error))
   p2[] = o2
@@ -857,7 +744,7 @@ proc callInvoke5(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: ptr p
   p1[] = arena.owner
   okResult()
 
-proc callClear5(p1: ptr LogosResponseOwner, p2: ptr ptr UncheckedArray[logos_pmtest_Binding_t], p3: ptr csize_t, p4: ptr bool, p5: ptr logos_pmtest_Catalog_t, p6: ptr uint64) =
+proc callClear3(p1: ptr LogosResponseOwner, p2: ptr ptr UncheckedArray[logos_pmtest_Binding_t], p3: ptr csize_t, p4: ptr bool, p5: ptr logos_pmtest_Catalog_t, p6: ptr uint64) =
   ## `lcn_clear_pmtest_Status` (INTERFACE §2.7.2): clears the owner, then
   ## resets every output object without reading it.
   clearOwner(p1)
@@ -866,62 +753,6 @@ proc callClear5(p1: ptr LogosResponseOwner, p2: ptr ptr UncheckedArray[logos_pmt
   resetOutput(p4)
   resetOutput(p5)
   resetOutput(p6)
-
-proc callRequest6(p2: logos_tstr_size_1_256_t, p3: bool, p4: logos_bstr_size_1_8192_t, p5: csize_t, p6: bool, p7: logos_tstr_size_1_256_t, p8: logos_tstr_size_1_256_t): Result[seq[byte], string] =
-  ## `pmtest.update`'s request params from its typed inputs.
-  let depth {.used.} = 1
-  var e: seq[CborEntry]
-  let value62 = ?inText(p2)
-  e.add((cbor("package"), value62))
-  if p3:
-    let value63 = ?inBytes(p4, p5)
-    e.add((cbor("source"), value63))
-  if p6:
-    let value64 = ?inText(p7)
-    e.add((cbor("target_version"), value64))
-  let value65 = ?inText(p8)
-  e.add((cbor("version"), value65))
-  ok(encodeCbor(cborMap(e)))
-
-proc callRespond6(a: var CallArena, v: CborValue, o9: var ptr UncheckedArray[uint8], o10: var csize_t): Result[void, string] =
-  ## `pmtest.update`'s outputs from its checked response.
-  let depth {.used.} = 1
-  let f66 = v.lookup("response").get
-  ?a.bytes(f66.bytes, o9, o10)
-  ok()
-
-proc invoke*(route: ptr LogosRouteHandle, request: PmtestUpdateRequest): Result[PmtestUpdateResponse, InvocationFailure] =
-  ## `pmtest.update` through `route` (INTERFACE §5.2).
-  let p0 = route
-  let params = encodeCbor(toCbor(request))
-  let v = ?routeCall(p0, "update", params, callsSchema(), "pmtest.update_response")
-  ok(fromChecked(PmtestUpdateResponse, v))
-
-proc callInvoke6(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: logos_tstr_size_1_256_t, p3: bool, p4: logos_bstr_size_1_8192_t, p5: csize_t, p6: bool, p7: logos_tstr_size_1_256_t, p8: logos_tstr_size_1_256_t, p9: ptr ptr UncheckedArray[uint8], p10: ptr csize_t): LogosResult =
-  ## `lcn_invoke_pmtest_Update` (INTERFACE §2.7.2, App A.5): `pmtest.update`.
-  if p0 == nil or p1 == nil or p9 == nil or p10 == nil:
-    return failureResult(moduleError("a null route, response owner or output"))
-  let params = callRequest6(p2, p3, p4, p5, p6, p7, p8).valueOr:
-    return failureResult(failure(ecInvalidParams, error))
-  let v = routeCall(p0, "update", params, callsSchema(), "pmtest.update_response").valueOr:
-    return failureResult(error)
-  var arena: CallArena
-  var o9: ptr UncheckedArray[uint8]
-  var o10: csize_t
-  callRespond6(arena, v, o9, o10).isOkOr:
-    arena.release()
-    return failureResult(moduleError("the response has no canonical C value: " & error))
-  p9[] = o9
-  p10[] = o10
-  p1[] = arena.owner
-  okResult()
-
-proc callClear6(p1: ptr LogosResponseOwner, p9: ptr ptr UncheckedArray[uint8], p10: ptr csize_t) =
-  ## `lcn_clear_pmtest_Update` (INTERFACE §2.7.2): clears the owner, then
-  ## resets every output object without reading it.
-  clearOwner(p1)
-  resetOutput(p9)
-  resetOutput(p10)
 
 # Over a wrapped route handle (consumert, DECISIONS G339).
 
@@ -941,22 +772,6 @@ proc prepareInvoke*(route: RouteHandle, request: PmtestHandoffRequest, onDone: C
   result = prepareTyped(route, "handoff", params, PmtestHandoffResponse, onDone, user, timeoutMs)
   wipe(params)
 
-proc invoke*(route: RouteHandle, request: PmtestInspectRequest): Result[PmtestInspectResponse, InvocationFailure] =
-  ## `pmtest.inspect` through `route` under its operation rules.
-  ?route.beginOperation()
-  defer:
-    route.endOperation()
-  invoke(route.raw, request)
-
-proc prepareInvoke*(route: RouteHandle, request: PmtestInspectRequest, onDone: CallDone[PmtestInspectResponse], user: pointer = nil, timeoutMs: uint64 = 0): Result[PreparedCall, InvocationFailure] =
-  ## `pmtest.inspect` through `route`, prepared and not yet submitted
-  ## (INTERFACE §2.9.1).
-  let t = toCbor(request)
-  var params = encodeCbor(t)
-  wipe(t)
-  result = prepareTyped(route, "inspect", params, PmtestInspectResponse, onDone, user, timeoutMs)
-  wipe(params)
-
 proc invoke*(route: RouteHandle, request: PmtestInstallRequest): Result[PmtestInstallResponse, InvocationFailure] =
   ## `pmtest.install` through `route` under its operation rules.
   ?route.beginOperation()
@@ -971,22 +786,6 @@ proc prepareInvoke*(route: RouteHandle, request: PmtestInstallRequest, onDone: C
   var params = encodeCbor(t)
   wipe(t)
   result = prepareTyped(route, "install", params, PmtestInstallResponse, onDone, user, timeoutMs)
-  wipe(params)
-
-proc invoke*(route: RouteHandle, request: PmtestRemoveRequest): Result[PmtestRemoveResponse, InvocationFailure] =
-  ## `pmtest.remove` through `route` under its operation rules.
-  ?route.beginOperation()
-  defer:
-    route.endOperation()
-  invoke(route.raw, request)
-
-proc prepareInvoke*(route: RouteHandle, request: PmtestRemoveRequest, onDone: CallDone[PmtestRemoveResponse], user: pointer = nil, timeoutMs: uint64 = 0): Result[PreparedCall, InvocationFailure] =
-  ## `pmtest.remove` through `route`, prepared and not yet submitted
-  ## (INTERFACE §2.9.1).
-  let t = toCbor(request)
-  var params = encodeCbor(t)
-  wipe(t)
-  result = prepareTyped(route, "remove", params, PmtestRemoveResponse, onDone, user, timeoutMs)
   wipe(params)
 
 proc invoke*(route: RouteHandle, request: PmtestResolveRequest): Result[PmtestResolveResponse, InvocationFailure] =
@@ -1019,22 +818,6 @@ proc prepareInvoke*(route: RouteHandle, request: PmtestStatusRequest, onDone: Ca
   var params = encodeCbor(t)
   wipe(t)
   result = prepareTyped(route, "status", params, PmtestStatusResponse, onDone, user, timeoutMs)
-  wipe(params)
-
-proc invoke*(route: RouteHandle, request: PmtestUpdateRequest): Result[PmtestUpdateResponse, InvocationFailure] =
-  ## `pmtest.update` through `route` under its operation rules.
-  ?route.beginOperation()
-  defer:
-    route.endOperation()
-  invoke(route.raw, request)
-
-proc prepareInvoke*(route: RouteHandle, request: PmtestUpdateRequest, onDone: CallDone[PmtestUpdateResponse], user: pointer = nil, timeoutMs: uint64 = 0): Result[PreparedCall, InvocationFailure] =
-  ## `pmtest.update` through `route`, prepared and not yet submitted
-  ## (INTERFACE §2.9.1).
-  let t = toCbor(request)
-  var params = encodeCbor(t)
-  wipe(t)
-  result = prepareTyped(route, "update", params, PmtestUpdateResponse, onDone, user, timeoutMs)
   wipe(params)
 
 proc pmtestModuleCallsLayout*(): seq[(string, int)] =
@@ -1098,44 +881,23 @@ template exportPmtestModuleCalls*() =
   proc pmtestModuleCallsClear0(p1: ptr LogosResponseOwner, p5: ptr ptr UncheckedArray[uint8], p6: ptr csize_t) {.exportc: "lcn_clear_pmtest_Handoff", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear0(p1, p5, p6)
 
-  proc pmtestModuleCallsInvoke1(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: bool, p3: logos_tstr_size_1_256_t, p4: bool, p5: logos_bstr_size_1_8192_t, p6: csize_t, p7: bool, p8: logos_tstr_size_1_256_t, p9: ptr ptr UncheckedArray[uint8], p10: ptr csize_t): LogosResult {.exportc: "lcn_invoke_pmtest_Inspect", dynlib, cdecl, gcsafe, raises: [].} =
+  proc pmtestModuleCallsInvoke1(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: logos_tstr_size_1_256_t, p3: bool, p4: logos_tstr_size_1_256_t, p5: ptr ptr UncheckedArray[uint8], p6: ptr csize_t): LogosResult {.exportc: "lcn_invoke_pmtest_Install", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
-    callInvoke1(p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10)
+    callInvoke1(p0, p1, p2, p3, p4, p5, p6)
 
-  proc pmtestModuleCallsClear1(p1: ptr LogosResponseOwner, p9: ptr ptr UncheckedArray[uint8], p10: ptr csize_t) {.exportc: "lcn_clear_pmtest_Inspect", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
-    callClear1(p1, p9, p10)
+  proc pmtestModuleCallsClear1(p1: ptr LogosResponseOwner, p5: ptr ptr UncheckedArray[uint8], p6: ptr csize_t) {.exportc: "lcn_clear_pmtest_Install", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
+    callClear1(p1, p5, p6)
 
-  proc pmtestModuleCallsInvoke2(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: logos_tstr_size_1_256_t, p3: bool, p4: logos_bstr_size_1_8192_t, p5: csize_t, p6: bool, p7: logos_tstr_size_1_256_t, p8: ptr ptr UncheckedArray[uint8], p9: ptr csize_t): LogosResult {.exportc: "lcn_invoke_pmtest_Install", dynlib, cdecl, gcsafe, raises: [].} =
+  proc pmtestModuleCallsInvoke2(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: logos_tstr_size_1_256_t, p3: logos_tstr_size_1_256_t, p4: ptr logos_pmtest_Resolve_response_t): LogosResult {.exportc: "lcn_invoke_pmtest_Resolve", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
-    callInvoke2(p0, p1, p2, p3, p4, p5, p6, p7, p8, p9)
+    callInvoke2(p0, p1, p2, p3, p4)
 
-  proc pmtestModuleCallsClear2(p1: ptr LogosResponseOwner, p8: ptr ptr UncheckedArray[uint8], p9: ptr csize_t) {.exportc: "lcn_clear_pmtest_Install", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
-    callClear2(p1, p8, p9)
+  proc pmtestModuleCallsClear2(p1: ptr LogosResponseOwner, p4: ptr logos_pmtest_Resolve_response_t) {.exportc: "lcn_clear_pmtest_Resolve", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
+    callClear2(p1, p4)
 
-  proc pmtestModuleCallsInvoke3(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: logos_tstr_size_1_256_t, p3: logos_tstr_size_1_256_t, p4: ptr ptr UncheckedArray[uint8], p5: ptr csize_t): LogosResult {.exportc: "lcn_invoke_pmtest_Remove", dynlib, cdecl, gcsafe, raises: [].} =
+  proc pmtestModuleCallsInvoke3(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: ptr ptr UncheckedArray[logos_pmtest_Binding_t], p3: ptr csize_t, p4: ptr bool, p5: ptr logos_pmtest_Catalog_t, p6: ptr uint64): LogosResult {.exportc: "lcn_invoke_pmtest_Status", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
-    callInvoke3(p0, p1, p2, p3, p4, p5)
+    callInvoke3(p0, p1, p2, p3, p4, p5, p6)
 
-  proc pmtestModuleCallsClear3(p1: ptr LogosResponseOwner, p4: ptr ptr UncheckedArray[uint8], p5: ptr csize_t) {.exportc: "lcn_clear_pmtest_Remove", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
-    callClear3(p1, p4, p5)
-
-  proc pmtestModuleCallsInvoke4(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: logos_tstr_size_1_256_t, p3: logos_tstr_size_1_256_t, p4: ptr logos_pmtest_Resolve_response_t): LogosResult {.exportc: "lcn_invoke_pmtest_Resolve", dynlib, cdecl, gcsafe, raises: [].} =
-    kitEnter()
-    callInvoke4(p0, p1, p2, p3, p4)
-
-  proc pmtestModuleCallsClear4(p1: ptr LogosResponseOwner, p4: ptr logos_pmtest_Resolve_response_t) {.exportc: "lcn_clear_pmtest_Resolve", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
-    callClear4(p1, p4)
-
-  proc pmtestModuleCallsInvoke5(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: ptr ptr UncheckedArray[logos_pmtest_Binding_t], p3: ptr csize_t, p4: ptr bool, p5: ptr logos_pmtest_Catalog_t, p6: ptr uint64): LogosResult {.exportc: "lcn_invoke_pmtest_Status", dynlib, cdecl, gcsafe, raises: [].} =
-    kitEnter()
-    callInvoke5(p0, p1, p2, p3, p4, p5, p6)
-
-  proc pmtestModuleCallsClear5(p1: ptr LogosResponseOwner, p2: ptr ptr UncheckedArray[logos_pmtest_Binding_t], p3: ptr csize_t, p4: ptr bool, p5: ptr logos_pmtest_Catalog_t, p6: ptr uint64) {.exportc: "lcn_clear_pmtest_Status", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
-    callClear5(p1, p2, p3, p4, p5, p6)
-
-  proc pmtestModuleCallsInvoke6(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: logos_tstr_size_1_256_t, p3: bool, p4: logos_bstr_size_1_8192_t, p5: csize_t, p6: bool, p7: logos_tstr_size_1_256_t, p8: logos_tstr_size_1_256_t, p9: ptr ptr UncheckedArray[uint8], p10: ptr csize_t): LogosResult {.exportc: "lcn_invoke_pmtest_Update", dynlib, cdecl, gcsafe, raises: [].} =
-    kitEnter()
-    callInvoke6(p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10)
-
-  proc pmtestModuleCallsClear6(p1: ptr LogosResponseOwner, p9: ptr ptr UncheckedArray[uint8], p10: ptr csize_t) {.exportc: "lcn_clear_pmtest_Update", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
-    callClear6(p1, p9, p10)
+  proc pmtestModuleCallsClear3(p1: ptr LogosResponseOwner, p2: ptr ptr UncheckedArray[logos_pmtest_Binding_t], p3: ptr csize_t, p4: ptr bool, p5: ptr logos_pmtest_Catalog_t, p6: ptr uint64) {.exportc: "lcn_clear_pmtest_Status", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
+    callClear3(p1, p2, p3, p4, p5, p6)

@@ -2,10 +2,10 @@
 _module = "pmtest_module"
 
 ; Input for tests/generated/pmtest_module_*: the Package Manager's shell
-; (src/logos_core/pm/shell.nim) hosted under a test name until 5-6a lifts the
-; refusal of a hosted `logos_` provider (Tier 5 step 5-3b, F5; DECISIONS G405).
-; Never shipped: 5-6a's `logos_package_manager` replaces it over the same
-; shell. Its probe answers what the shell holds (tests/kit/pmtest_impl.nim).
+; (src/logos_core/pm/shell.nim) hosted under a test name (Tier 5 step 5-3b, F5;
+; DECISIONS G405), kept as a probe (G496): `logos_package_manager` serves the
+; operations (5-6a-1), and this probe answers what the shell holds
+; (tests/kit/pmtest_impl.nim). Never shipped.
 
 pmtest.catalog = {
   sequence: uint64,
@@ -56,42 +56,17 @@ pmtest.resolve_response =
   { packages: [* pmtest.selected], counters: pmtest.counters } /
   { error: tstr .size (1..64), ? message: tstr .size (1..512) }
 
-; [Tier 5 step 5-5-4; G449] The operations, each answering its §15 response value as
-; pm/responses.nim encodes it (deterministic CBOR, in `response`); the invocation error
-; MODULE_ERROR is the call's own failure. `source` is an encoded
-; logos.package_manager.package_source.
-pmtest.inspect_request = {
-  ? package: tstr .size (1..256),
-  ? version: tstr .size (1..256),
-  ? source: bstr .size (1..8192),
-}
-
-pmtest.inspect_response = { response: bstr }
-
+; [Tier 5 step 5-5-4; G449, G496] `install_package`, the record the handoff probe reads
+; (5-6a-2 moves the handoff case to `logos_package_manager` over its system binding, and
+; this pair goes): its §15 response value as pm/responses.nim encodes it
+; (deterministic CBOR, in `response`); the invocation error MODULE_ERROR is the call's
+; own failure. The other operations are `logos_package_manager`'s (test_pm_module).
 pmtest.install_request = {
   package: tstr .size (1..256),
   ? version: tstr .size (1..256),
-  ? source: bstr .size (1..8192),
 }
 
 pmtest.install_response = { response: bstr }
-
-pmtest.remove_request = {
-  package: tstr .size (1..256),
-  version: tstr .size (1..256),
-}
-
-pmtest.remove_response = { response: bstr }
-
-; `update_package` with `current` = {package, version}.
-pmtest.update_request = {
-  package: tstr .size (1..256),
-  version: tstr .size (1..256),
-  ? target_version: tstr .size (1..256),
-  ? source: bstr .size (1..8192),
-}
-
-pmtest.update_response = { response: bstr }
 
 pmtest.handoff_request = {
   package: tstr .size (1..255),

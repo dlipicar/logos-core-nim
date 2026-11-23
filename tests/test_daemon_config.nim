@@ -222,13 +222,14 @@ suite "dc.checks: DAEMON.md §3, checks 1 to 4 [IMPL-DECISION G293] [IMPL-DECISI
     check checked(dcText(extra = "\"modules\": [" & hostedModule("svc") & "]")).isOk
     for id in [
       OrchestratorInstance, AuthorityInstance, CtlInstance, CliInstance,
-      LoaderInstanceId,
+      LoaderInstanceId, PmInstance,
     ]:
       checkpoint id
       check refusal(dcText(extra = "\"modules\": [" & hostedModule(id) & "]")) ==
         "modules: instance " & id & " uses a reserved instance id"
     for m in [
-      LoaderModuleName, AuthorityModule, CtlModule, CliModule, OrchestratorModule
+      LoaderModuleName, AuthorityModule, CtlModule, CliModule, OrchestratorModule,
+      PmModule,
     ]:
       checkpoint m
       check refusal(dcText(extra = "\"modules\": [" & hostedModule("x", m) & "]")) ==
@@ -943,6 +944,7 @@ proc moduleOf(instance: string): string =
   of AuthorityInstance: AuthorityModule
   of LoaderInstanceId: LoaderModuleName
   of CliInstance: CliModule
+  of PmInstance: PmModule
   else: "svc"
 
 proc daemonFacts(): SharedFacts =
@@ -1340,16 +1342,27 @@ const
   PmCatalog =
     """{"storage": "main", "object": h'636174616c6f67', "digest": """ & Zero32 & "}"
 
+  PmArtifactPath = "/opt/pm/liblogos_package_manager.so"
+  PmArtifact =
+    "{\"id\": \"logos_package_manager\", \"local_path\": \"" & PmArtifactPath &
+    "\", \"hash\": " & Zero32 & ", \"hash_suite\": \"logos.hash-suite.blake3-256\"}"
+
 proc pmSection(
-    instance = "pm", storage = PmBinding, catalog = PmCatalog, extra = ""
+    state = "pm",
+    storage = PmBinding,
+    catalog = PmCatalog,
+    extra = "",
+    artifact = PmArtifact,
 ): string =
-  "{\"instance\": \"" & instance & "\", \"storage\": " & storage & ", \"catalog\": " &
-    catalog & (if extra.len > 0: ", " & extra else: "") & "}"
+  ## [G491] The section: the state assignment of the instance logosd composes and,
+  ## here, its artifact (a test logosd has no companion library's hash).
+  "{\"state\": \"" & state & "\"" &
+    (if artifact.len > 0: ", \"artifact\": " & artifact else: "") & ", \"storage\": " &
+    storage & ", \"catalog\": " & catalog & (if extra.len > 0: ", " & extra
+  else: "") & "}"
 
 proc pmText(
-    section = pmSection(),
-    modules =
-      @[withState(hostedModule("pm", "pkgmgr"), "pm"), hostedModule("st", "storesvc")],
+    section = pmSection(), modules = @[hostedModule("st", "storesvc")]
 ): string =
   dcText(
     extra = "\"modules\": [" & modules.join(", ") & "], \"package_manager\": " & section
@@ -1377,25 +1390,11 @@ func presetLine(instance: string): string =
 
 suite "dc.package_manager: the Package Manager's section, its input and S9 to S11 [IMPL-DECISION G399] [IMPL-DECISION G400] [IMPL-DECISION G402]":
   test "check 2: each refusal names the field it concerns":
-    let pmEntry = withState(hostedModule("pm", "pkgmgr"), "pm")
-    let st = hostedModule("st", "storesvc")
-    let configured = pmEntry[0 ..< pmEntry.len - 1] & ", \"configuration\": h'a0'}"
+    let relative = PmArtifact.replace(PmArtifactPath, "lib/liblogos_package_manager.so")
     for (text, want) in [
       (
-        pmText(modules = @[st]),
-        "package_manager.instance: pm is not an entry of modules",
-      ),
-      (
-        pmText(modules = @[directModule("pm"), st]),
-        "package_manager.instance: pm is not hosted_dynamic (the Package Manager runs in its own process)",
-      ),
-      (
-        pmText(modules = @[hostedModule("pm", "pkgmgr"), st]),
-        "package_manager.instance: pm has no state_assignment",
-      ),
-      (
-        pmText(modules = @[configured, st]),
-        "package_manager.instance: pm has configuration: the Package Manager has none, and its trust input is never configuration (CONFIGURATION l.58)",
+        pmText(pmSection(artifact = relative)),
+        "package_manager.artifact.local_path must be an absolute path",
       ),
       (pmText(pmSection(storage = "[]")), "package_manager.storage holds no binding"),
       (
@@ -1408,7 +1407,12 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
         "package_manager.storage: binding main is named twice",
       ),
       (
-        pmText(pmSection(storage = """[{"binding": "main", "instance": "pm"}]""")),
+        # [G491] Storage's own-instance check: the composed instance is no provider.
+        pmText(
+          pmSection(
+            storage = """[{"binding": "main", "instance": "package_manager"}]"""
+          )
+        ),
         "package_manager.storage: binding main names the Package Manager's own instance",
       ),
       (
@@ -1416,7 +1420,7 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
         "package_manager.storage: binding main: zz is not an entry of modules",
       ),
       (
-        pmText(modules = @[pmEntry, directModule("st")]),
+        pmText(modules = @[directModule("st")]),
         "package_manager.storage: binding main: st is not hosted_dynamic",
       ),
       (
@@ -1481,7 +1485,9 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
     let c = checked(pmText()).get
     check c.pm.isSome
     let pm = c.pm.get
-    check pm.instance == "pm"
+    check pm.instance == PmInstance
+    check pm.state == "pm"
+    check pm.artifact.isSome and pm.artifact.get.local_path == PmArtifactPath
     check pm.providers == @["st"]
     check pm.limitsOrigin == loPreset
     let preset = resolverLimits(
@@ -1491,7 +1497,7 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
       int64(PresetAssignmentAttempts),
     )
     check pm.resolverLimits == preset.get
-    check pmStartLine(pm) == presetLine("pm")
+    check pmStartLine(pm) == presetLine(PmInstance)
     let own = checked(
       pmText(
         pmSection(
@@ -1503,7 +1509,7 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
     ).get.pm.get
     check own.limitsOrigin == loOperator
     check pmStartLine(own) ==
-      "package_manager: pm gets resolver limits partial_closure_names 16, dependency_depth 15, " &
+      "package_manager: package_manager gets resolver limits partial_closure_names 16, dependency_depth 15, " &
       "candidates_per_name 4, assignment_attempts 1000 (package_manager.resolver_limits)"
 
   test "compose: the instance's lcn.pm_input, byte for byte, its only protected input":
@@ -1522,11 +1528,21 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
     check app.protected_inputs.isSome
     check app.protected_inputs.get.len == 1
     if app.protected_inputs.get.len == 1:
-      check app.protected_inputs.get[0].instance == "pm"
+      check app.protected_inputs.get[0].instance == PmInstance
       check app.protected_inputs.get[0].input == expected
-    # The instance's own record is the operator's, unchanged: the input is not configuration.
-    let rec = app.modules.filterIt(it.instance == "pm")
-    check rec.len == 1 and rec[0].configuration.isNone
+    # [G491] The instance logosd composes: hosted in its own process, with the section's
+    # state assignment and artifact, no configuration (the input is not configuration),
+    # and the host configuration's mark (G490).
+    let rec = app.modules.filterIt(it.instance == PmInstance)
+    check rec.len == 1
+    if rec.len == 1:
+      check rec[0].module == PmModule
+      check rec[0].configuration.isNone
+      check rec[0].state_assignment == Opt.some("pm")
+      check rec[0].implementation.kind == LcnAppImplementationKind.Process_hosted_dynamic
+      check rec[0].implementation.arm_Process_hosted_dynamic.artifact.local_path ==
+        PmArtifactPath
+    check app.package_manager == Opt.some(PmInstance)
     # Without the section, no instance gets one.
     let plain = prepareDaemon(
       Session(dir: freshDir()),
@@ -1539,12 +1555,57 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
     ).get
     check plain.composition.appConfig.protected_inputs.isNone
 
-  test "[G402] S9 to S11 with the section: five rules, each provider once, in byte order":
+  posixTest "[IMPL-DECISION G491] [PKG-0513] the composed Package Manager: from package_manager.artifact, host-ambient, started by the orchestrator after the operator's list; this logosd, with no compiled hash, refuses a section without the artifact, naming the field; logosctl's checks compose a stand-in":
+    # A test logosd is built without the companion library's hash (`pmArtifactHash`):
+    # the section must give the artifact. The packaged logosd's own library is checked
+    # by the flake's smoke check.
+    check pmArtifactHash.len == 0
+    let p =
+      prepareDaemon(Session(dir: freshDir()), dcBytes(withHost(pmText())), prod).get
+    check p.composition.entryFor(PmModule, PmInstance) == @[HostAmbient & "=a0"]
+    check p.composition.orchestrator.defaults.get.mapIt(it.instance)[^1] == PmInstance
+    let none = prepareDaemon(
+      Session(dir: freshDir()),
+      dcBytes(withHost(pmText(pmSection(artifact = "")))),
+      prod,
+    )
+    check none.isErr
+    if none.isErr:
+      check none.error ==
+        "package_manager: this logosd has no Package Manager library; give package_manager.artifact"
+    # [G343, G491] The companion library's place, beside lcn_call's.
+    let exe = getAppFilename()
+    let place = (
+      expandFilename(exe).parentDir / ".." / "lib" / "logos-core" / PmLibrary
+    ).normalizedPath
+    check companionLibrary(exe, PmLibrary).get == place
+    # logosctl's checks cannot know which logosd starts: they compose a stand-in at
+    # the companion's place, with an all-zero digest, and the start decides.
+    check not PmCompanion
+    let shell = prepareDaemon(
+      Session(dir: freshDir()),
+      dcBytes(withHost(pmText(pmSection(artifact = "")))),
+      prod,
+      exe = exe,
+      pmCompanion = true,
+    )
+    check shell.isOk
+    if shell.isOk:
+      let rec =
+        shell.get.composition.appConfig.modules.filterIt(it.instance == PmInstance)
+      check rec.len == 1
+      if rec.len == 1:
+        let a = rec[0].implementation.arm_Process_hosted_dynamic.artifact
+        check a.id == PmModule
+        check a.local_path == place
+        check a.hash == newSeq[byte](32)
+
+  test "[G402] [IMPL-DECISION G491] S9 to S12 with the section: six rules, each provider once, in byte order":
     let orch = orchestratorValue(dcOf(pmText())).get
     let base = systemRules(orch).get
-    let two = PmSettings(instance: "pm", providers: @["st", "a", "st"])
+    let two = PmSettings(instance: PmInstance, providers: @["st", "a", "st"])
     let rules = systemRules(orch, pm = Opt.some(two)).get
-    check rules.len == base.len + 5
+    check rules.len == base.len + 6
     let added = rules[base.len .. ^1].mapIt(toDiag(it))
     # S9's Runtime Control rule names no target: a list method's decision
     # names none, so a rule with `targets` would never allow list_modules (I86).
@@ -1555,6 +1616,10 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
     check added[4].startsWith(
       "{\"kind\": \"allow\", \"subject\": {\"instances\": [\"a\", \"st\"]}"
     )
+    # S12: logosctl may not retire or reconfigure the composed instance.
+    check added[5].startsWith("{\"kind\": \"deny\"")
+    check "\"target-denied\"" in added[5]
+    check "\"modules\": [\"logos_package_manager\"]" in added[5]
     # They are in the policy compose hands the authority.
     let c = checked(pmText()).get
     let s = Session(dir: freshDir())
@@ -1568,7 +1633,7 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
     # record p-b also implements lcn.storage_fetch but is no binding.
     let text = pmText()
     var e = openPolicy(text, pm = checked(text).get.pm)
-    check e.facts.putInstance("pm", InstanceFacts(module: "pkgmgr")).isOk
+    check e.facts.putInstance(PmInstance, InstanceFacts(module: PmModule)).isOk
     check e.facts.putInstance("st", InstanceFacts(module: "storesvc")).isOk
     check e.facts.putProvider("p-st", "st").isOk
     check e.facts.putProvider("p-b", "b").isOk
@@ -1576,7 +1641,7 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
       AuthzRequest(
         action: aaRuntimeControl,
         operation: operation,
-        consumer: "pm",
+        consumer: PmInstance,
         target: route,
         route: route,
       )
@@ -1591,7 +1656,7 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
       AuthzRequest(
         action: action,
         operation: operation,
-        consumer: "pm",
+        consumer: PmInstance,
         target: provider,
         provider: provider,
         route: "route-1",
@@ -1620,15 +1685,15 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
     check e.allows(rc("establish_route"))
     check e.allows(rc("renew_route", "route-1"))
     check e.allows(rc("close_route", "route-1"))
-    check e.allows(rcReq("pm", "list_modules"))
+    check e.allows(rcReq(PmInstance, "list_modules"))
     # No other Runtime Control method, and no Runtime Control event (S9's deny).
-    check not e.allows(rcReq("pm", "list_routes"))
-    check not e.allows(rcReq("pm", "shutdown_runtime"))
-    check not e.allows(rcReq("pm", "get_readiness", "st"))
-    check not e.allows(rcReq("pm", "start_module", "st"))
+    check not e.allows(rcReq(PmInstance, "list_routes"))
+    check not e.allows(rcReq(PmInstance, "shutdown_runtime"))
+    check not e.allows(rcReq(PmInstance, "get_readiness", "st"))
+    check not e.allows(rcReq(PmInstance, "start_module", "st"))
     for ev in ["module_state_changed", "route_state_changed", "inventory_changed"]:
       checkpoint ev
-      check e.denial(eventReq("pm", ev)) == DenialKind.Consumer_denied
+      check e.denial(eventReq(PmInstance, ev)) == DenialKind.Consumer_denied
     # S9's route and calls, and S10's subscription: to the binding's provider only.
     for p in ["p-st", "p-b"]:
       checkpoint p
@@ -1658,7 +1723,7 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
         action: aaPublishEvent,
         operation: "fetch_readiness_changed",
         consumer: publisher,
-        target: "pm",
+        target: PmInstance,
         provider: provider,
         route: "route-1",
         module: "storesvc",
@@ -1668,6 +1733,79 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
 
     check e.allows(published("st", "p-st"))
     check not e.allows(published("b", "p-b"))
+    e.close()
+
+  test "[IMPL-DECISION G491] the replaced field: package_manager.instance is refused before the schema, naming state and artifact":
+    let text =
+      pmText(pmSection().replace("{\"state\"", "{\"instance\": \"pm\", \"state\""))
+    check decodeDaemonConfig(dcBytes(text)).error ==
+      "package_manager.instance is no longer a field: logosd composes the Package " &
+      "Manager itself as the instance package_manager; give package_manager.state (its " &
+      "state assignment) and, to override the companion library, package_manager.artifact"
+
+  test "[IMPL-DECISION G490] [IMPL-DECISION G491] an operator logos_ module or declaration is refused; package_manager is not in orchestration.start, and ordering and overrides may name it":
+    let st = hostedModule("st", "storesvc")
+    check refusal(pmText(modules = @[st, hostedModule("x", "logos_thing")])) ==
+      "modules: instance x uses the reserved module-name prefix logos_"
+    let decl =
+      "{\"module\": \"logos_thing\", \"implementation\": {\"strategy\": \"hosted_dynamic\", " &
+      "\"placement\": \"process\", \"artifact\": {\"id\": \"t\", \"local_path\": \"/opt/t/libt.so\", " &
+      "\"hash\": " & Zero32 & ", \"hash_suite\": \"logos.hash-suite.blake3-256\"}}}"
+    check refusal(dcText(extra = "\"declarations\": [" & decl & "]")) ==
+      "declarations: module logos_thing uses the reserved module-name prefix logos_"
+    proc withOrchestration(o: string): string =
+      dcText(
+        extra =
+          "\"modules\": [" & st & "], \"package_manager\": " & pmSection() &
+          ", \"orchestration\": " & o
+      )
+
+    check refusal(withOrchestration("{\"start\": [\"package_manager\"]}")) ==
+      "orchestration.start: package_manager is started by logosd itself; it is not listed here"
+    check checked(withOrchestration("{\"start\": [\"st\"]}")).isOk
+    const off = "{\"kind\": \"disabled\"}"
+    check checked(
+      withOrchestration(
+        "{\"overrides\": [{\"instance\": \"package_manager\", \"restart\": " & off &
+          "}]}"
+      )
+    ).isOk
+    let ordered = dcText(
+      extra =
+        "\"modules\": [" & st & "], \"package_manager\": " & pmSection() &
+        ", \"ordering\": [{\"prerequisite\": \"package_manager\", \"dependent\": \"st\"}]"
+    )
+    check checked(ordered).isOk
+    # Without the section there is no such instance to order against.
+    check refusal(
+      dcText(
+        extra =
+          "\"modules\": [" & st &
+          "], \"ordering\": [{\"prerequisite\": \"package_manager\", \"dependent\": \"st\"}]"
+      )
+    ) == "ordering: package_manager is not an operator instance in modules"
+    # [G491] The orchestrator starts it after the operator's list, with no entry there.
+    let orch = orchestratorValue(dcOf(withOrchestration("{\"start\": [\"st\"]}"))).get
+    let defaults = orch.defaults.get
+    check defaults[^1].module == PmModule and defaults[^1].instance == PmInstance
+    check defaults.filterIt(it.instance == "st").len == 1
+    check orchestratorValue(dcOf(dcText(extra = "\"modules\": [" & st & "]"))).get.defaults.get
+      .filterIt(it.instance == PmInstance).len == 0
+
+  test "[IMPL-DECISION G491] S2 authorizes the orchestrator's start of package_manager from the composed start list; S12: logosctl starts, stops and recovers it, and may not retire or reconfigure it (target-denied)":
+    let text = pmText()
+    var e = openPolicy(text, pm = checked(text).get.pm)
+    check e.facts.putInstance(PmInstance, InstanceFacts(module: PmModule)).isOk
+    check e.allows(execReq(OrchestratorInstance, PmInstance, hosted = true))
+    for m in ["start_module", "stop_module", "recover_module", "get_configuration"]:
+      checkpoint m
+      check e.allows(rcReq(CtlInstance, m, PmInstance))
+    check e.allows(execReq(CtlInstance, PmInstance, hosted = true))
+    check e.allows(execReq(CtlInstance, PmInstance, stop = true))
+    for m in ["retire_module", "update_configuration", "apply_configuration"]:
+      checkpoint m
+      check e.denial(rcReq(CtlInstance, m, PmInstance)) == DenialKind.Target_denied
+      check e.allows(rcReq(CtlInstance, m, "a"))
     e.close()
 
 suite "dc.trust: the trust file's continuity [IMPL-DECISION G137] [IMPL-DECISION G299] [D27]":
@@ -2362,7 +2500,7 @@ suite "dc.init: logosctl init's session [IMPL-DECISION G192] [batch E 19] [U8]":
     check getFilePermissions(s.runDir) == {fpUserRead, fpUserWrite, fpUserExec}
 
 suite "dc.docs: docs/DAEMON.md carries the schemas and the system rules verbatim":
-  test "[PKG-0474] every daemon CDDL file, the package trust file's and the launcher's, S1-S11 and logosd's preset of the resolver limits, word for word":
+  test "[PKG-0474] every daemon CDDL file, the package trust file's and the launcher's, S1-S12 and logosd's preset of the resolver limits, word for word":
     let root = currentSourcePath().parentDir.parentDir
     let doc = readFile(root / "docs" / "DAEMON.md")
     for name in [
@@ -2385,7 +2523,7 @@ suite "dc.docs: docs/DAEMON.md carries the schemas and the system rules verbatim
     for r in systemRules(orch, cli = true).get[base.len .. ^1]:
       cli.add(toDiag(r) & "\n")
     check (cli & "```") in doc
-    # [G402] S9 to S11, which logosd adds with a package_manager section.
+    # [G402, G491] S9 to S12, which logosd adds with a package_manager section.
     let withCli = systemRules(orch, cli = true).get.len
     let pm = PmSettings(instance: "package_manager", providers: @["storage"])
     var pmRules = "```text\n"

@@ -766,11 +766,32 @@ module is a test build (`pmtest_module`), so a packaged deployment has none.
   cost. Since 5-3c-1 and 5-3c-2 (G454, G455) the resolution's longest hold measured is under 11 ms at the preset
   and at the maxima ("The resumable run"), and a large closure costs time in all, a turn at a time.
 
+### What Tier 5 step 5-6a-1 changes
+
+The Package Manager as the module `logos_package_manager`, which logosd composes as the reserved instance
+`package_manager` (DECISIONS I140; G490, G491, G494, G495, G496, G500; the owner's Q2, Q7 (b), Q11;
+`docs/PACKAGE-MANAGER.md` §14, `docs/DAEMON.md` §3, §5, `docs/HOST-CONFIG.md`).
+
+- **Claimed:** PKG-0003 to PKG-0008 (the Package Manager is the module the responsibility names, hosted, never in
+  logosd's or the Runtime's process; PKG-0005 and PKG-0006 also by inspection, `pm-never-co-located`), PKG-0366,
+  PKG-0367, PKG-0369 to PKG-0377, PKG-0379, PKG-0519 and PKG-0521 (the contract, its request and response rules
+  among it), PKG-0513 and PKG-0514 (the library logosd ships, checked against the hash it is built with, and its
+  override), and the 6cac8335 copies PKG-0630, PKG-0631, PKG-0633, PKG-0637, PKG-0639 to PKG-0647 and PKG-0649. 36
+  units. PKG 403/403.
+- **Limits of the claim:**
+  - `get_runtime_handoff` has no caller that may use it until 5-6a-2's system-service binding, and the observation
+    methods none until 5-6b's readers: until then each is `MODULE_ERROR` with no message or detail (G495).
+  - **Windows** hosts no Package Manager until 5-9 (no `logos.local.unix-stream`, so the Loader refuses a hosted request; "What Tier 5 step 5-4 changes"), and **mobile** none:
+    the mark refuses a direct instance (G490).
+  - The large-reply figures with the module's pre-encoded responses (G497) are not yet measured: they wait for 5-3c-4.
+    "The operations" keeps 5-5's figures until then.
+
 ## Properties not claimed
 
 - A complete Logos module system (BCP §5.1; owner decision 10 (a), K18; DECISIONS G310, I97): there
-  is no packaged Package Manager (the hosted one is a test build until step 5-6a, and it only resolves),
-  so no package is installed, selected or trusted for running, and BCP's units that bind the whole are
+  is a packaged Package Manager since step 5-6a-1, which installs packages, but nothing selects an
+  installed package for execution (package-backed creation is 5-8), so no package is selected or trusted
+  for running, and BCP's units that bind the whole are
   claimed only where `logosd` meets them on its own. `docs/DEPLOYMENT.md` answers each
   missing facility "None" or "Not supported", with the tier that changes it where one is planned.
 - The Credential Store (BCP l.287-289; owner row 38, 2026-11-18; DECISIONS G159): optional to
@@ -1445,10 +1466,11 @@ files after the start (Fable's design A). A commit's new snapshot shares every u
   the refetch by digest, the retained check, install, remove, update and inspect, failures at each step, signer
   replacement and C6, the request checks, the admission failure, `nix`, messages and the handoff. After each
   mutation kind and each failure point, the live snapshot equals the one a restart builds from disk.
-  `test_pm_hosted` "[IMPL-DECISION G449]" (3 cases) runs them in a hosted instance with the fake provider: across a
-  restart; during a paced extraction (the `LCN_TEST_EXTRACT_PACE_MS` hook, "Test hooks"), with a second operation
-  and a route renewal answered; and through two stops. `test_logosd_pm` keeps an installed record across logosd's
-  restart.
+  Since 5-6a-1 `test_pm_module` runs them through the module `logos_package_manager` in a hosted instance with the
+  fake provider: the four operations, a full queue, a consumer's cancel, during a paced extraction (the
+  `LCN_TEST_EXTRACT_PACE_MS` hook, "Test hooks") with a second operation and a route renewal answered, a stop with a
+  call in flight, and a deadline while the worker extracts. `test_pm_hosted` keeps the handoff through the test
+  module (G496), and `test_logosd_pm` keeps an installed record across logosd's restart.
 - **A stop** (G449, Fable's stop check `tier5-plans/fable-checks/step5-5-4-stop-drain.md`): the Runtime cancels the
   provider's admitted calls, the kit (with the asynchronous provider API) cancels the handler, the engine cancels the
   operation, the call ends, `_MODULE_destroy` follows, and the worker's stop flag ends its job within one piece.
@@ -1651,7 +1673,7 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `
   for each MiB written. It is the one hook a variable selects, because it lives in the Module Host's
   process, which a test cannot call. The Runtime's host passes the variable only when its
   configuration's `module_host_env` names it, so the Runtime's host still selects it (rule 4). Only
-  `test_pm_hosted` does, to stop an instance inside a long extraction. A packaged build of the module
+  `test_pm_module` does, to stop an instance inside a long extraction. A packaged build of the module
   has no hook code, so the variable does nothing there.
 
 No deployment binary contains them.

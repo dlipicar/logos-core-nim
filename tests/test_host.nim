@@ -1068,6 +1068,69 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
       )
       check parse(c).isOk
 
+  test "[PKG-0003] [PKG-0007] [PKG-0008] [IMPL-DECISION G490] package_manager marks a listed hosted_dynamic logos_package_manager instance; a mark naming no instance, another module, a direct instance, the orchestration or the authority instance is refused":
+    # Tier 5 step 5-6a-1 (Q1 (a)). Refused at `logos_runtime_create`, whose decode this is.
+    when defined(posix):
+      let dir = work / "module-host-pm"
+      createDir(dir)
+      let program = dir / "logos-module-host"
+      writeFile(program, "#!/bin/sh\nexit 2\n")
+      check chmod(cstring(program), Mode(0o755)) == 0
+      let artifact =
+        LcnAppArtifact(id: "pm", local_path: dir / "libpm.so", hash: newSeq[byte](32))
+      proc hostedEntry(instance, module: string): LcnAppModule =
+        LcnAppModule(
+          instance: instance,
+          module: module,
+          implementation: LcnAppImplementation(
+            kind: LcnAppImplementationKind.Process_hosted_dynamic,
+            arm_Process_hosted_dynamic:
+              LcnAppImplementationARProcessHostedDynamicMap(artifact: artifact),
+          ),
+        )
+
+      var c = caConfig()
+      c.runtime.module_host = Opt.some(program)
+      c.modules.add(hostedEntry("pm", PackageManagerModule))
+      c.modules.add(hostedEntry("probe-1", "probe_module"))
+      c.modules.add(
+        LcnAppModule(
+          instance: "pm-direct",
+          module: PackageManagerModule,
+          implementation: LcnAppImplementation(
+            kind: LcnAppImplementationKind.Direct_dynamic,
+            arm_Direct_dynamic:
+              LcnAppImplementationARDirectDynamicMap(artifact: artifact),
+          ),
+        )
+      )
+      # Unmarked, the configuration is accepted: its host refuses the reserved name at
+      # the start, and the Runtime the surface (test_pm_module).
+      check c.decoded.isOk
+      check c.decoded.get.packageManager.isNone
+      c.package_manager = Opt.some("pm")
+      let marked = c.decoded
+      check marked.isOk
+      if marked.isOk:
+        check marked.get.packageManager == Opt.some("pm")
+      c.package_manager = Opt.some("nowhere")
+      check c.decoded.rejects("package_manager names no instance in modules")
+      c.package_manager = Opt.some("probe-1")
+      check c.decoded.rejects("package_manager's module is not logos_package_manager")
+      c.package_manager = Opt.some("pm-direct")
+      check c.decoded.rejects(
+        "package_manager must be a hosted_dynamic instance with placement process"
+      )
+      # The orchestration and authority instances are other modules; one that were the
+      # Package Manager's would be refused for its reserved name first.
+      c.package_manager = Opt.some("orch")
+      check c.decoded.rejects("package_manager's module is not logos_package_manager")
+      c.package_manager = Opt.some("ca")
+      check c.decoded.rejects("package_manager's module is not logos_package_manager")
+      c.package_manager = Opt.some("pm")
+      c.orchestration = "pm"
+      check c.decoded.rejects("reserved logos_ prefix")
+
   test "[RUN-0284] a hosted_dynamic implementation is an artifact in a placement, never a static binding":
     var c = baseConfig()
     c.runtime.module_host = Opt.some(work / "module-host" / "logos-module-host")
