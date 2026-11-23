@@ -107,6 +107,10 @@ This accepts the contract (INTERFACE §1.1, §5.3) and writes into `generated/`:
 | `counter_module_kit.nim` | the exported symbols, over your handlers; `export<Module>(T)` |
 | `counter_module_kit.exports`, `.map` | the library's export list for macOS ld and GNU ld (§8) |
 
+Where a contract allows any value, the types hold a `CborValue` (`logos_sdk/cbor`). It is a tree: build
+it bottom up, sharing a subtree if you like, but never make a value contain itself. One that does is
+never freed, under orc or refc (core's DECISIONS G478).
+
 Regenerate whenever the contract changes; never edit the output. Other forms:
 
 - `--interface:FILE` (repeatable): an interface the module implements, named by its root in the
