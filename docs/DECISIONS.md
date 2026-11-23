@@ -6722,6 +6722,9 @@ their history.
   node inside a ready instance; Core lifecycle stays authoritative; any state they write goes to
   state_dir. Methods depending on the inner node return a typed `not-started` arm before it starts
   (RUNTIME §3.4 l.618-633 forbids NOT_READY for application state).
+- **Note 2026-11-22 (Tier 5 step N-4.4):** storage's `togglePrivateQueries` has no entry at storage's pin: upstream
+  removed it on purpose (`e7269721`). The 1:1 rule has nothing to keep, and storage_module drops the method (G147's
+  amendment), following the owner's rule of 2026-11-22 that a module wraps its library as it is.
 
 ### G98 — Delivery's RLN and service-discovery dependencies
 - **Kind:** FREE · **Specs:** RUNTIME §7.5 (module-to-module calls only through Runtime routes).
@@ -6857,6 +6860,17 @@ their history.
   `toggle_private_queries` kept; a loopback mix private download in the offline e2e; the mix bootstrap
   data recorded as an external dependency *(recommended)*; (b) mix exercised only in the live run.
 - **Decision:** (a).
+- **Amended 2026-11-22 (Tier 5 step N-4.4; planning's ruling after Fable's check
+  `tier5-plans/fable-checks/stepN-4-toggle-private-queries.md`):** `toggle_private_queries` is dropped. The library
+  at the pin has no toggle to wrap (upstream removed it on purpose, `e7269721`), which follows from the owner's rule
+  of 2026-11-22 that a module wraps its library as it is. Private transfers are per call: `private`, false when
+  absent, moves the whole download to mix (`download_init`, `download_to_file`, `download_manifest`, `fetch`;
+  `fetch.private` for `lcn.storage_fetch`'s reads). A private call answers `mix-not-configured` before storage is
+  called unless mix is enabled and a DHT mix proxy is configured, the old toggle's condition (storage
+  `storage/discovery.nim` l.134-138). No issue draft: the removal is upstream's choice.
+- **Status:** built 2026-11-22 by N-4.4 (merged into storage's `logos-core-module` at `f835f6a8`, not pushed):
+  the typed pool (`mix.pool`), a mix-enabled module starting, and the loopback private download (S7) in
+  `test_module_mix`; a private call on a node without mix answers `mix-not-configured` in `test_module_data`.
 
 ### G148 — Exercising the dependency modules end to end
 - **Kind:** FREE · **Options offered:** (a) offline on Linux/macOS: all six modules ready, delivery
@@ -6893,11 +6907,14 @@ their history.
     operator's `storage.fetch` of it runs (G428). `storage.manifests` is paged [IMPL]. Metric values are the
     decimal text of the float, since the contract carries no floats (INTERFACE §1).
   - The administrative methods (`storage.start`, `storage.stop`, `storage.set_log_level`, `storage.connect`,
-    `storage.toggle_private_queries`, `storage.set_advertise`, `storage.remove`, `storage.data_dir`) are ordinary
-    methods, granted by method to the orchestrator and the operator only.
+    `storage.set_advertise`, `storage.remove`, `storage.data_dir`) are ordinary methods, granted by method to the
+    orchestrator and the operator only.
 - **Status:** decided 2026-11-21 (planning, after Fable's reviews; the owner's answers on storage's D5 and D6,
   G426, G430). Built in part, 2026-11-22: N-4.2 built the whole contract document, `storage.start`, `stop` and
-  `status`, and the information methods. The data methods answer `failed` ("not built") until N-4.4.
+  `status`, and the information methods. N-4.4 built the data methods (`f835f6a8`), amending the contract in place
+  (G480): `download_init` and `fetch` are delayed and gain `timed-out` (`fetch` also `not-found` and
+  `unavailable`); `set_advertise` names its codes; `remove` answers `invalid-argument` for a block a dataset
+  references, which storage keeps; sessions take one call at a time; `toggle_private_queries` is dropped (G147).
 
 ### G426 — storage_module's configuration
 - **Kind:** FREE (Tier 5 step N-4; plan §3.3, §4.1) · **Specs:** CONFIG l.223 (no configuration-file path at the
@@ -7014,7 +7031,11 @@ their history.
   absolute. Path methods are confined to the configured roots, none by default. A download creates its file
   exclusively, never overwriting one. The typed failures are `invalid-path` and `path-unavailable`. The README
   warns that a path is the provider's, and `storage.data_dir` is for the operator only.
-- **Status:** decided 2026-11-21. Not built yet: N-4.4 builds it with the data methods.
+- **Status:** decided 2026-11-21. Built 2026-11-22 by N-4.4 (`logos_module/src/module/paths.nim`, merged into
+  storage's `logos-core-module` at `f835f6a8`, not pushed). Three failures: `invalid-path` (not absolute, a `..`
+  or a NUL), `path-not-permitted` (no roots configured, or outside every root once links are resolved) and
+  `path-unavailable`. A download creates its file `O_EXCL|O_NOFOLLOW` with mode 0600, and removes it when the
+  download fails.
 
 ### G430 — storage_module's start, stop and destroy
 - **Kind:** FREE, with one [IMPL] bound (Tier 5 step N-4; plan §3.8, §4.2; storage's D6; amends G97) · **Specs:**
@@ -7094,6 +7115,15 @@ their history.
 - **Status:** decided 2026-11-21 (planning: Q5 (b), Q8 (a), the owner's item I). **Revised 2026-11-22 under the
   owner's rule:** no patch. Built: merged into `logos-core-module` at `4221d6ac` (not pushed); the module's
   suites pass on the Mac and on Linux.
+
+### G480 — When storage_module's contract freezes
+- **Kind:** FREE (Tier 5 step N-4; planning's ruling 2026-11-22, the rule blockchain's v2 has) · **Specs:** INTERFACE
+  §1.4 (a contract's content is its author's).
+- **Description:** N-4.4 amended storage_module's contract (G425) while building the data methods: codes that
+  storage's behaviour needed, and a method the library at the pin no longer has (G147).
+- **Decision:** storage_module's contract freezes at N-6a's first pin of its root or at N-4.5's merge, whichever
+  comes first, as blockchain's v2 does. Until then it changes in place.
+- **Status:** decided 2026-11-22 (planning). Not frozen yet: N-4.4's amendments (`f835f6a8`) were made in place.
 
 ---
 
@@ -8771,6 +8801,7 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G440 | a post gate that outlives a confined kit's context | IMPL | 12 |
 | G442 | sanitizer reports from child processes fail the check | IMPL | 12 |
 | G468 | the lock check: an install and its own `srcDir` are one install (amends G436) | IMPL | 12 |
+| G480 | when storage_module's contract freezes | FREE | 11 |
 
 ---
 
