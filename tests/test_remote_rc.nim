@@ -25,7 +25,6 @@ when defined(posix):
   import logos_sdk/crypto/blake3
   import logos_sdk/iface/[accept, outcome]
   import logos_sdk/kit/rc_types
-  import logos_sdk/testing/testdirs
   import
     ../src/logos_core/daemon/[
       config, credential, daemon_config_types, remoteexposure, remotetrust, session,
@@ -66,7 +65,7 @@ when defined(posix):
     rcB = rcBoundaryOf()
     rcRoot = rcB.selected
     meterRoot = @(
-      acceptContractSet(readFile(repoDir / "spec/mirrors/IFC/3.9.1.module.cddl"))
+      acceptContractSet(readFile("spec/mirrors/IFC/3.9.1.module.cddl"))
       .expect("the meter_module contract set").primary.root
     )
 
