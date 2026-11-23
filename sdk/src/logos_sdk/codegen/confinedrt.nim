@@ -1085,12 +1085,20 @@ proc completeDeferred(
   invocation.executionRelease(invocation)
   dj.unref()
 
+when defined(lcnTestHooks):
+  var liveDeferredTasks*: Atomic[int]
+    ## [DECISIONS G338, G437] Test hook: the deferred tasks of this library
+    ## begun and not yet ended, in every context. One that teardown abandoned
+    ## stays counted for the life of the process.
+
 proc deferredTask(dj: ptr DeferredJob) {.async: (raises: []).} =
   ## [SPEC INTERFACE §2.9.2; DECISIONS G338] One submitted invocation on the
   ## module thread: the route over the Runtime's method and request bytes,
   ## borrowed until the release (IFC-0752), with the invocation's own context
   ## (l.2131); then its scoped publications answered, its `Invocation`
   ## closed (IFC-0779), its completion and its release.
+  when defined(lcnTestHooks):
+    liveDeferredTasks += 1
   let job = addr dj.job
   let ctx = job.ctx
   let inv = startJob(job)
@@ -1120,6 +1128,8 @@ proc deferredTask(dj: ptr DeferredJob) {.async: (raises: []).} =
   inv.job = nil
   completeDeferred(dj, outcome)
   wipe(outcome)
+  when defined(lcnTestHooks):
+    liveDeferredTasks -= 1
 
 proc runCancel(task: ptr TaskNode, drop: bool) {.nimcall, gcsafe, raises: [].} =
   ## [SPEC INTERFACE §2.9.2 l.2112; DECISIONS G338] A cancellation notice on

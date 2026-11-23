@@ -151,19 +151,37 @@ toolchain; on Linux `nix flake check` runs all three:
 nimble --useSystemNim test_asan && nimble --useSystemNim test_tsan
 ```
 
-A `?` inside a half-built constructor leaks under ORC on Nim 2.2.14 (I77). The flake's
-`lint-ctor-try` check rejects it; to run it by hand:
+Each sanitizer suite runs through `tools/sanitizer/reports.sh` (DECISIONS G442): every report,
+the suite's own and any process's it starts, a Module Host's included, goes to a file under
+`build/tests/<sanitizer>/sanitizer-reports/<suite>/` (in the flake, the check's own directory),
+and the suite fails on any and prints them. A test that gives a Module Host its environment names
+`SanitizerEnv` (`tests/support/sanitizerenv.nim`); the flake's `lint-sanitizer-env` check
+rejects one that does not. To run the script's own checks and the lint by hand:
 
 ```bash
-python3 tools/lint/ctortry.py src tests
+bash tools/sanitizer/reports.sh self-test
+```
+
+```bash
+python3 tools/lint/sanitizerenv.py tests sdk/tests
+```
+
+A `?` inside a half-built constructor leaks under ORC on Nim 2.2.14 (I77). The flake's
+`lint-ctor-try` check rejects it; to run it by hand, from the repository root (its default roots
+are the flake's: `src`, `sdk/src`, `sdk/tests` and `tests`; a missing root, or no `.nim` file at all,
+exits 2):
+
+```bash
+python3 tools/lint/ctortry.py
 ```
 
 A local declared without an initializer, first written in a branch and written again after it,
 loses the branch's value undestroyed under ORC (I92, nim-lang/Nim#26725). The flake's
-`lint-first-write` check rejects it; to run it by hand:
+`lint-first-write` check rejects it; to run it by hand, from the repository root (the same
+default roots and exit status 2):
 
 ```bash
-python3 tools/lint/firstwrite.py src tests
+python3 tools/lint/firstwrite.py
 ```
 
 A C-callable procedure that runs on a thread its library's Nim runtime never started must register

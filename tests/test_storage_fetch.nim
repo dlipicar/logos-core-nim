@@ -8,6 +8,7 @@
 
 import std/[atomics, monotimes, os, strutils, tables, times, typedthreads]
 import unittest2
+import ./support/sanitizerenv
 import ../src/logos_core/runtime/engine
 import logos_sdk/abi/[checks, types]
 import ../src/logos_core/runtime/routes
@@ -174,10 +175,7 @@ when defined(posix):
   from ./support/trnowner import fastConfig, Ms
   from ../src/logos_core/runtime/hostsup import traceMarkers, traced
 
-  const
-    SanitizerEnv =
-      ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
-    Answer = 60 * Slow ## seconds: bounds a wait for the probe's answer
+  const Answer = 60 * Slow ## seconds: bounds a wait for the probe's answer
 
   let
     hostProgram = moduleHostProgram()

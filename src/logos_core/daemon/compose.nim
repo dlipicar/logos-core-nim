@@ -32,9 +32,10 @@
 
 {.push raises: [].}
 
-import std/[algorithm, os, sets, strutils, tables]
+import std/[algorithm, os, sequtils, sets, strutils, tables]
 import results
 import logos_sdk/cbor
+from logos_sdk/cbor/encode import cmpBytes
 import ../loader/contract
 from logos_sdk/base/hex import fromHex
 from logos_sdk/abi/host import AppConfigFormat
@@ -42,9 +43,13 @@ from ../runtime/authscopes import AuthorityModule
 from ../authority/scopes import rcContractInfo
 from ../runtime/host_config import parseHostConfig
 from ../permissions import HostAmbient
+from ../transport/tls/trustsnap import TrustSnapshot, newTrustSnapshot
+import ../remote/carrier
+from logos_sdk/pins import CommitmentModelId, HashProfileId, HashSuiteId
+import logos_sdk/contracts/generated/lcn_storage_fetch_root
 import ../orchestration/[settings, needs]
 import ../cli/callsettings
-import ./[config, session, trustfile]
+import ./[config, remoteexposure, session, trustfile]
 
 when defined(posix):
   import std/posix
@@ -60,6 +65,8 @@ const
   AuthorityState* = "authority"
   ModuleHostName* = "logos-module-host" ## [G264]
   LibexecHost* = ".." / "libexec" / "logos-core" / ModuleHostName
+  RemoteProgramName* = "logos_remote" ## [G411]
+  LibexecRemote* = ".." / "libexec" / "logos-core" / RemoteProgramName
   LibDir* = ".." / "lib" / "logos-core" ## [G343] the companion library's directory
   CliLibrary* = DynlibFormat.replace("$1", CliModule) ## `liblcn_call.so` or `.dylib`
   RcEventPrefix = "logos.runtime_control."
@@ -82,10 +89,22 @@ type
     appConfig*: LcnAppConfig ## the derived `lcn.app_config`
     bytes*: seq[byte] ## its deterministic CBOR
     orchestrator*: OrchestratorSettings ## the orchestration instance's value
+    retained*: Retained
+      ## [G412; Q4] the durable disables applied to the records, and those
+      ## dropped, which the start removes from the file
+
+  RemoteSeen* = object
+    ## [G408, G412] What this start read of the remote inputs, for compose:
+    ## the trust snapshot the remote processes take, and the durable disables
+    ## (`state/remote-exposure.cbor`, Q4).
+    snapshot*: TrustSnapshot
+    exposure*: seq[LcnRemoteExposureEntry]
 
   Prepared* = object ## A daemon-config that passed DAEMON.md §3's five checks.
     config*: DaemonConfig
     composition*: Composition
+    policyReport*: seq[string]
+      ## [G415] the authority policy's load report, which logosd logs
 
 # CBOR helpers for the policy -------------------------------------------------------
 
@@ -178,13 +197,35 @@ func bareEvent(name: string): string =
 
 # The system rules -------------------------------------------------------------------
 
+func storageFetchContract(): CborValue =
+  ## [G402] `lcn.storage_fetch`'s schema commitment, as a policy names it.
+  cborMap(
+    (t("commitment_model"), t(CommitmentModelId)),
+    (t("schema_root"), cbor(@LcnStorageFetchRoot)),
+    (t("hash_profile"), t(HashProfileId)),
+    (t("hash_suite"), t(HashSuiteId)),
+  )
+
+func roots(xs: openArray[array[32, byte]]): CborValue =
+  ## Declaration roots as a policy set: strictly ascending (AUTHORITY-POLICY.md).
+  var sorted = xs.mapIt(@it)
+  sorted.sort(
+    proc(a, b: seq[byte]): int =
+      cmpBytes(a, b)
+  )
+  var a = newCborArray(0)
+  for x in sorted:
+    a.items.add(cbor(x))
+  a
+
 proc systemRules*(
-    orch: OrchestratorSettings, cli = false
+    orch: OrchestratorSettings, cli = false, pm = Opt.none(PmSettings)
 ): Result[seq[CborValue], string] =
   ## [G295] S1 to S5 (DAEMON.md §5), and S6 to S8 when the lcn_call instance
   ## is composed (`cli`; G345, G346). Every start rule holds its execution scope and
   ## the host-ambient permission scope together (G207); an absent `modes`
   ## covers direct and hosted starts alike.
+  ## [G402] S9 to S11 with a `package_manager` section (`pm`).
   let n = ?orchestratorNeeds(orch)
   var rules: seq[CborValue]
   # S1: the authority publishes its change notices.
@@ -318,14 +359,97 @@ proc systemRules*(
         Opt.some(subjectOf("modules", [CliModule])),
       ),
     )
+  if pm.isSome:
+    # [G402] The Package Manager's routes to its Storage providers, which are
+    # ordinary module routes: logosd issues each and decides its Hello.
+    let pmSubject = subjectOf("instances", [pm.get.instance])
+    # A subject's list is a set: each provider once, ascending.
+    var named = pm.get.providers.toHashSet.toSeq
+    named.sort()
+    let providers = subjectOf("instances", named)
+    # S9 (the first three): the Runtime Control methods that hold a route,
+    # and `list_modules` (a route names a provider record, not an instance),
+    # no Runtime Control event (as S3), and the route and the three calls.
+    # The Runtime Control rule names no `targets`: `establish_route` and a
+    # list decide with no target, `renew_route` and `close_route` name a route,
+    # and this authority never narrows an allow (AUTHORITY-POLICY.md; CA l.124
+    # permits it, nothing requires it), so a targeted rule would allow none of
+    # them. The provider-access rule names the providers.
+    rules.add rule(
+      "allow",
+      pmSubject,
+      rcScope(
+        ["close_route", "establish_route", "list_modules", "renew_route"],
+        Opt.none(seq[string]),
+      ),
+    )
+    rules.add denyRule(
+      "consumer-denied", pmSubject, rcScope(newSeq[string](), Opt.none(seq[string]))
+    )
+    rules.add rule(
+      "allow",
+      pmSubject,
+      cborMap(
+        (t("kind"), t("provider-access")),
+        (t("contract"), storageFetchContract()),
+        (t("actions"), texts(["call", "establish-route", "renew-route"])),
+        (t("providers"), providers),
+        (
+          t("access"),
+          cborMap(
+            (
+              t("methods"),
+              roots(
+                [
+                  LcnStorageFetchStatObjectRoot, LcnStorageFetchReadObjectRoot,
+                  LcnStorageFetchFetchReadinessRoot,
+                ]
+              ),
+            )
+          ),
+        ),
+      ),
+    )
+    # S10: its subscription to fetch_readiness_changed on those routes.
+    rules.add rule(
+      "allow",
+      pmSubject,
+      cborMap(
+        (t("kind"), t("provider-access")),
+        (t("contract"), storageFetchContract()),
+        (t("actions"), texts(["subscribe-event"])),
+        (t("providers"), providers),
+        (
+          t("access"),
+          cborMap((t("subscribe_events"), roots([LcnStorageFetchReadinessChangedRoot]))),
+        ),
+      ),
+    )
+    # S11: the providers publish that event (STORAGE-FETCH §8).
+    rules.add rule(
+      "allow",
+      providers,
+      cborMap(
+        (t("kind"), t("provider-access")),
+        (t("contract"), storageFetchContract()),
+        (t("actions"), texts(["publish-event"])),
+        (
+          t("access"),
+          cborMap((t("publish_events"), roots([LcnStorageFetchReadinessChangedRoot]))),
+        ),
+      ),
+    )
   ok(rules)
 
 proc mergedPolicy*(
-    p: LcnDcPolicyARCapabilityAuthorityMap, orch: OrchestratorSettings, cli = false
+    p: LcnDcPolicyARCapabilityAuthorityMap,
+    orch: OrchestratorSettings,
+    cli = false,
+    pm = Opt.none(PmSettings),
 ): Result[LcnAuthorityPolicy, string] =
   ## [G295] The operator's rules and options with the system rules, as one
   ## `lcn.authority_policy`, every array canonical.
-  var rules = ?systemRules(orch, cli)
+  var rules = ?systemRules(orch, cli, pm)
   for r in p.rules:
     rules.add(toCbor(r))
   var entries: seq[CborEntry] = @[
@@ -470,6 +594,17 @@ proc defaultModuleHost*(exe: string): Opt[string] =
       return Opt.some(realPath(p))
   Opt.none(string)
 
+proc defaultRemoteProgram*(exe: string): Opt[string] =
+  ## [G411] `logos_remote`, found as `defaultModuleHost` finds the Module Host.
+  if exe.len == 0:
+    return Opt.none(string)
+  let d = realPath(exe).parentDir
+  for candidate in [d / LibexecRemote, d / RemoteProgramName]:
+    let p = candidate.normalizedPath
+    if fileExists(p):
+      return Opt.some(realPath(p))
+  Opt.none(string)
+
 proc companionLibrary*(exe: string): Opt[string] =
   ## [G343] `<d>/../lib/logos-core/liblcn_call.{so,dylib}`, `<d>` as for the
   ## Module Host; none when `exe` is empty.
@@ -533,6 +668,13 @@ proc cliRecord(
     )
   )
 
+func protectedInputsOf(c: DaemonConfig): Opt[seq[LcnAppProtectedInput]] =
+  ## [IMPL-DECISION G399, G400] With `package_manager`, its instance's
+  ## `lcn.pm_input`, the one protected realization input logosd writes.
+  if c.pm.isNone:
+    return Opt.none(seq[LcnAppProtectedInput])
+  Opt.some(@[LcnAppProtectedInput(instance: c.pm.get.instance, input: c.pm.get.input)])
+
 # Composition ------------------------------------------------------------------------
 
 func staticModule(instance, module, binding: string): LcnAppModule =
@@ -545,9 +687,42 @@ func staticModule(instance, module, binding: string): LcnAppModule =
     ),
   )
 
-proc compose*(s: Session, c: DaemonConfig, exe = ""): Result[Composition, string] =
+proc remoteValue*(
+    c: DaemonConfig, seen: Opt[RemoteSeen]
+): Result[(Opt[LcnAppRemote], Retained), string] =
+  ## [G408, G412] The host configuration's `remote`, with `remote.enabled`:
+  ## this start's trust snapshot, as the remote processes take it, and the
+  ## deployment's records with the retained disables whose configuration
+  ## entry is unchanged applied (Q4). Without what the start read (a check
+  ## before it, `logosctl daemon config check`) the snapshot is an empty one
+  ## and nothing is retained, so the records are still checked.
+  if not c.remote.enabled:
+    return ok((Opt.none(LcnAppRemote), Retained()))
+  let t =
+    if seen.isSome:
+      seen.get.snapshot
+    else:
+      ?newTrustSnapshot(0, [], [])
+  var x = c.value.remote.get
+  var retained = Retained()
+  if seen.isSome:
+    retained = ?applyRetained(x, seen.get.exposure)
+  let snapshot = ?snapshotMessage(t).encode
+  ok(
+    (
+      Opt.some(
+        LcnAppRemote(snapshot: snapshot, listeners: x.listeners, exports: x.exports)
+      ),
+      retained,
+    )
+  )
+
+proc compose*(
+    s: Session, c: DaemonConfig, exe = "", remote = Opt.none(RemoteSeen)
+): Result[Composition, string] =
   ## [G294] The derived host configuration. `exe` is logosd's executable, for
-  ## the default `module_host`; empty: none.
+  ## the default `module_host` and `remote_program`; empty: none. `remote` is
+  ## what this start read of the remote inputs (G408), with `remote.enabled`.
   let dc = c.value
   let orch = ?orchestratorValue(dc)
   var orchRecord =
@@ -565,7 +740,7 @@ proc compose*(s: Session, c: DaemonConfig, exe = ""): Result[Composition, string
     var ca = staticModule(AuthorityInstance, AuthorityModule, AuthorityModule)
     ca.state_assignment = Opt.some(AuthorityState)
     modules.add(ca)
-    let merged = ?mergedPolicy(p, orch, cliArt.isSome)
+    let merged = ?mergedPolicy(p, orch, cliArt.isSome, c.pm)
     policy = LcnAppPolicy(
       kind: LcnAppPolicyKind.Capability_authority,
       arm_Capability_authority: LcnAppPolicyARCapabilityAuthorityMap(
@@ -581,6 +756,10 @@ proc compose*(s: Session, c: DaemonConfig, exe = ""): Result[Composition, string
   if moduleHost.isNone:
     moduleHost = defaultModuleHost(exe)
   let r = dc.runtime
+  var remoteProgram = r.remote_program
+  if c.remote.enabled and remoteProgram.isNone:
+    remoteProgram = defaultRemoteProgram(exe)
+  let protectedInputs = protectedInputsOf(c)
   var app = LcnAppConfig(
     runtime: LcnAppRuntime(
       work_dir: s.workDir,
@@ -595,10 +774,12 @@ proc compose*(s: Session, c: DaemonConfig, exe = ""): Result[Composition, string
       endpoint_dir: Opt.some(s.endpointDir),
       module_host: moduleHost,
       module_host_env: r.module_host_env,
+      remote_program: remoteProgram,
     ),
     policy: policy,
     orchestration: OrchestratorInstance,
     modules: modules,
+    protected_inputs: protectedInputs,
     ordering: dc.ordering,
     declarations: dc.declarations,
     routing: dc.routing,
@@ -615,8 +796,10 @@ proc compose*(s: Session, c: DaemonConfig, exe = ""): Result[Composition, string
         Opt.some(LcnAppCallAudit(call_records: a.call_records, evidence: a.evidence))
     else:
       app.call_audit = Opt.some(LcnAppCallAudit())
+  let (remoteApp, retained) = ?remoteValue(c, remote)
+  app.remote = remoteApp
   let bytes = ?app.encode
-  ok(Composition(appConfig: app, bytes: bytes, orchestrator: orch))
+  ok(Composition(appConfig: app, bytes: bytes, orchestrator: orch, retained: retained))
 
 proc prepareDaemon*(
     s: Session,
@@ -625,14 +808,17 @@ proc prepareDaemon*(
     hooksBuild = HooksBuild,
     checkKey = true,
     exe = "",
+    remote = Opt.none(RemoteSeen),
 ): Result[Prepared, string] =
   ## DAEMON.md §3's checks 1 to 5 on daemon-config bytes, before anything
-  ## starts; `logosctl daemon config check` runs the same.
+  ## starts; `logosctl daemon config check` runs the same. `remote` is what
+  ## the start read of the remote inputs (G408), passed on to the remote
+  ## processes.
   let dc = ?decodeDaemonConfig(bytes)
   let c = ?checkDaemonConfig(dc, trust, hooksBuild, checkKey)
-  let comp = ?compose(s, c, exe)
-  discard parseHostConfig(AppConfigFormat, comp.bytes).valueOr:
+  let comp = ?compose(s, c, exe, remote)
+  let hc = parseHostConfig(AppConfigFormat, comp.bytes).valueOr:
     return err("the derived host configuration is refused: " & error.message)
-  ok(Prepared(config: c, composition: comp))
+  ok(Prepared(config: c, composition: comp, policyReport: hc.policyReport))
 
 {.pop.}

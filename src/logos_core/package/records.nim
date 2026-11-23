@@ -90,7 +90,7 @@ proc ruleText(doc, name: string): Result[string, string] =
     return err("no mirrored PM block defines " & name)
   ok(doc[start ..< stop].strip & "\n")
 
-proc recordsDocument(): Result[string, string] =
+proc recordsDocument*(): Result[string, string] =
   ## The records as the Package Manager's module document declares them (PM
   ## §16: they live in `logos.package_manager` and reference the
   ## `logos.package_manifest` supporting schema): PM §4.3, whose block opens with

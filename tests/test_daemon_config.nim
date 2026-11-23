@@ -11,7 +11,7 @@
 ## (G343-G346). No logosd process and no Runtime: those are `test_logosd`
 ## (6b) and `test_lcn_call`.
 
-import std/[os, sequtils, strutils]
+import std/[algorithm, os, sequtils, strutils]
 import unittest2
 import logos_sdk/cbor
 import logos_sdk/base/hex
@@ -22,6 +22,10 @@ import
 import ../src/logos_core/runtime/authz
 from ../src/logos_core/runtime/store import openStore, close
 from ../src/logos_core/runtime/authscopes import evaluateRequest, AuthorityModule
+from ../src/logos_core/authority/facts import InstanceFacts, putInstance, putProvider
+from logos_sdk/kit/rc_types import LogosNSRuntimeControlRouteAccess, encode
+from logos_sdk/cbor/encode import cmpBytes
+import logos_sdk/contracts/generated/lcn_storage_fetch_root
 from ../src/logos_core/permissions import PermissionSetting, HostAmbient, profileV1
 from ../src/logos_core/loader/contract import LoaderInstanceId, LoaderModuleName
 from ../src/logos_core/orchestration/settings import OrchestratorModule
@@ -30,6 +34,12 @@ from ../src/logos_core/durable import release, writeAtomic
 from ../src/logos_core/cli/lcn_call_configuration_types import
   LcnCallSettings, LcnCallSettingsDeploymentChoiceKind, decode
 import ./support/authfixture, logos_sdk/testing/[kitbuild, schemasuite]
+from ../src/logos_core/transport/tls/trust import TrustSnapshot, newTrustSnapshot
+import ../src/logos_core/remote/carrier_types
+from ../src/logos_core/pm/input import MaxReadDeadlineMs
+from ../src/logos_core/package/resolver import
+  ResolverLimits, resolverLimits, `==`, MaxResolverLimits, names, depth, candidates,
+  attempts
 
 let work =
   currentSourcePath().parentDir.parentDir / "build" / "daemon-config" / kitVariant
@@ -114,8 +124,9 @@ const
   DcRules = [
     "lcn.daemon_config", "lcn.dc_runtime", "lcn.dc_policy", "lcn.dc_orchestration",
     "lcn.dc_restart", "lcn.dc_override", "lcn.dc_call_audit", "lcn.dc_evidence_store",
-    "lcn.dc_permissions", "lcn.dc_ctl", "lcn.dc_cli", "lcn.dc_test_hooks",
-    "lcn.dc_test_diagnostics",
+    "lcn.dc_permissions", "lcn.dc_ctl", "lcn.dc_cli", "lcn.dc_package_manager",
+    "lcn.dc_test_hooks", "lcn.dc_test_diagnostics", "lcn.dc_remote",
+    "lcn.dc_remote_signing",
   ]
   TrustRules = ["lcn.trust_mark", "lcn.ev_key_binding"]
   TrustdocRules = [
@@ -489,6 +500,246 @@ suite "dc.checks: DAEMON.md §3, checks 1 to 4 [IMPL-DECISION G293] [IMPL-DECISI
       dcText(extra = "\"ctl\": {\"workers\": 0}, \"call_audit\": {\"store\": {}}")
     check refusal(ctlAndStore) == "ctl.workers must be 1 to 32"
 
+# dc.remote --------------------------------------------------------------------------
+
+const RemoteId = "1b4e28ba-2fa1-4d3b-a3f5-ef19a2b0c0de" ## a lowercase UUID version 4
+
+proc remoteText(remote: string, id = RemoteId): string =
+  ## A daemon-config for Runtime `id` with `remote` as its `remote` field.
+  dcText(extra = "\"remote\": " & remote).replace("\"rt-1\"", "\"" & id & "\"")
+
+suite "dc.remote: the remote section, DAEMON.md §3 check 4 [IMPL-DECISION G407] [IMPL-DECISION G410]":
+  test "[RUN-0492] with remote.enabled the Runtime id must be a lowercase canonical UUID version 4; without it, any id":
+    let on = checked(remoteText("{\"enabled\": true}"))
+    check on.isOk
+    if on.isOk:
+      check on.get.remote.enabled and on.get.remote.signing == rsLogosd
+    const Refused = "runtime.runtime_instance_id must be a lowercase UUID version 4"
+    for id in [
+      "rt-1", # not a UUID
+      "1B4E28BA-2FA1-4D3B-A3F5-EF19A2B0C0DE", # upper case
+      "1b4e28ba-2fa1-1d3b-a3f5-ef19a2b0c0de", # version 1
+      "1b4e28ba-2fa1-4d3b-c3f5-ef19a2b0c0de", # variant 110
+      "1b4e28ba2fa14d3ba3f5ef19a2b0c0de", # not canonical: no hyphens
+      "{1b4e28ba-2fa1-4d3b-a3f5-ef19a2b0c0de}", # not canonical: braces
+      "1b4e28ba-2fa1-4d3b-a3f5-ef19a2b0c0dg", # not hex
+    ]:
+      checkpoint id
+      check Refused in refusal(remoteText("{\"enabled\": true}", id))
+      # The same id without remote, or with it off, is accepted (RUN-0490: any id).
+      check checked(remoteText("{\"enabled\": false}", id)).isOk
+      check checked(dcText().replace("\"rt-1\"", "\"" & id & "\"")).isOk
+    let off = checked(dcText())
+    check off.isOk and not off.get.remote.enabled
+    for v in ["8", "9", "a", "b"]:
+      check isUuidV4("1b4e28ba-2fa1-4d3b-" & v & "3f5-ef19a2b0c0de")
+    # init's ids qualify.
+    for _ in 0 ..< 32:
+      check isUuidV4(newRuntimeId().get)
+
+  posixTest "[IMPL-DECISION G410] signing: logosd by default; key-holder with a checked key_holder program and only then; process-copy in a test build only":
+    let holder = freshDir("kh")
+    createDir(holder)
+    let program = holder / "logos_keyholder"
+    writeFile(program, "#!/bin/sh\n")
+    setFilePermissions(program, {fpUserRead, fpUserWrite, fpUserExec})
+    let kh = checked(
+      remoteText(
+        "{\"enabled\": true, \"signing\": \"key-holder\", \"key_holder\": \"" &
+          dq(program) & "\"}"
+      )
+    )
+    check kh.isOk
+    if kh.isOk:
+      check kh.get.remote.signing == rsKeyHolder and kh.get.remote.keyHolder == program
+    check checked(remoteText("{\"enabled\": true, \"signing\": \"logosd\"}")).isOk
+    check "remote.signing \"key-holder\" needs remote.key_holder" in
+      refusal(remoteText("{\"enabled\": true, \"signing\": \"key-holder\"}"))
+    check "remote.key_holder needs remote.signing \"key-holder\"" in
+      refusal(
+        remoteText("{\"enabled\": true, \"key_holder\": \"" & dq(program) & "\"}")
+      )
+    # Checked as runtime.module_host is (checkProgramFile).
+    for (path, why) in [
+      ("relative/logos_keyholder", "must be an absolute path"),
+      (holder / "missing", "does not exist"),
+      (holder, "is not a regular file"),
+    ]:
+      checkpoint path
+      check ("remote.key_holder " & why) in
+        refusal(
+          remoteText(
+            "{\"enabled\": true, \"signing\": \"key-holder\", \"key_holder\": \"" &
+              dq(path) & "\"}"
+          )
+        )
+    setFilePermissions(program, {fpUserRead, fpUserWrite, fpUserExec, fpGroupWrite})
+    check "remote.key_holder is writable by its group or others" in
+      refusal(
+        remoteText(
+          "{\"enabled\": true, \"signing\": \"key-holder\", \"key_holder\": \"" &
+            dq(program) & "\"}"
+        )
+      )
+    let copy = dcOf(remoteText("{\"enabled\": true, \"signing\": \"process-copy\"}"))
+    check "accepted only by a logosd built for tests" in
+      checkRemote(copy, testSigningBuild = false).error
+    let accepted = checkRemote(copy, testSigningBuild = true)
+    check accepted.isOk and accepted.get.signing == rsProcessCopy
+
+proc tlsAddress(port: int, extra = ""): string =
+  "{\"transport\": \"tls-tcp\", \"host\": \"127.0.0.1\", \"port\": " & $port & extra &
+    "}"
+
+proc listener(address: string, enabled = false): string =
+  "{\"address\": " & address & ", \"enabled\": " & $enabled &
+    ", \"runtime_control_enabled\": false}"
+
+proc export1(address: string, provider = "p-x", runtime = ""): string =
+  "{\"listener\": " & address & ", \"provider\": {\"provider\": \"" & provider & "\"" &
+    (if runtime.len > 0: ", \"runtime_instance_id\": \"" & runtime & "\""
+    else: "") & "}, \"enabled\": true}"
+
+proc withRecords(
+    listeners: seq[string], exports: seq[string] = @[], enabled = true
+): string =
+  var r = "{\"enabled\": " & $enabled
+  if listeners.len > 0:
+    r.add ", \"listeners\": [" & listeners.join(", ") & "]"
+  if exports.len > 0:
+    r.add ", \"exports\": [" & exports.join(", ") & "]"
+  r & "}"
+
+proc prepared(
+    diag: string, snapshot = Opt.none(TrustSnapshot)
+): Result[Prepared, string] =
+  let seen =
+    if snapshot.isSome:
+      Opt.some(RemoteSeen(snapshot: snapshot.get))
+    else:
+      Opt.none(RemoteSeen)
+  prepareDaemon(Session(dir: freshDir()), dcBytes(diag), prod, remote = seen)
+
+suite "dc.remote: allow-all, listeners and exports [IMPL-DECISION G412] [IMPL-DECISION G415]":
+  test "[IMPL-DECISION G415] policy allow-all is refused with remote.enabled, and accepted with it off":
+    let on = dcText(
+        policy = "{\"kind\": \"allow-all\"}", extra = "\"remote\": {\"enabled\": true}"
+      )
+      .replace("\"rt-1\"", "\"" & RemoteId & "\"")
+    check "policy: allow-all is refused with remote.enabled" in refusal(on, dev)
+    check checked(on.replace("\"enabled\": true", "\"enabled\": false"), dev).isOk
+
+  test "[IMPL-DECISION G412] listeners and exports need remote.enabled":
+    let a = tlsAddress(7400)
+    check "remote.listeners and remote.exports need remote.enabled" in
+      refusal(remoteText(withRecords(@[listener(a)], enabled = false)))
+    check "remote.listeners and remote.exports need remote.enabled" in
+      refusal(remoteText(withRecords(@[], @[export1(a)], enabled = false)))
+    check checked(remoteText(withRecords(@[listener(a)], @[export1(a)]))).isOk
+
+  test "[IMPL-DECISION G408] [IMPL-DECISION G412] compose: the snapshot given, else an empty one, and the records as Runtime Control holds them":
+    let a = tlsAddress(7400)
+    let p = prepared(remoteText(withRecords(@[listener(a)], @[export1(a)]))).get
+    let r = p.composition.appConfig.remote.get
+    let m = LcnRchMessage.decode(r.snapshot).get
+    check m.kind == LcnRchMessageKind.lcn_Rch_snapshot
+    check m.arm_lcn_Rch_snapshot.records.len == 0
+    check r.listeners.get.len == 1 and r.exports.get.len == 1
+    check r.listeners.get[0].address.arm_lcn_Rc_tls_tcp_runtime_address.port == 7400
+    let t = newTrustSnapshot(3, [], []).get
+    let q = prepared(remoteText("{\"enabled\": true}"), Opt.some(t)).get
+    let s = LcnRchMessage.decode(q.composition.appConfig.remote.get.snapshot).get
+    check s.arm_lcn_Rch_snapshot.revision == 3
+    check q.composition.appConfig.remote.get.listeners.isNone
+    # without remote.enabled, no remote section
+    check prepared(dcText()).get.composition.appConfig.remote.isNone
+
+  test "[SPEC RUNTIME l.3319-3321] [IMPL-DECISION G412] the records are validated as Runtime Control validates them":
+    let a = tlsAddress(7400)
+    let b = tlsAddress(7401)
+    for (records, why) in [
+      (
+        withRecords(
+          @[listener(tlsAddress(7400, ", \"profile\": \"logos.remote.quic\""))]
+        ),
+        "an address whose profile its transport does not select",
+      ),
+      (withRecords(@[listener(a), listener(a)]), "an address is given twice"),
+      (withRecords(@[listener(a)], @[export1(b)]), "an export names no listener here"),
+      (
+        withRecords(
+          @[listener(a)],
+          @[export1(a, runtime = "7d0e3f1a-9b2c-4a5d-8e6f-1a2b3c4d5e6f")],
+        ),
+        "an export names another Runtime's provider",
+      ),
+      (
+        withRecords(@[listener(a)], @[export1(a), export1(a)]),
+        "an export is given twice",
+      ),
+      (
+        withRecords(@[listener(a, enabled = true)]),
+        "an enabled listener needs runtime.remote_program",
+      ),
+    ]:
+      checkpoint why
+      let r = prepared(remoteText(records))
+      check r.isErr and why in r.error
+    # this Runtime's own id on a provider, two exports of one provider on two
+    # listeners, and a disabled quic listener are all accepted
+    check prepared(
+      remoteText(
+        withRecords(
+          @[
+            listener(a),
+            listener(b),
+            listener(
+              "{\"transport\": \"quic\", \"host\": \"127.0.0.1\", \"port\": 7402}"
+            ),
+          ],
+          @[export1(a, runtime = RemoteId), export1(b)],
+        )
+      )
+    ).isOk
+
+  posixTest "[IMPL-DECISION G411] [IMPL-DECISION G412] an enabled listener: tls-tcp with remote_program; quic refused":
+    let dir = freshDir("rp")
+    createDir(dir)
+    let program = dir / "logos_remote"
+    writeFile(program, "#!/bin/sh\n")
+    setFilePermissions(program, {fpUserRead, fpUserWrite, fpUserExec})
+    proc withProgram(records: string): string =
+      remoteText(records).replace(
+        "{\"runtime_instance_id\": \"" & RemoteId & "\"}",
+        "{\"runtime_instance_id\": \"" & RemoteId & "\", \"remote_program\": \"" &
+          dq(program) & "\"}",
+      )
+
+    let p =
+      prepared(withProgram(withRecords(@[listener(tlsAddress(7400), enabled = true)])))
+    check p.isOk
+    if p.isOk:
+      check p.get.composition.appConfig.runtime.remote_program == Opt.some(program)
+    let q = prepared(
+      withProgram(
+        withRecords(
+          @[
+            listener(
+              "{\"transport\": \"quic\", \"host\": \"127.0.0.1\", \"port\": 7402}",
+              enabled = true,
+            )
+          ]
+        )
+      )
+    )
+    check q.isErr and "not supported by this Runtime" in q.error
+    check "remote_program is writable by its group or others" in (
+      block:
+        setFilePermissions(program, {fpUserRead, fpUserWrite, fpUserExec, fpGroupWrite})
+        let r = prepared(withProgram(withRecords(@[])))
+        if r.isOk: "" else: r.error
+    )
+
 # dc.compose -------------------------------------------------------------------------
 
 proc entryFor(c: Composition, module: string, instance = ""): seq[string] =
@@ -767,11 +1018,11 @@ type PolicyEnv = object
   sink: ChannelSink
   a: Authority
 
-proc openPolicy(diag: string, cli = false): PolicyEnv =
+proc openPolicy(diag: string, cli = false, pm = Opt.none(PmSettings)): PolicyEnv =
   let dc = dcOf(diag)
   let orch = orchestratorValue(dc).expect("an orchestration value")
   let policy =
-    mergedPolicy(dc.policy.arm_Capability_authority, orch, cli).expect("a policy")
+    mergedPolicy(dc.policy.arm_Capability_authority, orch, cli, pm).expect("a policy")
   let dir = freshDir("ca")
   privateDir(dir)
   result.facts = daemonFacts()
@@ -1081,6 +1332,343 @@ proc commit(
 
 proc fileBytes(s: Session): string =
   readFile(s.trustPath)
+
+# dc.package_manager ---------------------------------------------------------------
+
+const
+  PmBinding = """[{"binding": "main", "instance": "st"}]"""
+  PmCatalog =
+    """{"storage": "main", "object": h'636174616c6f67', "digest": """ & Zero32 & "}"
+
+proc pmSection(
+    instance = "pm", storage = PmBinding, catalog = PmCatalog, extra = ""
+): string =
+  "{\"instance\": \"" & instance & "\", \"storage\": " & storage & ", \"catalog\": " &
+    catalog & (if extra.len > 0: ", " & extra else: "") & "}"
+
+proc pmText(
+    section = pmSection(),
+    modules =
+      @[withState(hostedModule("pm", "pkgmgr"), "pm"), hostedModule("st", "storesvc")],
+): string =
+  dcText(
+    extra = "\"modules\": [" & modules.join(", ") & "], \"package_manager\": " & section
+  )
+
+proc directModule(instance: string): string =
+  "{\"instance\": \"" & instance & "\", \"module\": \"dsvc\", \"implementation\": " &
+    "{\"strategy\": \"direct_dynamic\", \"artifact\": {\"id\": \"dsvc\", " &
+    "\"local_path\": \"/opt/dsvc/libdsvc.so\", \"hash\": " & Zero32 &
+    ", \"hash_suite\": \"logos.hash-suite.blake3-256\"}}}"
+
+proc withHost(text: string): string =
+  ## `text` with a `module_host`, which a composed hosted instance needs.
+  text.replace(
+    "{\"runtime_instance_id\": \"rt-1\"}",
+    "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & getAppFilename() & "\"}",
+  )
+
+func presetLine(instance: string): string =
+  ## The start's log line for logosd's preset (DAEMON.md §3, `package_manager`'s row).
+  "package_manager: " & instance & " gets resolver limits partial_closure_names " &
+    $PresetPartialClosureNames & ", dependency_depth " & $PresetDependencyDepth &
+    ", candidates_per_name " & $PresetCandidatesPerName & ", assignment_attempts " &
+    $PresetAssignmentAttempts & " (logosd's preset)"
+
+suite "dc.package_manager: the Package Manager's section, its input and S9 to S11 [IMPL-DECISION G399] [IMPL-DECISION G400] [IMPL-DECISION G402]":
+  test "check 2: each refusal names the field it concerns":
+    let pmEntry = withState(hostedModule("pm", "pkgmgr"), "pm")
+    let st = hostedModule("st", "storesvc")
+    let configured = pmEntry[0 ..< pmEntry.len - 1] & ", \"configuration\": h'a0'}"
+    for (text, want) in [
+      (
+        pmText(modules = @[st]),
+        "package_manager.instance: pm is not an entry of modules",
+      ),
+      (
+        pmText(modules = @[directModule("pm"), st]),
+        "package_manager.instance: pm is not hosted_dynamic (the Package Manager runs in its own process)",
+      ),
+      (
+        pmText(modules = @[hostedModule("pm", "pkgmgr"), st]),
+        "package_manager.instance: pm has no state_assignment",
+      ),
+      (
+        pmText(modules = @[configured, st]),
+        "package_manager.instance: pm has configuration: the Package Manager has none, and its trust input is never configuration (CONFIGURATION l.58)",
+      ),
+      (pmText(pmSection(storage = "[]")), "package_manager.storage holds no binding"),
+      (
+        pmText(
+          pmSection(
+            storage =
+              """[{"binding": "main", "instance": "st"}, {"binding": "main", "instance": "st"}]"""
+          )
+        ),
+        "package_manager.storage: binding main is named twice",
+      ),
+      (
+        pmText(pmSection(storage = """[{"binding": "main", "instance": "pm"}]""")),
+        "package_manager.storage: binding main names the Package Manager's own instance",
+      ),
+      (
+        pmText(pmSection(storage = """[{"binding": "main", "instance": "zz"}]""")),
+        "package_manager.storage: binding main: zz is not an entry of modules",
+      ),
+      (
+        pmText(modules = @[pmEntry, directModule("st")]),
+        "package_manager.storage: binding main: st is not hosted_dynamic",
+      ),
+      (
+        pmText(
+          pmSection(
+            catalog =
+              """{"storage": "other", "object": h'63', "digest": """ & Zero32 & "}"
+          )
+        ),
+        "package_manager.catalog.storage: other is not a binding",
+      ),
+      (
+        pmText(pmSection(extra = "\"limits\": {\"read_deadline_ms\": 0}")),
+        "package_manager: limits.read_deadline_ms must be 1 to " & $MaxReadDeadlineMs,
+      ),
+      (
+        pmText(
+          pmSection(
+            extra =
+              "\"resolver_limits\": {\"partial_closure_names\": 4097, \"dependency_depth\": 1, " &
+              "\"candidates_per_name\": 1, \"assignment_attempts\": 1}"
+          )
+        ),
+        "package_manager: resolver_limits: resolver limit partial_closure_names is above its maximum 4096",
+      ),
+    ]:
+      checkpoint want
+      check refusal(text) == want
+
+  test "[ruling C1] resolver_limits holds all four limits or is absent: a partial one fails check 1":
+    let text = pmText(
+      pmSection(
+        extra =
+          "\"resolver_limits\": {\"partial_closure_names\": 16, \"dependency_depth\": 15}"
+      )
+    )
+    check decodeDaemonConfig(dcBytes(text)).isErr
+
+  test "[ruling C4] the composed input passes the Package Manager's decoder: a trust state it refuses fails the check":
+    var t = floorTrust()
+    t.catalog = LcnTrustSelection(selected: Opt.some("logos.catalog.example"))
+    check refusal(pmText(), TrustFileState(file: t)).startsWith(
+      "package_manager: trust: this implementation supports no catalog profile"
+    )
+
+  test "[IMPL-DECISION G443] the preset's relations: attempts at least names, depth below names, each within its maximum":
+    let names = int(PresetPartialClosureNames)
+    let depth = int(PresetDependencyDepth)
+    let candidates = int(PresetCandidatesPerName)
+    let attempts = int(PresetAssignmentAttempts)
+    # A full closure takes one attempt per name; a path of `names` names has at most
+    # `names - 1` edges, so a larger depth limit could never trip (fable-checks §7.1).
+    check attempts >= names
+    check depth < names
+    check names <= MaxResolverLimits.names
+    check depth <= MaxResolverLimits.depth
+    check candidates <= MaxResolverLimits.candidates
+    check attempts <= MaxResolverLimits.attempts
+    check resolverLimits(names, depth, candidates, attempts).isOk
+
+  test "[ruling C2] [ruling C3] the preset applies when resolver_limits is absent, and the start line names its origin":
+    let c = checked(pmText()).get
+    check c.pm.isSome
+    let pm = c.pm.get
+    check pm.instance == "pm"
+    check pm.providers == @["st"]
+    check pm.limitsOrigin == loPreset
+    let preset = resolverLimits(
+      int64(PresetPartialClosureNames),
+      int64(PresetDependencyDepth),
+      int64(PresetCandidatesPerName),
+      int64(PresetAssignmentAttempts),
+    )
+    check pm.resolverLimits == preset.get
+    check pmStartLine(pm) == presetLine("pm")
+    let own = checked(
+      pmText(
+        pmSection(
+          extra =
+            "\"resolver_limits\": {\"partial_closure_names\": 16, \"dependency_depth\": 15, " &
+            "\"candidates_per_name\": 4, \"assignment_attempts\": 1000}"
+        )
+      )
+    ).get.pm.get
+    check own.limitsOrigin == loOperator
+    check pmStartLine(own) ==
+      "package_manager: pm gets resolver limits partial_closure_names 16, dependency_depth 15, " &
+      "candidates_per_name 4, assignment_attempts 1000 (package_manager.resolver_limits)"
+
+  test "compose: the instance's lcn.pm_input, byte for byte, its only protected input":
+    let s = Session(dir: freshDir())
+    let p = prepareDaemon(s, dcBytes(withHost(pmText())), prod).get
+    let app = p.composition.appConfig
+    let expected = dcBytes(
+      "{\"trust\": h'" & prod.file.encode.get.toHex &
+        "', \"format\": \"logos-core-nim.pm-input.v1\", " & "\"catalog\": " & PmCatalog &
+        ", \"storage\": " & PmBinding & ", \"resolver_limits\": {\"dependency_depth\": " &
+        $PresetDependencyDepth & ", \"assignment_attempts\": " &
+        $PresetAssignmentAttempts & ", \"candidates_per_name\": " &
+        $PresetCandidatesPerName & ", \"partial_closure_names\": " &
+        $PresetPartialClosureNames & "}}"
+    )
+    check app.protected_inputs.isSome
+    check app.protected_inputs.get.len == 1
+    if app.protected_inputs.get.len == 1:
+      check app.protected_inputs.get[0].instance == "pm"
+      check app.protected_inputs.get[0].input == expected
+    # The instance's own record is the operator's, unchanged: the input is not configuration.
+    let rec = app.modules.filterIt(it.instance == "pm")
+    check rec.len == 1 and rec[0].configuration.isNone
+    # Without the section, no instance gets one.
+    let plain = prepareDaemon(
+      Session(dir: freshDir()),
+      dcBytes(
+        withHost(
+          dcText(extra = "\"modules\": [" & hostedModule("st", "storesvc") & "]")
+        )
+      ),
+      prod,
+    ).get
+    check plain.composition.appConfig.protected_inputs.isNone
+
+  test "[G402] S9 to S11 with the section: five rules, each provider once, in byte order":
+    let orch = orchestratorValue(dcOf(pmText())).get
+    let base = systemRules(orch).get
+    let two = PmSettings(instance: "pm", providers: @["st", "a", "st"])
+    let rules = systemRules(orch, pm = Opt.some(two)).get
+    check rules.len == base.len + 5
+    let added = rules[base.len .. ^1].mapIt(toDiag(it))
+    # S9's Runtime Control rule names no target: a list method's decision
+    # names none, so a rule with `targets` would never allow list_modules (I86).
+    check "\"list_modules\"" in added[0]
+    check "\"targets\"" notin added[0]
+    check "\"providers\": {\"instances\": [\"a\", \"st\"]}" in added[2]
+    check "\"providers\": {\"instances\": [\"a\", \"st\"]}" in added[3]
+    check added[4].startsWith(
+      "{\"kind\": \"allow\", \"subject\": {\"instances\": [\"a\", \"st\"]}"
+    )
+    # They are in the policy compose hands the authority.
+    let c = checked(pmText()).get
+    let s = Session(dir: freshDir())
+    let ca = prepareDaemon(s, dcBytes(withHost(pmText())), prod).get.composition.appConfig.policy
+    check ca.kind == LcnAppPolicyKind.Capability_authority
+    check ca.arm_Capability_authority.policy.rules.len ==
+      systemRules(orch, pm = c.pm).get.len
+
+  test "[G402] S9 to S11, decided by the Capability Authority: the routes, calls, readiness event and list_modules, and nothing else":
+    # The Package Manager `pm` and its provider `st` (record p-st); `b`'s
+    # record p-b also implements lcn.storage_fetch but is no binding.
+    let text = pmText()
+    var e = openPolicy(text, pm = checked(text).get.pm)
+    check e.facts.putInstance("pm", InstanceFacts(module: "pkgmgr")).isOk
+    check e.facts.putInstance("st", InstanceFacts(module: "storesvc")).isOk
+    check e.facts.putProvider("p-st", "st").isOk
+    check e.facts.putProvider("p-b", "b").isOk
+    proc rc(operation: string, route = ""): AuthzRequest =
+      AuthzRequest(
+        action: aaRuntimeControl,
+        operation: operation,
+        consumer: "pm",
+        target: route,
+        route: route,
+      )
+
+    proc fetch(
+        action: AuthzAction,
+        operation: string,
+        declaration: openArray[byte] = [],
+        provider = "p-st",
+        access: seq[byte] = @[],
+    ): AuthzRequest =
+      AuthzRequest(
+        action: action,
+        operation: operation,
+        consumer: "pm",
+        target: provider,
+        provider: provider,
+        route: "route-1",
+        module: "storesvc",
+        contract: @LcnStorageFetchRoot,
+        declaration: @declaration,
+        access: access,
+      )
+
+    # The access the Package Manager's establishment asks (pm/shell.nim).
+    var methods = @[
+      @LcnStorageFetchStatObjectRoot,
+      @LcnStorageFetchReadObjectRoot,
+      @LcnStorageFetchFetchReadinessRoot,
+    ]
+    methods.sort(
+      proc(a, b: seq[byte]): int =
+        cmpBytes(a, b)
+    )
+    let access =
+      LogosNSRuntimeControlRouteAccess(
+        methods: Opt.some(methods),
+        subscribe_events: Opt.some(@[@LcnStorageFetchReadinessChangedRoot]),
+      ).encode.get
+    # S9: the Runtime Control methods that hold a route, and list_modules.
+    check e.allows(rc("establish_route"))
+    check e.allows(rc("renew_route", "route-1"))
+    check e.allows(rc("close_route", "route-1"))
+    check e.allows(rcReq("pm", "list_modules"))
+    # No other Runtime Control method, and no Runtime Control event (S9's deny).
+    check not e.allows(rcReq("pm", "list_routes"))
+    check not e.allows(rcReq("pm", "shutdown_runtime"))
+    check not e.allows(rcReq("pm", "get_readiness", "st"))
+    check not e.allows(rcReq("pm", "start_module", "st"))
+    for ev in ["module_state_changed", "route_state_changed", "inventory_changed"]:
+      checkpoint ev
+      check e.denial(eventReq("pm", ev)) == DenialKind.Consumer_denied
+    # S9's route and calls, and S10's subscription: to the binding's provider only.
+    for p in ["p-st", "p-b"]:
+      checkpoint p
+      let mine = p == "p-st"
+      check e.allows(fetch(aaRoute, "establish_route", provider = p, access = access)) ==
+        mine
+      check e.allows(fetch(aaRoute, "renew_route", provider = p, access = access)) ==
+        mine
+      for (name, root) in [
+        ("stat_object", LcnStorageFetchStatObjectRoot),
+        ("read_object", LcnStorageFetchReadObjectRoot),
+        ("fetch_readiness", LcnStorageFetchFetchReadinessRoot),
+      ]:
+        checkpoint name
+        check e.allows(fetch(aaCall, name, root, provider = p)) == mine
+      check e.allows(
+        fetch(
+          aaSubscribeEvent,
+          "fetch_readiness_changed",
+          LcnStorageFetchReadinessChangedRoot,
+          provider = p,
+        )
+      ) == mine
+    # S11: the binding's provider instance publishes that event; no other does.
+    proc published(publisher, provider: string): AuthzRequest =
+      AuthzRequest(
+        action: aaPublishEvent,
+        operation: "fetch_readiness_changed",
+        consumer: publisher,
+        target: "pm",
+        provider: provider,
+        route: "route-1",
+        module: "storesvc",
+        contract: @LcnStorageFetchRoot,
+        declaration: @LcnStorageFetchReadinessChangedRoot,
+      )
+
+    check e.allows(published("st", "p-st"))
+    check not e.allows(published("b", "p-b"))
+    e.close()
 
 suite "dc.trust: the trust file's continuity [IMPL-DECISION G137] [IMPL-DECISION G299] [D27]":
   test "[PKG-0418] [PKG-0419] [PKG-0420] [PKG-0421] the decision table":
@@ -1774,12 +2362,13 @@ suite "dc.init: logosctl init's session [IMPL-DECISION G192] [batch E 19] [U8]":
     check getFilePermissions(s.runDir) == {fpUserRead, fpUserWrite, fpUserExec}
 
 suite "dc.docs: docs/DAEMON.md carries the schemas and the system rules verbatim":
-  test "every daemon CDDL file, the package trust file's and the launcher's, and S1-S8 for init's default configuration, word for word":
+  test "[PKG-0474] every daemon CDDL file, the package trust file's and the launcher's, S1-S11 and logosd's preset of the resolver limits, word for word":
     let root = currentSourcePath().parentDir.parentDir
     let doc = readFile(root / "docs" / "DAEMON.md")
     for name in [
       "daemon/daemon_config.cddl", "daemon/trust.cddl", "package/trustdoc.cddl",
       "daemon/ctl.cddl", "daemon/logosctl.cddl", "daemon/evstore.cddl", "cli/cli.cddl",
+      "daemon/remote_trust.cddl",
     ]:
       checkpoint name
       let schema = readFile(root / "src/logos_core" / name)
@@ -1796,3 +2385,18 @@ suite "dc.docs: docs/DAEMON.md carries the schemas and the system rules verbatim
     for r in systemRules(orch, cli = true).get[base.len .. ^1]:
       cli.add(toDiag(r) & "\n")
     check (cli & "```") in doc
+    # [G402] S9 to S11, which logosd adds with a package_manager section.
+    let withCli = systemRules(orch, cli = true).get.len
+    let pm = PmSettings(instance: "package_manager", providers: @["storage"])
+    var pmRules = "```text\n"
+    for r in systemRules(orch, cli = true, pm = Opt.some(pm)).get[withCli .. ^1]:
+      pmRules.add(toDiag(r) & "\n")
+    check (pmRules & "```") in doc
+    # [G399; ruling C2, C3] logosd's preset and the start's log line.
+    let preset =
+      "`partial_closure_names` " & $PresetPartialClosureNames & ", `dependency_depth` " &
+      $PresetDependencyDepth & ", `candidates_per_name` " & $PresetCandidatesPerName &
+      " and `assignment_attempts` " & $PresetAssignmentAttempts
+    check preset in doc
+    check "`package_manager: <instance> gets resolver limits partial_closure_names N, dependency_depth N, candidates_per_name N, assignment_attempts N (logosd's preset)`" in
+      doc

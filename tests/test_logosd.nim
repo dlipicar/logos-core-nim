@@ -4,7 +4,8 @@
 ## development switch and its banner, trust continuity, the trust anchor
 ## commands and their refusals (G397), the offline writers' lock, concurrent
 ## shells, retirement, the socket path's limits, a Loader loss, a key bound to
-## another Runtime, and the call-evidence store's commands.
+## another Runtime, the call-evidence store's commands, and a binary with no
+## libssl code in it (G409).
 ##
 ## The children are built for the suite's variant (`daemonbuild.nim`): logosd
 ## with test hooks, logosctl without. They run with `posix_spawn`, their
@@ -15,6 +16,7 @@
 when defined(posix):
   import std/[json, monotimes, os, sequtils, strutils, times]
   import unittest2
+  import ./support/sanitizerenv
   import logos_sdk/cbor
   import logos_sdk/crypto/blake3
   import
@@ -33,7 +35,8 @@ when defined(posix):
     acquire, ensurePrivateDir, release, removeIfPresent, writeAtomic
   import
     ./support/[
-      clibuild, daemonbuild, daemonproc, evfixture, modulehostbuild, shortdir, slowdown
+      clibuild, daemonbuild, daemonproc, evfixture, modulehostbuild, nossl, shortdir,
+      slowdown,
     ],
     logos_sdk/testing/[kitbuild, testdirs]
 
@@ -53,13 +56,15 @@ when defined(posix):
     StopMs = 3 * StopDeadlineMs
       ## how long a case waits for logosd to exit: past both deadlines
     HostsGoneMs = 10_000 * Slow
-    SanitizerEnv =
-      ["ASAN_OPTIONS", "LSAN_OPTIONS", "MSAN_OPTIONS", "TSAN_OPTIONS", "UBSAN_OPTIONS"]
-      ## the Module Host's environment allow-list here: the sanitizers' settings
     ChatterLine = "chatter: beacon_module initialized in process "
       ## `tests/kit/chatter_impl.nim`'s line, which ends with the writer's pid
     ChatterInstance = "chatter-1"
     ChatterDelayVar = "LCN_CHATTER_INIT_DELAY_MS" ## `chatter_impl`'s init delay
+    ChatterShowEnvVar = "LCN_CHATTER_SHOW_ENV"
+      ## [G442] names `chatter_impl` writes as `chatter: env <name>=<value>`
+    ChatterEnvLine = "chatter: env "
+    ChatterTraceVar = "LCN_CHATTER_SANITIZER_TRACE"
+      ## [G442] set: one sanitizer stack trace from `chatter_impl`, the canary
     MeterInstance = "meter-1" ## a hosted provider `lcn_call` is granted
     LedgerInstance = "ledger-1" ## the confined ledger, `lcn_call`'s provider
     LedgerShells = 8 ## concurrent `logosctl call`s: `cli.workers`' default
@@ -1140,6 +1145,38 @@ when defined(posix):
       check heldLocks(c.s.workDir).len == 0
       check c.lockFree
 
+    test "[IMPL-DECISION G442] a daemon's Module Host gets the five sanitizer variables with logosd's values; under a sanitizer, its stack trace lands in the check's report directory (the canary)":
+      let want = deliverySettings()
+      let c = newCase()
+      let ran =
+        c.initHosted(start = true, hostEnv = @[ChatterShowEnvVar, ChatterTraceVar])
+      check ran.code == 0
+      let d = c.start(
+        env = [(ChatterShowEnvVar, SanitizerEnv.join(",")), (ChatterTraceVar, "1")]
+      )
+      c.expectReady(d)
+      check c.reaches(ChatterInstance, "ready")
+      let pids = d.chatterLogged(1)
+      check pids.len == 1
+      let shown = want.mapIt(ChatterEnvLine & it[0] & "=" & it[1])
+      let until = getMonoTime() + initDuration(milliseconds = ReadyMs)
+      while not shown.allIt(it in d.errText) and getMonoTime() < until:
+        sleep(20)
+      let log = d.errText
+      for line in shown:
+        check line in log
+      check d.stopped == 0
+      # Its host ended: nothing more can land in its file.
+      check hostsGone()
+      when Sanitized:
+        let reports = reportsDir()
+        if reports.len == 0:
+          checkpoint(
+            "no log_path here: this suite was not run by tools/sanitizer/reports.sh"
+          )
+        elif pids.len == 1:
+          check takeCanary(reports, pids[0]) == coMoved
+
     test "[RUN-0998] [RUN-0925] [RUN-1000] [IMPL-DECISION I96] a hosted operator module replaced by state_transfers move: the next start retires it and gives its directory to the replacement, which the orchestrator starts":
       let c = newCase()
       var dc = defaultDaemonConfig("assigned-by-init")
@@ -1602,6 +1639,20 @@ when defined(posix):
         skip()
       else:
         ledgerCase(hosted = true)
+
+    test "[IMPL-DECISION G409] logosd holds no libssl code: none of the symbols only libssl's objects define is in the binary (plain builds)":
+      # Plain builds only. A sanitizer can keep libssl's tables and their code
+      # alive: ASan registers each object's globals, and the other sanitizers
+      # add constructors to each object. An audit build exports every symbol on
+      # Linux (`-rdynamic`), and a prebuilt logosd (`LCN_LOGOSD`) has no nimcache
+      # beside it; the flake check `logosd-no-ssl` checks the shipped binary.
+      let nimcache = dExe.parentDir / "nimcache"
+      if kitSanitizer.len > 0 or kitAudit or not dirExists(nimcache):
+        skip()
+      else:
+        let r = checkNoSsl(nimcache, dExe)
+        checkpoint r.problem
+        check r.problem == ""
 else:
   import unittest2
 

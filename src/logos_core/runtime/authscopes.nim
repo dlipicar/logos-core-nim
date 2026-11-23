@@ -47,7 +47,7 @@ import logos_sdk/cbor
 import logos_sdk/codegen/common_types
 import ../authority/scopes
 from logos_sdk/kit/rc_types import LogosNSRuntimeControlRouteAccess, decode
-import ./authz
+import ./[authz, forwarded]
 
 type
   EvaluateRequest* = LogosNSCapabilityAuthorityEvaluateRequest
@@ -60,6 +60,12 @@ func codeText(s: string): string =
 
 proc address*(runtimeId, instance: string): Address =
   Address(runtime_instance_id: runtimeId, module_instance_id: instance)
+
+proc consumerAddress*(runtimeId, consumer: string): Address =
+  ## [G413, G415] The consumer `consumer` of this Runtime (`runtimeId`) as an
+  ## address: a forwarded consumer's names its own Runtime (`forwarded.nim`).
+  let p = consumerParts(runtimeId, consumer)
+  Address(runtime_instance_id: p.runtime, module_instance_id: p.instance)
 
 proc providerAddress(runtimeId, provider: string): ProviderAddress =
   ProviderAddress(provider: provider, runtime_instance_id: Opt.some(runtimeId))
@@ -220,7 +226,7 @@ proc evaluateRequest*(
   canonicalOrder(scopes)
   ok(
     EvaluateRequest(
-      consumer: address(runtimeId, q.consumer),
+      consumer: consumerAddress(runtimeId, q.consumer),
       scopes: scopes,
       execution_renewal:
         if q.renewal and q.action == aaExecute:

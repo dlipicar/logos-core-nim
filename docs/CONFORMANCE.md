@@ -7,8 +7,8 @@ of its units. `tools/spectrace/spectrace.py` does the bookkeeping. In the dev sh
 
 ## Requirement ledger
 
-Each spec's files sit under the conformance tree of the package that owns them: `conformance/` for core
-and `sdk/conformance/` for the SDK (CDE, CMT and HSH). `<tree>/requirements/<PFX>.jsonl` holds one line per unit. The first line records the spec file,
+Each spec's ledger sits under the conformance tree of the package that owns it: `sdk/conformance/` for the
+SDK (CDE, CMT, HSH and IFC) and `conformance/` for core (the rest). `<tree>/requirements/<PFX>.jsonl` holds one line per unit. The first line records the spec file,
 the spec revision and the next free ID.
 
 | Prefix | Spec | Prefix | Spec |
@@ -45,8 +45,11 @@ match the pinned specs.
 
 ## Claims
 
-`<tree>/claims/<PFX>.toml` gives each section a status. A spec two packages share has a claims file in each,
-and `spectrace owners` holds that each unit has one owner. The longest matching section key wins,
+`<tree>/claims/<PFX>.toml` gives each section a status. Each unit is claimed by the package that implements
+its rule (DECISIONS R8). A spec two packages share (IFC, RUN, CFG) has a claims file in each, and each
+gives the other package's units `out-of-scope:<package>`. `spectrace owners` holds that each unit has one
+owner, that a unit neither claims has the same status in both files, and that a claimed unit's tests and
+inspection items are in its owner's trees. The longest matching section key wins,
 and `default` covers the rest. Section keys are `§4.4`, `App B.1`, or `§1/Heading` for an unnumbered
 heading under a numbered one.
 
@@ -522,6 +525,12 @@ the facade process that passes the invocation's Runtime as the one expected (5-7
 also run the carrier against pyOpenSSL (G128, suite `tls.independent peer`); where `LCN_TLS_PEER_PYTHON` is
 not set, as under `nimble test`, those five cases are skipped.
 
+Part 5-7a-1 adds the protected input the snapshot is built from: logosd's remote trust input and its
+mark (G408), accepted at the start before any connection (TRN-0217), and the Runtime's own credential
+(G409), the one algorithm pair this implementation offers and accepts (TRN-0369). The handshakes are
+signed through the control channel by logosd's signing service, its key holder or, in tests, the
+process itself (G410), each in `test_remote_tls`.
+
 Part 5-2d pinned nim-boringssl 0.0.16 and turned on its `BORINGSSL_ZERO_RECORD_BUFFERS` (G327). The re-pin
 to 6cac8335 took the option off again (P4d): the new text forbids marked payloads on `tls-tcp` and `quic`
 whatever the library does (TRANSPORT l.1188-1189; RUNTIME l.1808, l.2939), so the build is upstream's
@@ -712,13 +721,55 @@ marker) and the catalog and provenance selections. Its schema and rules are core
   package name are 1 to 128 bytes and a key 48 bytes. The number of anchors and names is bounded only by
   the file's size.
 - **Key separation** (PM l.533): no anchor may use a call-evidence key of the session, retired ones
-  included. It supplies evidence to PKG-0435, which stays with step 5-7a until the TLS key exists.
+  included. It supplies evidence to PKG-0435, claimed since step 5-7a-1, where the TLS key and the
+  evidence key each refuse the other's file (G409).
+
+### What Tier 5 step 5-3b-1 changes
+
+The Package Manager's engine (DECISIONS I116; G399's value, G401 to G406 as built in 5-3b-1; G90 amended,
+G150 replaced), documented in `docs/PACKAGE-MANAGER.md`. It is a library in `src/logos_core/pm/` with no
+I/O of its own; the module that hosts it, the daemon's end and the channel come with 5-3b-2, so logosd
+still deploys no Package Manager.
+
+- **Claimed:** PM §4.2 and §4.4 as the mandatory baseline (G404): no catalog profile exists, a trust input
+  that selects one is refused by the Package Manager's input check as at logosd's start, and the catalog
+  document is closed (PKG-0085 to PKG-0093, PKG-0114, PKG-0115, PKG-0449). §13's retrieval through
+  `lcn.storage_fetch` (PKG-0353). The verification cache and what it may answer (PKG-0076, PKG-0077),
+  rotation (PKG-0079), what no catalog or Storage content may do (PKG-0019, PKG-0021, PKG-0069, PKG-0081,
+  PKG-0082), no freshness from a signature or the catalog's sequence (PKG-0112), the baseline applied with
+  no provenance profile (PKG-0167), and the catalog document and its acquisition (PKG-0472, PKG-0473).
+  PKG-0085, PKG-0089 and PKG-0449 are claimed by inspection. PKG 278/278, with 308 units left for Tier 5.
+- **Limits of the claim.** The engine is tested in one process over scripted providers; the hosted case
+  over a real route is 5-3b-2's (`test_pm_hosted`), and so is PKG-0474 (the bindings and the locator
+  encodings). PKG-0080 (a removed anchor never used for an installation, update or handoff) is 5-5's; the
+  inspection half is tagged here. The resolver's limits are a parameter of the engine with no configured
+  source yet.
+- **Bounds.** An archive at most 1 GiB, held in memory while it is checked; a catalog at most 4 MiB and
+  65,536 entries; at most 4,096 cached verifications (256 by default); one call at most a day
+  (300 s by default). Each is a protected input field (`docs/PACKAGE-MANAGER.md` §2).
+
+### What Tier 5 step 5-3b-2 changes
+
+The Package Manager as a hosted module under logosd (DECISIONS I116, closed; G399's daemon section, G400,
+G402's grants and hosted case, G405's shell, G443; G140 and G361 amended). With a `package_manager` section, logosd hands one
+`hosted_dynamic` instance its `lcn.pm_input` as protected realization input, adds the system rules S9 to S11, and
+the instance acquires its catalog and resolves roots over routes to its Storage providers. Until step 5-6a that
+module is a test build (`pmtest_module`), so a packaged deployment has none.
+
+- **Claimed:** PKG-0474, the bindings' retrieval API and locator encodings (`docs/PACKAGE-MANAGER.md` §4,
+  `sdk/docs/STORAGE-FETCH.md` §5, `docs/DAEMON.md` §3). PKG-0353 is now also tested hosted, under logosd, over
+  real routes (`test_logosd_pm`, `test_pm_hosted`). PKG 279/279, with 307 units left for Tier 5.
+- **Limits of the claim.** The only `lcn.storage_fetch` provider is the test fake; the storage module is N-4's.
+  A trust file change reaches the Package Manager only at the next start (BCP-0049). The resolver limits are
+  bounded, not cheap: at logosd's preset (G443) one package with a maximum-size manifest in the closure holds the
+  Package Manager's thread about a minute for one step; "Resolver limits" below gives the measured cost.
 
 ## Properties not claimed
 
 - A complete Logos module system (BCP §5.1; owner decision 10 (a), K18; DECISIONS G310, I97): there
-  is no Package Manager, so no package is installed, selected or trusted, and BCP's units that bind
-  the whole are claimed only where `logosd` meets them on its own. `docs/DEPLOYMENT.md` answers each
+  is no packaged Package Manager (the hosted one is a test build until step 5-6a, and it only resolves),
+  so no package is installed, selected or trusted for running, and BCP's units that bind the whole are
+  claimed only where `logosd` meets them on its own. `docs/DEPLOYMENT.md` answers each
   missing facility "None" or "Not supported", with the tier that changes it where one is planned.
 - The Credential Store (BCP l.287-289; owner row 38, 2026-11-18; DECISIONS G159): optional to
   implement and deploy, and not claimed. Its provider would have to answer `NOT_AUTHORISED`, which
@@ -894,19 +945,95 @@ route and bounds them with its routes (5-7b).
 PACKAGE MANAGER §11 (PKG-0597, PKG-0598) as built in `src/logos_core/package/resolver.nim`
 (DECISIONS G361). Protected policy supplies every limit; `resolverLimits` and
 `decodeResolverLimits` refuse a missing, non-positive or larger value before any root operation, and
-no package, manifest, catalog, source or caller can change one. These are the greatest values
-supported (`MaxResolverLimits`):
+no package, manifest, catalog, source or caller can change one. The maxima are the greatest values
+supported (`MaxResolverLimits`); logosd's preset is what a deployment gets when its `package_manager`
+section names no `resolver_limits` (DECISIONS G443; [DAEMON.md](DAEMON.md) §3):
 
-| Limit | Maximum | Counts |
-|---|---|---|
-| `partial_closure_names` | 4,096 | distinct package names in one partial closure, the root included |
-| `dependency_depth` | 4,095 | the greatest number of edges on a path from the root (4,096 names make no longer path) |
-| `candidates_per_name` | 4,096 | records charged for one package name: one per name and version (DECISIONS I110, B3) |
-| `assignment_attempts` | 1,048,576 | tentative bindings in one root operation, never decreasing |
+| Limit | Maximum | logosd's preset | Counts |
+|---|---|---|---|
+| `partial_closure_names` | 4,096 | 256 | distinct package names in one partial closure, the root included |
+| `dependency_depth` | 4,095 | 32 | the greatest number of edges on a path from the root (4,096 names make no longer path) |
+| `candidates_per_name` | 4,096 | 256 | records charged for one package name: one per name and version (DECISIONS I110, B3) |
+| `assignment_attempts` | 1,048,576 | 1,024 | tentative bindings in one root operation, never decreasing |
 
-At these values a chain of 4,096 names resolves in each build mode (`tests/test_resolver.nim`). Each
-bind recomputes every depth, so the worst case is about 4.3e9 edge visits: slow, with no time-out to
-reach. Exceeding a limit ends the root operation with `dependency-unavailable` and changes nothing.
+At the maxima a chain of 4,096 names resolves in each build mode (`tests/test_resolver.nim`). There
+is no time-out to reach: exceeding a limit ends the root operation with `dependency-unavailable` and
+changes nothing (DECISIONS G399, ruling M1), and the Package Manager's log names the limit.
+
+### What a resolution costs
+
+The limits bound the number of attempts, not the cost of one, so the cost was measured
+(`tools/pmbench.nim`, over the shapes of `tests/support/pmshapes.nim`). The shapes run through the
+Package Manager's driver with every inspection answered at once. A step is one resolver run, the time
+one handler holds the Package Manager's module thread. The driver reruns the resolver from the root
+after each inspection (DECISIONS G405), so a closure of n names takes n + 1 steps, and the thread is
+free between two steps while a retrieval runs. The figures are CPU time, orc with `-d:release`, one
+run at a time, on an Apple M1 Max (macOS) and an AMD Ryzen AI 9 HX 370 (x86_64 Linux). CI asserts
+the shapes' counts, never a time (`test_pm_driver`, ruling M6).
+
+The shapes:
+- **wide**: a root with w dependency names that sort last and 20 names, each with two versions, that
+  sort first, then a name no candidate satisfies, so every assignment of the 20 is tried. One
+  manifest of 4 MiB holds about 80,000 dependency entries;
+- **dense**: n names, each needing every later one;
+- **layered**: n names in L layers, each needing every name of a later layer;
+- **chain**: n names, each needing the next;
+- **hub**: a dense core of n names and one name, sorting last, that needs all of them, in v versions.
+
+**At logosd's preset** (256 / 32 / 256 / 1,024):
+
+| Shape | Ended by | Steps | Longest step, Mac | Longest step, Linux | Total, Mac | Total, Linux |
+|---|---|---|---|---|---|---|
+| chain, 33 names (depth 32) | resolved | 34 | 0.56 ms | 0.53 ms | 9.9 ms | 11.6 ms |
+| dense, 32 names | resolved | 33 | 2.0 ms | 1.8 ms | 27 ms | 21.7 ms |
+| layered, 256 names in 32 layers | resolved | 257 | 659 ms | 553 ms | 60.9 s | 43.5 s |
+| hub, 30 names, 256 versions of the last | no closure | 288 | 49 ms | 38 ms | 6.6 s | 5.2 s |
+| wide, w = 80,000 | `assignment_attempts` | 31 | 55.7 s | 76.0 s | 121.3 s | 171.2 s |
+| dense or chain past depth 32 | `dependency_depth` | 34 | 18 ms | — | 0.26 s | — |
+
+**At the maxima** (4,096 / 4,095 / 4,096 / 1,048,576), with `assignment_attempts` lowered where a row
+says:
+
+| Shape | Attempts | Ended by | Steps | Longest step, Mac | Longest step, Linux | Total, Mac | Total, Linux |
+|---|---|---|---|---|---|---|---|
+| wide, w = 10,000 | 1,000 | `assignment_attempts` | 31 | 5.55 s | 3.29 s | 12.0 s | 7.67 s |
+| wide, w = 80,000 | 100 | `assignment_attempts` | 28 | 4.98 s | 6.92 s | 23.6 s | 33.4 s |
+| wide, w = 80,000 | 1,000 | `assignment_attempts` | 31 | 49.5 s | 73.6 s | 113.7 s | 167.7 s |
+| wide, w = 80,000 | 10,000 | — | — | over 900 s, stopped | — | — | — |
+| dense, 128 names | | resolved | 129 | 89 ms | 79 ms | 4.0 s | 2.92 s |
+| dense, 256 names | | resolved | 257 | 738 ms | 611 ms | 64.0 s | 46.1 s |
+| chain, 1,024 names | | resolved | 1,025 | 312 ms | 200 ms | 99.0 s | 58.4 s |
+| chain, 2,048 names | | resolved | 2,049 | 1.13 s | 734 ms | 747.5 s | 485.7 s |
+| hub, 255 names, 1 version | | resolved | 258 | 698 ms | 613 ms | 59.8 s | 46.1 s |
+| hub, 255 names, 4 versions | | no closure | 261 | 666 ms | 546 ms | 62.7 s | 47.7 s |
+
+What the figures say:
+- **Honest closures at the preset** hold the thread under 1 s for each step: a chain or a dense
+  closure at the depth limit takes milliseconds, and 256 names in 32 layers, the most the preset
+  admits of that shape, under 0.7 s. Its total is about a minute, spread over 257 steps.
+- **The wide shape misses the 1 s target at the preset.** One package with a maximum-size manifest
+  in the closure costs about 55 ms for each attempt on the Mac and about 75 ms on Linux, so its
+  longest step at 1,024 attempts is about 56 s (Linux: about 76 s). Only `assignment_attempts` bounds
+  it. `partial_closure_names` counts bound names only: the specification does not define a partial
+  closure (PACKAGE MANAGER l.1243, l.1257-1260; an editorial remark in the spec owner's comments
+  document, logos-lips `f19745f8`), and counting a required name before it is bound would change
+  results, not only cost. No limit counts dependency entries (logos-lips `17284d73`). Any accepted
+  signer with a package in the closure can bring it. The value is not lowered toward 20, which would be below
+  honest need (DECISIONS G443, ruling M5).
+- **At the maxima** the cost grows past any target. By extrapolation from the rows above, not
+  measured: one step of the wide shape at 1,048,576 attempts takes about 14.5 h; the dense shape at
+  4,096 names about 50 min for its longest step and about 48 days in total; a chain at depth 4,095
+  about 4.5 s for its longest step and about 1.6 h in total. [DEPLOYMENT.md](DEPLOYMENT.md) §12 says
+  what raising a limit costs.
+- **Why:** each bind and each unbind recomputes every depth over the dependency entries of every
+  bound package, each attempt scans every required name, and the driver reruns the resolver from the
+  root after each inspection. A bind checks its bound dependencies for a cycle in one walk (DECISIONS
+  G361's amendment): before, the hub of 255 names took 1,020 ms for its longest step with one version
+  and 1,763 ms with four, on the Mac.
+- **The cost fix** is a step of its own after 5-3b (DECISIONS G443): incremental depths, ordered
+  unresolved names, a run resumed instead of rerun, and slicing by a fixed count of work, so no
+  result or counter changes. It comes before 5-5, or before the first step that lets a consumer other
+  than the operator's tools start a root operation, whichever is first.
 
 ## Storage fetch limits
 
@@ -1018,6 +1145,10 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `
   B1: tests only); `engine.newTlsContextForTests` makes settings no conforming peer has (TLS 1.2
   allowed, or no certificate) to show the refusals; `stream.abortForTests` ends a connection without
   close_notify. All are called by `test_remote_tls`, which is also an audit build (`base/wipeaudit`).
+- Signing with the TLS key (G410): `remote.signing = "process-copy"` and `signsvc.testKeyMessage`,
+  which send the key to a TLS process, exist only in a build with `-d:logosTestSigning` (owner
+  decision B1: tests only); a packaged logosd refuses the setting. `test_remote_signing` and
+  `test_remote_tls` are built with it.
 
 No deployment binary contains them.
 
@@ -1041,7 +1172,10 @@ ids = ["HSH-0004"]
 reason = "Statement about what a profile document must contain; satisfied by HASH itself."
 ```
 
-`spectrace gate` (a flake check) fails when a claimed unit has no test or inspection item, when a
+A unit's evidence counts only in its owner's trees: a test under `tests/` for core or `sdk/tests/` for the
+SDK, or an item in that package's `conformance/inspection/` (R8).
+
+`spectrace gate` (a flake check) fails when a claimed unit has no test or inspection item there, when a
 test names an unknown or retired ID, when a claims file has an invalid status, when an inspection item
 names a unit that is not claimed (inspection stands for a test, so it covers claimed units only), or,
 with `--closed-tier N`, when any status defers to tier N. It prints the deferred units per label.

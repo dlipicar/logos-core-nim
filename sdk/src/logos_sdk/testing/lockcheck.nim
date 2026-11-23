@@ -9,6 +9,12 @@
 ## checksum: one made from other content, a renamed directory, a lock moved since setup and a second
 ## install of one version all show.
 ##
+## An install directory and the `srcDir` its own nimble file declares are one install [IMPL]
+## (DECISIONS G468, amending G436): Nimble 0.26.2 installs a package it fetches in local mode
+## whole, its `srcDir` inside, and lists both directories in `nimble.paths` (draft #199). A
+## directory pairs only with its own `srcDir`, so two installs of one package, each with its
+## pair, are still two.
+##
 ## What the suffix does not show: an edit to an installed file after the install, since the
 ## directory keeps its name and passes; a directory
 ## copied in, or left from before, under the right name; untracked files in the tree it was
@@ -23,6 +29,8 @@ import std/[json, os, strutils]
 
 type Install* = object ## an install directory `nimble.paths` names
   dir*: string ## the path as `nimble.paths` gives it
+  root*: string
+    ## its `pkgs2/<name>-<version>-<sha1>` directory: `dir` itself or a parent
   name*, version*, checksum*: string
 
 const setupHint* = "run `nimble --useSystemNim setup -l`"
@@ -51,7 +59,9 @@ proc installOf*(path: string, install: var Install): bool =
   ## subdirectory of it, the package's `srcDir`), and which. The name is read from the right:
   ## the checksum, then the version, and the rest, dashes included, is the name.
   let parts = path.split({'/', '\\'})
+  var ends = parts[0].len # where `parts[i]` ends in `path`
   for i in 1 ..< parts.len:
+    ends += 1 + parts[i].len
     let part = parts[i]
     if parts[i - 1] != "pkgs2" or part.len < 44 or part[^41] != '-' or
         not isSha1(part[^40 .. ^1]):
@@ -62,6 +72,7 @@ proc installOf*(path: string, install: var Install): bool =
       continue
     install = Install(
       dir: path,
+      root: path[0 ..< ends],
       name: rest[0 ..< dash],
       version: rest[dash + 1 .. ^1],
       checksum: part[^40 .. ^1],
@@ -77,6 +88,7 @@ proc lockMismatches*(
     developLinks: openArray[string] = [],
     ownDir = "",
     linkNames: openArray[(string, string)] = [],
+    srcDirs: openArray[(string, string)] = [],
 ): seq[string] =
   ## Every locked package but `nim` (never installed: every command passes `--useSystemNim`) has
   ## a checksum in the lock and exactly one install, whose checksum is the lock's, and whose
@@ -88,6 +100,10 @@ proc lockMismatches*(
   ## link of a package `developLinks` names. `linkNames` gives the package each such directory
   ## holds, as (path, name); the caller writes `developLinks` in its own code, never from the
   ## environment.
+  ##
+  ## `srcDirs` gives, as (root, path), the `srcDir` an install's own nimble file declares. Where
+  ## `nimble.paths` names both an install's root and that directory, the two are one install
+  ## (DECISIONS G468). A root pairs with its own `srcDir` only, and only once.
   var lock: JsonNode
   try:
     lock = parseJson(lockText)
@@ -118,6 +134,27 @@ proc lockMismatches*(
           ", a develop link of " & name & ", which is not listed as one"
           else: ""
         )
+  # [DECISIONS G468] Nimble's nested local install: the root and its own srcDir.
+  var paired = newSeq[bool](installs.len)
+  for i, whole in installs:
+    if not samePath(whole.dir, whole.root):
+      continue
+    var src = ""
+    for (root, dir) in srcDirs:
+      if samePath(root, whole.root):
+        src = dir
+    if src.len == 0 or samePath(src, whole.root):
+      continue
+    for j, inner in installs:
+      if j != i and not paired[j] and samePath(inner.root, whole.root) and
+          samePath(inner.dir, src):
+        paired[j] = true
+        break
+  var counted: seq[Install]
+  for i, install in installs:
+    if not paired[i]:
+      counted.add install
+  installs = counted
   for link in developLinks:
     if not packages.hasKey(link):
       result.add link & ": listed as a develop link, but nimble.lock has no such package"
@@ -196,9 +233,10 @@ proc installMismatches*(
     root: string, developLinks: openArray[string] = []
 ): seq[string] =
   ## `lockMismatches` over `root`'s `nimble.lock` and `nimble.paths`, with `root`'s `srcDir` as the
-  ## project's own directory and each other directory's package read from the nimble file in it or
-  ## above it. A missing `nimble.paths`, or one whose install directories are gone, is one finding:
-  ## Nimble's setup has not run there.
+  ## project's own directory, each other directory's package read from the nimble file in it or
+  ## above it, and each install root's `srcDir` from the nimble file in it. A missing
+  ## `nimble.paths`, or one whose install directories are gone, is one finding: Nimble's setup has
+  ## not run there.
   let
     lockPath = root / "nimble.lock"
     pathsPath = root / "nimble.paths"
@@ -213,11 +251,14 @@ proc installMismatches*(
   var
     gone: seq[string]
     linkNames: seq[(string, string)]
+    srcDirs: seq[(string, string)]
   for path in nimblePaths(pathsText):
     var install: Install
     if installOf(path, install):
       if not dirExists(path):
         gone.add path
+      elif samePath(path, install.root):
+        srcDirs.add (path, srcDirOf(path))
     elif not samePath(path, ownDir) and dirExists(path):
       linkNames.add (path, nimbleNameAt(path))
   if gone.len > 0:
@@ -230,4 +271,6 @@ proc installMismatches*(
       pathsPath & " names " & what &
         ", so Nimble's setup has not run here or its installs were removed; " & setupHint
     ]
-  lockMismatches(readFile(lockPath), pathsText, developLinks, ownDir, linkNames)
+  lockMismatches(
+    readFile(lockPath), pathsText, developLinks, ownDir, linkNames, srcDirs
+  )
