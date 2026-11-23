@@ -51,7 +51,7 @@
 import std/[locks, monotimes, sysrand, times]
 import results
 import logos_sdk/abi/[checks, types]
-from logos_sdk/codegen/kitrt import callbackEnter
+from logos_sdk/base/entry import lcnCallback
 import logos_sdk/base/hex
 import logos_sdk/hash/hashinput
 import logos_sdk/iface/outcome
@@ -200,12 +200,11 @@ proc setEndHook*(t: RouteTable, hook: EndHook, data: pointer) =
     t.endHook = hook
     t.endHookData = data
 
-proc onEnd(reason: CErrorCode, userData: pointer) {.cdecl, gcsafe, raises: [].} =
+proc onEnd(reason: CErrorCode, userData: pointer) {.lcnCallback.} =
   ## [SPEC INTERFACE §2.8] The route ended: the handle takes no new command,
   ## and its subscriptions are inactive (IF l.1430-1433). It takes the table's
   ## lock only, never a handle's. Like every callback, it registers the
   ## calling thread first (`rpc.onComplete`).
-  callbackEnter()
   let tag = cast[ptr EndTag](userData)
   var hook: EndHook = nil
   var data: pointer = nil
@@ -218,10 +217,9 @@ proc onEnd(reason: CErrorCode, userData: pointer) {.cdecl, gcsafe, raises: [].} 
 
 proc onSubscriptionEnd(
     sub: LogosSubscriptionId, reason: CErrorCode, userData: pointer
-) {.cdecl, gcsafe, raises: [].} =
+) {.lcnCallback.} =
   ## [SPEC INTERFACE l.1474-1481] A binding-ended subscription on this handle,
   ## for the table's hook; it operates on no handle (l.1480).
-  callbackEnter()
   let tag = cast[ptr EndTag](userData)
   var hook: EndHook = nil
   var data: pointer = nil

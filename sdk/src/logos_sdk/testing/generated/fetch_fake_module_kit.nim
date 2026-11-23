@@ -1088,7 +1088,7 @@ template exportFetchFakeModule*(T: typedesc) =
       destroyModule(instance)
     GC_unref(instance)
 
-  proc fetchFakeModuleKitName(): cstring {.exportc: "logos_fetch_fake_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [].} =
+  proc fetchFakeModuleKitName(): cstring {.exportc: "logos_fetch_fake_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "a static string".} =
     system.cstring(moduleName)
 
   proc fetchFakeModuleKitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: "logos_fetch_fake_module_MODULE_init", dynlib, cdecl, gcsafe, raises: [].} =
@@ -1103,7 +1103,7 @@ template exportFetchFakeModule*(T: typedesc) =
     let instance {.cursor.} = cast[T](p)
     routeFetchFakeModule(instance, bare, params)
 
-  proc fetchFakeModuleKitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: "logos_fetch_fake_module_MODULE_call_surface", dynlib, cdecl, gcsafe, raises: [].} =
+  proc fetchFakeModuleKitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: "logos_fetch_fake_module_MODULE_call_surface", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "static bytes".} =
     if outLen != nil:
       outLen[] = csize_t(callSurfaceData.len)
     addr callSurfaceData[0]

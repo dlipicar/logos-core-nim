@@ -265,18 +265,18 @@ proc statusNote(r: Result[void, InvocationFailure]): string =
   else:
     $r.unsafeError.code
 
-proc onPosted(payload: pointer) {.cdecl, gcsafe, raises: [].} =
+proc onPosted(payload: pointer) {.lcnModuleThread.} =
   if not onConfinedThread():
     postThreads += 1
   posts += 1
 
-proc onWoken(payload: pointer) {.cdecl, gcsafe, raises: [].} =
+proc onWoken(payload: pointer) {.lcnModuleThread.} =
   let m = cast[Ledger](payload)
   posts += 1
   if not m.wake.isNil and not m.wake.finished():
     m.wake.complete()
 
-proc onStreamed(payload: pointer) {.cdecl, gcsafe, raises: [].} =
+proc onStreamed(payload: pointer) {.lcnModuleThread.} =
   let m = cast[Ledger](payload)
   inc m.streamed # touches the instance
   streamed += 1
@@ -416,7 +416,7 @@ proc stopLeftStream*(): int =
 
 proc postFromNim*(poster: pointer) =
   ## [DECISIONS G440] One `post` of a counted callback through `poster`.
-  post(Poster(poster), onPosted, nil)
+  post(Poster(poster), entered(onPosted), nil)
 
 proc postFromC*(poster: pointer): bool =
   ## [DECISIONS G440] One `lcn_kit_post` of a counted callback through
@@ -683,7 +683,7 @@ proc `probe`(
     destroyMode.store(10)
     note = "armed"
   of 31:
-    m.services.poster.post(nil, nil)
+    m.services.poster.post(default(Entered[PostFn]), nil) # dies: a null callback
   else:
     discard
   ok(LedgerProbeResponse(value: request.value, thread: threadNumber(), note: note))

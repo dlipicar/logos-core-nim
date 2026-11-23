@@ -30,7 +30,7 @@ import results
 import logos_sdk/abi/types
 import logos_sdk/base/perthread
 import logos_sdk/iface/outcome
-import ./[callside, events, plumbing, subend]
+import ./[callside, entryframe, events, firstfresh, plumbing, subend]
 
 when defined(lcnTestHooks):
   import std/os
@@ -253,6 +253,35 @@ proc runReport(e: Engine, job: RcJob) =
     discard cast[ptr AttemptServices](job.owner).subEnd.report(id, job.reason)
   e.post(Msg(kind: mkSubEndDone, job: job.report))
 
+type
+  DrainArgs = object
+    e: Engine
+    sub: pointer
+
+  ReportArgs = object
+    e: Engine
+    job: ptr RcJob
+
+proc drainAt(p: pointer) =
+  let a = cast[ptr DrainArgs](p)
+  drain(a.e, rcSubOf(a.sub))
+
+proc linkDrainAt(p: pointer) =
+  let a = cast[ptr DrainArgs](p)
+  linkDrain(a.e, a.sub)
+
+proc reportAt(p: pointer) =
+  let a = cast[ptr ReportArgs](p)
+  runReport(a.e, a.job[])
+
+when defined(lcnTestHooks):
+  proc reportKey(job: RcJob): pointer =
+    ## [DECISIONS G466] The subscription-end handler `runReport` runs.
+    if job.onHandle:
+      cast[ptr HandleState](job.owner).subEnd.handlerKeyForTests
+    else:
+      cast[ptr AttemptServices](job.owner).subEnd.handlerKeyForTests
+
 proc rcWorkerLoop(e: Engine) =
   while true:
     var job: RcJob
@@ -268,11 +297,20 @@ proc rcWorkerLoop(e: Engine) =
         let late = drainDelayMs.load
         if late > 0:
           sleep(late)
-      drain(e, rcSubOf(job.sub))
+      # [DECISIONS G466] Under test hooks the first drain to each handler,
+      # and the first report to each, is on a new thread.
+      var a = DrainArgs(e: e, sub: job.sub)
+      firstOnFreshThread(
+        cast[pointer](rcSubOf(job.sub).handler), drainAt, addr a, markRuntimeThread
+      )
     of rjLinkDrain:
-      linkDrain(e, job.sub)
+      var a = DrainArgs(e: e, sub: job.sub)
+      firstOnFreshThread(
+        linkKeyForTests(job.sub), linkDrainAt, addr a, markRuntimeThread
+      )
     of rjSubEnd:
-      runReport(e, job)
+      var a = ReportArgs(e: e, job: addr job)
+      firstOnFreshThread(reportKey(job), reportAt, addr a, markRuntimeThread)
 
 proc rcWorkerMain*(e: Engine) {.thread.} =
   ## A Runtime-owned thread: `wait_for_shutdown` from a handler is NOT_READY,

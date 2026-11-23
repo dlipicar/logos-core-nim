@@ -739,12 +739,12 @@ template exportPmtestModuleCalls*() =
     kitEnter()
     callInvoke0(p0, p1, p2, p3, p4)
 
-  proc pmtestModuleCallsClear0(p1: ptr LogosResponseOwner, p4: ptr logos_pmtest_Resolve_response_t) {.exportc: "lcn_clear_pmtest_Resolve", dynlib, cdecl, gcsafe, raises: [].} =
+  proc pmtestModuleCallsClear0(p1: ptr LogosResponseOwner, p4: ptr logos_pmtest_Resolve_response_t) {.exportc: "lcn_clear_pmtest_Resolve", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear0(p1, p4)
 
   proc pmtestModuleCallsInvoke1(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: ptr ptr UncheckedArray[logos_pmtest_Binding_t], p3: ptr csize_t, p4: ptr bool, p5: ptr logos_pmtest_Catalog_t, p6: ptr uint64): LogosResult {.exportc: "lcn_invoke_pmtest_Status", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
     callInvoke1(p0, p1, p2, p3, p4, p5, p6)
 
-  proc pmtestModuleCallsClear1(p1: ptr LogosResponseOwner, p2: ptr ptr UncheckedArray[logos_pmtest_Binding_t], p3: ptr csize_t, p4: ptr bool, p5: ptr logos_pmtest_Catalog_t, p6: ptr uint64) {.exportc: "lcn_clear_pmtest_Status", dynlib, cdecl, gcsafe, raises: [].} =
+  proc pmtestModuleCallsClear1(p1: ptr LogosResponseOwner, p2: ptr ptr UncheckedArray[logos_pmtest_Binding_t], p3: ptr csize_t, p4: ptr bool, p5: ptr logos_pmtest_Catalog_t, p6: ptr uint64) {.exportc: "lcn_clear_pmtest_Status", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear1(p1, p2, p3, p4, p5, p6)

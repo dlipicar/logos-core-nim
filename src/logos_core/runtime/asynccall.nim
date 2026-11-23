@@ -490,6 +490,13 @@ proc runComplete*(p: pointer) =
     c.completer = 0
     broadcast(c.cond)
 
+when defined(lcnTestHooks):
+  proc completeKeyForTests*(p: pointer): pointer =
+    ## [DECISIONS G466] Test hook: the completion callback `runComplete` runs.
+    let c = asyncOf(p)
+    withLock c.lock:
+      result = cast[pointer](c.complete)
+
 # Deferred provider invocations ----------------------------------------------------------
 
 proc releaseOwner(o: LogosResponseOwner) =
