@@ -315,6 +315,10 @@ deferred past the re-pin.
 - **Options offered:** (a) Nim over the Rust library's C FFI *(recommended)*; (b) Rust, exporting the C
   ABI directly. **Decision:** (b). Consequence: the code generator, kits and the conformance harness must
   be language-neutral (they test built artifacts).
+- **Revised 2026-11-22 (the Tier 5 plan's A4 (a), approved by the owner 2026-11-16; built in step N-3,
+  I118):** for blockchain, (a) replaces (b). The module is Nim, a confined kit module over the library's C
+  binding, which is linked into the module library as a static archive (G419–G424). The consequence
+  stands: the generator, kits and harness test built artifacts. The Rust output is the Rust SDK's (D29).
 
 ### D11 — Where modules run on desktop
 - **Kind:** SCOPE/FREE · **Specs:** RUNTIME §2, §4.2 (placement is policy), §5.1, §5.3 ("In-process
@@ -7231,6 +7235,12 @@ their history.
   node inside a ready instance; Core lifecycle stays authoritative; any state they write goes to
   state_dir. Methods depending on the inner node return a typed `not-started` arm before it starts
   (RUNTIME §3.4 l.618-633 forbids NOT_READY for application state).
+- **Amended 2026-11-22 for blockchain (the owner's answer to the stepN-3 plan's Q4; G423, I118):**
+  blockchain keeps none of `start`, `stop` and `generate_user_config`. `_init` starts the inner node and
+  `_destroy` stops it, since blockchain has no observable outcome before stop; the keys are the library's
+  own, made at the first `_init` (G144, G422). With no state before the start there is no `not-started`
+  arm: an inner node that stops by itself answers `unavailable` with `node-stopped` (G424). (b) stands
+  for the other modules until their steps decide.
 
 ### G98 — Delivery's RLN and service-discovery dependencies
 - **Kind:** FREE · **Specs:** RUNTIME §7.5 (module-to-module calls only through Runtime routes).
@@ -7326,6 +7336,8 @@ their history.
   only successful inits are constrained), §2.8.
 - **Options offered:** (a) refuse with LOGOS_ERR_MODULE, null context, no leak *(recommended)*; (b)
   support multiple instances. **Decision:** (a).
+- **Cited 2026-11-22 (Tier 5 step N-3, G420):** the blockchain module relies on (a). With one instance
+  per process, the poster its C callbacks share, static and never freed, is safe.
 
 ### G136 — Storage start blocking on DHT bootstrap
 - **Kind:** FREE · **Description:** storage's `start()` awaits the network bootstrap (up to minutes),
@@ -7351,6 +7363,14 @@ their history.
   and a loopback API live in Core configuration; devnet genesis from an e2e fixture; keystore backup
   documented; `generate_user_config` kept as a method *(recommended)*; (b) keys only through the method.
 - **Decision:** (a).
+- **Amended 2026-11-22 (the owner's answer to the stepN-3 plan's Q4 and Q5; G422, G423, I118):**
+  `generate_user_config` is not a method (G97's amendment). The keystore is made at the first `_init`
+  when absent, by the library's own key generation, or placed before it, and is never rewritten.
+  Network, initial peers and ports are the typed configuration (G422); there is no API, loopback or
+  other (Q5 (c)), and v1 has no package default for initial peers (the node profile's, N-6a). The
+  devnet's keystore and deployment are made at test time from the library's standalone files, not an
+  e2e fixture. The keystore's backup and what a `copy` transfer clones are in `docs/DEPLOYMENT.md` §26
+  and the module's README.
 
 ### G147 — Storage mix (private downloads)
 - **Kind:** FREE · **Options offered:** (a) typed mix configuration (enabled, pool, SPRs inline);
@@ -7363,6 +7383,219 @@ their history.
   discovery through libp2p_module, an RLN-enabled round trip against the local LEZ sequencer; live:
   libp2p active, rln/lez_rln installed but idle under the logos.test preset *(recommended)*; (b) also
   enable RLN in the live run. **Decision:** (a).
+
+### G419 — The blockchain module's artifact: the C binding as a static archive inside the kit library
+- **Kind:** IMPL, under C8 · **Specs:** INTERFACE §2 (one module library, its exports); PM l.1183 (one
+  self-contained module library, G93's interim); stepN-3 plan §3.8, §4.1.
+- **Decision.** The library's C binding (`logos-blockchain-c`, a cdylib in its manifest) is built as a
+  static archive with `cargo rustc --crate-type staticlib` (no manifest change) and linked into the module's
+  kit library, so the module is one file. The kit's export list hides every symbol of the archive: the
+  library exports exactly the kit's ten symbols, no `NimMain` and no Rust symbol, and `nm` finds
+  `start_lb_node_embedded` inside, hidden (T1). Its dynamic dependencies are within an allowlist of system
+  libraries (macOS: libSystem, libobjc, libc++, libiconv and four system frameworks; Linux: libc, libm,
+  libpthread, libdl, librt, libutil, libgcc_s, libstdc++ and the loader); no OpenSSL is linked. On Linux the
+  RUNPATH names only `/nix/store` paths and `GNU_STACK` is `RW` (`-z noexecstack`, spike F1).
+  - Two archives: `logos-blockchain-c-static` (release profile: fat LTO, one codegen unit) for the
+    artifact, and `logos-blockchain-c-static-test` (the `ci-release` profile, LTO off, and the
+    `lcn-test-hooks` feature) for test builds only; the spike's F3 measured the test profile's crate rebuild
+    2.9 times faster on framework.lan and 2.5 times on the Mac. The release artifact holds neither the
+    test-hook marker `lcn_test_hooks_blockchain_c` nor the kit's strict-destroy marker (T1).
+  - The packages hold the archive, the header and the link line only (`doInstallCargoArtifacts = false`;
+    crane's default put the 840 MB cargo target into each output).
+- **Tests:** `logos_module/tests/test_artifact.nim` (T1), on the module package's library on Linux.
+- **Status:** built 2026-11-22 (Tier 5 steps N-3.1 and N-3.2; I118).
+
+### G420 — The blockchain module's threads: a confined kit over C workers
+- **Kind:** IMPL, on G335, G338, G111 · **Specs:** INTERFACE l.1955, l.2100, l.2114-2115 (destroy and
+  calls in flight); stepN-3 plan §3.5, §3.6.
+- **Decision.**
+  - A confined kit with `--async-api` (`lcn-gen kit --confined --async-api`; N-1's thread-confined mode).
+  - Four C worker threads run the library's blocking calls. Jobs live in a C table keyed by an id (`queued`,
+    `running`, `done`, `abandoned`; 256 at most, a full table answers `unavailable` with `busy`); a
+    completion is posted to the module thread with its id, and a worker frees an abandoned job's result
+    itself. Event copies live in a table keyed by id too, so destroy frees the copies whose posts the kit
+    dropped.
+  - The mutex, the conditions, the `closed` mark, the id counter and the poster are static and never freed,
+    so a late callback tests memory that still exists. The library's threads reach the module only through C
+    callbacks behind the `closed` mark; no Nim code runs on a foreign thread. One instance per process
+    (G111) makes the callbacks' process-wide poster safe.
+  - A 5 s watchdog on the same workers notices an inner node that stopped by itself (G423).
+  - **Destroy posts nothing and awaits no posted callback.** It sets the `closed` mark, closes the queue,
+    waits on the glue's condition variable for running jobs, calls `shutdown_node` on the module thread,
+    joins the workers and frees both tables. It holds under the kit's order at N-1e (G437, G438, G440).
+  - Job results cross into Nim as a Nim object (`JobResult`), not the C struct: under refc an `importc`
+    struct in a case object whose other branch holds a GC'd field is copied as zeros (Nim 2.2.14; upstream
+    draft #195 in `build/scratch/upstream/ISSUES.md`).
+- **Tests:** T7 `test_threads` (16 threads at once, a slow job beside fast ones, cancellation queued and
+  running, destroy with a job running: it waits for the abandoned job's library call, 2.7 s for the 3 s
+  hook, and every count balances; a post after destroy stops at the `closed` mark); T5's thread plateau.
+- **Status:** built 2026-11-22 (Tier 5 step N-3.2; I118).
+
+### G421 — The blockchain module's placement: `hosted_dynamic` in a process of its own
+- **Kind:** IMPL, on RUNTIME l.3645 · **Specs:** RUNTIME l.3645 (a module's supported placements);
+  LOADER §5 (placements); stepN-3 plan §3.6 step 5, §3.7.
+- **Decision.** `hosted_dynamic` with placement `process` only, one node per process: stated in
+  `docs/DEPLOYMENT.md` §26 and the module's README, and in the node profile when N-6a builds it. No code
+  check while NP-14 is open (a module cannot declare the placements it supports).
+  - **Grounds:** the library's threads outlive `_destroy` (planning's ruling, 2026-11-21): tokio's and
+    RocksDB's pools wind down after `shutdown_node` returns, and one `tracing-appender` thread stays per
+    start (T5: 4 other threads throughout, and the appenders equal to the starts). What still ends a
+    process from inside the library: a Rust abort (a double panic, a panic in drop while unwinding, out of
+    memory) and C++ faults in RocksDB or rapidsnark. In a host of its own that ends only that host.
+  - **What a host must do:** never unload the library, and end with `_exit` after the release, running no
+    exit handlers beside those threads. logos-core-nim's Module Host does both (`host/main.nim`: no
+    `dlclose`; `exitnow` after `released`).
+  - **The working directory** ([IMPL], planning's ruling of 2026-11-22, with Fable's note
+    `tier5-plans/fable-checks/rapidsnark-logfile.md`). On Linux, rapidsnark's prover, as the circuits'
+    prebuilt archive ships it (`USE_LOGGER`), logs every proof to `MyLogFile.log` in the process's working
+    directory: 29 lines of phase names, about 1.4 KB a proof, unrotated; the devnet node makes about one a
+    second, some 124 MB a day. While the node runs, the module's process works in `<state_dir>/prover/`
+    (0700): `_init` changes the directory after the one-node check and before the node starts (the logger
+    opens its file at its first line), `_destroy` changes it back, and every path the module gives the
+    library is absolute. The watchdog empties the file in place past 1 MiB, and `_init` does the same to
+    one an earlier process left (the logger writes in append mode and flushes each line, so a truncate
+    leaves no hole; a rename or removal would leave it growing unseen). This rests on the placement: the
+    change is process-wide, which a process that hosts one node may make. It is not a Runtime feature: a
+    realization mechanism must not use process-global environment as per-instance state (RUNTIME
+    l.1398). A link to the null device in `prover/` was not taken: a `copy` state transfer takes only
+    directories and regular files (HOST-CONFIG l.1389-1391), so it would refuse the instance. Upstream
+    note #197 (drafted, not filed) asks upstream to drop the flag; the fix stays correct after it does.
+- **Tests:** T9 `test_hosted`: an orc logosd realizes the module in a Module Host and drives it with
+  `logosctl` (start, a call, three events, `describe`). Five stops each end their host and leave the
+  instance `unloaded`, never `error`, with no "ended unexpectedly" in logosd's log, and logosd exits 0: the
+  plan's condition (d), planning's ruling (a), that each host ends orderly (its terminal lane-0 message read,
+  released by the Runtime). The host's exit status is recorded only inside the Runtime (`HostEnd.status`), so
+  T9 cannot see it; a diagnostic for an orderly end with a nonzero status is a later core step. T20
+  `test_prover_log` (the working directory): the devnet from an empty working directory with a 16 KiB
+  bound and a 2 MiB leftover log; the directory stays empty, the working directory is `prover/` while the
+  node runs and comes back, the leftover is emptied, and on Linux the logger holds the instance's file
+  open, which is emptied again and stays bounded. `test_units` checks `boundLog`.
+- **Status:** built 2026-11-22 (Tier 5 step N-3.3; the working directory N-3.5; I118).
+
+### G422 — D5 for blockchain: typed configuration, no environment, no home directory
+- **Kind:** IMPL, for the owner with the stepN-3 plan (D5) · **Specs:** CONFIG l.223 (configuration is
+  the module's input); PM l.1183; stepN-3 plan §3.3, §3.4.
+- **Decision.**
+  - `blockchain_config.cddl`'s typed configuration, delivered as `configuration_input`; the module reads no
+    environment variable and no home directory (the embedded start, `start_lb_node_embedded`, takes none;
+    T4 with hostile `NET_PORT`, `STATE_PATH`, `LOG_LEVEL`, `DEPLOYMENT`, `HTTP_HOST`,
+    `LOGOS_BLOCKCHAIN_CIRCUITS` and `HOME`).
+  - The deployment built in, or a read-only file named by configuration with an optional `sha256` that
+    `_init` checks (G441 refines: BearSSL's SHA-256 over the bytes the library reads, from the module's
+    copy).
+  - Circuits compiled in; logs to standard error only; no HTTP API (Q5 (c)).
+  - The time source a named server, `time: { ntp_server, ? update_interval }`, with no `"system"` arm;
+    `127.0.0.1:9` is the offline value. `cryptarchia: { prolonged_bootstrap_period }` optional, absent the
+    library's hour; a lower value is logged once at start (planning's rulings (a), 2026-11-21, with Fable
+    §10).
+  - `network`: `listen_host` (an IPv4 literal: the library's limit), `port`, `initial_peers` (at most 64),
+    `external_address`, `nat` (`static` or `traversal`); `blend.port`; `runtime_threads` (1 to 64). The
+    prelude has no integer ranges, so the bounds are checked at start.
+  - The state layout: `keystore.yaml` (0600; the library's own keys, made at the first `_init` or placed
+    before it, never rewritten), `node/` (the library's database), `run/user_config.yaml` (0600, rewritten
+    at every `_init`, no secret; its `version` from the library's own `generate_user_config` output) and,
+    with `sha256`, `run/deployment.yaml`.
+- **Amended 2026-11-22 (N-3.5; G421's working directory):** the layout gains `prover/` (0700), the
+  process's working directory while the node runs. On Linux it holds rapidsnark's `MyLogFile.log`, the
+  prover's phase names (no key, no witness), kept under 1 MiB. So the module logs to standard error and,
+  on Linux, to that one file.
+- **Tests:** T4, T5, T11, T6 (the devnet with a placed keystore), `test_units`; T9 checks the configuration
+  the module renders under logosd.
+- **Status:** built 2026-11-22 (Tier 5 step N-3.2; I118).
+
+### G423 — D6 for blockchain: `_init` starts the node, an unprepared destroy stops it
+- **Kind:** IMPL, for the owner with the stepN-3 plan (Q4 (a)) · **Specs:** INTERFACE l.2100; RUNTIME
+  l.3462-3472, l.3654, l.3700-3701, l.3705, l.3713-3719; stepN-3 plan §3.6.
+- **Decision** (the single D6 rule for node modules, blockchain's row):
+  - `_init` starts the inner node. There is no `start`, `stop` or `generate_user_config` method: blockchain
+    has no observable outcome before stop (v1's calls are reads, and nothing is owed to peers). G97 (b) and
+    G144 (a) are amended for blockchain.
+  - An unprepared `_destroy` does the whole shutdown and joins its work before returning, and awaits no
+    posted callback (G420). Its expected time is F7's; measured unprepared destroys: 1.2 ms on the Mac and
+    1.3 ms on framework.lan (T5, idle), 0.5 to 670 ms hosted under logosd (T9).
+  - The stop figure: F7's slowest plus 5 s, at least 10 s: the default `stop_deadline_ms`, 10 s. The
+    per-module field and the orchestrator's preparation call (RUNTIME l.3713-3716) are wave 3's small core
+    step.
+  - The node's shutdown budget: the drain, plus the longest path of unprepared release times through the
+    ordering constraints, plus a 5 s margin, rounded up to whole 5 s. The node's `shutdown_grace_ms` is
+    20000 (owner, Q4 (a), 2026-11-21), to be reconciled with N-4's figure; the node profile (N-6a) sets it.
+  - An inner node that stops by itself: every node method answers `unavailable` with `node-stopped`, and
+    the module calls `report_failure` once (RUNTIME l.3654); the instance is `error`
+    (`reported-by-module`) and a restart policy recovers it (T8, T9).
+  - The library's text goes only to the log, a failed `_init` and `report_failure`, never into a response.
+- **Tests:** T5 (init and destroy times, the thread plateau), T7 (destroy with a job running), T8 (the
+  node stopped by itself), T9 (the failure, the recovery and five stops under logosd).
+- **Status:** built 2026-11-22 (Tier 5 steps N-3.2, N-3.3; I118).
+
+### G424 — The blockchain module's contract v1
+- **Kind:** IMPL, on D20, COMMITMENT l.966-976, l.1007-1010, RUNTIME l.614 · **Specs:** as named;
+  stepN-3 plan §3.2.
+- **Decision.**
+  - `node_info`, `cryptarchia_info`, `network_info` and `chain_progress_event`, one per block the node
+    processed. Every response has an open `unavailable` arm (`code`, the module's `reason`), written out in
+    each response (COMMITMENT §3.1 step 5): v1 sends `node-stopped`, `library-error` and `busy`, and a
+    consumer treats any other code as unavailable. `mode` has a catch-all, `other`. No marked method; no
+    `import_key` (the devnet places its keystore before the first start).
+  - Frozen when N-6a pins its root in policy rules or N-5 starts, whichever is first. N-5's contract
+    extends it and lists v1 under `extends` (TF-62, G393).
+  - The policy's rule classes (D4): `lcn_call` and consumers get `provider-access` (discover,
+    establish-route, renew-route, call, subscribe-event) on v1's root, the module its own
+    `publish-event`; its permission settings hold `logos-core-nim.host-ambient`.
+- **Tests:** T2 `test_contract` (roots recomputed from the text; the frozen-declarations rule on a fixture
+  v2), T9 (the calls, events and `describe` through `lcn_call`).
+- **Status:** built 2026-11-22 (Tier 5 step N-3.2; I118).
+
+### G441 — The blockchain module's deployment digest: BearSSL, on the bytes the library reads
+- **Kind:** IMPL, refining G422 · **Specs:** none (the module's own configuration,
+  `blockchain_config.cddl` `deployment.sha256`, stepN-3 plan §3.3); planning's rulings of 2026-11-22 (b)
+  and (4), Fable agreeing, with Fable's correction to (4).
+- **Found.** N-3.2's first build (logos-blockchain c77ce98cf) hashed `deployment.file` with a SHA-256
+  written in the module's C glue, then gave the library the path, which it read again: a file changed
+  between the check and the library's read was never checked. The library resolves `!include` relative to
+  the including file (utils/src/yaml.rs), so a copy of the checked bytes alone would break the relative
+  includes, and the digest of the main file pins none of the files it includes (the era schedule, the
+  chain parameters).
+- **Decision.**
+  - **The hash** is BearSSL's `br_sha256` through nim-bearssl (`logos_module/digest.nim`), importing only
+    `bearssl/abi/bearssl_hash`: BearSSL's hash sources (about 15 files) are new code in the module
+    library, but no new package. nim-bearssl is chronos's own dependency; the module requires
+    `bearssl >= 0.2.13 & < 0.3.0`, which holds core's locked 0.2.13, and a scratch lock of the module
+    against core's installed packages is byte-identical with and without that line, each entry equal to
+    core's `nimble.lock`'s. The kit's export list keeps BearSSL's symbols private (T1: the 10 kit
+    exports; every `_br_*` local). The glue's own SHA-256 is deleted.
+  - **With `sha256` set, the file must be self-contained** (`logos_module/deployment.nim`): no include,
+    directive, verbatim tag, escaped tag, BOM or NUL. `_init` opens the file (`O_NONBLOCK`), bounds it by
+    `fstat` on that descriptor ([IMPL] 4 MiB; not a regular file is refused) and reads it from the same
+    descriptor, once. Before hashing it refuses bytes holding `!include` anywhere, a line that starts with
+    `%` (a directive: `%TAG` builds tags from handles), `!<` (a verbatim tag), a `%` in a tag (`!`
+    followed by non-space characters containing `%`: escapes), a UTF-8 byte order mark anywhere, a 0xFE or
+    0xFF byte (UTF-16 and UTF-32 marks; never in UTF-8) or a NUL byte. No YAML parsing: the library matches
+    the tag as serde_yaml resolved it (yaml.rs:199, `INCLUDE_TAG`), and YAML can spell it without the text
+    `!include` (Fable). A missed relative include could climb out with `..` into the state directory,
+    where the keystore is; a missed absolute one reads any file (yaml.rs:208-212). Other tags, such as the
+    era schedule's `!V1`, stay allowed.
+  - **Hash the bytes the library gets** (Fable). The bytes that match are written to
+    `<state_dir>/run/deployment.yaml` (0600 in the 0700 `run/`, through a temporary name, fsync and rename)
+    and the library starts from that copy, so a file changed after the check never reaches it. The digest
+    stays a plain file digest that `sha256sum` reproduces, and it now covers the whole deployment.
+  - **Without `sha256`** nothing changes: the library reads the file named, includes and all; nothing is
+    copied, and a copy an earlier start left is removed.
+  - **The fixture.** `logos_module/fixtures/standalone-deployment-flat.yaml`: the library's standalone
+    deployment with `era/schedule/0.yaml` inlined under `eras: 0:`, made by `fixtures/flatten.nim` from the
+    files as of library commit 47f87124c; `test_units` keeps it equal to that output. N-6a's node profile
+    pins this kind of file.
+- **Tests:** `logos_module/tests/test_units.nim`: FIPS 180-4's four examples on `digest.sha256`; each
+  refused spelling and the allowed ones; the size bound on the descriptor read (and a directory, a missing
+  file, a FIFO); the fixture against `flatten`. `test_lifecycle`: the copy (0600, its bytes and the
+  system tool's digest), a mismatch refused, the library's own deployment with sha256 refused (its
+  include), the size bound, a source swapped after the check (test hook `swap_deployment`: the node
+  starts from the checked bytes), and no copy kept without sha256. Library side (documentation only:
+  the refusal applies either way), `utils/tests/lcn_deployment.rs`, Nix check
+  `logos-blockchain-utils-lcn-tests`: the loader resolves as the include a plain `!include`, a `%TAG`
+  handle, a verbatim `!<!include>`, an escaped `!incl%75de` and one after a UTF-8 BOM; `!!include` is a
+  different tag; a UTF-16 file does not load; the flattened fixture loads to the value the original
+  loads to.
+- **Status:** built 2026-11-22 (Tier 5 step N-3.2, logos-blockchain 56192e5e4 on `lcn/n3-2-sha`).
 
 ---
 
@@ -7857,6 +8090,10 @@ their history.
   handlers and set their own dispositions: logosd (a signal thread over blocked SIGTERM, SIGINT,
   SIGHUP, SIGUSR1 and SIGUSR2; SIGPIPE ignored; `docs/DAEMON.md` §13), `logos-module-host` (SIGPIPE
   ignored, `host/main.nim`), logosctl, lcn-gen and lcn-pkg (Nim's handlers: a stack trace on a crash).
+- **Cited 2026-11-22 (Tier 5 step N-3, G419):** the blockchain module's Rust library follows the same
+  rule. Its embedded start leaves out the node's `SystemSig` service, the one that would take the
+  process's signals, so the module library leaves its host's dispositions alone (the spike's F5 and F6;
+  T3 `test_signals`).
   A module repository builds its module library with the switch too (the kit's guide, TIER5-PLAN N-1).
 - **Test:** `tests/test_host_dylib.nim` "[DECISIONS G340] loading the library leaves the host's SIGINT,
   SIGSEGV and SIGPIPE dispositions as they were": a sentinel handler on each before the load, compared
@@ -9030,6 +9267,12 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G412 | remote listener and export records (G298 re-decided) | FREE (B8, Q4) | 10 |
 | G413 | inbound remote Runtime Control | FREE | 10 |
 | G415 | who may forward, and the subject of a forwarded consumer | FREE (B5, O1) | 10 |
+| G419 | the blockchain module's artifact: the C binding as a static archive inside the kit library | IMPL | 11 |
+| G420 | the blockchain module's threads: a confined kit over C workers | IMPL | 11 |
+| G421 | the blockchain module's placement: `hosted_dynamic` in a process of its own | IMPL | 11 |
+| G422 | D5 for blockchain: typed configuration, no environment, no home directory | IMPL (D5) | 11 |
+| G423 | D6 for blockchain: `_init` starts the node, an unprepared destroy stops it | IMPL (Q4 (a)) | 11 |
+| G424 | the blockchain module's contract v1 | IMPL | 11 |
 | G433 | the packages inside this repository | Choice | 12 |
 | G434 | how our packages require each other | Choice | 12 |
 | G435 | what each package installs, and kit builds outside this repository | Choice | 12 |
@@ -9038,6 +9281,7 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G438 | closing a confined kit's module-thread dispatcher, and what destroy left | IMPL | 12 |
 | G439 | a chronos variant in `kit-toolchains`: the kits under the libraries' own chronos | IMPL | 12 |
 | G440 | a post gate that outlives a confined kit's context | IMPL | 12 |
+| G441 | the blockchain module's deployment digest: BearSSL, on the bytes the library reads | IMPL, refining G422 | 11 |
 | G442 | sanitizer reports from child processes fail the check | IMPL | 12 |
 | G443 | logosd's preset of the resolver limits | IMPL | 9 |
 | G468 | the lock check: an install and its own `srcDir` are one install (amends G436) | IMPL | 12 |
@@ -9173,6 +9417,7 @@ of work follows the tiers in `docs/SPEC-STATUS.md`: most settled areas first.
 | I115 | IMPL | Tier 5: the marked-copy audit (G276, G278; INTERFACE §1.2.1, §1.4.1 l.380-386; `tier5-plans/marked-copy-audit.md`, one row per site with its evidence; the probe in `tier5-plans/marked-copy-probe/`). Built as `a71ebac` and `bd97ba8` | **The rule.** In results 0.5.1, `isOkOr`, `isErrOr`, `valueOr`, `errorOr`, `and`, `or` and `orErr` begin with `let s = (self)`, and whatever part of `s` the template does not move out is freed unzeroed; `?` moves both sides, and `get`, `value` and `error` are lent (`resultsLent`). Whether `s` is a copy is the compiler's cursor inference (the probe, under the free scan, orc and orc `-d:release` alike): a `var` local is copied; a `let` local is not, except inside a loop; a field of a `var` object, a `var` parameter and a plain parameter are not; `discard ?f()` drops a copy. An object, tuple or array constructor passed to a non-sink parameter borrows its fields and is not destroyed (Nim 2.2.14 `compiler/injectdestructors.nim` l.884-929). Not a Nim bug: the copy is results' own `TODO avoid copy`, and zeroing before release is G276's requirement, not the language's. **Nine paths fixed**, each with a case that fails without its fix: (1) `abi/checks.providerChecked` zeroes a status outside the provider set in place, not in a copy; (2) `codegen/consumert.completeTyped` zeroes the checked completion status and erases a failure's text once `onDone` returns; (3) `iface/outcome.checkDetail` zeroes the decoded detail tree; (4) `codegen/kitrt` registers `releaseLastFailure` with `onThreadRelease`, so the per-thread failure text is cleared at a thread's end (`a71ebac`); (5) `runtime/invoke.commitSync` zeroes a provider's failure when the route's end decides a synchronous call; (6) `transport/envelope.failureOf` zeroes a refused failure; (7) `transport/hello.readFirst` zeroes the first frame's tree, and the payload and failure text of a first message that is not a Hello (`wipeRefused`); (8) `transport/session.onResponse` zeroes the failure text of a Response for no outstanding request; (9) `host/consumer.setFailure` zeroes the `clip` copy. Tests: `test_wipe_routes` gains the matrix steps `outside` and `detail` (W-4, W-6, W-7, and W-7's hosted consumer through the probe's new `call-quiet`), a W-4 `commitSync` case and a W-8 typed-failure case; `test_wipe` W-2 gains three refused-message cases. **Four found safe** by the rule: `transport/session.nim` :540 `encoded(Message(... response: resp))` and `checkStatus`'s `checkFailure(InvocationFailure(...))` (constructors passed to non-sink parameters), `checkFailure`'s `let m = f.message.get` (a cursor), and `readDetail`'s `view` (a template over `toOpenArray`); the md lists the sites that never see marked text. **Out of scope**, with reasons: ticket copies on the Hello path (R18: a ticket exists only transiently; fix 7 zeroes a received Hello's tree); the carrier's frame copies (no marked payload crosses the carrier, I92); `host/rcbinding`'s `clip` temporaries (Runtime Control marks nothing). **Handed on:** `cli/` is a consumer like any other, so G276 applies to `lcn_call`. N-2's `lcn_call` refuses every marked method before any route (its `commands.nim` :594, checked by L-5), so N-2b exposes only the refused argument text and records that as a non-claim; N-2d builds the full erasure (a marked response erased once written out) with a W-case, citing this audit. **Open:** whether a newer `results` drops the copy is unchecked; nothing was downloaded. Checks on `bd97ba8`: the 18 touched suites in orc, refc and orc-release on the Mac and on framework.lan, nph, the three lints and the spectrace gate at 6cac8335 | 2026-11-20 |
 | I116 | IMPL | Tier 5 step 5-3b: Package Manager foundations, A4 and A2 (PACKAGE MANAGER §4.1 to §4.4, §6, §11, §13, l.834-858, l.1294-1331; STORAGE-FETCH; plan `tier5-plans/step5-3b-plan.md`, its revision log and planning's rulings §12; reviews `fable-checks/step5-3b-plan.md`). Built as 5-3b-1 (the engine) and 5-3b-2 (the channel and the module) | **Closed 2026-11-22** (5-3b-2). **5-3b-1, the engine** (G399's value, G401, G402's retrieval, G403, G404, G405's driver and engine, G406; G90 amended, G150 replaced, notes on G91 and G166). `src/logos_core/pm/`: `input` (`lcn.pm_input`, generated types, `decodePmInput`), `catalog` (`lcn.package_catalog` and `lcn.pm_catalog_kept`, the canonical order, the digest pin, sequence continuity against the kept document), `fetcher` (one retrieval: `stat_object`, 1 MiB reads with BLAKE3, the retries and waits of G402), `vcache` (G403), `driver` (the resolver over a memo, G405) and `engine` (sans-I/O: commands out, events in; routes and their renewal with fresh keys, readiness, acquisition and the kept catalog, one retrieval per binding, a deadline timer per call, `resolve` for one root). `lcn-pkg catalog` writes the canonical document and prints its digest. `tools/lint/nostorage.py` and `nostorage.toml` (the flake check `lint-nostorage`) and `layers.py`'s `pm-external` rule with `layers.toml`'s `pm_roots` and `pm_external_allowlist` (G406). `docs/PACKAGE-MANAGER.md` but the channel and the daemon's section. Suites `test_pm_input`, `test_pm_catalog`, `test_pm_fetch`, `test_pm_vcache`, `test_pm_driver`, cases in `test_lcn_pkg`; the engine is tested over scripted providers in one process, the hosted case is 5-3b-2's. 25 PKG units claimed (§4.2's 9, §4.4's 0114, 0115 and 0449, PKG-0353's in-process half, and 0019, 0021, 0069, 0076, 0077, 0079, 0081, 0082, 0112, 0167, 0472 and 0473 by entry). `[IMPL]` The resolver's limits are an engine parameter with no configured source yet. G400 is recorded as decided. **5-3b-2, the channel and the module** (G399's daemon section, G400, G402's grants and hosted case, G405's shell; G140 amended). **The channel** (G400): `protected_inputs` in `app-config.v1` (`runtime/host_config.cddl`), checked at create (a listed instance with a `state_assignment`, at most one entry); the Module Loader writes `input` to `<state_dir>/.lcn-protected-input` at each realization attempt, before the module's code runs, and removes it when initialization returns, at release and at retirement (`runtime/protinput.nim`, `loader/provider.nim`, `runtime/realizer.nim`); a `copy` state transfer skips the reserved name and its temporary names. **logosd** (G399): the `package_manager` section (`daemon/daemon_config.cddl`), its checks with each refusal naming its field, `resolver_limits` all four or absent, absent being logosd's preset (rulings C1 to C4), the start line naming the limits and their origin; compose writes the instance's `lcn.pm_input` with the trust file the start accepted, checked by the Package Manager's own decoder before anything starts. **S9 to S11** (G402, DAEMON.md §5): S9's Runtime Control rule names no `targets` and holds `list_modules`, since this Capability Authority never allows a request without selectors (a list, `establish_route`) or one naming a route through a rule with `targets` (found in `test_logosd_pm`; planning's ruling of 2026-11-22, 7.3); G402 and DAEMON.md §5 record that the Package Manager can read every module record. `test_authority` shows a targeted deny never matching a list either, and AUTHORITY-POLICY.md says so. **The shell** (G405): `pm/shell.nim` runs the engine in a hosted module over the kit's routes, looks up each binding's provider record with `list_modules`, and logs a resolver limit that ends a root operation by name (ruling M5); `pmtest_module` (`tests/kit/`) wraps it for tests. **The fake** serves `fetch-fake/state/<name>` from its state directory (STORAGE-FETCH §5). **The resolver limits** (rulings M1 to M6, planning's ruling of 2026-11-22): logosd's preset is G443's (256, 32, 256, 1,024), its relations tested on the constants; `bindCand` makes one cycle walk per bind (G361's amendment), checked against the per-dependency walk kept under `lcnTestHooks` on 400 seeded catalogs (`test_resolver`); the shapes (wide, dense, layered, chain, hub) are `tests/support/pmshapes.nim`, timed by `tools/pmbench.nim` and counted in `test_pm_driver` (M6); CONFORMANCE "Resolver limits" gives the measured cost at the preset and at the maxima, DEPLOYMENT §12 what raising a limit costs. The cost fix is a step of its own after 5-3b, gated before 5-5 (G443). Suites `test_protected_input` (10), `test_pm_hosted` (6), `test_logosd_pm` (2), and cases in `test_daemon_config` (S9 to S11 decided by the Capability Authority; the preset's relations), `test_loader`, `test_authority` (a targeted rule and a list), `test_resolver` (the walk's oracle) and `test_pm_driver` (the shapes' counts). PKG-0474 claimed; PKG 279/279. | 2026-11-22 |
 | I117 | IMPL | Tier 5 step 5-7a: remote Runtimes over `logos.remote.tls-tcp` (RUNTIME §9.3.6-§9.3.9; TRANSPORT §8.4.1; plan `tier5-plans/step5-7a-plan.md` revision 4 with its recheck at `c9e88db`; Fable's batch B recheck `fable-batch-b-6cac8335.md`; G407-G418). Built as 5-7a-1 to 5-7a-4, each merged on its own | **5-7a-1** (the foundations, with no remote process; `5f24b55`, `90f9903`, `250313c`, `18a1c0a`, `a09940d`, and the records). **The host's parent** (G264 amended, a separate commit ahead of the rest): `logos_sdk/base/parentwatch.nim`; the spawner passes `--parent=<pid>`, and the host sets `PR_SET_PDEATHSIG` first (Linux) and then compares `getppid()` with that pid, exiting 70 on a mismatch and 2 without the argument. **The remote section** (G407): daemon configuration `remote` (`enabled`, `signing`, `key_holder`); with `remote.enabled` the Runtime id must be a lowercase UUIDv4; `key_holder` goes with `key-holder` only; `process-copy` only with `-d:logosTestSigning`. **The split** (Q2 (a)): the P-256 key, PKCS#8, the self-signed certificate and ECDSA move from `credential.nim` behind `boring.nim` to `transport/tls/p256.nim`, which calls no libssl function; the layers lint gains `daemon-no-ssl`. **The link** (G409; Fable's check and planning's ruling, 2026-11-22): logosd links with `-Wl,-dead_strip` (macOS) or `-Wl,--gc-sections` (Linux), and `tests/support/nossl.nim` checks that none of the symbols that only libssl's eleven objects define is in the binary (`test_logosd` on plain builds, the flake check `logosd-no-ssl` on the deployed logosd). **The remote trust input** (G408): `remote/trust.cbor` and `state/remote-trust-mark.cbor` (`daemon/remote_trust.cddl`, RUNTIME's enrollment rules appended and renamed `lcn.enrollment_*`), G299's start table, the rules per key with the two stricter ones, the extended loader report (G324), `logosctl remote trust` (`init`, `show`, `reestablish`, `anchor add`, `anchor remove`, `enroll add`, `enroll revoke`, `import`), and the verifier's snapshot (`transport/tls/trustsnap.nim`); `trust.nim` keeps an active record whose anchor was withdrawn, failing it closed. **The credential** (G409): `daemon/credential.nim` and `logosctl remote credential` (`new`, `show`, `rotate`); rotation a cutover through `remote/credential-next/`, taken up at the next start, crash-safe; a start with `remote.enabled` and no credential refused. **The channel** (G411): `remote/carrier.cddl` (`logos-core-nim.remote-carrier.v1`) and `remote/carrier.nim`; `signing.SignClient`, the TLS process's end. **Who signs** (G410): `daemon/signsvc.nim` (logosd's service, `HolderRelay`, the rate limits, the count file) and the program `logos_keyholder` (`daemon/keyholder.nim`); `testKeyMessage` for the test copy; `assemble` takes the rotation up, refuses a start without a credential, and loads the key only in the default mode. **Tests:** `test_remote_trust` (new: the schema, every row of the start table, the rules per key, protected files, the loader report, the writers, the snapshot, the credential, key separation, and logosd and logosctl as processes, a kill right after the mark moved included), `test_remote_signing` (new: the channel, logosd's service, the key holder as a program on a socket pair, the relay, a key-holder start's reads with `key.p8` unreadable, the test copy), `test_remote_tls` (handshakes signed through logosd's service, the relayed holder and the test copy), `test_logosd` (no libssl code in the binary), `test_module_host`, `test_daemon_config`, `test_gen_current`. **Claims:** RUN-0493 to RUN-0500, RUN-0869, RUN-0928 and RUN-0929, TRN-0217, TRN-0369 and PKG-0435. **Records:** G86, G87, G324 lines at `6cac8335`, G87 redone, G324 extended, G255 and G194 settled by the text; `docs/REMOTE.md` (new), `DAEMON.md` §2, §3, §6a and §6b, `DEPLOYMENT.md` §2 and §5 (row 5d Supported), `HOST-CONFIG.md` (the host's argv). **Left to 5-7a-2:** logosd spawning the key holder and the open-watch test, the remote program and its supervision, passing the accepted input through `prepareDaemon`; to 5-7a-4: `remote trust import --node`. **At the merge of master `193a58a`:** the `logos_keyholder` bin in the nimble file and the flake, in W2-P's layout: the flake package `logos-keyholder`, and logosd's package installs it at `libexec/logos-core/logos_keyholder`, beside the Module Host (`docs/REMOTE.md`). `nix/ci-weights.json` is unchanged: the new suites take their group's mean until a CI run measures them. **5-7a-2** (G412, G413, G415; G298 re-decided; Q4 as planning ruled; G81 and G205 amended). **Authority** (G415): `lcn.ap_subject` gains `runtimes`, provider and target patterns become selectors, the Authority takes the enrolled Runtimes from logosd, the load report names an enrolled-nowhere id, and `policy: allow-all` with `remote.enabled` refuses the start. **Records** (G412): `runtime/remoterecords.nim`; the engine holds the configuration's records (`remote.listeners`, `remote.exports`; the host's `lcn.app_remote`) and Runtime Control's, behind the four methods, `rqRemoteCommit` and the engine's remote lock, each change audited with its origin and hinted. **Durable disables** (Q4): `daemon/remoteexposure.nim`, `state/remote-exposure.cbor` (`daemon/remote_exposure.cddl`), `logosctl remote exposure list` and `reset`. **The listener** (G411): `src/logos_remote.nim` with `remote/listener.nim`, `runtime/remotesup.nim` (every spawn on its thread, the restart lock, backoff, the ending), `logos_sdk/base/parentwatch.nim`, `daemon/remoteside.nim`; logosd spawns `logos_keyholder` in key-holder mode and refuses a start while a restart lock is held; the nimble file and the flake build `logos_remote`. **Inbound Runtime Control** (G413): `runtime/remoterc.nim` (the Hello judge, a session thread, workers), `runtime/forwarded.nim` (the forwarded id), `invoke.rcAuthorizeMethod`, the store's forwarded origin (`lcn.rs_origin` `runtime`, `lcn.rs_create_key` `consumer_runtime`), forwarded discovery; `get_execution_permissions` and `report_failure` are NOT_AUTHORISED for a forwarded consumer (correcting the plan's §3.5); interims for `establish_route` (until 5-7a-3) and Runtime Control event subscriptions (until 5-7b). **Tests:** `test_remote_rc` (new), `test_remote_lifecycle` (new), `test_authority` (`cap.remote`), `test_daemon_config`, `test_runtime_authority`, `test_routes`, `test_gen_current`. **Claims:** 38 of the plan's 42 RUN units (RUN-0092, RUN-0336 to RUN-0340, RUN-0342 to RUN-0344, RUN-0502, RUN-0503, RUN-0508 to RUN-0510, RUN-0513, RUN-0514, RUN-0516 to RUN-0518, RUN-0595, RUN-0596, RUN-0598, RUN-0613 to RUN-0618, RUN-0621, RUN-0622, RUN-0898, RUN-0984 to RUN-0989, RUN-1124), TRN-0206, TRN-0227 and TXT-0359's enrolled half. RUN-1124 leaves `spec/repin-pending.toml`, and TXT-0163 now rides on RUN-1125. **Moved:** RUN-0341 (the source's use of the connection) to 5-7a-4; RUN-0511, RUN-0512 (Runtime Control and provider traffic on one listener) and RUN-0515 (an export makes no route) to 5-7a-3; TXT-0360 stays with RUN-1125 (5-7a-4); TXT-0362 to TXT-0365's re-evidence needs a forwarded consumer's route record, so 5-7a-3. **Records:** the G81, G205 and G298 notes, summary rows G407 to G413 and G415, `docs/REMOTE.md`, `DAEMON.md` §2, §6c and §10, `DEPLOYMENT.md` §4 and §5d, `AUTHORITY-POLICY.md`, `HOST-CONFIG.md`. **At the merge of master `6e580e0`:** the remote program beside the key holder: the nimble file's bins are `logosd`, `logosctl`, `logos_keyholder` and `logos_remote`; the flake packages `logos-keyholder` and `logos-remote` (both at `coreVersion`, W2-P), and logosd's package installs both in `libexec/logos-core/`, beside the Module Host (`docs/REMOTE.md`). **Still left:** `nix/ci-weights.json` unchanged | 2026-11-21 to 2026-11-22 (5-7a-1, 5-7a-2) |
+| I118 | IMPL | Tier 5 step N-3: the blockchain node as a Logos Core module (G419-G424, G441; D10 revised, G97 and G144 amended, G111 and G340 cited; plan `tier5-plans/stepN-3-plan.md`, spike `tier5-plans/stepN-3-spike.md`) | **Where.** The library's clone `logos-blockchain` (no push URL), from master at `e0d79cc25`. Branches: `lcn/n3-1-embedded` (`4ff155b9a`: the embedded start `start_lb_node_embedded` without `SystemSig` and the HTTP service, the static packages, the cargo tests), `lcn/n3-2-module` (`c77ce98cf`: the module; `56192e5e4`: G441) and `lcn/n3-3-hosted` (`718606723`: the late-post report written through a rename; `72a011436`: T9; `7162acef2`: T9's permission case cites G110; `5b7c03d23`: condition (d)'s wording), `lcn/n3-4-sdk` (`b8bf31fe7`: the SDK required as the nimble package `logos_sdk`, G434, G436; `b2b8967e1`: `report_failure`'s completion registers its thread, G339) and `lcn/n3-5-prover-log` (`9ad0cedba`: the working directory, G421; `4df729c3e`: T9 removes a passing case's directory), each merged `--no-ff` into `lcn/blockchain-module` (`154774268`, `52e60e13a`, `95a76de53`, `8b13199a7`, `01e403c72`). Its `logos_module/` directory moves to the module's own repository unchanged. Core: docs only, on `stepN-3` (`ffa12fa`: G441; then this row's commit). **Built.** `logos-blockchain-c-static` and `-static-test` (G419); contract v1 and the configuration (G424, G422); the C glue and the confined kit (G420); D6's rule (G423); the placement (G421); the deployment digest (G441); the SDK as an installed package (N-3.4's first half); the working directory and the prover's bounded log (G421, G422); the suites T1 to T9, T11, T20 and `test_units`, each a flake check `blockchain-module-<suite>-<orc|refc|orcrelease>` on x86_64-linux and aarch64-darwin (T20's not yet run as one: no per-step full flake); the cargo tests. **Measured** (F7, T5, T7, T9). Init 17.5-55.1 ms on the Mac and 31.5-83.4 ms on framework.lan; destroy 1.2-12.7 ms and 1.4-2.8 ms; an unprepared destroy on an idle node 1.2 ms and 1.3 ms. Over ten cycles the other threads stay at 4 and the `tracing-appender` threads equal the starts; after the last cycle the Mac keeps `tracing-appender` and `futures-timer`, Linux `rocksdb:low`, `rocksdb:high`, `tracing-appende` and `futures-timer` (G421's grounds). Destroy with a job running waits 2.7 s for T7's 3 s hook, every count balanced. Under logosd in a Module Host: destroys 0.5-670 ms on the Mac and 1.9-3.5 ms on framework.lan; T9 runs 15-27 s. **Checks.** N-3.1: the archives, the cargo tests (11 passed, 0 failed, 22 ignored) and the release output free of test hooks, on framework.lan and the Mac. N-3.2 on `56192e5e4`: the ten suites x orc/refc/orc-release on the Mac (30/30) and framework.lan (30/30), the library-side cargo test (2/2); the flake check on framework.lan: 29 of 30 suite checks, the cargo tests and `logos-blockchain-utils-lcn-tests`, the failure a test race in T7 under orc-release (it read the late-post report before the glue wrote it), fixed in `718606723`. N-3.3: T7 and T9 x orc/refc/orc-release on the Mac (6/6) and T7, T8 and T9 x 3 on framework.lan (9/9), T9's refc case a skip (G277); T9 again under orc on the merged tree's `5b7c03d23` (2/2); the library's flake check on framework.lan (`72a011436`, rc 0, 1063 s): the 33 suite checks, the three `blockchain-module-hosted-*` ones in the sandbox on core's packaged logosd, logosctl, `lcn_call` and Module Host; `spectrace deploydoc` and `pending`. N-3.4's first half, package mode (the SDK from core `c6f9ed4`): on `b2b8967e1` the Mac 33/33, framework.lan 33/33 with T1's Nix build, T9 orc-release x3 on the Mac (3/3), `nimble --useSystemNim --offline -l test` on the Mac (11 suites, 53 tests), path mode on the Mac (4/4); on `b8bf31fe7` framework.lan 33/33 and the Mac 32/33, T9 under orc-release the G339 fault `b2b8967e1` fixes. N-3.5 on `9ad0cedba`: the twelve suites (T20 new) x orc/refc/orc-release on the Mac (36/36; T1 in a second run with the release archive, which the first omitted) and framework.lan (36/36, with T1's Nix build of the module package); T20 on framework.lan: under each variant the logger held the instance's `prover/MyLogFile.log`, which was emptied twice (the leftover at `_init`, then past the 16 KiB test bound), and no `MyLogFile.log` appeared in the suites' working directory. On `4df729c3e` (T9's case directories): T9 x orc/refc/orc-release on framework.lan (3/3, refc the G277 skip) and the Mac (3/3, refc the G277 skip), no `lbh` directory left; a scratch copy with a forced failure kept exactly the failed case's directory and printed its path. Measured: rapidsnark's Linux log is 29 lines, about 1.4 KB a proof, and the devnet node makes about one proof a second (765 in 777 s), some 124 MB a day; the bound is 1 MiB, checked every 5 s by the watchdog. **Upstream.** Nim draft #195 in `build/scratch/upstream/ISSUES.md` (an `importc` struct in a refc case object copied as zeros; G420's `JobResult`); #197, the circuits' Linux archives built with rapidsnark's logger on. Not filed. **Downloads** (reported after, the owner's rule of 2026-11-22): the Rust 1.100.0 toolchain through rustup (1.4 GB, for rustfmt), the workspace's git dependencies (`~/.cargo/git` 410 to 885 MB) and a crates.io index update on the Mac, all deleted when N-3 ends; the core input at `349f4a5` through the git fetcher; Nimble's package list (`packages_official.json`, about 1 MB) on N-3.4's first install. **Left.** N-3.4's second half (the lock entry, the Nix reader and the core address, at the extraction); the per-module stop field and the orchestrator's preparation call (wave 3); NP-14 (G421); a bound blend port, which needs two nodes (N-6a) | 2026-11-22 |
 | I120 | IMPL | Tier 5 step W2-P: the repository split's packaging (`tier5-plans/wave2-plan.md`; plan `tier5-plans/stepW2-P-plan.md`, spike record `tier5-plans/stepW2-P-spike.md`; G433-G436). Parts W2-P.2: the two packages; W2-P.1: Nimble 0.26.2, the lock and the Nim pin | **W2-P.2.** `sdk/` is the Nimble package `logos_sdk` 0.1.0, with `lcn-gen` as its program and ranges for its requirements (G433, `acf7fb0`). Kits build, and test data is read, from an installed SDK as from a checkout (G435, `ac561f5`). `lint-packaging` checks the install lists, the requirements, the lock and the addresses (`cfd2a96`). A module repository requires the SDK by name, one SDK revision per Nimble directory (G434, `4458360`; `sdk/docs/MODULE-KIT.md` §9). **W2-P.1.** Nimble 0.26.2 built from the copy Nim 2.2.14 ships, in place of nixpkgs' 0.20.1 (`931a306`); every Nimble command passes `--useSystemNim`, the lock has no `nim` entry and is regenerated byte for byte, both nimble files refuse a Nimble older than 0.26, and the Nim pin has one home (`806fd6d`); CI and `tools/ci/windows.ps1` run with them, and `workflow_dispatch` gains `nimble_only` for the trial push (G436, `b8f305f`). `test_kit_dylib`'s installed-package case reads the build record under its Windows name too (`4374de4`). Nimble checks none of a lock's checksums (draft #191, found by N-4), so `tools/check_installs.nim`, through `logos_sdk/testing/lockcheck`, compares every install `nimble.paths` names with the lock before every `nimble test*` task, `build_runtime_lib` and, in a checkout with `nimbledeps/`, `nimble build`, and as its own step after setup in CI and `windows.ps1` (first in `1c4b9ee`; G436, Fable's §10 on the plan). Test: `test_lockcheck`. The Nimble drafts the step found, #189 (two installs of one version) and #191, are in `build/scratch/upstream/ISSUES.md`, not filed. The checks on each host are in the spike record's §4 and the merge note | 2026-11-21 |
 | I125 | IMPL | The LGX reader on a tar that ends inside an entry's padding (PACKAGE MANAGER §7.1, §8; PKG-0269) | **The fault.** `readTar` checked an entry's padding with `for i in pos + n ..< pos + padded: tar[i]` and never checked `pos + padded` against the tar's length. An archive whose inflated tar ends inside an entry's padding (527 bytes: `manifest.cbor`'s header, its 10 bytes and 5 of its padding) raised an IndexDefect, which the reader's callers do not catch, so the process ended. It was reached from `openLgx`, so through the verification cache's inspection, the resolver's eligibility, `lcn-pkg verify` and the hosted Package Manager. Found in step 5-5-2b's equivalence tests. **The fix.** Before the loop, `pos + padded > tar.len` is "an entry's data is truncated: <path>", `invalid-package` like every format check. **The audit** of `gunzip`, `readTar` and the header fields found no other read that untrusted bytes can push past a buffer: each header is copied only after `pos + 512` is checked, each field lies inside that copy, the end blocks are read only after their length is checked, and the gzip header's optional fields are bounded before they are read. One wrong result of the same kind is fixed with it: zlib's `crc32` takes a `cuint` length, so a tar of exactly 4 GiB (the default decompressed limit) had its CRC-32 taken over no bytes; the reader now takes it in pieces of at most 1 GiB (`crc32Of`). The writer's own CRC and `avail_in` keep the `cuint` length; its inputs are the packager's. **Tests** (`test_lgx`): the 527-byte case; every proper prefix of a small archive's tar, and of its gzip member, is refused; each byte of each of its eight headers set to three values, with the checksum as it was and set again, never crashes. Without the check the new test ends with "index 527 not in 0 .. 526 [IndexDefect]". Step 5-5-2b replaces `readTar` with the streaming tar cursor and keeps these tests. | 2026-11-22 |
 | R6 | SCOPE (revises R1; Tier 5 plan A6) | CI legs from Tier 5 | Linux x86_64, Linux aarch64 and macOS arm64 in the `nix` and `nimble` jobs; Windows x86_64 in the `windows` job, on the Nimble path with its own toolchain, the library suites under orc, blocking since step 5-4c (G123 as revised, G334). Android and iOS join with M12, with G105 and G125. Owner's approval of the Tier 5 plan, batch A (A6), 2026-11-16. | 2026-11-16 |

@@ -1452,6 +1452,17 @@ prints the roots. Where the Runtime answers `NOT_AUTHORISED`, the launcher print
 Runtime's message; it guesses no reason. Every process of logosd's user can use `lcn_call` with all of
 these grants, as with the logosctl instance (§7): grant it what the session's user may call.
 
+**Example: a payload module** (`blockchain_module`; [DEPLOYMENT.md](DEPLOYMENT.md) §26; DECISIONS
+G424). It calls no other module, and `report_failure` needs no grant, so two rules on its contract,
+named by v1's root, are all it needs. The first is the rule above for `lcn_call`, with
+`subscribe-event` added (and `access.methods` naming `node_info`, `cryptarchia_info` and
+`network_info` where the rule narrows them), so `logosctl call`, `describe` and `subscribe` reach it.
+The second allows the `blockchain_module` instance its own `publish-event`; without it every
+`chain_progress_event` is skipped (Streams). Its permission settings must hold the profile's
+minimum: `permissions.initial` names it with `logos-core-nim.host-ambient` and the empty constraints.
+With no entry, or one without host-ambient, its start is refused `NOT_AUTHORISED`
+(`authority-denied`; DECISIONS G110; [PERMISSIONS.md](PERMISSIONS.md), "Admission and the snapshot").
+
 ### Streams (G349)
 
 - **`subscribe MODULE EVENT [--count N] [--for DURATION] [--instance I] [--contract ROOT]`**: one event
