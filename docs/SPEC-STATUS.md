@@ -571,6 +571,21 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   8b, 9 and 21 hold for the node's state and keystore. `docs/DAEMON.md` gains the module as the Grants example.
   No unit changes status.
 
+- 2026-11-22, Tier 5 restructure step R9 with R10b (W2-X X0.1; R8): each claimed unit belongs to the package
+  that implements its rule, and its evidence is in that package's own tree (a tagged test there, or an item
+  in its `conformance/inspection/`). `spectrace gate`, `owners` and `deploydoc` count only the owner's tree.
+  - INTERFACE's ledger, main claims file and inspection file are under `sdk/conformance/`. Core claims the
+    Runtime's 143 IFC units in `conformance/claims/IFC.toml`, 13 of them by inspection
+    (`conformance/inspection/IFC.toml`).
+  - The SDK claims 124 RUN units and 7 CFG units in `sdk/conformance/claims/`: the Runtime Control schema and
+    header, and the kit's side of configuration delivery.
+  - The SDK's tests now carry the 11 IFC units whose only evidence was in core's suites: ten in `test_kit`,
+    `test_kit_confined` and `test_calls`, and IFC-0577 in a new audit-build suite, `sdk/tests/test_wipe_kit.nim`
+    (the ledger's marked `seal`, with no Runtime). IFC-0518's inspection item is reworded and the unit tested too.
+  - No unit changes status. The claimed set is unchanged, unit for unit (`tools/restructure/claim_split.py
+    --compare`, 3572 units). Per package at the branch point: IFC core 143, SDK 665; RUN core 767, SDK 124; CFG
+    core 119, SDK 7. Merged with master (5-7a's claims), RUN core is 816.
+
 ## Tiers at f4f83471 (the original plan)
 
 | Tier | Area | Verdict |
