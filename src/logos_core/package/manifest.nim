@@ -196,41 +196,47 @@ func artifactKind(s: string): ArtifactKind =
   of "schema": akSchema
   else: akData
 
+func moduleDeclaration*(x: CborValue): ModuleDeclaration =
+  ## One `modules` entry of a manifest the schema and its rules accepted, typed. The
+  ## installed state's module thread types each selected declaration with it from the
+  ## worker's encoding (Fable's 5-5-4 check §3).
+  var d = ModuleDeclaration(
+    module: x.text("module"),
+    artifact: x.text("artifact"),
+    primaryContract: x.lookup("primary_contract"),
+    implements: x.list("implements"),
+    extends: x.list("extends"),
+    requires: x.list("requires"),
+    value: x,
+  )
+  for p in x.list("requested_permissions"):
+    d.requestedPermissions.add(
+      RequestedPermission(
+        permission: p.text("permission"),
+        constraints: p.field("constraints").getBytes.get,
+        reason: p.optText("reason"),
+      )
+    )
+  let c = x.lookup("configuration")
+  if c.isSome:
+    let c = c.get
+    d.configuration = Opt.some(
+      ConfigurationDeclaration(
+        schemaArtifact: c.text("schema_artifact"),
+        root: c.text("root"),
+        schemaCommitment: c.field("schema_commitment"),
+        defaultArtifact: c.optText("default_artifact"),
+        liveReconfiguration: c.lookup("live_reconfiguration").isSome,
+      )
+    )
+  d
+
 func toManifest(v: CborValue, encoded: seq[byte]): Manifest =
   var m = Manifest(
     package: v.text("package"), version: v.text("version"), value: v, encoded: encoded
   )
   for x in v.list("modules"):
-    var d = ModuleDeclaration(
-      module: x.text("module"),
-      artifact: x.text("artifact"),
-      primaryContract: x.lookup("primary_contract"),
-      implements: x.list("implements"),
-      extends: x.list("extends"),
-      requires: x.list("requires"),
-      value: x,
-    )
-    for p in x.list("requested_permissions"):
-      d.requestedPermissions.add(
-        RequestedPermission(
-          permission: p.text("permission"),
-          constraints: p.field("constraints").getBytes.get,
-          reason: p.optText("reason"),
-        )
-      )
-    let c = x.lookup("configuration")
-    if c.isSome:
-      let c = c.get
-      d.configuration = Opt.some(
-        ConfigurationDeclaration(
-          schemaArtifact: c.text("schema_artifact"),
-          root: c.text("root"),
-          schemaCommitment: c.field("schema_commitment"),
-          defaultArtifact: c.optText("default_artifact"),
-          liveReconfiguration: c.lookup("live_reconfiguration").isSome,
-        )
-      )
-    m.modules.add(d)
+    m.modules.add(moduleDeclaration(x))
   for x in v.list("variants"):
     let p = x.field("platform")
     var variant = PackageVariant(

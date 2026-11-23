@@ -5,7 +5,7 @@
 import std/strutils
 import unittest2
 import logos_sdk/cbor
-import ../src/logos_core/package/resolver
+import ../src/logos_core/package/[lgx, resolver]
 import ./support/pmfixture
 
 proc encoded(v: LcnPmInput): seq[byte] =
@@ -37,6 +37,10 @@ proc withLimit(field: string, value: uint64): LcnPmInput =
     l.cache_entries = Opt.some(uint16(value))
   of "read_deadline_ms":
     l.read_deadline_ms = Opt.some(uint32(value))
+  of "operation_entries":
+    l.operation_entries = Opt.some(uint32(value))
+  of "operation_deadline_ms":
+    l.operation_deadline_ms = Opt.some(uint32(value))
   else:
     doAssert false
   pmValue(defaultTrust(), document(), limits = Opt.some(l))
@@ -57,6 +61,8 @@ suite "PM protected input (G399)":
     check i.limits.catalogEntries == 65_536
     check i.limits.cacheEntries == 256
     check i.limits.readDeadlineMs == 300_000'u32
+    check i.limits.operationEntries == 262_144 # G477
+    check i.limits.operationDeadlineMs == 3_600_000'u32 # G449
     check i.trustBytes == defaultTrust()
     check i.trust.len == 1
     check i.binding("main").isSome
@@ -92,6 +98,8 @@ suite "PM protected input (G399)":
       ("catalog_entries", uint64(MaxCatalogEntries)),
       ("cache_entries", uint64(MaxCacheEntries)),
       ("read_deadline_ms", uint64(MaxReadDeadlineMs)),
+      ("operation_entries", uint64(MaxOperationEntries)),
+      ("operation_deadline_ms", uint64(MaxOperationDeadlineMs)),
     ]:
       let low = decodePmInput(withLimit(field, 1).encoded)
       check low.isOk
@@ -105,6 +113,8 @@ suite "PM protected input (G399)":
       ("catalog_entries", uint64(MaxCatalogEntries)),
       ("cache_entries", uint64(MaxCacheEntries)),
       ("read_deadline_ms", uint64(MaxReadDeadlineMs)),
+      ("operation_entries", uint64(MaxOperationEntries)),
+      ("operation_deadline_ms", uint64(MaxOperationDeadlineMs)),
     ]:
       let zero = withLimit(field, 0).refusal
       check zero == "limits." & field & " must be 1 to " & $high
@@ -118,6 +128,8 @@ suite "PM protected input (G399)":
       catalog_entries: Opt.some(16'u32),
       cache_entries: Opt.some(2'u16),
       read_deadline_ms: Opt.some(50'u32),
+      operation_entries: Opt.some(7'u32),
+      operation_deadline_ms: Opt.some(900'u32),
     )
     let r =
       decodePmInput(pmValue(defaultTrust(), document(), limits = Opt.some(l)).encoded)
@@ -129,7 +141,31 @@ suite "PM protected input (G399)":
         catalogEntries: 16,
         cacheEntries: 2,
         readDeadlineMs: 50,
+        operationEntries: 7,
+        operationDeadlineMs: 900,
       )
+    # Both new keys render back (5-5-3).
+    let again = decodePmInput(r.get.toValue.encoded)
+    check again.isOk
+    check again.get.limits == r.get.limits
+
+  test "[G453] the LGX limits keep G75's proportions to a lowered archive_bytes (Q3 (d))":
+    check scaledLimits(DefaultLgxLimits, MaxArchiveBytes) == DefaultLgxLimits
+    let quarter = scaledLimits(DefaultLgxLimits, 256 shl 20)
+    check quarter.compressed == 256 shl 20
+    check quarter.decompressed == 1 shl 30
+    check quarter.extracted == 1 shl 30
+    check quarter.entry == 1 shl 30
+    check quarter.entries == DefaultLgxLimits.entries
+    check quarter.documents == DefaultLgxLimits.documents # fixed (G75's sixth row)
+    let small = scaledLimits(DefaultLgxLimits, 1000)
+    check small.compressed == 1000
+    check small.decompressed == 4000
+    check small.extracted == 4000
+    check small.entry == 4000 # the decompressed bound, below the table's entry
+    let one = scaledLimits(DefaultLgxLimits, 1)
+    check one.decompressed == 4
+    check one.entry == 4
 
 suite "PM protected input refusals (G399, G404)":
   test "no binding":

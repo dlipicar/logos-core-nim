@@ -14,9 +14,14 @@
 ##   (G400) is read and decoded as `lcn.pm_input` (G399). An instance without a
 ##   state directory, without the file, or with a refused input fails its
 ##   initialization, and the failure names what is missing or the field. The
-##   kept catalog (`catalog.kept`, G401) is loaded and the engine made. Nothing
-##   waits on a route, so the instance is Runtime-ready at once; the engine
-##   starts in the module thread's next turn, after `_MODULE_init` returned.
+##   kept catalog (`catalog.kept`, G401) is loaded and the engine made. The
+##   installation root is opened (`store.openStore`, G444, G445; POSIX): its
+##   lock taken, its index read, and what a crash left deleted, the spool
+##   included. Then the worker thread starts (`worker.nim`, G447) with the
+##   spool directory `install/spool/` (0700). A root that cannot be opened, or
+##   a worker that cannot start, fails the initialization. Nothing waits on a
+##   route, so the instance is Runtime-ready at once; the engine starts in the
+##   module thread's next turn, after `_MODULE_init` returned.
 ## - **Routes** (G402): `establish_route` to `lcn.storage_fetch` with the
 ##   provider record of the binding's instance (looked up with `list_modules`
 ##   before each establishment), the engine's fresh key, and access to
@@ -46,11 +51,14 @@
 ##   line (`logtext.oneLine`), on stderr unless the module gives its own sink.
 ##   The engine's lines hold names, codes, digests and counts, never a
 ##   payload.
+## - **The worker's jobs** (`cmWork`, G447) are queued for its thread; its
+##   answers come back through the kit's `post` and are queued as events.
 ## - **`closeShell`** (`_MODULE_destroy`): the engine stops (no command
 ##   follows, G437), timers are cancelled, outstanding calls are cancelled and
 ##   awaited (bounded), the route set is closed, and a root operation still
-##   running is answered `package-unavailable`. Only `catalog.kept` was ever
-##   written.
+##   running is answered `package-unavailable`. Then the worker is stopped and
+##   joined, which deletes its spool files, and the installation root is
+##   released. Only `catalog.kept` and spool files were ever written.
 
 {.push raises: [], gcsafe.}
 
@@ -65,7 +73,14 @@ import
 import ../durable
 import ../runtime/protinput
 import ../package/[errors, resolver]
-import ./engine
+import ./[engine, worker]
+
+when defined(posix):
+  import ./store
+else:
+  const
+    InstallDir = "install"
+    SpoolDir = "spool"
 
 export engine
 
@@ -103,9 +118,16 @@ type
     scheduled: bool ## a drain of `events` is queued or running
     timers: Table[uint64, Future[void].Raising([])]
     tasks: seq[Future[void].Raising([])] ## running calls
-    replies: Table[uint64, Future[Result[Resolution, PackageError]].Raising([])]
+    replies:
+      Table[uint64, Future[Result[Resolution, PackageError]].Raising([CancelledError])]
+    answers: Table[uint64, Future[OperationAnswer].Raising([CancelledError])]
+      ## [G449] by request
+    calls: Table[uint64, FutureBase] ## [G449] outstanding calls, by the engine's call id
     nextRequest: uint64
     closed: bool
+    worker: Worker ## [G447]
+    when defined(posix):
+      store: InstalledStore ## [G444] held from `_init` to `_destroy`
 
   LinkStatus* = object
     binding*: BindingStatus
@@ -403,7 +425,9 @@ proc callTask(s: Shell, l: Link, c: Command) {.async: (raises: []).} =
       LcnNSStorageFetchStatObjectRequest(`object`: c.locator), uint64(c.deadlineMs)
     )
     l.inflight.add(FutureBase(f))
+    s.calls[c.call] = FutureBase(f)
     let r = await f
+    s.calls.del(c.call)
     l.drop(FutureBase(f))
     answer =
       if r.isErr:
@@ -422,7 +446,9 @@ proc callTask(s: Shell, l: Link, c: Command) {.async: (raises: []).} =
       uint64(c.deadlineMs),
     )
     l.inflight.add(FutureBase(f))
+    s.calls[c.call] = FutureBase(f)
     let r = await f
+    s.calls.del(c.call)
     l.drop(FutureBase(f))
     answer =
       if r.isErr:
@@ -483,7 +509,7 @@ proc exec(s: Shell, c: var Command) =
     if w.isErr:
       s.say("the kept catalog was not written: " & w.error)
   of cmReply:
-    var f: Future[Result[Resolution, PackageError]].Raising([])
+    var f: Future[Result[Resolution, PackageError]].Raising([CancelledError])
     if s.replies.pop(c.request, f):
       f.complete(move c.outcome)
   of cmLog:
@@ -493,6 +519,23 @@ proc exec(s: Shell, c: var Command) =
     let t = Turn(shell: s, operation: c.operation)
     GC_ref(t)
     callSoon(continueSoon, cast[pointer](t))
+  of cmWork:
+    s.worker.submit(move c.job)
+  of cmAnswer:
+    var f: Future[OperationAnswer].Raising([CancelledError])
+    if s.answers.pop(c.answerTo, f):
+      f.complete(move c.answer)
+  of cmCancelCall:
+    # [G449] Through the Interface's cancel; the call's answer still comes back.
+    let f = s.calls.getOrDefault(c.cancelled)
+    if not f.isNil:
+      f.cancelSoon()
+
+proc onWorkerResult(
+    owner: pointer, r: sink WorkerResult
+) {.nimcall, gcsafe, raises: [].} =
+  ## [G447] The worker's answer, on the module thread: an event like any other.
+  cast[Shell](owner).post(worked(r))
 
 # Start -----------------------------------------------------------------------------------
 
@@ -537,12 +580,42 @@ proc openShell*(
     refuse(moduleError("lcn.pm_input is refused: " & error))
   let kept = readBounded(dir / KeptName, input.limits.catalogBytes + KeptOverheadBytes).valueOr:
     refuse(moduleError("the kept catalog could not be read: " & error))
+  # [G444, G445] The installation root: its lock, its index, and the start's cleanup,
+  # the spool's included, before the worker writes there (G447).
+  when defined(posix):
+    var store = openStore(dir).valueOr:
+      refuse(moduleError("the installation root could not be opened: " & error.detail))
+    for note in store.notes:
+      log("package-manager: " & oneLine(note))
+  let spoolDir = dir / InstallDir / SpoolDir
+  ensurePrivateDir(spoolDir).isOkOr:
+    when defined(posix):
+      store.close()
+    refuse(moduleError("the spool directory could not be made: " & error))
   let routeSet = newRouteSet(init.services).valueOr:
+    when defined(posix):
+      store.close()
     refuse(error)
   var (e, notes) = initEngine(
     input, kept, freshKey, platform, pathRules = pathRules, turnWork = turnWork
   )
   let s = Shell(engine: move e, routeSet: routeSet, stateDir: dir, log: log)
+  var config = s.engine.workerConfig(spoolDir)
+  when defined(posix):
+    s.store = move store
+    s.engine.setSnapshot(snapshotOf(s.store))
+    # [Fable's 5-5-4 check §1.2] The file half, the descriptor with it, is the worker's
+    # from now on; the shell keeps the lock, released after the worker is joined.
+    config.store = s.store.handOver()
+    config.hasStore = true
+  let started =
+    startWorker(init.services.poster, cast[pointer](s), onWorkerResult, move config)
+  if started.isErr:
+    discard s.routeSet.close()
+    when defined(posix):
+      s.store.close()
+    refuse(moduleError(started.error))
+  s.worker = started.get
   s.run(move notes)
   GC_ref(s)
   callSoon(startSoon, cast[pointer](s))
@@ -552,11 +625,11 @@ proc openShell*(
 
 proc resolveRoot*(
     s: Shell, root: RootReference
-): Future[Result[Resolution, PackageError]].Raising([]) =
+): Future[Result[Resolution, PackageError]].Raising([CancelledError]) =
   ## [G405] One root operation through the driver; completes with its outcome.
   ## [G455; Fable F3] Cancelled by its caller, it is cancelled in the engine,
   ## so it takes no more turns, and the future ends cancelled.
-  let f = Future[Result[Resolution, PackageError]].Raising([]).init(
+  let f = Future[Result[Resolution, PackageError]].Raising([CancelledError]).init(
       "pm resolve", {FutureFlag.OwnCancelSchedule}
     )
   if s.closed:
@@ -570,12 +643,59 @@ proc resolveRoot*(
   let id = s.nextRequest
   s.replies[id] = f
   f.cancelCallback = proc(arg: pointer) {.gcsafe, raises: [].} =
-    var held: Future[Result[Resolution, PackageError]].Raising([])
+    var held: Future[Result[Resolution, PackageError]].Raising([CancelledError])
     if s.replies.pop(id, held):
       s.run(s.engine.cancel(id))
       held.cancelAndSchedule()
   s.run(s.engine.resolve(id, root))
   f
+
+proc ask(
+    s: Shell,
+    issue: proc(e: var Engine, id: uint64): seq[Command] {.gcsafe, raises: [].},
+): Future[OperationAnswer].Raising([CancelledError]) =
+  ## One operation or query through the engine; completes with its answer. Cancelled by its
+  ## caller, it is cancelled in the engine (leaving its queue, or ending at its next
+  ## suspension), and the future ends cancelled.
+  let f = Future[OperationAnswer].Raising([CancelledError]).init(
+      "pm operation", {FutureFlag.OwnCancelSchedule}
+    )
+  if s.closed:
+    f.complete(
+      OperationAnswer(
+        kind: oaResponse,
+        response: errorResult(pecPackageUnavailable, "the Package Manager is stopping"),
+      )
+    )
+    return f
+  inc s.nextRequest
+  let id = s.nextRequest
+  s.answers[id] = f
+  f.cancelCallback = proc(arg: pointer) {.gcsafe, raises: [].} =
+    var held: Future[OperationAnswer].Raising([CancelledError])
+    if s.answers.pop(id, held):
+      s.run(s.engine.cancel(id))
+      held.cancelAndSchedule()
+  s.run(issue(s.engine, id))
+  f
+
+proc operate*(
+    s: Shell, op: OperationRequest
+): Future[OperationAnswer].Raising([CancelledError]) =
+  ## [G449] One operation through the engine's slots.
+  s.ask(
+    proc(e: var Engine, id: uint64): seq[Command] {.gcsafe, raises: [].} =
+      e.submit(id, op)
+  )
+
+proc handoff*(
+    s: Shell, identity: PackageIdentity, module: string
+): Future[OperationAnswer].Raising([CancelledError]) =
+  ## [SPEC PM §12; 5-5-4] `get_runtime_handoff`, a query that does not queue.
+  s.ask(
+    proc(e: var Engine, id: uint64): seq[Command] {.gcsafe, raises: [].} =
+      e.handoff(id, identity, module)
+  )
 
 proc shellStatus*(s: Shell): ShellStatus =
   ## The catalog in use, each binding's route, and the running operations.
@@ -621,9 +741,13 @@ proc closeShell*(s: Shell): Future[void] {.async: (raises: []).} =
   s.tasks.setLen(0)
   for c in answers.mitems:
     if c.kind == cmReply:
-      var f: Future[Result[Resolution, PackageError]].Raising([])
+      var f: Future[Result[Resolution, PackageError]].Raising([CancelledError])
       if s.replies.pop(c.request, f):
         f.complete(move c.outcome)
+    elif c.kind == cmAnswer:
+      var f: Future[OperationAnswer].Raising([CancelledError])
+      if s.answers.pop(c.answerTo, f):
+        f.complete(move c.answer)
   # None is left: every operation the shell holds a future for is the engine's.
   for _, f in s.replies:
     f.complete(
@@ -632,6 +756,14 @@ proc closeShell*(s: Shell): Future[void] {.async: (raises: []).} =
       )
     )
   s.replies.clear()
+  for _, f in s.answers:
+    f.complete(
+      OperationAnswer(
+        kind: oaResponse,
+        response: errorResult(pecPackageUnavailable, "the Package Manager is stopping"),
+      )
+    )
+  s.answers.clear()
   for _, l in s.links:
     l.retiring = true
   for l in s.retired:
@@ -642,5 +774,10 @@ proc closeShell*(s: Shell): Future[void] {.async: (raises: []).} =
   s.routeSet = nil
   s.links.clear()
   s.retired.setLen(0)
+  # [G447] The worker after the engine: no job follows; it deletes its spool files.
+  await stopWorker(s.worker)
+  s.worker = nil
+  when defined(posix):
+    s.store.close()
 
 {.pop.}

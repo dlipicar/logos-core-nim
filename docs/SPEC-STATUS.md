@@ -100,7 +100,9 @@ PKG-0274, whose LGX half is the extraction check, to 5-5 (G362). App A's 38 rule
 the sections state: ten are claimed and 28 are deferred by name with their twins, five to 5-5, two to 5-8 and 21 to 5-6a
 (G363). PKG-0568 is now deferred by name to 5-6b (G362). The count by step above is still that of 6a4dfa28, except
 that planning's rulings on step 5-3a's plan (2026-11-20, Q8, Q18, Q19) moved PKG-0083 from 5-3b to 5-3a,
-PKG-0166 and PKG-0169 from 5-11 to 5-3a, and PKG-0167 from 5-11 to 5-3b.
+PKG-0166 and PKG-0169 from 5-11 to 5-3a, and PKG-0167 from 5-11 to 5-3b. Planning's ruling on step 5-5's plan
+(2026-11-22, Q-P1 (a)) and TIER5-PLAN's row 5-5 moved PKG-0060, PKG-0337, PKG-0339 to PKG-0344 and PKG-0348 from 5-8
+to 5-5, which builds and tests them; 5-8 keeps PKG-0338, PKG-0347 and PKG-0351 (G391), built at 5-5-1.
 
 A dropped area's units that bind without it stay and are claimed in their own steps: TRN-0352, PKG-0190,
 PKG-0166, PKG-0167, PKG-0169, the `nix` and `quic` refusals (plan A1). At the close (5-13) every unit
@@ -667,6 +669,83 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   0 findings), merged at the clone's `407dfb768`. In package mode a module suite that builds core's daemon needs
   core's own dependencies, which `sdk/docs/MODULE-KIT.md` §9 now says. v2's contract and root are unchanged. No
   unit changes status.
+
+- 2026-11-22, Tier 5 step 5-5-1 (I121; G445's files, G450, G451, G452), installed records, responses, the
+  handoff's construction and the admission bound, all pure code:
+  - `pm/installed.nim` and `pm/installed.cddl`: the installed record from a verified package, its record file
+    and the index, each checked on load against its text, App A and the signed manifest.
+  - `pm/responses.nim`: one encoder per §15 response variant, the 512-byte message cut and `MODULE_ERROR`.
+  - `pm/handoff.nim`: `runtime_handoff` for a selected module, with its configuration declaration accepted
+    under LOGOS-MODULE-CONFIGURATION; PKG-0060 at inspection in `vcache.inspect`.
+  - `pm/admission.nim`: each required result in its real Transport envelope within the 16 MiB body.
+  - Suite `test_pm_records`, and cases in `test_pm_vcache`; `tests/support/lgxbuild.nim` builds signed packages
+    with modules and configurations.
+
+  Claimed: PKG-0060, PKG-0172, PKG-0177, PKG-0178, PKG-0291, PKG-0337, PKG-0339 to PKG-0344, PKG-0348, PKG-0356,
+  PKG-0357, PKG-0359 to PKG-0362, PKG-0438, PKG-0468, PKG-0469, and App A's PKG-0618 to PKG-0620, PKG-0624 and
+  PKG-0628. 27 units; PKG-0338, PKG-0347 and PKG-0351 are built and stay deferred to 5-8. PKG 307/307, with
+  5-7a-1's PKG-0435.
+
+- 2026-11-22, Tier 5 step 5-5-2 (I121; G444, the rest of G445, G446's writing half), the installed-state
+  store and extraction, a synchronous library that 5-5-3's worker and 5-5-4's operations call:
+  - `pm/store.nim`: the root `<state_dir>/install/` with its lock and path-rule probe, staging, the commit
+    (one `writeAtomic` of the index after `syncfs` on Linux ext4 from 5.8, or a `fsync` of each file and
+    directory elsewhere), the start, deferred retirement and the retained hash.
+  - `pm/extract.nim`: descriptor-relative writes, no link followed, 0400 files in 0700 directories; reads below
+    a record the same way.
+  - `LgxPackage.signature` keeps the verified `manifest.cose`; `handoff.admissionHandoffs` gives the admission
+    bound each module's handoff. `durable.nim` is unchanged.
+  - Suite `test_pm_store` (POSIX only; Windows skips it).
+
+  Claimed: PKG-0181, PKG-0182, PKG-0204, PKG-0219, PKG-0274, PKG-0292, PKG-0293 (with TXT-0472), PKG-0471,
+  PKG-0487, PKG-0489, PKG-0499, PKG-0500, PKG-0610 and PKG-0611 by test; PKG-0488 and PKG-0498 by inspection.
+  16 units. PKG-0487 to PKG-0489 rest on the owner's Q5 (a), answered 2026-11-22. PKG 323/323.
+
+- 2026-11-23, Tier 5 step 5-5-3 (I121; G447, G446's spool half, G453's limits, G75's note, G477's key), the
+  worker and the spool:
+  - `pm/worker.nim`: one thread per instance, started at `_MODULE_init` after the store's start (moved here from
+    5-5-4) and joined at `_MODULE_destroy`; answers reach the module thread through the kit's `post`.
+  - `pm/jobs.nim`: the jobs and answers, checked free of references at compile time; a judgment crosses with its
+    contracts encoded and is decoded a turn at a time (1,024 entries and contracts). Two departures from the plan,
+    the encoded judgment (D1) and no failure event (D2), accepted by planning with Fable's conditions.
+  - `pm/spool.nim`: `<state_dir>/install/spool/`, each archive appended 1 MiB at a time with its BLAKE3, 0600 and
+    exclusive, judged and deleted; the inspections' share of 4 × `archive_bytes`; a write that fails makes the
+    archive unavailable.
+  - The verification cache keeps no inspection over 256 KiB by the walk's estimate; `lcn.pm_limits` gains
+    `operation_entries` and `operation_deadline_ms`; the LGX limits scale with `archive_bytes` (the owner's Q3 (d)).
+  - Suite "the worker and the spool" in `test_pm_driver`, cases in `test_pm_input` and `test_pm_vcache`;
+    `tools/pmbench.nim spool` and `receive`; CONFORMANCE "The worker and the spool"; DEPLOYMENT §12's budget.
+
+  Claimed: PKG-0011, PKG-0012, PKG-0192 and PKG-0271. 4 units. PKG 327/327.
+
+- 2026-11-23, Tier 5 step 5-5-4 (I121; G448, G449, G453's target platform; G446's spool budget; G447's stop
+  corrected), the operations. Step 5-5 is complete with it:
+  - `pm/slots.nim`: two slots, inspections and installed-state mutations, each with a queue of 16 behind it;
+    `MODULE_ERROR` past that.
+  - The engine's operations: `inspect`, `install`, `remove`, `update` and the `handoff` query; the snapshot of
+    shared immutable records with its holds, the retired list and `wjCollect`; `operation_deadline_ms` and the
+    last-commit rule; the fault map; a log line for each operation; the mutation's spool budget with the refetch
+    by digest; the retained check on the worker.
+  - The store in two halves (Fable's design A): the worker owns the files from the start's hand-over, the module
+    thread owns the snapshot.
+  - `pmtest_module` gains the five methods, and its kit the asynchronous provider API, so that a stop cancels an
+    operation's call (0.49 s, against 10.08 s without it).
+  - Suite `test_pm_install` (39 cases), cases in `test_pm_hosted` and `test_logosd_pm`; `tools/pmbench.nim
+    installed`, `module`, `commit`, `start` and `reply`; CONFORMANCE "The operations"; DEPLOYMENT rows 1, 12b
+    and 16a, §1, §12 and four duty rows; PACKAGE-MANAGER §11.
+  - Limits stated in G449: no job cancel, a call cancelled after its last commit began, a worker that hangs. And
+    in G445: the store's start takes about 1 ms a record under orc on the Mac, so the default startup deadline
+    holds about 120,000 records, below the index's 200,000 (DEPLOYMENT §12).
+  - The worker encodes each response, and the module thread carries the bytes (G447). Their way out is a stated
+    exception, a confined kit module's: a 16 MiB `{installed}` holds the module thread 99 ms under orc and 175 ms
+    under refc on the Mac, about 200 ms and 390 ms on server.lan (the host's check and commitment, the SDK's
+    completion copy, the kit's second encoding), left to the core item "large-response completion".
+
+  Claimed: PKG-0080, PKG-0189, PKG-0190, PKG-0389 to PKG-0410, PKG-0436, PKG-0437, PKG-0439, PKG-0440, PKG-0470,
+  PKG-0534 to PKG-0537, PKG-0608 and PKG-0609 by test; PKG-0222, PKG-0363, PKG-0441 and PKG-0493 by inspection;
+  BCP-0033 and BCP-0035. 40 PKG units and 2 BCP units. PKG-0411 is `out-of-scope`: a MAY not taken, since every
+  installed-state mutation is serialized in one slot (G449). TXT-0493 to TXT-0495 and PKG-0608 and PKG-0609 leave
+  the re-pin's deferred list. PKG 367/367, BCP 53/53. Areas A3 and A4's 5-5 units are all claimed.
 
 ## Tiers at f4f83471 (the original plan)
 

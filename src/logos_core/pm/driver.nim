@@ -66,8 +66,9 @@ type
       ## checks, once it is done
 
 proc noRetained(p: InstalledPackage): Result[void, string] {.gcsafe, raises: [].} =
-  ## Never called: the run asks for each answer (`dsRetained`).
-  err("no installed state")
+  ## Never called: the run asks for each answer (`dsRetained`), which the engine has the
+  ## worker hash (G448).
+  err("the retained check is asked for, never called")
 
 proc initDriver*(
     catalog: openArray[CatalogEntry],
@@ -76,12 +77,15 @@ proc initDriver*(
     root: RootReference,
     budget = ResolverTurnWork,
     operationEntries = Opt.none(int),
+    installed: openArray[InstalledPackage] = [],
 ): Driver =
   ## [G455] `budget` is the work of one turn (`ResolverTurnWork`, a constant;
-  ## the tests give others). 5-3b and 5-3c resolve against no installed state
-  ## (5-5 adds it). [G477] `operationEntries` is the operation bound
+  ## the tests give others). [G477] `operationEntries` is the operation bound
   ## (`ResolverInput.operationEntries`; 5-5 passes `operation_entries`).
+  ## [G449] `installed` is the operation's snapshot, copied like the catalog;
+  ## `resolve` (5-3b's and 5-3c's probe) passes none.
   let input = ResolverInput(
+    installed: @installed,
     catalog: @catalog,
     limits: limits,
     trust: trust,

@@ -45,16 +45,23 @@ lcn.pm_resolver_limits = {
 ; The bounds, each checked by rule as written here; an absent one is its
 ; default.
 ; archive_bytes: 1..1073741824, default 1073741824 (1 GiB): one archive,
-;   held in memory while it is inspected.
+;   spooled to disk and read in pieces; the inspection's other LGX bounds keep
+;   G75's proportions to it (G453).
 ; catalog_bytes: 1..4194304, default 4194304 (4 MiB): the catalog document.
 ; catalog_entries: 1..65536, default 65536.
 ; cache_entries: 1..4096, default 256: the verification cache.
 ; read_deadline_ms: 1..86400000, default 300000: one call, and the wait for
 ;   `ready` after `not-ready` (G402).
+; operation_entries: 1..16777216, default 262144: the records, dependency
+;   entries and contracts one root operation reads (G477).
+; operation_deadline_ms: 1..86400000, default 3600000 (1 h): one root
+;   operation, from taking its slot (G449).
 lcn.pm_limits = {
   ? archive_bytes: uint64,
   ? catalog_bytes: uint32,
   ? catalog_entries: uint32,
   ? cache_entries: uint16,
   ? read_deadline_ms: uint32,
+  ? operation_entries: uint32,
+  ? operation_deadline_ms: uint32,
 }
