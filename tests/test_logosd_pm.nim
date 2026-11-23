@@ -302,8 +302,32 @@ when defined(posix):
     )
     j{"status"}.getStr == "ok"
 
+  proc resolveReply(c: Case, name, version: string): JsonNode =
+    c.call("pmtest_module", "resolve", "name=" & name, "version=" & version)
+
   proc resolved(c: Case, name, version: string): JsonNode =
-    c.call("pmtest_module", "resolve", "name=" & name, "version=" & version){"result"}
+    ## The resolve's result, or nil when the call failed: for a wait, which asks again.
+    c.resolveReply(name, version){"result"}
+
+  type NoResult = object of CatchableError
+    ## [IMPL] A call without a `result` where its case reads one: raised to fail and stop
+    ## the case, whose teardown still stops logosd. unittest2's `require` would quit the
+    ## process without it.
+
+  proc resolution(c: Case, name, version: string): JsonNode =
+    ## The resolve's result, read once and logged. With none, as under load (about 120 on
+    ## the Mac), the case fails naming the call and its reply, and stops. `$` of the nil
+    ## crashed the process instead, which skipped the teardown, and the orphaned logosd
+    ## kept respawning its Module Hosts.
+    let reply = c.resolveReply(name, version)
+    result = reply{"result"}
+    if result.isNil:
+      raise newException(
+        NoResult,
+        "pmtest_module resolve name=" & name & " version=" & version &
+          ": no result; the reply: " & $reply,
+      )
+    checkpoint($result)
 
   proc packagesOf(r: JsonNode): seq[string] =
     for p in r{"packages"}.getElems:
@@ -383,8 +407,7 @@ when defined(posix):
         hexOf(blake3(document)) in d.errText
       check "no readiness subscription" notin d.errText
       # The archives verify against the session's anchor.
-      let r = c.resolved("app", "1.0.0")
-      checkpoint($r)
+      let r = c.resolution("app", "1.0.0")
       check r.packagesOf == @["app@1.0.0", "lib@1.2.0"]
       check c.status(){"pending"}.getInt == 0
       check d.stopped == 0
@@ -424,12 +447,10 @@ when defined(posix):
       )
       # `lib`'s archive is signed by `org`, whose anchor no longer authorizes the name: `app`
       # has no closure, and `lib` as a root is refused.
-      let r = c.resolved("app", "1.0.0")
-      checkpoint($r)
+      let r = c.resolution("app", "1.0.0")
       check r.packagesOf.len == 0
       check r{"error"}.getStr == "dependency-unavailable"
-      let l = c.resolved("lib", "1.2.0")
-      checkpoint($l)
+      let l = c.resolution("lib", "1.2.0")
       check l{"error"}.getStr == "signature-verification-failed"
       check second.stopped == 0
       check hostsGone()
