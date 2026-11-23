@@ -19,6 +19,8 @@ proc main() =
   echo trustTypesPath
   writeFile(remoteTrustTypesPath, generatedRemoteTrustTypes().get)
   echo remoteTrustTypesPath
+  writeFile(remoteExposureTypesPath, generatedRemoteExposureTypes().get)
+  echo remoteExposureTypesPath
   writeFile(trustdocTypesPath, generatedTrustdocTypes().get)
   echo trustdocTypesPath
   writeFile(pmInputTypesPath, generatedPmInputTypes().get)

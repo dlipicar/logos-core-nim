@@ -109,6 +109,13 @@ default = "claimed"
 "TRN-0226" = "claimed"
 "TRN-0228" = "claimed"
 "TRN-0233" = "claimed"
+# Step 5-7a-2 (DECISIONS G411, G412): enabling a profile without transport here (quic) is
+# MODULE_ERROR, never another profile, and an unenrolled peer's handshake is refused. A revoked
+# enrollment takes effect at the next start (owner decision B3), and no listener process outlives
+# the run that started it, so every connection of that run is closed and the revoked peer's
+# handshakes are refused from then on.
+"TRN-0206" = "claimed"
+"TRN-0227" = "claimed"
 # Step 5-7a-1 (DECISIONS G409): logosctl remote credential makes the one credential and
 # certificate-signature algorithm pair this implementation's tls-tcp offers and accepts (P-256,
 # ecdsa-with-SHA256), so every intended peer supports it.

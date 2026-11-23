@@ -64,8 +64,8 @@ when defined(posix):
   import logos_sdk/kit/[rc_arms, rc_types], ./logos_core/runtime/stateadmin
   import
     ./logos_core/daemon/[
-      compose, credential, ctlwire, evexport, evkey, evstore, remotetrust, render,
-      session, sessioninit, signsvc, trustfile,
+      compose, credential, ctlwire, evexport, evkey, evstore, remoteexposure,
+      remotetrust, render, session, sessioninit, signsvc, trustfile,
     ]
   import ./logos_core/cli/[cli_types, launcher]
   from logos_sdk/codegen/nimrt import wipeTyped
@@ -124,6 +124,8 @@ offline (the session's files; writers hold its lock):
   remote credential new [--days N]
   remote credential show
   remote credential rotate [--days N]
+  remote exposure list
+  remote exposure reset (--listener ADDR [--provider ID] | --all)
   audit evidence ls
   audit evidence export --seq N [--out FILE]
   state list
@@ -140,7 +142,12 @@ remote_runtime_enrollment and @PEER a logos-core-nim.remote-peer.v1 file, each
 remote credential: this Runtime's TLS key and self-signed certificate (valid
 --days, default 3650), and peer.cbor, the anchor and enrollment each peer
 imports; rotate writes the next one, taken up at the next start of logosd
-with remote.enabled (a cutover)."""
+with remote.enabled (a cutover).
+remote exposure: the listener and export fields Runtime Control turned off,
+which stay off across restarts until the configuration entry changes, Runtime
+Control enables them, or reset removes them (at the next start). ADDR is the
+address as list prints it, quoted (\"tls-tcp HOST:PORT\" and its optional
+fields); --provider names an export of that listener."""
     DefaultTimeoutMs = 65_000
     ExitOk = 0
     ExitUsage = 1
@@ -150,7 +157,7 @@ with remote.enabled (a cutover)."""
     MaxFileArgs = 14 ## [G344] 16 descriptors, stdout and stderr included
     NoValue = [
       "json", "text", "wait", "development", "remove", "print-template", "help",
-      "version", "yes",
+      "version", "yes", "all",
     ]
 
   type
@@ -2139,6 +2146,87 @@ with remote.enabled (a cutover)."""
     else:
       err(usage("unknown remote credential command " & sub))
 
+  proc exposureJson(e: LcnRemoteExposureEntry): JsonNode =
+    let a = addressOf(e.listener)
+    var off = newJArray()
+    for f in e.offOf:
+      off.add(%($f))
+    %*{
+      "listener": (if a.isOk: a.get.addressText else: "0x" & toHex(e.listener)),
+      "provider": (if e.provider.isSome: %e.provider.get
+      else: newJNull()),
+      "off": off,
+      "by": e.by,
+      "at_ms": e.at_ms,
+      "configuration_entry": e.config.isSome,
+    }
+
+  proc exposureRow(e: LcnRemoteExposureEntry): seq[string] =
+    let a = addressOf(e.listener)
+    @[
+      (if a.isOk: a.get.addressText else: "0x" & toHex(e.listener)),
+      e.provider.get("-"),
+      offText(e.offOf),
+      $fromUnix(int64(e.at_ms div 1000)).utc,
+      e.by,
+    ]
+
+  proc cmdRemoteExposure(c: Cli, s: Session): Result[Done, Fail] =
+    ## [G412; Q4] The durable disables, offline.
+    let sub = ?c.arg(2, "list or reset")
+    case sub
+    of "list":
+      let entries = readExposure(s).valueOr:
+        return err(fail(ExitUsage, error))
+      var a = newJArray()
+      var rows: seq[seq[string]]
+      for e in entries:
+        a.add(exposureJson(e))
+        rows.add(exposureRow(e))
+      let text =
+        if rows.len == 0:
+          "no durable disable: each record starts as the configuration has it"
+        else:
+          table(["LISTENER", "PROVIDER", "OFF", "SINCE", "BY"], rows)
+      ok(s.offline("remote exposure list", %*{"entries": a}, text))
+    of "reset":
+      let all = "all" in c.flags
+      let listener = c.opt("listener")
+      let provider = c.opt("provider")
+      if all == listener.isSome or (all and provider.isSome):
+        return err(
+          usage("remote exposure reset takes --listener ADDR [--provider ID], or --all")
+        )
+      var lock = ?locked(s)
+      defer:
+        lock.release()
+      let removed = resetExposure(s, listener.get(""), provider.get(""), all).valueOr:
+        return err(fail(ExitUsage, error))
+      if removed.len == 0 and not all:
+        return err(
+          fail(
+            ExitUsage,
+            "no durable disable of " &
+              (if provider.isSome: "the export of " & provider.get & " on "
+              else: "") & listener.get,
+          )
+        )
+      var a = newJArray()
+      var rows: seq[seq[string]]
+      for e in removed:
+        a.add(exposureJson(e))
+        rows.add(exposureRow(e))
+      let text =
+        "removed " & $removed.len & " durable disable" &
+        (if removed.len == 1: "" else: "s") & "; " & AppliesAtNextStart & (
+          if rows.len > 0:
+          "\n" & table(["LISTENER", "PROVIDER", "OFF", "SINCE", "BY"], rows)
+          else: ""
+        )
+      ok(s.offline("remote exposure reset", %*{"removed": a}, text))
+    else:
+      err(usage("unknown remote exposure command " & sub))
+
   proc cmdRemote(c: Cli, s: Session): Result[Done, Fail] =
     let sub = ?c.arg(1, "a remote command")
     case sub
@@ -2146,6 +2234,8 @@ with remote.enabled (a cutover)."""
       cmdRemoteTrust(c, s)
     of "credential":
       cmdRemoteCredential(c, s)
+    of "exposure":
+      cmdRemoteExposure(c, s)
     else:
       err(usage("unknown remote command " & sub))
 

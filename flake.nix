@@ -356,6 +356,26 @@
             meta.mainProgram = "logos_keyholder";
           };
 
+          # The remote program (Tier 5 step 5-7a-2; DECISIONS G411; docs/REMOTE.md): logosd's
+          # TLS processes, the programs that link BoringSSL's libssl, which logosd does not
+          # (G409). logosd starts it from `runtime.remote_program`, by default
+          # ../libexec/logos-core/logos_remote. A release build without test hooks or test
+          # signing (R5, D27).
+          logosRemote = nimDerivation {
+            pname = "logos-remote";
+            version = coreVersion;
+            src = nimSources;
+            buildPhase = ''
+              runHook preBuild
+              nim c --mm:orc -d:release --outdir:build/bin src/logos_remote.nim
+              runHook postBuild
+            '';
+            installPhase = ''
+              install -Dm755 build/bin/logos_remote $out/bin/logos_remote
+            '';
+            meta.mainProgram = "logos_remote";
+          };
+
           # PM §3, §4, §4.3, §7.1 package tools (a subset: no fetch or install).
           lcnPkg = nimDerivation {
             pname = "lcn-pkg";
@@ -397,9 +417,9 @@
           };
 
           # logosd and logosctl (Tier 4b step 4b-6; DECISIONS I95; docs/DAEMON.md): orc
-          # release builds without test hooks (R5, D27). logosd finds the Module Host at
-          # ../libexec/logos-core and liblcn_call at ../lib/logos-core, where its package
-          # puts them, with the key holder beside the Module Host. [G343] logosd is built with the BLAKE3-256 of liblcn_call's final
+          # release builds without test hooks (R5, D27). logosd finds the Module Host, the key
+          # holder and the remote program at ../libexec/logos-core and liblcn_call at
+          # ../lib/logos-core, where its package puts them. [G343] logosd is built with the BLAKE3-256 of liblcn_call's final
           # store file, and the library is copied after the fixup, so no strip or patchelf
           # changes the bytes the Module Loader checks against that digest.
           daemonVersion = coreVersion;
@@ -425,6 +445,7 @@
               install -Dm755 build/bin/logosd $out/bin/logosd
               install -Dm755 ${lib.getExe logosModuleHost} $out/libexec/logos-core/logos-module-host
               install -Dm755 ${lib.getExe logosKeyholder} $out/libexec/logos-core/logos_keyholder
+              install -Dm755 ${lib.getExe logosRemote} $out/libexec/logos-core/logos_remote
             '';
             postFixup = ''
               install -Dm444 ${lcnCallLib}/lib/logos-core/liblcn_call${sharedLib} \
@@ -583,6 +604,7 @@
             lcnPkg
             logosModuleHost
             logosKeyholder
+            logosRemote
             logosd
             logosdSwitches
             logosctl
@@ -608,6 +630,7 @@
           lcn-pkg = s.lcnPkg;
           logos-module-host = s.logosModuleHost;
           logos-keyholder = s.logosKeyholder;
+          logos-remote = s.logosRemote;
           inherit (s) logosd logosctl;
         }
         // lib.optionalAttrs (s.android != null) {

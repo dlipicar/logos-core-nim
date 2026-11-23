@@ -302,18 +302,12 @@ func recheck(
   markedScope(marked):
     result = t.recheckIn(v, c, onSchema, marked)
 
-func acceptRequest*(b: Boundary, r: Request): Result[void, Reject] =
-  ## [SPEC TRANSPORT §4.1, §8.1, §8.3] Before dispatch: the bare method name
-  ## resolved under the selected contract only (unknown: METHOD_NOT_FOUND), then
-  ## the route's method scope (outside: NOT_AUTHORISED), then the commitment and
-  ## schema checks of `recheck`. No provider code runs on any failure.
-  ## [SPEC RUNTIME l.1824-1828; TRANSPORT §4.1 (2); re-pin P4b] A schema failure
-  ## is `rjOwner`: the call fails "as in direct mode", where the Runtime's
-  ## authorization of the call (step 2) comes before the payload's check (step
-  ## 3). Its owner admits it, then checks the params under the same selected
-  ## contract (`callProvider`, the Module Host's `runAdmitted`); the params go
-  ## nowhere they would not go for a valid Request.
-  let t = b.requestTarget(r.methodName, false).valueOr:
+func resolveRequest*(b: Boundary, r: Request): Result[void, Reject] =
+  ## [SPEC TRANSPORT §4.1, §8.1] The checks of `acceptRequest` that read no
+  ## payload: the bare method name resolved under the selected contract only
+  ## (unknown: METHOD_NOT_FOUND), then the route's method scope (outside:
+  ## NOT_AUTHORISED).
+  if b.requestTarget(r.methodName, false).isNone:
     return err(
       reject(
         rjRespond,
@@ -331,7 +325,37 @@ func acceptRequest*(b: Boundary, r: Request): Result[void, Reject] =
         r.methodName & " is outside the route scope",
       )
     )
+  ok()
+
+func checkRequestPayload*(b: Boundary, r: Request): Result[void, Reject] =
+  ## [SPEC TRANSPORT §4.1] The commitment and schema checks of `recheck` for a
+  ## Request `resolveRequest` passed. [SPEC RUNTIME l.1835; G413] Runtime
+  ## Control served to another Runtime runs them only after the method's
+  ## authorization.
+  let t = b.requestTarget(r.methodName, false).valueOr:
+    return err(
+      reject(
+        rjRespond,
+        rcUnknownTarget,
+        ecMethodNotFound,
+        r.methodName & " is not in the selected contract",
+      )
+    )
   t.recheck(r.params, r.commitment, rjOwner, b.marked(r.methodName).request)
+
+func acceptRequest*(b: Boundary, r: Request): Result[void, Reject] =
+  ## [SPEC TRANSPORT §4.1, §8.1, §8.3] Before dispatch: the bare method name
+  ## resolved under the selected contract only (unknown: METHOD_NOT_FOUND), then
+  ## the route's method scope (outside: NOT_AUTHORISED), then the commitment and
+  ## schema checks of `recheck`. No provider code runs on any failure.
+  ## [SPEC RUNTIME l.1824-1828; TRANSPORT §4.1 (2); re-pin P4b] A schema failure
+  ## is `rjOwner`: the call fails "as in direct mode", where the Runtime's
+  ## authorization of the call (step 2) comes before the payload's check (step
+  ## 3). Its owner admits it, then checks the params under the same selected
+  ## contract (`callProvider`, the Module Host's `runAdmitted`); the params go
+  ## nowhere they would not go for a valid Request.
+  ?b.resolveRequest(r)
+  b.checkRequestPayload(r)
 
 func acceptResponse*(
     b: Boundary, methodName: string, r: Response

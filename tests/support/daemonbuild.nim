@@ -8,7 +8,7 @@
 import std/os
 import ./childbuild
 
-var builtD, builtCtl, builtHolder: string
+var builtD, builtCtl, builtHolder, builtRemote: string
 
 proc logosdProgram*(): string =
   if builtD.len > 0:
@@ -39,3 +39,12 @@ proc keyholderProgram*(): string =
     builtHolder =
       buildChild("src/logos_keyholder.nim", "logos_keyholder", "logos_keyholder")
   builtHolder
+
+proc remoteProgram*(): string =
+  ## [G411, Tier 5 step 5-7a-2] `logos_remote`, a program logosd starts, with
+  ## its test hooks (the wedged-loop test's).
+  if builtRemote.len == 0:
+    builtRemote = buildChild(
+      "src/logos_remote.nim", "logos_remote", "logos_remote", @["lcnTestHooks"]
+    )
+  builtRemote
