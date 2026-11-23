@@ -132,7 +132,7 @@ template exportMetricsOnlyModule*(T: typedesc) =
       destroyModule(instance)
     GC_unref(instance)
 
-  proc metricsOnlyModuleKitName(): cstring {.exportc: "logos_metrics_only_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [].} =
+  proc metricsOnlyModuleKitName(): cstring {.exportc: "logos_metrics_only_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "a static string".} =
     system.cstring(moduleName)
 
   proc metricsOnlyModuleKitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: "logos_metrics_only_module_MODULE_init", dynlib, cdecl, gcsafe, raises: [].} =
@@ -147,7 +147,7 @@ template exportMetricsOnlyModule*(T: typedesc) =
     let instance {.cursor.} = cast[T](p)
     routeMetricsOnlyModule(instance, bare, params)
 
-  proc metricsOnlyModuleKitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: "logos_metrics_only_module_MODULE_call_surface", dynlib, cdecl, gcsafe, raises: [].} =
+  proc metricsOnlyModuleKitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: "logos_metrics_only_module_MODULE_call_surface", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "static bytes".} =
     if outLen != nil:
       outLen[] = csize_t(callSurfaceData.len)
     addr callSurfaceData[0]

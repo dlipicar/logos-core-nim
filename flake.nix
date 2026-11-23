@@ -806,6 +806,15 @@
               python3 ${./tools/lint/packaging.py}
               touch $out
             '';
+          # [DECISIONS G464-G467] Every C-callable procedure of the SDK, core and the test kit
+          # modules registers its thread first, or carries its exemption and reason; no
+          # `Entered` value is made without `entered`. The command module repositories run.
+          lint-callbacks = s.pkgs.runCommand "lint-callbacks" { nativeBuildInputs = [ s.lcnGen ]; } ''
+            cd ${s.nimSources}
+            lcn-gen lint-callbacks --self-test
+            lcn-gen lint-callbacks sdk/src src tests/kit
+            touch $out
+          '';
           # [DECISIONS G442] Every environment a test gives a Module Host names the sanitizer
           # variables (tests/support/sanitizerenv.nim), so a sanitizer check sees its hosts' reports.
           lint-sanitizer-env = s.pkgs.runCommand "lint-sanitizer-env" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''

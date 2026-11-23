@@ -527,7 +527,7 @@ proc kitParts(
         "    ## The instance's release, in the step that drops what is still queued\n" &
         "    ## (DECISIONS G437).\n" & "    GC_unref(cast[T](p))\n\n" & "  proc " &
         prefix & "KitName(): cstring {.exportc: \"" & sym("name") &
-        "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
+        "\", dynlib, cdecl, gcsafe, raises: [], " & NameNoHeap & ".} =\n" &
         "    system.cstring(moduleName)\n\n" & "  proc " & prefix &
         "KitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: \"" &
         sym("init") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
@@ -563,7 +563,8 @@ proc kitParts(
           "    let instance {.cursor.} = cast[T](p)\n" & "    routeConfined" &
           pascalModule(b.module) & "(instance, bare, params, len, inv)\n\n" & "  proc " &
           prefix & "KitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: \"" &
-          sym("call_surface") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
+          sym("call_surface") & "\", dynlib, cdecl, gcsafe, raises: [], " & SurfaceNoHeap &
+          ".} =\n" &
           "    if outLen != nil:\n      outLen[] = csize_t(callSurfaceData.len)\n" &
           "    addr callSurfaceData[0]\n\n" & "  proc " & prefix &
           "KitFree(module: ptr LogosModuleContext, p: pointer) {.exportc: \"" &
@@ -588,8 +589,8 @@ proc kitParts(
             "KitAsyncApiData = LogosAsyncProviderApi(abiVersion: AsyncProviderAbiVersion, structSize: csize_t(sizeof(LogosAsyncProviderApi)), submit: " &
             prefix & "KitSubmit, requestCancel: " & prefix & "KitRequestCancel)\n\n" &
             "  proc " & prefix & "KitAsyncApi(): ptr LogosAsyncProviderApi {.exportc: \"" &
-            sym("async_api") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
-            "    unsafeAddr " & prefix & "KitAsyncApiData\n"
+            sym("async_api") & "\", dynlib, cdecl, gcsafe, raises: [], " & AsyncApiNoHeap &
+            ".} =\n" & "    unsafeAddr " & prefix & "KitAsyncApiData\n"
         )
       for e in mirrors.exports:
         o.add("\n" & e & "\n")
@@ -613,7 +614,7 @@ proc kitParts(
         "    when compiles(destroyModule(instance)):\n      destroyModule(instance)\n" &
         "    GC_unref(instance)\n\n" & "  proc " & prefix &
         "KitName(): cstring {.exportc: \"" & sym("name") &
-        "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
+        "\", dynlib, cdecl, gcsafe, raises: [], " & NameNoHeap & ".} =\n" &
         "    system.cstring(moduleName)\n\n" & "  proc " & prefix &
         "KitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: \"" &
         sym("init") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
@@ -642,7 +643,8 @@ proc kitParts(
           "    let instance {.cursor.} = cast[T](p)\n" & "    route" &
           pascalModule(b.module) & "(instance, bare, params)\n\n" & "  proc " & prefix &
           "KitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: \"" &
-          sym("call_surface") & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" &
+          sym("call_surface") & "\", dynlib, cdecl, gcsafe, raises: [], " & SurfaceNoHeap &
+          ".} =\n" &
           "    if outLen != nil:\n      outLen[] = csize_t(callSurfaceData.len)\n" &
           "    addr callSurfaceData[0]\n\n" & "  proc " & prefix &
           "KitFree(module: ptr LogosModuleContext, p: pointer) {.exportc: \"" &

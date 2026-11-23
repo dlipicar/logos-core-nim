@@ -507,7 +507,7 @@ template exportLedgerModule*(T: typedesc) =
     ## (DECISIONS G437).
     GC_unref(cast[T](p))
 
-  proc ledgerModuleKitName(): cstring {.exportc: "logos_ledger_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [].} =
+  proc ledgerModuleKitName(): cstring {.exportc: "logos_ledger_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "a static string".} =
     system.cstring(moduleName)
 
   proc ledgerModuleKitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: "logos_ledger_module_MODULE_init", dynlib, cdecl, gcsafe, raises: [].} =
@@ -522,7 +522,7 @@ template exportLedgerModule*(T: typedesc) =
     let instance {.cursor.} = cast[T](p)
     routeConfinedLedgerModule(instance, bare, params, len, inv)
 
-  proc ledgerModuleKitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: "logos_ledger_module_MODULE_call_surface", dynlib, cdecl, gcsafe, raises: [].} =
+  proc ledgerModuleKitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: "logos_ledger_module_MODULE_call_surface", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "static bytes".} =
     if outLen != nil:
       outLen[] = csize_t(callSurfaceData.len)
     addr callSurfaceData[0]
@@ -545,7 +545,7 @@ template exportLedgerModule*(T: typedesc) =
 
   let ledgerModuleKitAsyncApiData = LogosAsyncProviderApi(abiVersion: AsyncProviderAbiVersion, structSize: csize_t(sizeof(LogosAsyncProviderApi)), submit: ledgerModuleKitSubmit, requestCancel: ledgerModuleKitRequestCancel)
 
-  proc ledgerModuleKitAsyncApi(): ptr LogosAsyncProviderApi {.exportc: "logos_ledger_module_MODULE_async_api", dynlib, cdecl, gcsafe, raises: [].} =
+  proc ledgerModuleKitAsyncApi(): ptr LogosAsyncProviderApi {.exportc: "logos_ledger_module_MODULE_async_api", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "a static descriptor".} =
     unsafeAddr ledgerModuleKitAsyncApiData
 
   proc ledgerModuleKitCall0(p0: ptr LogosModuleContext, p1: ptr LogosResponseOwner, p2: uint64, p3: logos_tstr_size_1_64_t, p4: ptr uint64, p5: ptr uint64): LogosResult {.exportc: "logos_ledger_module_CALL_ledger_Post", dynlib, cdecl, gcsafe, raises: [].} =

@@ -48,7 +48,7 @@ template exportFlakyModule*(T: typedesc) =
       destroyModule(instance)
     GC_unref(instance)
 
-  proc flakyModuleKitName(): cstring {.exportc: "logos_flaky_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [].} =
+  proc flakyModuleKitName(): cstring {.exportc: "logos_flaky_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "a static string".} =
     system.cstring(moduleName)
 
   proc flakyModuleKitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: "logos_flaky_module_MODULE_init", dynlib, cdecl, gcsafe, raises: [].} =
