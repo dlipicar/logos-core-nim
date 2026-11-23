@@ -18,7 +18,10 @@
 import std/[algorithm, sequtils, sets, tables]
 import results
 import logos_sdk/cbor
+import logos_sdk/base/testhooks
 import ./[errors, lgx, manifest, records, semver, signing, trust]
+
+testHooksMarker("resolver")
 
 export results, errors, records, signing
 
@@ -117,6 +120,12 @@ type
     depth*: int ## the greatest depth of a bound package name during the operation
     considered*: seq[(string, int)] ## candidates charged per package name, by name
     attempts*: int ## candidate-assignment attempts
+    limit*: string
+      ## [G399; ruling M5] the resolver limit that ended the operation, by its
+      ## configuration name (`partial_closure_names`, ...); empty: none. For the
+      ## operator's log: a limit is protected policy input (PM l.1514), and
+      ## its exhaustion answers `dependency-unavailable` like a missing
+      ## dependency (PM l.1501-1502).
 
   Resolution* = object
     root*: PackageIdentity
@@ -316,6 +325,7 @@ type
     attempts: int
     maxNames: int
     maxDepth: int
+    tripped: string ## the limit that ended the run (`ResolverCounters.limit`)
 
 func key(id: PackageIdentity): (string, string) =
   (id.package, id.version)
@@ -649,9 +659,15 @@ proc rootCandidate(
     )
   ok(Opt.none(Cand))
 
-func reaches(r: Resolver, start, target: string): bool =
-  ## Whether `target` is reachable from `start` over bound packages' edges.
-  var stack = @[start]
+func reachesAny(r: Resolver, starts: openArray[string], target: string): bool =
+  ## Whether `target` is reachable over bound packages' edges from any bound
+  ## name of `starts`. [IMPL; planning's ruling of 2026-11-22, 7.2] One walk
+  ## with one visited set, so a candidate that requires many bound names costs
+  ## the edges they reach once, not once per name.
+  var stack: seq[string]
+  for x in starts:
+    if x in r.assigned:
+      stack.add(x)
   var seen: HashSet[string]
   while stack.len > 0:
     let x = stack.pop()
@@ -664,6 +680,14 @@ func reaches(r: Resolver, start, target: string): bool =
         stack.add(d)
   false
 
+when defined(lcnTestHooks):
+  var perDependencyWalk* {.threadvar.}: bool
+    ## A test hook: `bindCand`'s cycle check as 5-3b-1 built it, one walk per
+    ## bound dependency, for the test that compares the two (`test_resolver`).
+
+  func reaches(r: Resolver, start, target: string): bool =
+    r.reachesAny([start], target)
+
 proc bindCand(r: var Resolver, name: string, c: Cand, added: var seq[string]): bool =
   ## Binds `c` and records its requirements. False when the partial closure is
   ## then rejected: a bound package does not satisfy a new requirement (one
@@ -675,10 +699,16 @@ proc bindCand(r: var Resolver, name: string, c: Cand, added: var seq[string]): b
     r.reqs.mgetOrPut(d, @[]).add(c.deps[i])
     added.add(d)
   for i, d in c.depNames:
-    if d in r.assigned:
-      if not r.assigned.getOrDefault(d).meets(c.deps[i]) or r.reaches(d, name):
-        return false
-  true
+    if d in r.assigned and not r.assigned.getOrDefault(d).meets(c.deps[i]):
+      return false
+  # Both checks only reject, so their order does not change the answer.
+  when defined(lcnTestHooks):
+    if perDependencyWalk:
+      for d in c.depNames:
+        if d in r.assigned and r.reaches(d, name):
+          return false
+      return true
+  not r.reachesAny(c.depNames, name)
 
 proc unbind(r: var Resolver, name: string, added: seq[string]) =
   r.assigned.del(name)
@@ -736,12 +766,10 @@ proc settleDepths(r: var Resolver): Result[void, PackageError] =
       over = Opt.some(n)
   if over.isSome:
     let n = over.get
-    return err(
-      unavailableDependency(
-        n & " is at depth " & $r.depths.getOrDefault(n) &
-          ", beyond the dependency-depth limit"
-      )
-    )
+    # [ruling S1] No depth in the message: it would show the limit, which is
+    # protected policy input (PM l.1514), to the caller.
+    r.tripped = "dependency_depth"
+    return err(unavailableDependency(n & " is beyond the dependency-depth limit"))
   ok()
 
 func versionsFor(r: Resolver, name: string): seq[string] =
@@ -767,6 +795,7 @@ proc charge(r: var Resolver, name, version: string): Result[void, PackageError] 
     return ok()
   let n = r.considered.getOrDefault(name)
   if n >= r.limits.candidates:
+    r.tripped = "candidates_per_name"
     return err(
       unavailableDependency(
         "resolution needs another candidate for " & name &
@@ -781,6 +810,7 @@ proc attempt(r: var Resolver): Result[void, PackageError] =
   ## [SPEC PM §11] Every tentative binding counts, and the count never
   ## decreases.
   if r.attempts >= r.limits.attempts:
+    r.tripped = "assignment_attempts"
     return
       err(unavailableDependency("resolution exhausted the assignment-attempt limit"))
   inc r.attempts
@@ -925,6 +955,7 @@ func counters(r: Resolver): ResolverCounters =
   result.names = r.maxNames
   result.depth = r.maxDepth
   result.attempts = r.attempts
+  result.limit = r.tripped
 
 proc closure(r: var Resolver): Resolution =
   if r.depthsStale:
@@ -997,10 +1028,10 @@ proc run(r: var Resolver, root: RootReference): Result[Resolution, PackageError]
         inc stack[f].next
         let depth = r.depthOf(name)
         if depth > r.limits.depth:
+          r.tripped = "dependency_depth" # [ruling S1] no depth in the message
           return err(
             unavailableDependency(
-              "inspecting " & name & " at depth " & $depth &
-                " exceeds the dependency-depth limit"
+              "inspecting " & name & " exceeds the dependency-depth limit"
             )
           )
         let id = PackageIdentity(package: name, version: version)
@@ -1012,6 +1043,7 @@ proc run(r: var Resolver, root: RootReference): Result[Resolution, PackageError]
         let c = (?r.dependencyCandidate(id, e)).valueOr:
           continue
         if r.assigned.len + 1 > r.limits.names:
+          r.tripped = "partial_closure_names"
           return err(
             unavailableDependency(
               "adding " & name & " exceeds the partial-closure package-name limit"

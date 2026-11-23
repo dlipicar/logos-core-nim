@@ -94,6 +94,17 @@ type
       ## [SPEC RUNTIME l.3411-3418; I96; G306] `state_transfers`, checked as
       ## far as the configuration alone allows; bootstrap checks the rest
       ## against the store
+    protectedInputs*: seq[ProtectedInput]
+      ## [IMPL-DECISION G400] `protected_inputs`, in configuration order: each
+      ## names a listed instance with a state assignment, at most once
+
+  ProtectedInput* = object
+    ## [IMPL-DECISION G400] One instance's protected realization input: the
+    ## Loader writes `input` to `<state_dir>/.lcn-protected-input` at each
+    ## realization attempt (`protinput`). Never in a record, an error, a log
+    ## line or an event.
+    instance*: string
+    input*: seq[byte]
 
   ConfigError* = object
     message*: string
@@ -562,31 +573,39 @@ proc checkRouting(
     return err(configError("routing: " & error))
   ok()
 
-proc checkHostProgram(path: string): Result[void, ConfigError] =
-  ## [plan §2.2; G264] The program is protected deployment input (LOADER
-  ## l.107-108): a regular executable file, owned by the daemon's user or by
-  ## root, writable by its owner only, and no symbolic link at its last
-  ## component. Its directories are the deployment's.
-  ?checkPath("module_host", path)
+proc checkProgramFile*(field, path: string): Result[void, string] =
+  ## [plan §2.2; G264; G410] A program the Runtime's host starts is protected
+  ## deployment input (LOADER l.107-108): an absolute path to a regular
+  ## executable file, owned by the daemon's user or by root, writable by its
+  ## owner only, and no symbolic link at its last component. Its directories
+  ## are the deployment's. `field` names the setting in each message.
+  if not path.isAbsolute:
+    return err(field & " must be an absolute path")
   when defined(posix):
     var st: posix.Stat
     if posix.lstat(cstring(path), st) != 0:
-      return err(configError("module_host does not exist"))
+      return err(field & " does not exist")
     if posix.S_ISLNK(st.st_mode):
-      return err(configError("module_host is a symbolic link"))
+      return err(field & " is a symbolic link")
     if not posix.S_ISREG(st.st_mode):
-      return err(configError("module_host is not a regular file"))
+      return err(field & " is not a regular file")
     if st.st_uid != posix.geteuid() and st.st_uid != 0:
-      return err(configError("module_host is owned by another user"))
+      return err(field & " is owned by another user")
     let mode = uint32(st.st_mode)
     if (mode and 0o022'u32) != 0:
-      return err(configError("module_host is writable by its group or others"))
+      return err(field & " is writable by its group or others")
     if (mode and 0o100'u32) == 0:
-      return err(configError("module_host is not executable"))
+      return err(field & " is not executable")
     ok()
   else:
-    # [plan §2.1] The host is a stub here: nothing is hosted.
-    err(configError("module_host is not supported on this platform"))
+    # [plan §2.1] Nothing is started as a separate program here.
+    err(field & " is not supported on this platform")
+
+proc checkHostProgram(path: string): Result[void, ConfigError] =
+  ## The Module Host's program (`checkProgramFile`).
+  checkProgramFile("module_host", path).isOkOr:
+    return err(configError(error))
+  ok()
 
 proc checkModuleHost(c: var HostConfig, r: LcnAppRuntime): Result[void, ConfigError] =
   ## [plan §2.2, §3; R4] `module_host`, `module_host_env`, and no hosted
@@ -691,6 +710,32 @@ proc checkTransfers(
     )
   # [IMPL] No chain: every target is listed and no source is, so no instance
   # is both, and one start never reads a state it has just moved.
+  ok()
+
+proc checkProtectedInputs(
+    c: var HostConfig, entries: Opt[seq[LcnAppProtectedInput]]
+): Result[void, ConfigError] =
+  ## [IMPL-DECISION G400] Each entry names a listed instance with a state
+  ## assignment, and no instance has two. Messages name the instance, never
+  ## the bytes.
+  if entries.isNone:
+    return ok()
+  if entries.get.len == 0:
+    return err(configError("protected_inputs is present but empty"))
+  var listed = initTable[string, ModuleRecord]()
+  for m in c.modules:
+    listed[m.instance] = m.record
+  var seen = initHashSet[string]()
+  for e in entries.get:
+    let what = "protected_inputs: " & e.instance
+    if e.instance notin listed:
+      return err(configError(what & " is not listed in modules"))
+    if listed.getOrDefault(e.instance).stateAssignment.isNone:
+      return err(configError(what & " has no state_assignment"))
+    if e.instance in seen:
+      return err(configError(what & " has two entries"))
+    seen.incl(e.instance)
+    c.protectedInputs.add(ProtectedInput(instance: e.instance, input: e.input))
   ok()
 
 proc decodeHostConfig*(
@@ -871,6 +916,7 @@ proc decodeHostConfig*(
   ?checkPath("endpoint_dir", c.endpointDir)
   ?checkModuleHost(c, cfg.runtime)
   ?checkTransfers(c, cfg.state_transfers)
+  ?checkProtectedInputs(c, cfg.protected_inputs)
   ok(c)
 
 proc parseHostConfig*(

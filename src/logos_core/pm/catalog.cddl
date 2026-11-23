@@ -1,0 +1,27 @@
+; The catalog document and the last accepted one (Tier 5 step 5-3b; DECISIONS
+; G401; docs/PACKAGE-MANAGER.md §3). Each is one Logos deterministic-CBOR
+; value; pm/catalog.nim reads and writes both, and test_pm_catalog checks them
+; against this text and the pinned PACKAGE MANAGER §6 entry rule.
+
+; logos-core-nim.catalog.v1: unsigned. The protected catalog is the document
+; the Package Manager's protected input pins by binding, locator and BLAKE3-256
+; digest (lcn.pm_catalog_ref). Entries are PACKAGE MANAGER §6's location data,
+; in canonical order (list_packages' order, PACKAGE MANAGER l.1657, then the
+; version text), each {identity, source} once (by rule). sequence orders
+; documents and claims no freshness (C9).
+lcn.package_catalog = {
+  format: "logos-core-nim.catalog.v1",
+  sequence: uint64,
+  entries: [* logos.package_manager.package_catalog_entry],
+}
+
+; logos-core-nim.catalog-kept.v1, <state_dir>/catalog.kept: the last accepted
+; document and the reference it was read by. Written by sync and rename; used
+; at start only while object and digest equal the configured ones.
+lcn.pm_catalog_kept = {
+  format: "logos-core-nim.catalog-kept.v1",
+  storage: tstr .size (1..128),
+  object: bstr .size (1..4096),
+  digest: bstr .size 32,
+  document: bstr,
+}

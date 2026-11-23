@@ -52,6 +52,18 @@ if ($ToolDir -eq '') {
 }
 $ToolDir = [IO.Path]::GetFullPath($ToolDir)
 
+# [DECISIONS G436] A package's checksum is over the bytes Nimble checks out. Nimble turns
+# core.autocrlf off in each clone, but a fetch by revision leaves core.eol native, so a package whose
+# .gitattributes marks files as text would check out with CRLF here and carry another checksum than
+# the lock's. These hold for every git a step starts (GIT_CONFIG_*, git 2.31 or later), so a Nimble
+# command after `setup -l` that fetches checks out the same bytes; the machine's git configuration is
+# left alone, and the variables are put back as they were when the script ends.
+$GitConfig = [ordered]@{
+  GIT_CONFIG_COUNT = '2'
+  GIT_CONFIG_KEY_0 = 'core.autocrlf'; GIT_CONFIG_VALUE_0 = 'false'
+  GIT_CONFIG_KEY_1 = 'core.eol'; GIT_CONFIG_VALUE_1 = 'lf'
+}
+
 function Invoke-Native([string]$What, [scriptblock]$Block) {
   & $Block
   if ($LASTEXITCODE -ne 0) { throw "$What failed with exit code $LASTEXITCODE" }
@@ -127,25 +139,45 @@ function Show-Toolchain {
   if ($gcc -ne $want) { throw "gcc on PATH is $gcc, not $want" }
 }
 
+# [DECISIONS G436] Nimble never compares the compiler with `requires "nim == ..."`, and with
+# --useSystemNim it takes the Nim on PATH, so each Nimble step checks that Nim against the one pin,
+# logos_core.nimble's, before it runs. On Windows nothing else does: $NimVersion must equal that pin
+# too (lint-packaging's nim-windows).
+function Assert-NimPin {
+  $pin = Select-String -Path (Join-Path $Repo 'logos_core.nimble') -Pattern '^requires "nim == ([0-9.]+)"' |
+    Select-Object -First 1
+  if (-not $pin) { throw 'logos_core.nimble has no exact nim requirement' }
+  $want = $pin.Matches[0].Groups[1].Value
+  $have = (& nim --version | Select-Object -First 1)
+  if ($have -notmatch "^Nim Compiler Version $([regex]::Escape($want)) ") {
+    throw "the Nim on PATH is '$have', not logos_core.nimble's $want"
+  }
+  Write-Host "Nim on PATH matches the pin: $have"
+}
+
 function Step-Setup {
   Use-Toolchain
   Set-Location $Repo
-  # As the nimble job: the package list is fetched here and handed to nimble, which then only
-  # resolves the lock file. Local deps (`-l`) keep everything under nimbledeps\.
+  Assert-NimPin
+  # The package list is fetched here and handed to nimble, which then only resolves the lock file.
+  # Local deps (`-l`) keep everything under nimbledeps\.
   New-Item -ItemType Directory -Force (Join-Path $Repo 'nimbledeps') | Out-Null
   $list = Join-Path $Repo 'nimbledeps\packages_official.json'
   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
   Invoke-WebRequest -UseBasicParsing -OutFile $list `
     -Uri 'https://raw.githubusercontent.com/nim-lang/packages/master/packages.json'
-  Invoke-Native 'nimble setup -l' { nimble -y setup -l }
+  Invoke-Native 'nimble setup -l' { nimble --useSystemNim -y setup -l }
   Get-Content (Join-Path $Repo 'nimble.paths')
+  # Nimble checks none of nimble.lock's checksums (draft #191); `test` runs this again first.
+  Invoke-Native 'check_installs' { nim r --hints:off tools/check_installs.nim }
 }
 
 function Step-Test {
   Use-Toolchain
   Set-Location $Repo
   Write-Host "LCN_SHARD=$env:LCN_SHARD"
-  Invoke-Native 'nimble test' { nimble test }
+  Assert-NimPin
+  Invoke-Native 'nimble test' { nimble --useSystemNim test }
 }
 
 # --- probe -----------------------------------------------------------------------------------
@@ -247,9 +279,21 @@ function Step-Probe {
   if ($winRc -ne 0 -or $loopRc -ne 0) { exit 1 }
 }
 
-switch ($Step) {
-  'toolchain' { Step-Toolchain }
-  'setup' { Step-Setup }
-  'test' { Step-Test }
-  'probe' { Step-Probe }
+$savedGitConfig = @{}
+foreach ($name in $GitConfig.Keys) {
+  $savedGitConfig[$name] = [Environment]::GetEnvironmentVariable($name)
+  Set-Item "Env:$name" $GitConfig[$name]
+}
+try {
+  switch ($Step) {
+    'toolchain' { Step-Toolchain }
+    'setup' { Step-Setup }
+    'test' { Step-Test }
+    'probe' { Step-Probe }
+  }
+} finally {
+  foreach ($name in $GitConfig.Keys) {
+    if ($null -eq $savedGitConfig[$name]) { Remove-Item -ErrorAction SilentlyContinue "Env:$name" }
+    else { Set-Item "Env:$name" $savedGitConfig[$name] }
+  }
 }

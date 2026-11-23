@@ -2,7 +2,7 @@
 ## G299, G303; batch E items 19 and E3). docs/DAEMON.md §2.
 ##
 ## `initSession` makes a new session: the layout, the Runtime id (a lowercase
-## UUID version 4, RUNTIME l.2665), the evidence key and its binding to that id
+## UUID version 4, RUNTIME l.2592-2593), the evidence key and its binding to that id
 ## (G149), the trust file at revision 1 (revision 2 with the development
 ## switch) and its mark, the daemon-config, checked as logosd checks it, and
 ## the Runtime's state store, holding that id and nothing else.

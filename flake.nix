@@ -39,6 +39,16 @@
           )
         )
       );
+      # [G433] Our packages' versions live in their nimble files, read here as the Nim pin is;
+      # lint-packaging refuses a version written in this file.
+      versionOf =
+        file:
+        let
+          lines = lib.splitString "\n" (builtins.readFile file);
+        in
+        lib.head (lib.head (lib.remove null (map (builtins.match "^version = \"([0-9.]+)\".*") lines)));
+      coreVersion = versionOf ./logos_core.nimble;
+      sdkVersion = versionOf ./sdk/logos_sdk.nimble;
 
       perSystem =
         system:
@@ -69,6 +79,8 @@
             root = ./.;
             fileset = lib.fileset.unions [
               ./logos_core.nimble
+              # test_lockcheck checks the helper against the real lock (DECISIONS G436).
+              ./nimble.lock
               ./config.nims
               ./.nph.toml
               ./src
@@ -176,6 +188,18 @@
             }
           ];
           testVariants = baseVariants ++ sanitizerVariants;
+          # [DECISIONS G442] Under a sanitizer the suite runs through tools/sanitizer/reports.sh: every
+          # report, the suite's own and any child's (a Module Host's included), goes to a file in
+          # the check's own directory, and the check fails on any, prints them, and fails if the
+          # directory's marker is gone or a canary suite's canary is missing. A base variant's
+          # command is the bare `nim c -r`, so its derivation does not change.
+          sanitizerReports = ./tools/sanitizer/reports.sh;
+          suiteRun =
+            variant: file:
+            if variant.sanitizer or false then
+              "bash ${sanitizerReports} run --suite ${lib.removeSuffix ".nim" (baseNameOf file)} --dir \"$TMPDIR/sanitizer-reports\" -- "
+            else
+              "";
           testChecks = lib.listToAttrs (
             lib.concatMap (
               file:
@@ -193,7 +217,7 @@
                       buildPhase = ''
                         runHook preBuild
                         ${variant.setup or ""}
-                        nim c -r ${variant.flags} --outdir:build ${file}
+                        ${suiteRun variant file}nim c -r ${variant.flags} --outdir:build ${file}
                         runHook postBuild
                       '';
                     }
@@ -283,11 +307,11 @@
           # INTERFACE §2.1-§2.3, §2.5, §5.2 C type headers (types only, D29).
           lcnGen = nimDerivation {
             pname = "lcn-gen";
-            version = "0.0.1";
+            version = sdkVersion;
             src = nimSources;
             buildPhase = ''
               runHook preBuild
-              nim c -d:release --outdir:build/bin src/lcn_gen.nim
+              nim c -d:release --outdir:build/bin sdk/src/lcn_gen.nim
               runHook postBuild
             '';
             installPhase = ''
@@ -300,7 +324,7 @@
           # hosted module instance, started by the Runtime from `runtime.module_host`.
           logosModuleHost = nimDerivation {
             pname = "logos-module-host";
-            version = "0.0.1";
+            version = coreVersion;
             src = nimSources;
             buildPhase = ''
               runHook preBuild
@@ -313,10 +337,29 @@
             meta.mainProgram = "logos-module-host";
           };
 
+          # The key holder (Tier 5 step 5-7a-1; DECISIONS G410; docs/REMOTE.md): logosd's
+          # `remote.signing = "key-holder"` program, which loads the Runtime's key itself.
+          # `remote.key_holder` names it; logosd's package puts it at
+          # ../libexec/logos-core/logos_keyholder. A release build without test hooks (R5, D27).
+          logosKeyholder = nimDerivation {
+            pname = "logos-keyholder";
+            version = coreVersion;
+            src = nimSources;
+            buildPhase = ''
+              runHook preBuild
+              nim c --mm:orc -d:release --outdir:build/bin src/logos_keyholder.nim
+              runHook postBuild
+            '';
+            installPhase = ''
+              install -Dm755 build/bin/logos_keyholder $out/bin/logos_keyholder
+            '';
+            meta.mainProgram = "logos_keyholder";
+          };
+
           # PM §3, §4, §4.3, §7.1 package tools (a subset: no fetch or install).
           lcnPkg = nimDerivation {
             pname = "lcn-pkg";
-            version = "0.0.1";
+            version = coreVersion;
             src = nimSources;
             buildPhase = ''
               runHook preBuild
@@ -356,10 +399,16 @@
           # logosd and logosctl (Tier 4b step 4b-6; DECISIONS I95; docs/DAEMON.md): orc
           # release builds without test hooks (R5, D27). logosd finds the Module Host at
           # ../libexec/logos-core and liblcn_call at ../lib/logos-core, where its package
-          # puts them. [G343] logosd is built with the BLAKE3-256 of liblcn_call's final
+          # puts them, with the key holder beside the Module Host. [G343] logosd is built with the BLAKE3-256 of liblcn_call's final
           # store file, and the library is copied after the fixup, so no strip or patchelf
           # changes the bytes the Module Loader checks against that digest.
-          daemonVersion = "0.0.1";
+          daemonVersion = coreVersion;
+          # [DECISIONS G409] logosd's switches, which the flake check `logosd-no-ssl` builds its
+          # probe with, so the same BoringSSL objects compile under the same nimcache names.
+          # logosd adds only `lcnVersion` and `lcnCallArtifactHash`, constants of its own Nim
+          # code. The binding reads platform defines, BORINGSSL_USE_ASM and
+          # BORINGSSL_ZERO_RECORD_BUFFERS, and neither of these.
+          logosdSwitches = "--mm:orc -d:release";
           logosd = nimDerivation {
             pname = "logosd";
             version = daemonVersion;
@@ -368,13 +417,14 @@
               runHook preBuild
               nim c -d:release --outdir:build/bin tools/artifact_hash.nim
               cliHash=$(build/bin/artifact_hash ${lcnCallLib}/lib/logos-core/liblcn_call${sharedLib})
-              nim c --mm:orc -d:release -d:lcnVersion=${daemonVersion} \
+              nim c ${logosdSwitches} -d:lcnVersion=${daemonVersion} \
                 -d:lcnCallArtifactHash=$cliHash --outdir:build/bin src/logosd.nim
               runHook postBuild
             '';
             installPhase = ''
               install -Dm755 build/bin/logosd $out/bin/logosd
               install -Dm755 ${lib.getExe logosModuleHost} $out/libexec/logos-core/logos-module-host
+              install -Dm755 ${lib.getExe logosKeyholder} $out/libexec/logos-core/logos_keyholder
             '';
             postFixup = ''
               install -Dm444 ${lcnCallLib}/lib/logos-core/liblcn_call${sharedLib} \
@@ -532,7 +582,9 @@
             lcnGen
             lcnPkg
             logosModuleHost
+            logosKeyholder
             logosd
+            logosdSwitches
             logosctl
             logosdSmoke
             android
@@ -555,6 +607,7 @@
           lcn-gen = s.lcnGen;
           lcn-pkg = s.lcnPkg;
           logos-module-host = s.logosModuleHost;
+          logos-keyholder = s.logosKeyholder;
           inherit (s) logosd logosctl;
         }
         // lib.optionalAttrs (s.android != null) {
@@ -613,7 +666,7 @@
         // {
           nph = s.pkgs.runCommand "nph-check" { nativeBuildInputs = [ s.nph ]; } ''
             cd ${s.nimSources}
-            nph --check src sdk/src sdk/tests tests logos_core.nimble config.nims
+            nph --check src sdk/src sdk/tests tests logos_core.nimble sdk/logos_sdk.nimble config.nims
             touch $out
           '';
           # The test-hook rule (sdk/src/logos_sdk/base/testhooks.nim; D27 revised 2026-11-13, I89):
@@ -670,9 +723,33 @@
               '';
             };
           logosd-smoke = s.logosdSmoke;
+          # [DECISIONS G409] The shipped logosd holds no libssl code (Fable's check of logosd's
+          # link and planning's ruling, 2026-11-22). A probe that imports the BoringSSL binding
+          # is built with logosd's switches (`logosdSwitches`); none of the symbols that only
+          # libssl's objects in its nimcache define may be in the deployed binary
+          # (tests/support/nossl.nim). The probe itself, linked without dead stripping, must
+          # fail the check, so the search is not vacuous. The test build's check is in
+          # test_logosd.
+          logosd-no-ssl = s.nimDerivation {
+            name = "logosd-no-ssl";
+            src = s.nimSources;
+            buildPhase = ''
+              runHook preBuild
+              nim c --hints:off ${s.logosdSwitches} --nimcache:build/sslprobe \
+                -o:build/sslprobe-bin tests/support/sslprobe.nim
+              nim c --hints:off -d:release --outdir:build tests/support/nosslcheck.nim
+              build/nosslcheck build/sslprobe ${s.logosd}/bin/logosd
+              if build/nosslcheck build/sslprobe build/sslprobe-bin; then
+                echo "the probe, which links libssl's objects whole, passes the check"
+                exit 1
+              fi
+              runHook postBuild
+            '';
+          };
           # No `?` inside a half-built constructor: it leaks on Nim 2.2.14 (I77).
           lint-ctor-try = s.pkgs.runCommand "lint-ctor-try" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
             cd ${s.nimSources}
+            python3 ${./tools/lint/ctortry.py} --self-test
             python3 ${./tools/lint/ctortry.py} src sdk/src sdk/tests tests
             touch $out
           '';
@@ -680,7 +757,44 @@
           # the branch's value undestroyed, so unwiped, on Nim 2.2.14 (I92; Nim#26725).
           lint-first-write = s.pkgs.runCommand "lint-first-write" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
             cd ${s.nimSources}
+            python3 ${./tools/lint/firstwrite.py} --self-test
             python3 ${./tools/lint/firstwrite.py} src sdk/src sdk/tests tests
+            touch $out
+          '';
+          # [DECISIONS G433-G436] The SDK's and core's Nimble packages: install lists, requirements,
+          # the lock against the SDK's ranges, the Nimble 0.26 guard, and no hand-typed URL of our
+          # repositories (tools/lint/packaging.py). The whole tree but build outputs, for that last
+          # rule.
+          lint-packaging =
+            let
+              tree = lib.cleanSourceWith {
+                src = ./.;
+                filter =
+                  path: _:
+                  let
+                    name = baseNameOf path;
+                  in
+                  !(lib.elem name [ ".git" "build" "nimbledeps" "nimcache" ] || lib.hasPrefix "result" name);
+              };
+            in
+            s.pkgs.runCommand "lint-packaging" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
+              cd ${tree}
+              python3 ${./tools/lint/packaging.py} --self-test
+              python3 ${./tools/lint/packaging.py}
+              touch $out
+            '';
+          # [DECISIONS G442] Every environment a test gives a Module Host names the sanitizer
+          # variables (tests/support/sanitizerenv.nim), so a sanitizer check sees its hosts' reports.
+          lint-sanitizer-env = s.pkgs.runCommand "lint-sanitizer-env" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
+            cd ${s.nimSources}
+            python3 -I ${./tools/lint/sanitizerenv.py} --self-test
+            python3 -I ${./tools/lint/sanitizerenv.py} tests sdk/tests
+            touch $out
+          '';
+          # [DECISIONS G442] The sanitizer checks' report script over made-up directories and stub
+          # suites, without a sanitizer: the causes, the printing, the marker, the canaries.
+          sanitizer-reports = s.pkgs.runCommand "sanitizer-reports" { } ''
+            bash ${./tools/sanitizer/reports.sh} self-test
             touch $out
           '';
           # The import direction between the SDK, core, the daemon and the CLI.
@@ -690,6 +804,33 @@
             python3 ${./tools/lint/layers.py} --config ${./tools/lint/layers.toml}
             touch $out
           '';
+          # No storage library among the dependencies or in the Package Manager's link inputs
+          # (G406): it reaches Logos Storage only through lcn.storage_fetch. nostorage.py
+          # reads layers.py beside it, so it runs from the copied tree.
+          lint-nostorage =
+            let
+              src = lib.fileset.toSource {
+                root = ./.;
+                fileset = lib.fileset.unions [
+                  ./logos_core.nimble
+                  ./nimble.lock
+                  ./nix/nimble-deps.json
+                  ./flake.nix
+                  ./flake.lock
+                  ./config.nims
+                  ./src
+                  ./sdk
+                  ./tests
+                  ./tools/lint
+                ];
+              };
+            in
+            s.pkgs.runCommand "lint-nostorage" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
+              cd ${src}
+              python3 -I tools/lint/nostorage.py --self-test
+              python3 -I tools/lint/nostorage.py --config tools/lint/nostorage.toml
+              touch $out
+            '';
           # The suites a change can reach (tools/affected_suites.py, wave 2's merge rule 1): its
           # planted cases, and on this tree the suites the rule names for genfixtures.nim,
           # DAEMON.md and commitment/choice.nim.

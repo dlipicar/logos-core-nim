@@ -4,7 +4,7 @@
 ## logs every source it is asked about; one test resolves real signed LGX
 ## packages through `lgxInspector`.
 
-import std/[sequtils, sets, strutils, tables]
+import std/[random, sequtils, sets, strutils, tables]
 import unittest2
 import logos_sdk/[cbor, pins]
 import logos_sdk/base/hex
@@ -1473,3 +1473,70 @@ suite "pkg.resolver: dependency resolution (PM §11)":
     check not satisfies(rkCompatible, "0.0.0", "0.0.1")
     check satisfies(rkExact, "1.0.0-rc.1", "1.0.0-rc.1")
     check not satisfies(rkExact, "1.0.0", "1.0.0-rc.1")
+
+  test "[IMPL] one cycle walk per bind gives the per-dependency walks' results, counters and inspections (the ruling of 2026-11-22, 7.2)":
+    # Seeded catalogs with cycles, self-requirements, exact pins, ineligible
+    # records and tight limits, each resolved twice: with 5-3b-1's check (one
+    # walk per bound dependency, the test hook) and with the one walk.
+    var rng = initRand(0x5_3B_2)
+    const names = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"]
+    const versions = ["1.0.0", "1.1.0", "1.2.0", "2.0.0"]
+    var outcomes: CountTable[string]
+    for round in 0 ..< 400:
+      let u = Universe()
+      let n = rng.rand(2 .. names.len)
+      for i in 0 ..< n:
+        for v in versions[0 ..< rng.rand(1 .. versions.len)]:
+          var deps: seq[string]
+          for _ in 0 ..< rng.rand(0 .. 4):
+            let target = names[rng.rand(0 ..< n)]
+            let req = versions[rng.rand(0 ..< versions.len)]
+            deps.add(target & (if rng.rand(0 .. 3) == 0: " =" else: " ^") & req)
+          if rng.rand(0 .. 9) == 0:
+            u.add(names[i], v, deps, outcome = ikIneligible)
+          else:
+            u.add(names[i], v, deps)
+      let lim = limits(
+        names = rng.rand(1 .. 16),
+        depth = rng.rand(1 .. 15),
+        candidates = rng.rand(1 .. 6),
+        attempts = rng.rand(1 .. 30),
+      )
+      let root = RootReference(package: Opt.some(names[rng.rand(0 ..< n)]))
+      checkpoint "round " & $round
+      perDependencyWalk = true
+      let before = u.resolveRoot(root, lim)
+      let beforeLog = u.log
+      perDependencyWalk = false
+      let after = u.resolveRoot(root, lim)
+      check after.picked == before.picked
+      check u.log == beforeLog
+      check after.counters.names == before.counters.names
+      check after.counters.depth == before.counters.depth
+      check after.counters.considered == before.counters.considered
+      check after.counters.attempts == before.counters.attempts
+      check after.counters.limit == before.counters.limit
+      if after.res.isOk:
+        check after.res.get.packages.mapIt(it.depth) ==
+          before.res.get.packages.mapIt(it.depth)
+      outcomes.inc(after.code & "/" & after.counters.limit)
+    checkpoint $outcomes
+    # The rounds reach both outcomes and every limit.
+    check outcomes.len >= 5
+    var resolved, failed = 0
+    for k, c in outcomes:
+      if k.startsWith("ok/"):
+        resolved += c
+      else:
+        failed += c
+    check resolved > 20 and failed > 20
+    for limit in [
+      "partial_closure_names", "dependency_depth", "candidates_per_name",
+      "assignment_attempts",
+    ]:
+      var seen = false
+      for k, _ in outcomes:
+        if k.endsWith("/" & limit):
+          seen = true
+      checkpoint limit
+      check seen

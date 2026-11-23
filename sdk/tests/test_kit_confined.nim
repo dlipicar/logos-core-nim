@@ -14,7 +14,7 @@ from chronos import finished, value
 import logos_sdk/codegen/[callrt, confinedcalls, consumert]
 from logos_sdk/codegen/confinedrt import
   packGate, unpackGate, gateNext, GateMaxGen, GateMaxSlots, failSignalClose,
-  failedSignalFd, failInitAt
+  failedSignalFd, failInitAt, liveDeferredTasks
 import logos_sdk/testing/kitruntime
 import logos_sdk/testing/fixtures/ledger_impl
 import
@@ -1566,6 +1566,7 @@ suite "confined kit: the deferred provider (DECISIONS G338)":
     let ctx = openLedger()
     let fi =
       prepareFake(0, "wait", request(LedgerWaitRequest(channel: 1, millis: 20_000)))
+    let tasksBefore = liveDeferredTasks.load
     submit(ctx, fi)
     discard probe(ctx, 1) # its handler is asleep
     let freedBefore = freed.load
@@ -1574,6 +1575,9 @@ suite "confined kit: the deferred provider (DECISIONS G338)":
     check epochTime() - started < 10.0
     check fi.exactlyOnce
     check fi.status.error.code == ecNotReady
+    # [DECISIONS G338] Its task ended before the module thread did: nothing
+    # abandoned, in every build.
+    check liveDeferredTasks.load == tasksBefore
     when defined(gcOrc):
       # Destroy cancelled the handler and it unwound: the instance and the
       # handler's task are freed once the module thread ends.
@@ -1589,6 +1593,7 @@ suite "confined kit: the deferred provider (DECISIONS G338)":
       let ctx = openLedger()
       let fi =
         prepareFake(0, "wait", request(LedgerWaitRequest(channel: 11, millis: 20_000)))
+      let tasksBefore = liveDeferredTasks.load
       submit(ctx, fi)
       discard probe(ctx, 1) # its handler is asleep
       let freedBefore = freed.load
@@ -1598,6 +1603,8 @@ suite "confined kit: the deferred provider (DECISIONS G338)":
       check took >= 1.5 and took < 10.0
       check fi.exactlyOnce
       check fi.status.error.code == ecNotReady
+      # [DECISIONS G338] Its task, abandoned, stays counted.
+      check liveDeferredTasks.load == tasksBefore + 1
       when defined(gcOrc):
         # The abandoned frames still hold the instance.
         check freed.load == freedBefore
@@ -1717,6 +1724,7 @@ suite "confined kit: what runs while destroyModule runs (DECISIONS G437)":
     let ctx = openLedger()
     check probe(ctx, 10)[1].note == "subscribed"
     let fi = prepareFake(0, "wait", request(LedgerWaitRequest(channel: 12, value: 3)))
+    let tasksBefore = liveDeferredTasks.load
     submit(ctx, fi)
     discard probe(ctx, 1) # its handler awaits its call, prepared and submitted
     check fakePrepares.load == 1
@@ -1733,6 +1741,9 @@ suite "confined kit: what runs while destroyModule runs (DECISIONS G437)":
     check fakeCancels.load == 0 # `noCancel`: its call was never cancelled
     check fi.exactlyOnce
     check fi.status.error.code == ecNotReady
+    # [DECISIONS G437] Its task ended inside destroyModule, not only its
+    # handler: nothing abandoned, in every build (CI run 44991040073).
+    check liveDeferredTasks.load == tasksBefore
     when defined(gcOrc):
       check freed.load == freedBefore + 1 # its frames ended: nothing abandoned
     clearFake(fi)

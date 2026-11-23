@@ -28,15 +28,25 @@
 ## - **Private handoffs** come only from the side table (`runtime/sidetable`,
 ##   D14): a `realize` for an instance the Runtime put no handoff for is
 ##   `invalid-request` (LOADER l.427).
+## - **The protected realization input** ([IMPL-DECISION G400]). When the
+##   attempt's inbound entry carries one, its bytes go to
+##   `<state_dir>/.lcn-protected-input` (`runtime/protinput`) once the state
+##   directory is established, before `_MODULE_init` or before the Module Host
+##   starts; an attempt without one removes a leftover there first. The file is
+##   removed when initialization returns, success or failure, and again at
+##   release. A write that fails fails the realization `realization-failed`.
+##   The bytes' digest is part of the request's key (L l.368-370).
 
 {.push raises: [], gcsafe.}
 
-import std/[locks, tables]
+import std/[locks, strutils, tables]
 import results
 import logos_sdk/abi/checks
 import ../runtime/[config, native]
 from ../runtime/callside import barrier, push, pop, Frame
 import logos_sdk/hash/hashinput
+import logos_sdk/crypto/blake3
+import ../runtime/protinput
 import ./[contract, core, hosted, logos_module_loader_kit]
 import logos_sdk/base/testhooks
 
@@ -468,6 +478,69 @@ proc `list_capabilities`(
     caps.hosted_dynamic = Opt.some(h)
   ok(LogosNSModuleLoaderListCapabilitiesResponse(capabilities: caps))
 
+# The protected realization input (G400) -----------------------------------------------
+
+func protectedBytes(h: Opt[InboundHandoff]): Opt[ptr UncheckedArray[byte]] =
+  if h.isSome and h.get.protectedInput != nil and h.get.protectedInputLen > 0:
+    Opt.some(h.get.protectedInput)
+  else:
+    Opt.none(ptr UncheckedArray[byte])
+
+proc protectedDigestOf(h: Opt[InboundHandoff]): string =
+  ## [G400] The hex BLAKE3-256 of the attempt's protected input; empty: none.
+  let p = protectedBytes(h)
+  if p.isNone:
+    return ""
+  let d = blake3(p.get.toOpenArray(0, h.get.protectedInputLen - 1))
+  for b in d:
+    result.add(toHex(int(b), 2).toLowerAscii)
+
+proc placeProtectedInput(
+    stateDir: Opt[string], h: Opt[InboundHandoff]
+): Result[void, LoaderError] =
+  ## [G400] Before initialization: the attempt's bytes in the reserved file,
+  ## or, for an attempt without any, a leftover removed. No message holds the
+  ## bytes.
+  let p = protectedBytes(h)
+  if stateDir.isNone:
+    if p.isSome:
+      return err(
+        loaderError(
+          lecRealizationFailed,
+          "the protected realization input needs a state directory",
+        )
+      )
+    return ok()
+  if p.isSome:
+    writeProtectedInput(stateDir.get, p.get.toOpenArray(0, h.get.protectedInputLen - 1)).isOkOr:
+      return err(
+        loaderError(
+          lecRealizationFailed,
+          "the protected realization input cannot be written: " & error,
+        )
+      )
+    return ok()
+  removeProtectedInput(stateDir.get).isOkOr:
+    return err(
+      loaderError(
+        lecRealizationFailed, "a leftover protected input cannot be removed: " & error
+      )
+    )
+  ok()
+
+proc clearProtectedInput(stateDir: Opt[string]) =
+  ## [G400] After initialization returns, and at release: the file is gone.
+  ## A failure leaves it for the release, the next attempt or the
+  ## retirement to remove.
+  if stateDir.isSome:
+    discard removeProtectedInput(stateDir.get)
+
+func dirOf(call: InitCall): Opt[string] =
+  if call.input != nil and call.input.stateDir != nil:
+    Opt.some($call.input.stateDir)
+  else:
+    Opt.none(string)
+
 proc runInit(
     m: LoaderModule, instance: string, call: InitCall
 ): Result[LogosNSModuleLoaderRealizeResponse, InvocationFailure] =
@@ -480,6 +553,7 @@ proc runInit(
   barrier:
     (res, ctx) = initModule(call.init, call.input)
     (outcome, returnedOk) = checkInit(res, ctx)
+  clearProtectedInput(dirOf(call))
   let reply = m.core.initDone(instance, outcome, returnedOk, ctx)
   if reply.orphan.isSome:
     let t = reply.orphan.get
@@ -511,6 +585,7 @@ proc `realize`(
       invocationAccess: h.invocationAccess,
       declareContract: cast[DeclareContractFn](h.declareContract),
     )
+  req.protectedDigest = protectedDigestOf(handoff)
   let host = (if handoff.isSome: handoff.get.host else: nil)
   if request.configuration.isSome:
     let c = configurationOf(request.configuration.get).valueOr:
@@ -533,13 +608,23 @@ proc `realize`(
       if m.services.isCancelled():
         m.core.abandon(instance)
         return err(failure(ecCancelled, "the realize was cancelled"))
+      placeProtectedInput(dirOf(step.call), handoff).isOkOr:
+        m.core.abandon(instance)
+        return ok(realizeResponse(RecordResult.err(error)))
       return m.runInit(instance, step.call)
     of pkHosted:
       if m.services.isCancelled():
         m.core.abandon(instance)
         return err(failure(ecCancelled, "the realize was cancelled"))
+      # [G400] Before the host starts, so the file exists when its
+      # initialization runs.
+      let dir = step.hosted.spec.stateDir
+      placeProtectedInput(dir, handoff).isOkOr:
+        m.core.abandon(instance)
+        return ok(realizeResponse(RecordResult.err(error)))
       # [plan §2.5] The Module Host runs `_MODULE_init`; this thread waits.
       var r = startHosted(host, step.hosted, m.maxPayloadDepth)
+      clearProtectedInput(dir)
       step = m.core.hostedDone(instance, move r.outcome, r.phase, host)
 
 proc `get_status`(
@@ -648,6 +733,7 @@ proc `release`(
     else:
       barrier:
         d.destroy(d.context)
+    clearProtectedInput(d.stateDir) # [G400] the backstop
     m.core.releaseDone(instance)
   ok(
     LogosNSModuleLoaderReleaseResponse(
