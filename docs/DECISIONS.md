@@ -7241,6 +7241,9 @@ their history.
   own, made at the first `_init` (G144, G422). With no state before the start there is no `not-started`
   arm: an inner node that stops by itself answers `unavailable` with `node-stopped` (G424). (b) stands
   for the other modules until their steps decide.
+- **Note 2026-11-22 (Tier 5 step N-4.4):** storage's `togglePrivateQueries` has no entry at storage's pin: upstream
+  removed it on purpose (`e7269721`). The 1:1 rule has nothing to keep, and storage_module drops the method (G147's
+  amendment), following the owner's rule of 2026-11-22 that a module wraps its library as it is.
 
 ### G98 — Delivery's RLN and service-discovery dependencies
 - **Kind:** FREE · **Specs:** RUNTIME §7.5 (module-to-module calls only through Runtime routes).
@@ -7351,6 +7354,15 @@ their history.
   `fetch_readiness_changed_event` with the states `starting`, `ready` and `offline`; `dht_ready` is the state
   `ready`. A consumer subscribes, then queries. N-4 builds the two phases in storage_module, whose `_init` returns at
   the listening phase.
+- **Amended 2026-11-22 (the owner's rule on library changes; N-4, G427, G432): (a) is dropped.** The owner ruled
+  that the module libraries are wrapped as they are, with issue reports drafted for their defects, and patched
+  only where a defect "impedes us from creating the modules". The split of storage's start (L1) did not, so it is
+  reverted from the storage branch, and storage stays upstream's `4fe02344`. storage_module's `_init` awaits
+  storage's own `start`, in one phase, and readiness begins at `_init`'s return (G427). The Package Manager still
+  waits on `ready` over `lcn.storage_fetch` (G395). The cost: a bootstrap node that accepts and never answers holds
+  the start for one AutoNAT dial timeout, about 60 s, so a startup deadline under about 65 s fails such a start
+  (the Runtime's default `startup_deadline_ms` is 120 s). The module's README states it ("Start: a stalled
+  bootstrap node and the startup deadline"), and upstream draft 207 keeps the defect.
 
 ### G138 — Payload module names
 - **Kind:** FREE · **Specs:** RUNTIME §1.3 (flat, unreserved names).
@@ -7377,6 +7389,17 @@ their history.
   `toggle_private_queries` kept; a loopback mix private download in the offline e2e; the mix bootstrap
   data recorded as an external dependency *(recommended)*; (b) mix exercised only in the live run.
 - **Decision:** (a).
+- **Amended 2026-11-22 (Tier 5 step N-4.4; planning's ruling after Fable's check
+  `tier5-plans/fable-checks/stepN-4-toggle-private-queries.md`):** `toggle_private_queries` is dropped. The library
+  at the pin has no toggle to wrap (upstream removed it on purpose, `e7269721`), which follows from the owner's rule
+  of 2026-11-22 that a module wraps its library as it is. Private transfers are per call: `private`, false when
+  absent, moves the whole download to mix (`download_init`, `download_to_file`, `download_manifest`, `fetch`;
+  `fetch.private` for `lcn.storage_fetch`'s reads). A private call answers `mix-not-configured` before storage is
+  called unless mix is enabled and a DHT mix proxy is configured, the old toggle's condition (storage
+  `storage/discovery.nim` l.134-138). No issue draft: the removal is upstream's choice.
+- **Status:** built 2026-11-22 by N-4.4 (merged into storage's `logos-core-module` at `f835f6a8`, not pushed):
+  the typed pool (`mix.pool`), a mix-enabled module starting, and the loopback private download (S7) in
+  `test_module_mix`; a private call on a node without mix answers `mix-not-configured` in `test_module_data`.
 
 ### G148 — Exercising the dependency modules end to end
 - **Kind:** FREE · **Options offered:** (a) offline on Linux/macOS: all six modules ready, delivery
@@ -7545,6 +7568,244 @@ their history.
   v2), T9 (the calls, events and `describe` through `lcn_call`).
 - **Status:** built 2026-11-22 (Tier 5 step N-3.2; I118).
 
+### G425 — The `storage_module` contract
+- **Kind:** FREE (Tier 5 step N-4; plan `tier5-plans/stepN-4-plan.md` §3.6; Fable's reviews
+  `tier5-plans/fable-checks/stepN-4-plan.md`) · **Specs:** INTERFACE §1.4 (a contract's content is its author's),
+  l.2140-2147 (the caller's identity; a system service has no module-instance view, l.2142); TRANSPORT l.826-833
+  (one Request and its delayed final Response; the caller subscribes before the call, l.830; no identifier from
+  the final Response is needed to recognize the events, l.833); RUNTIME l.1173-1200 (invocation-scoped events;
+  nothing is committed after the Response, l.1200).
+- **Description:** G97 (b) keeps the old wrapper's methods on the inner node, and G100 makes long operations
+  delayed Responses. storage_module's contract had to fix its surface against the old wrapper and libstorage, its
+  shapes, its transfer sessions, and who may call the administrative methods.
+- **Decision:**
+  - One namespace, `storage.`. Every response is `{ <result> } / { failure: storage.failure }`, with a code and an
+    optional detail, and each method lists its codes. CIDs are text (`tstr .size (1..128)`, checked by decoding);
+    the only binary form is `lcn.storage_fetch`'s locator. The surface, kept, changed and dropped against the old
+    wrapper and libstorage, is the plan's §3.6 table and `logos_module/storage_module.cddl` on the storage branch.
+  - Long operations are delayed Responses held by `_MODULE_async_api` (G100). Progress goes as invocation-scoped
+    events to the caller's own subscription, at most once per percent and ten times a second. A cancelled call
+    cancels the operation, and a file transfer stopped part way leaves no manifest.
+  - Chunked transfers use sessions bound to the caller's identity (`inv.caller()`). Another caller's use of an id
+    answers `session-unknown`, as an unknown id does. A caller with no module-instance view cannot open one
+    (`invalid-argument`). [IMPL] 16 sessions per caller, 256 in all, 10 minutes idle; sessions end with the inner
+    node.
+  - `not-started` while the inner node is stopped (G97); `stopping` for a new transfer during `storage.stop`'s
+    drain. `storage.stop` answers `drained`, `cancelled` and `discovery_stopped`; `storage.start` answers
+    `still-stopping` while the previous node's Kademlia stops (G430).
+  - `storage.remove` first ends `fetchserve`'s own download of the object, and answers `fetch-running` while an
+    operator's `storage.fetch` of it runs (G428). `storage.manifests` is paged [IMPL]. Metric values are the
+    decimal text of the float, since the contract carries no floats (INTERFACE §1).
+  - The administrative methods (`storage.start`, `storage.stop`, `storage.set_log_level`, `storage.connect`,
+    `storage.set_advertise`, `storage.remove`, `storage.data_dir`) are ordinary methods, granted by method to the
+    orchestrator and the operator only.
+- **Status:** decided 2026-11-21 (planning, after Fable's reviews; the owner's answers on storage's D5 and D6,
+  G426, G430). Built in part, 2026-11-22: N-4.2 built the whole contract document, `storage.start`, `stop` and
+  `status`, and the information methods. N-4.4 built the data methods (`f835f6a8`), amending the contract in place
+  (G480): `download_init` and `fetch` are delayed and gain `timed-out` (`fetch` also `not-found` and
+  `unavailable`); `set_advertise` names its codes; `remove` answers `invalid-argument` for a block a dataset
+  references, which storage keeps; sessions take one call at a time; `toggle_private_queries` is dropped (G147).
+
+### G426 — storage_module's configuration
+- **Kind:** FREE (Tier 5 step N-4; plan §3.3, §4.1) · **Specs:** CONFIG l.223 (no configuration-file path at the
+  boundary), l.225 (one configuration record per start), §8 (live reconfiguration is the module's to offer);
+  PACKAGE MANAGER l.1182-1183 (resource locations come through typed configuration); INTERFACE l.1596 (the state
+  directory stays mapped until destroy returns).
+- **Description:** storage reads a command line, its environment, a configuration file and a home directory, and
+  defaults to `--nat=auto`, which maps ports on the operator's router. A module takes one typed configuration
+  record per start.
+- **Options offered** (storage's D5): (a) typed configuration only *(recommended)*; (b) the mix pool as a file
+  under `import_roots`; (c) also environment overrides for logging. **Decision:** (a) (the owner, 2026-11-21, "As
+  recommended").
+  - The schema and its mapping onto `StorageConf` are the plan's §3.3 and
+    `logos_module/storage_module_configuration.cddl`. Excluded: the environment, the home directory, a
+    configuration file, the data directory (the state directory instead), log files, REST and metrics over HTTP.
+    `DEBUG` and `NO_COLOR` are read, documented, and tested to change nothing else. The node's key lives in the
+    state directory. No live reconfiguration.
+  - **`network.nat`** (the owner's F1, 2026-11-21: port mapping "off" by default). When `nat` is absent it is
+    `extip` at a default address, so the module sends no port-mapping request (UPnP, NAT-PMP or PCP), and storage
+    builds no port mapper and no AutoNAT client. The inner node finds the address at each start (`_init` and every
+    `storage.start`), in Fable's order, each failure leading to the next, with no name ever looked up
+    (`natdefault.nim`):
+    1. a concrete listen address;
+    2. the local address toward the first bootstrap IP literal of the listen family (`getPrimaryIPAddr`: a
+       connected UDP socket, no packet sent);
+    3. with bootstrap nodes, the local address toward the listen family's documentation address, 192.0.2.1 (RFC
+       5737) or 2001:db8::1 (RFC 3849), that is the default route's interface; a loopback, unspecified or
+       link-local answer counts as a failure;
+    4. 127.0.0.1, never a refusal.
+  - The modes are `auto` and `{extip: <address>}`; `"none"` and `"upnp"` are refused by the schema. `auto` is the
+    operator's opt-in, and N1 refuses it with no bootstrap node, in the module's words. `autonat_server` and
+    `relay_server` need an explicit `extip` [IMPL].
+  - The README states the cost: such a node announces its interface address, so behind NAT it downloads but
+    cannot serve; a node that started with no network announces 127.0.0.1 until its next start; a node that must
+    serve sets its address or `auto`.
+- **Status:** decided 2026-11-21 (the owner: D5 (a), F1 "off"). Built 2026-11-22 (N-4.2). F1 was first built by
+  a `none` strategy added to storage (L3, `b51ba73e`). **Revised 2026-11-22 under the owner's rule on library
+  changes** (G432): L3 is dropped and reverted, and the `extip` default replaces it, in the order Fable ruled and
+  planning took (planning 2026-11-22); upstream draft 209 keeps storage's missing `none`. Planning accepted the
+  two limits above as documented.
+
+### G427 — storage_module's start and readiness
+- **Kind:** FREE (Tier 5 step N-4; plan §3.4; Fable's `tier5-plans/fable-checks/stepN-4-readiness.md`) ·
+  **Specs:** RUNTIME l.609-616, l.625-626 (application readiness belongs to the module's contract, never
+  `NOT_READY`), l.628; `sdk/docs/STORAGE-FETCH.md` §4 (`fetch_readiness`: `starting`, `ready`, `offline`; G395).
+- **Description:** G136 gives the Package Manager a readiness signal to wait on. Storage's own `start` waits for
+  its AutoNAT dials to the bootstrap nodes, and a count of routing-table entries says nothing about whether any of
+  them answers.
+- **Decision:**
+  - **One phase** (G136 as amended 2026-11-22): `_init` awaits storage's own `start`, and `storage.start` after a
+    `storage.stop` answers the same way. A bootstrap node that accepts and never answers holds the start for one
+    AutoNAT dial timeout: 60022 ms on the Mac and 60034 ms on Linux, measured. With a startup deadline under about
+    65 s such a start fails, and the Runtime moves the instance to `error`; the Runtime's default
+    `startup_deadline_ms` is 120 s. The README says so.
+  - **Readiness from evidence**, as Fable ruled it (planning 2026-11-22): a connected peer, or a routing-table
+    peer that answers Kademlia's `lookupCheck`, never the table's count. `starting` → `ready` on evidence after
+    `_init` returns. `ready` holds while a peer is connected, with a probe at once and every few seconds when none
+    is. `offline` comes after `offline_after_ms` with neither, and `ready` again only on an answered probe. A read
+    while `offline` probes at once. No separate hold-down. A node with no bootstrap nodes keeps its readiness
+    unchanged. `ready` is never gated on `waitBootstrap()`.
+  - **`ready` about one tick after `_init`.** The poll's first tick comes one cadence tick (1 s) after `_init`
+    returns, never inside it, so a change is always published after `_init` or `storage.start` has returned.
+    Measured over 50 cycles: ready median 1008 ms on Linux, 1030 ms on the Mac (planning accepted it, 2026-11-22).
+  - `fetch.network_phase_timeout_ms` keeps its name and bounds how long `starting` waits for evidence after
+    `_init` returns.
+  - [IMPL] Cadence 1 s, 3 peers, 5 s, 30 s. A peer whose probe failed does not count as connected. A bootstrap
+    node's SPR addresses are used when identify dropped them. The poll and its probe round are cancelled in stop
+    and destroy, before Kademlia's wait.
+  - A peer whose machine vanishes sends no close, so `offline` can come up to about 5.5 minutes after such a loss
+    (libp2p's five-minute idle timeout); the README states the limit.
+- **Status:** decided 2026-11-21 (planning, after Fable's readiness review); built 2026-11-22 (N-4.2) with two
+  phases. **Revised 2026-11-22 under the owner's rule** (G136, G432): storage's split start (L1) is dropped, and
+  the start is one phase as above; the readiness poll's first tick moved one tick after its start in the same
+  change.
+
+### G428 — Serving `lcn.storage_fetch`
+- **Kind:** FREE (Tier 5 step N-4; plan §3.5; G91 (a), G395, G5) · **Specs:** PACKAGE MANAGER l.854-858 (a Storage
+  binding's retrieval API is implementation-defined and documented); RUNTIME l.614-616, l.624;
+  INTERFACE l.2112; `sdk/docs/STORAGE-FETCH.md` §3, §5.
+- **Description:** storage_module provides G395's contract, so that the Package Manager reads package objects
+  through it (G91 (a); G406: no storage library in the Package Manager).
+- **Decision:**
+  - The locator (G5) is the binary form of a manifest CID (CIDv1, the manifest codec), checked in G395's order.
+    Each object is read through its own background
+    download, alone (plan Q7 (2), [IMPL], after S4's timing: 5.3 s against 127 s for 32 MiB): reads are bound
+    through a store view carrying the download's id, never its completion; a retry joins the running download,
+    and a restart asks only for the missing blocks. A read waits up to its bound, then answers `unavailable`
+    with one of its four reasons. The idle rule ends an unclaimed download.
+  - A1: a cancelled sole reader ends `fetchserve`'s unclaimed download. A2: at most 4 such downloads. A3: the
+    README on `storage.connect`.
+  - A block that left the local store mid-download (expiry, `storage.remove`): `fetchserve`'s own unclaimed
+    download is replaced, every waiting read moved to the new one, one replacement per read; under an operator's
+    claimed download the read answers `unavailable` with the reason. No expiry refresh.
+  - Private reads wait until the call's 180 s bound, using what the lookup left; direct reads wait
+    `read_timeout_ms` (60 s). Advertising is off, private reads come by configuration, and an exceeded quota
+    answers `unavailable`.
+  - STORAGE-FETCH §5 and the README say retrieval is from the start of the object, and what would bring ranged
+    reads back.
+- **Status:** decided 2026-11-21 (planning's rulings Q7, the evicted block, P1 and R2, after Fable's reviews). Built
+  2026-11-22 by N-4.3 (`logos_module/src/module/fetchserve.nim`, merged into storage's `logos-core-module` at
+  `3e3409bf`, not pushed). The cases that need `storage.fetch`, `storage.remove` or mix come with N-4.4. A read
+  takes its download's want handle itself and races it against the bound [IMPL], so the handle all of the block's
+  waiters share is never cancelled. The README states a storage limit the tests found: one peer search per 3 s
+  for all downloads, which a stalled download takes (upstream draft #216). PKG-0474 was claimed by 5-3b-2 (I116);
+  the README documents this binding's locator (G5).
+
+### G429 — Paths in storage_module's methods
+- **Kind:** FREE (Tier 5 step N-4; plan §3.7; G99 decided for storage; Q4 (a)) · **Specs:** RUNTIME l.3776-3784 (a
+  path is not authority; a contract that takes one defines whose namespace it addresses and the failure,
+  l.3780-3781); INTERFACE l.2146-2147.
+- **Description:** G99 left paths to each contract when its module is ported. storage's file upload and download
+  methods take paths.
+- **Decision:** (Q4 (a), planning 2026-11-21) a path names the provider's own filesystem namespace and must be
+  absolute. Path methods are confined to the configured roots, none by default. A download creates its file
+  exclusively, never overwriting one. The typed failures are `invalid-path` and `path-unavailable`. The README
+  warns that a path is the provider's, and `storage.data_dir` is for the operator only.
+- **Status:** decided 2026-11-21. Built 2026-11-22 by N-4.4 (`logos_module/src/module/paths.nim`, merged into
+  storage's `logos-core-module` at `f835f6a8`, not pushed). Three failures: `invalid-path` (not absolute, a `..`
+  or a NUL), `path-not-permitted` (no roots configured, or outside every root once links are resolved) and
+  `path-unavailable`. A download creates its file `O_EXCL|O_NOFOLLOW` with mode 0600, and removes it when the
+  download fails.
+
+### G430 — storage_module's start, stop and destroy
+- **Kind:** FREE, with one [IMPL] bound (Tier 5 step N-4; plan §3.8, §4.2; storage's D6; amends G97) · **Specs:**
+  RUNTIME l.3699-3700, l.3738-3740 (the drain deadline and any preparation belong to the deployment), l.3703-3705,
+  l.3723-3725, l.1162; INTERFACE l.2100 (destroy, read as "stop or join" residual work), l.1596.
+- **Options offered** (storage's D6): (a) the single rule, with `storage.stop` as the preparation method and
+  `storage.start` to undo it, a 15 s stop deadline, a 7 s expected unprepared destroy, `init` dropped, and the
+  node's `shutdown_grace_ms` at the shared 20000 ms *(recommended)*; (b) G97 as it stands; (b2) typed configuration
+  and no `init`, with the node started only by `storage.start`; (c) no preparation method. **Decision:** (a) (the
+  owner, 2026-11-21, "As recommended"). The orchestration side is a small core step in wave 3 (Q3 (b)).
+  - `storage.stop { ? drain_ms }` drains for 30 s by default under a call deadline of `drain_ms` + 10 s. `init`
+    is dropped (G97 amended); `start` stays, to undo `stop`.
+  - Destroy stops or joins all residual work, waits on no posted callback, and leaves nothing registered on the
+    module thread (N-1e's strict destroy). The prepared path keeps the same rule inside the caller's deadline.
+  - **The bounded exception** [IMPL] (planning 2026-11-21, "stalled peer" (a)): Kademlia's stop with dials in
+    flight is awaited until 5 s after destroy began. Three facts carry it: it runs on the module thread only, the
+    kit joins the thread, and the refc heap goes with it (a confined kit only). Four terms bound it: hosted is the
+    supported placement and the README states the direct leak; the leftover count equals the dials in flight; it
+    is the one non-strict case; it is revisited on an upstream fix, a direct target, or a common occurrence. The
+    fourth term was re-read on 2026-11-22 and not triggered: at `extip` against a stalled peer, 361 s of
+    `still-stopping` is a declared arm of the contract.
+  - What destroy leaves in malloc on purpose, by name: the thread's secp256k1 context, and on macOS two
+    `getifaddrs` lists per start at a wildcard address, each with its upstream draft. A tree build takes about 1 ms
+    per MiB: past 7 s near 7 GiB, and past the Host's 15 s kill near 15 GiB.
+  - At the `extip` default (G426) storage builds no AutoNAT client and no port mapper, so libplum is never
+    started: no libplum thread, `DEBUG` never read, and no libplum wait in a default node's destroy. libplum's 5 s
+    mapping wait applies only at `auto`, and comes from reading the code: `auto` is never run here.
+  - **The partial-start remedy** (upstream draft 208; G432): storage's `stop` does nothing after a `start` that
+    failed, and a failing part of its `stop` can skip the rest, so `close` would shut the stores under
+    maintenance's armed timer. After either failure the module's `stopParts` stops the parts itself before
+    `close`, in Fable's three conditions: maintenance first; each stop guarded on its own, with `switch.stop` raced
+    against 5 s; and the NAT mapper, AutoNAT and AutoRelay when present, and mix's transport.
+  - N-4.2's measurements: a stalled node's stop 5002 ms on the Mac and 5025 ms on Linux; over 50 cycles,
+    descriptors and threads back to the baseline. `bootstrapTimeout`, a storage change tried in scratch, is
+    withdrawn (upstream draft 210).
+- **Status:** decided 2026-11-21 (the owner: D6 (a); planning's rulings on the stalled peer and the libplum patch);
+  built 2026-11-22 (N-4.2). **Revised 2026-11-22 under the owner's rule** (G432): the partial-start fix in storage
+  (L1's amendment) is dropped, and the remedy lives in the module.
+
+### G431 — storage_module's toolchain
+- **Kind:** IMPL (Tier 5 step N-4; plan §3.2, §5.1, §5.2) · **Specs:** INTERFACE l.3353-3355;
+  `sdk/docs/STORAGE-FETCH.md` §8.
+- **Decision:**
+  - refc, a confined kit with `--async-api`, on storage's lock with chronos `2d81a762` (P7). The wake-up
+    descriptor leak §5.2 found is fixed by N-1e, and N-4.2 builds on a base with all of N-1e.
+  - The module repeats storage's switch set (the four `libp2p_*_exts` defines and the rest), with a drift check
+    against storage's `config.nims`, the TRACE define with its two reasons, and `--passL:-lstdc++` on Linux and
+    `-lc++` on Darwin under nixpkgs' Nim.
+  - One `StorageServer` per thread. SIGPIPE is ignored, with a test, and `_init` refuses `SIG_DFL` with a clear
+    error (a README line for embedders).
+  - Hosted placement in logosd; direct placement only for in-process suites and embedders.
+  - The SDK is required by name, and enters the lock at the extraction.
+- **Status:** decided 2026-11-21 (N-4.1's spike and planning); built 2026-11-22 (N-4.2).
+
+### G432 — Where storage_module lives, and no storage patch
+- **Kind:** SCOPE (Tier 5 step N-4; plan §3.1, §3.9; the owner's rule on library changes, 2026-11-22).
+- **Description:** storage_module needs a home until its own repository exists. It was to carry two changes to
+  storage (L1, the split start, and L3, a `none` NAT strategy) as commits, then as patch files.
+- **Decision:**
+  - `logos_module/` on the storage branch (`logos-core-module` in `logos-storage-nim`) until the extraction
+    (planning's Q5 (b)). Storage's `storage.nimble` and `nimble.lock` stay upstream's (planning's lock ruling,
+    I128 in `tier5-plans/stepW2-X-plan.md`). At the move, the
+    switch-set check covers the four `libp2p_*_exts` paths. The tests name their core commit, and planning's push
+    checklist reruns the storage_module suites. `test_installs_match_lock` checks every lock entry through
+    W2-P.1's `lockcheck.nim`, with the `lcn-gen` link and core's opt-in cases. `hosted_dynamic` for the node,
+    `direct_dynamic` working.
+  - **No library patch** (the owner, 2026-11-22: "We don't need to fix the module libraries, just draft an issue
+    report, another team will take care of it. We just need to wrap the libraries as they are in modules", then
+    "only patch whatever impedes us from creating the modules"). Planning found that no storage change blocks the
+    module. L1 (`fd2b5adf`, `51670f1a`), its partial-start amendment (`21e0640b`, `5b46c05e`) and L3
+    (`b51ba73e`) are reverted on the branch by signed commits, and storage's files equal `4fe02344` again. No
+    `patches/` directory is made. Upstream drafts 207 to 210 keep the defects.
+  - The module works around them itself: one phase (G136, G427), the `extip` default (G426), and `stopParts`
+    (G430). `stopParts` reads two private fields, `maintenance` and `mixTransport`, through `privateAccess`, so a
+    rename fails the module's build. The README's bump line says to re-read storage's `start` and `stop` at
+    each bump of the storage pin.
+- **Status:** decided 2026-11-21 (planning: Q5 (b), Q8 (a), the owner's item I). **Revised 2026-11-22 under the
+  owner's rule:** no patch. Built: merged into `logos-core-module` at `4221d6ac` (not pushed); the module's
+  suites pass on the Mac and on Linux.
+
 ### G441 — The blockchain module's deployment digest: BearSSL, on the bytes the library reads
 - **Kind:** IMPL, refining G422 · **Specs:** none (the module's own configuration,
   `blockchain_config.cddl` `deployment.sha256`, stepN-3 plan §3.3); planning's rulings of 2026-11-22 (b)
@@ -7596,6 +7857,15 @@ their history.
   different tag; a UTF-16 file does not load; the flattened fixture loads to the value the original
   loads to.
 - **Status:** built 2026-11-22 (Tier 5 step N-3.2, logos-blockchain 56192e5e4 on `lcn/n3-2-sha`).
+
+### G480 — When storage_module's contract freezes
+- **Kind:** FREE (Tier 5 step N-4; planning's ruling 2026-11-22, the rule blockchain's v2 has) · **Specs:** INTERFACE
+  §1.4 (a contract's content is its author's).
+- **Description:** N-4.4 amended storage_module's contract (G425) while building the data methods: codes that
+  storage's behaviour needed, and a method the library at the pin no longer has (G147).
+- **Decision:** storage_module's contract freezes at N-6a's first pin of its root or at N-4.5's merge, whichever
+  comes first, as blockchain's v2 does. Until then it changes in place.
+- **Status:** decided 2026-11-22 (planning). Not frozen yet: N-4.4's amendments (`f835f6a8`) were made in place.
 
 ---
 
@@ -9070,7 +9340,7 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G119, G120, G122 | packing, verifier schema, schema.reference | GAP | 2 |
 | G121 | singleton mode | FREE | 6 |
 | G123–G135 | CI, platforms, build, stack | FREE | 12 |
-| G136, G138 | storage start split; module names | FREE | 11 |
+| G136, G138 | storage start (the split dropped 2026-11-22: one phase); module names | FREE | 11 |
 | G137 | package-signing trust | FREE | 9 |
 | G139 | reverse mapper requirement | CONTRA | 3 |
 | G140, G149 | default CA policy; evidence key | FREE | 7 |
@@ -9273,6 +9543,14 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G422 | D5 for blockchain: typed configuration, no environment, no home directory | IMPL (D5) | 11 |
 | G423 | D6 for blockchain: `_init` starts the node, an unprepared destroy stops it | IMPL (Q4 (a)) | 11 |
 | G424 | the blockchain module's contract v1 | IMPL | 11 |
+| G425 | the `storage_module` contract | FREE | 11 |
+| G426 | storage_module's configuration; `network.nat` defaults to `extip` | FREE | 11 |
+| G427 | storage_module's start (one phase) and readiness | FREE | 11 |
+| G428 | serving `lcn.storage_fetch` | FREE | 11 |
+| G429 | paths in storage_module's methods | FREE | 11 |
+| G430 | storage_module's start, stop and destroy | FREE, one IMPL bound | 11 |
+| G431 | storage_module's toolchain | IMPL | 11 |
+| G432 | where storage_module lives, and no storage patch | SCOPE | 11 |
 | G433 | the packages inside this repository | Choice | 12 |
 | G434 | how our packages require each other | Choice | 12 |
 | G435 | what each package installs, and kit builds outside this repository | Choice | 12 |
@@ -9285,6 +9563,7 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G442 | sanitizer reports from child processes fail the check | IMPL | 12 |
 | G443 | logosd's preset of the resolver limits | IMPL | 9 |
 | G468 | the lock check: an install and its own `srcDir` are one install (amends G436) | IMPL | 12 |
+| G480 | when storage_module's contract freezes | FREE | 11 |
 
 ---
 
