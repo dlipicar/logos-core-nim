@@ -2334,7 +2334,9 @@ proc internSteps(r: ref Resolver): RunSteps =
     let need = r.intern.get
     r.intern = Opt.none(InternNeed)
     var nums: Numbers
-    var walk: ContractBytes ## a catalog record's encodings, taken from its inspection
+    var walk = ContractBytes()
+      ## a catalog record's encodings, taken from its inspection. The initializer is
+      ## I92's rule (`tools/lint/firstwrite.py`): its first write is in a branch.
     block:
       # Sized once, so neither list grows: its contracts and its entries,
       # counted by its entries and modules.
