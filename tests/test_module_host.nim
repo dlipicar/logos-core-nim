@@ -2,7 +2,8 @@
 ## Tier 4b step 4b-3, DECISIONS G264, G266; plan §2.2, §4.3) against a test
 ## owner of its carrier (`support/hostowner.nim`), with no engine: startup,
 ## lane 0 (init, apply, release), the ends of the carrier, and the spawn
-## (`hostsup.spawnProcess`, through a stand-in program).
+## (`hostsup.spawnProcess`, through a stand-in program), and the parent the
+## spawn names (`--parent=<pid>`, G264 amended 2026-11-21; Tier 5 step 5-7a-1).
 ##
 ## The module is `tests/kit/probe_impl.nim`, a consumer-only library that reads
 ## what to do from its state directory and writes what it saw there. The host
@@ -14,10 +15,11 @@ when defined(posix):
   import unittest2
   import results
   import logos_sdk/iface/outcome
+  import logos_sdk/base/parentwatch
   import ../src/logos_core/runtime/[carrier, hostio, hostsup]
   import ../src/logos_core/transport/io/endpoint
   from ../src/logos_core/transport/io/sock import fdClose, socketPair
-  from ../src/logos_core/host/state import ExitCarrierLost
+  from ../src/logos_core/host/state import ExitCarrierLost, ExitNotStartedByLoader
   import ./support/[childbuild, hostowner, modulehostbuild, shortdir]
   import ./support/trnowner
 
@@ -87,8 +89,42 @@ when defined(posix):
 
   suite "host.module: startup (plan §2.2)":
     test "[IMPL] H-1 started without a carrier on fd 3, or with fd 3 not a socket: exit 2":
-      check shellStatus("exec 3<&- ; exec " & quoteShell(host) & " 2>/dev/null") == 2
-      check shellStatus("exec " & quoteShell(host) & " 3</dev/null 2>/dev/null") == 2
+      # `$PPID` is this process: `sh` execs the host in its own place.
+      let named = quoteShell(host) & " --parent=$PPID"
+      check shellStatus("exec 3<&- ; exec " & named & " 2>/dev/null") == 2
+      check shellStatus("exec " & named & " 3</dev/null 2>/dev/null") == 2
+
+    test "[IMPL-DECISION G264] H-16 started with a carrier but no valid --parent=<pid>: exit 2":
+      for args in [
+        newSeq[string](),
+        @["--parent="],
+        @["--parent=12x"],
+        @["--parent=0"],
+        @["parent=1"],
+      ]:
+        var r = startHost(host, args = Opt.some(args))
+        defer:
+          r.stop()
+        check r.waitExit() and r.exitedWith == ExitNotStartedByLoader
+
+    test "[IMPL-DECISION G264] H-17 a --parent that is not the host's parent, as when the Runtime ended before the host set its watch and the host was adopted: exit 70":
+      # This suite's own parent: a live process, never the host's.
+      var r = startHost(host, args = Opt.some(@[ParentFlag & $getppid()]))
+      defer:
+        r.stop()
+      check r.waitExit() and r.exitedWith == ExitCarrierLost
+
+    test "[IMPL-DECISION G264] H-18 parentArg: the first --parent=<pid>, a positive decimal that fits pid_t":
+      check parentArg(["--parent=1234"]) == Opt.some(1234)
+      check parentArg(["x", "--parent=7", "--parent=8"]) == Opt.some(7)
+      check parentArg(["--parent=2147483647"]) == Opt.some(2147483647)
+      for bad in [
+        "--parent=", "--parent=0", "--parent=-1", "--parent=+1", "--parent= 1",
+        "--parent=1 ", "--parent=2147483648", "--parent=99999999999", "--parent=0x10",
+      ]:
+        check parentArg([bad]).isNone
+      check parentArg(newSeq[string]()).isNone
+      check parentArg(["--parent", "1"]).isNone
 
   suite "host.module: lane 0 init (LOADER §6)":
     test "[LDR-0040] [LDR-0042] [LDR-0053] [IMPL-DECISION G442] H-2 a consumer-only module: initialized without a call surface; its state directory and only the given environment reach it, with this process's five sanitizer variables beside it":
@@ -371,7 +407,7 @@ when defined(posix):
         check toSeq(walkDir(dir)).len == 1 # `probe.cmd` alone: no init ran
 
   suite "host.module: spawn (plan §2.3, R4, R5)":
-    test "[IMPL] H-14 the child starts with an empty signal mask, default actions, only the allow-listed environment, /dev/null on fd 0, the lock on fd 5 and nothing above it":
+    test "[IMPL] H-14 the child starts with --parent=<the Runtime's pid> as its one argument, an empty signal mask, default actions, only the allow-listed environment, /dev/null on fd 0, the lock on fd 5 and nothing above it":
       # Built without Nim's own signal handlers, which would replace the
       # dispositions the spawn set before the probe could read them.
       let program = buildChild(
@@ -406,6 +442,7 @@ when defined(posix):
           m.get.arm_lcn_Carrier_fatal.message.splitLines.filterIt(it.len > 0)
         else:
           @[]
+      check report.filterIt(it.startsWith("arg ")) == @["arg --parent=" & $getpid()]
       check "mask 0" in report
       for sig in ["pipe", "term", "int", "hup"]:
         check (sig & " dfl") in report

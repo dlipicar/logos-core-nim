@@ -16,7 +16,10 @@ Package Manager runs under a test name (`pmtest_module`); `list_packages`, insta
 - **The engine** (`pm/`: input, catalog, fetcher, verification cache, resolution driver, engine) is
   core's, beside `package/`, the Capability Authority and the Loader. It does no I/O: it is a state
   machine over commands (calls, route operations, timers, the kept-catalog write, replies, log lines)
-  and events. The module shell (5-3b-2) carries them out through the module kit.
+  and events. The module shell (`pm/shell.nim`, G405) carries them out through the module kit: it
+  runs on the instance's module thread under chronos (G335), holds one route per binding through its
+  Runtime Control binding, and queues the engine's events, so no engine step runs inside a kit
+  callback. A test module (`pmtest_module`) wraps it with `status` and `resolve`.
 - **Payloads go between module processes.** The Package Manager's Module Host establishes its own
   routes to its Storage providers through its Runtime Control binding, as any consumer does, and the
   catalog and archives travel over those routes from the provider's process to the Package Manager's.
@@ -43,11 +46,13 @@ one Logos deterministic-CBOR value, `lcn.pm_input` (`src/logos_core/pm/input.cdd
 | `trust` | the package trust file's accepted bytes (DAEMON.md §6), 1 byte to 1 MiB |
 | `storage` | the Storage bindings, at least one: `{binding, instance}`, names unique |
 | `catalog` | the protected catalog: `{storage, object, digest}` (§3) |
+| `resolver_limits` | the four resolver limits (PM §11), required: the Package Manager has no default |
 | `limits` | optional bounds, below |
 
 The Package Manager checks the input itself, whoever wrote it, and refuses all of it on the first
 failure: the format, an empty `storage`, a binding named twice, a `catalog.storage` that is no
-binding, a bound out of range, and trust bytes that `trustdoc` refuses. A trust file that selects a
+binding, a bound or a resolver limit out of range (CONFORMANCE, "Resolver limits"), and trust bytes
+that `trustdoc` refuses. A trust file that selects a
 catalog or a provenance profile is refused here as at logosd's start (G398, G404), so the Package
 Manager does not start with one.
 
@@ -59,8 +64,21 @@ Manager does not start with one.
 | `cache_entries` | 1 to 4,096 | 256 | the verification cache (§5) |
 | `read_deadline_ms` | 1 to 86,400,000 | 300,000 | one call, and the wait for `ready` after `not-ready` (§4) |
 
-The daemon configuration's `package_manager` section, logosd's start checks and the channel that
-carries this value to the hosted Package Manager are 5-3b-2's, documented here when they are built.
+**The channel** (G400). The value is the instance's protected realization input: the host
+configuration's `protected_inputs` names the instance and carries the bytes, and the Module Loader
+writes them to `<state_dir>/.lcn-protected-input` before each realization attempt's initialization and
+removes the file when it returns ([HOST-CONFIG.md](HOST-CONFIG.md), `protected_inputs`). The Package
+Manager reads the file once, during `_MODULE_init`, and keeps no copy of it. It is not configuration:
+no Runtime Control method reads or changes it. Without a state directory or without the file,
+initialization fails. A refused input fails `_MODULE_init` with `MODULE_ERROR`; the Runtime records
+only that code, and the Package Manager's log line names the field ("package-manager: initialization
+failed: lcn.pm_input is refused: …").
+
+**In logosd** the value comes from daemon-config's `package_manager` section ([DAEMON.md](DAEMON.md)
+§3; G399): the bindings, the catalog and the bounds as the operator wrote them, the resolver limits
+it names or logosd's preset, and the trust file's bytes as that start accepted them. logosd runs the
+Package Manager's own decoder on the value before it starts anything, so the instance's check is the
+second one. A trust change therefore reaches the Package Manager at the next start.
 
 ## 3. The catalog
 
@@ -156,7 +174,9 @@ the name is logged once per start. Reusing a source in another deployment needs 
 and providers that read its locators the same way (PM l.858).
 
 **Routes** (G402). At start, the Package Manager establishes one route per binding to the binding's
-provider, then subscribes to `fetch_readiness_changed_event` and calls `fetch_readiness`.
+provider, then subscribes to `fetch_readiness_changed_event` and calls `fetch_readiness`. A route
+names a provider record, whose id the Runtime assigns, so before each establishment it looks up the
+binding's instance with `list_modules` and takes that record's provider.
 - **Every establishment has a new request key**, 128 random bits. A replay returns the retained result
   and revives nothing (R l.3072-3082), so a fixed key would hand a lost route's record back. A key is
   reused only to retry an establishment whose response was lost (at most three times).
@@ -193,8 +213,33 @@ raises a provider's bounds raises this one too.
 **`provenance_object` is never read** (PKG-0167; until step 5-11). A source with one inspects and
 resolves exactly as the same source without it, and no call names its locator.
 
-The locator encodings of each provider are STORAGE-FETCH §5's table. The bindings in the daemon
-configuration are 5-3b-2's.
+**Resolution over retrieval** (G405, G455). A root operation's resolution is a resumable run that the
+driver holds for the operation's life, on the module thread:
+- **A turn** of the run ends where it needs a candidate's inspection, which the engine retrieves as
+  above and supplies; where it needs an installed record's retained-bytes answer (5-5); or once
+  `ResolverTurnWork` units of work are spent. The run's first turns are its setup over the catalog.
+  After a spent turn the engine issues `cmContinue`, and the shell runs the next turn from a
+  `callSoon` of its own, one event-loop poll later. So route answers, timers, readiness events and
+  other operations go between two turns, and two operations take turns one after the other.
+- **Nothing is rerun** from the root. The candidates retrieved are exactly those one synchronous
+  resolution reaches, in its order (PM l.1294-1295, l.1310), and the budget changes no outcome or
+  counter (l.1279-1280).
+- **After the reply** the run's state is freed a turn at a time, by continues of their own.
+- **A caller that gives its operation up** (its future cancelled) cancels it: it takes no more turns,
+  its queued retrieval is dropped, and nothing answers it. A continue that arrives for it is ignored.
+- At `_MODULE_destroy` each operation still running is answered `package-unavailable`.
+- **The operation bound** (G477): the run counts the inputs it reads, a unit for each record read
+  (inspected or installed), for each of its dependency entries, for each contract an entry lists and
+  for each contract it provides, each record once (one walk, `inputUnits`). A count equal to the bound
+  goes on; the read that takes it over ends the operation with `package-unavailable` (PM l.1308-1309),
+  and the caller's message does not state the bound. The four resolver limits and their counters are
+  untouched. The resolver half is built; the protected key `operation_entries` in `lcn.pm_limits`
+  comes with 5-5-3, and until then the driver runs with no bound.
+
+The locator encodings of each provider are STORAGE-FETCH §5's table. In logosd the bindings are
+`package_manager.storage` ([DAEMON.md](DAEMON.md) §3), each naming a `hosted_dynamic` instance that
+provides `lcn.storage_fetch`; the system rules S9 to S11 grant the routes to those instances, the
+three calls and the event, and `list_modules`, which is not narrowed to them (DAEMON.md §5).
 
 ## 5. Trust in use, and the verification cache
 
@@ -250,4 +295,5 @@ This implementation applies the mandatory package-signature and artifact-verific
 | a `nix` source in an LGX operation | `unsupported-source` |
 | a catalog document refused | logged; the catalog in use, if any, stays; no catalog otherwise |
 | `catalog.kept` that does not decode | set aside and logged; no catalog until one is read |
-| a trust file that selects a profile | the Package Manager does not start |
+| a trust file that selects a profile | the Package Manager does not start: `_MODULE_init` fails, and its log names the field |
+| no protected input, or no state directory | the Package Manager does not start |

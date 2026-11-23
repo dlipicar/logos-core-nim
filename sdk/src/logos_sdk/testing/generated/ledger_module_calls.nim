@@ -400,26 +400,26 @@ template exportLedgerModuleCalls*() =
     kitEnter()
     callInvoke0(p0, p1, p2, p3, p4, p5)
 
-  proc ledgerModuleCallsClear0(p1: ptr LogosResponseOwner, p4: ptr uint64, p5: ptr uint64) {.exportc: "lcn_clear_ledger_Post", dynlib, cdecl, gcsafe, raises: [].} =
+  proc ledgerModuleCallsClear0(p1: ptr LogosResponseOwner, p4: ptr uint64, p5: ptr uint64) {.exportc: "lcn_clear_ledger_Post", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear0(p1, p4, p5)
 
   proc ledgerModuleCallsInvoke1(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: uint32, p3: uint64, p4: ptr logos_tstr_size_0_256_t, p5: ptr uint64, p6: ptr uint64): LogosResult {.exportc: "lcn_invoke_ledger_Probe", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
     callInvoke1(p0, p1, p2, p3, p4, p5, p6)
 
-  proc ledgerModuleCallsClear1(p1: ptr LogosResponseOwner, p4: ptr logos_tstr_size_0_256_t, p5: ptr uint64, p6: ptr uint64) {.exportc: "lcn_clear_ledger_Probe", dynlib, cdecl, gcsafe, raises: [].} =
+  proc ledgerModuleCallsClear1(p1: ptr LogosResponseOwner, p4: ptr logos_tstr_size_0_256_t, p5: ptr uint64, p6: ptr uint64) {.exportc: "lcn_clear_ledger_Probe", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear1(p1, p4, p5, p6)
 
   proc ledgerModuleCallsInvoke2(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: logos_bstr_size_1_256_t, p3: csize_t, p4: ptr logos_bstr_size_1_256_t, p5: ptr csize_t): LogosResult {.exportc: "lcn_invoke_ledger_Seal", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
     callInvoke2(p0, p1, p2, p3, p4, p5)
 
-  proc ledgerModuleCallsClear2(p1: ptr LogosResponseOwner, p4: ptr logos_bstr_size_1_256_t, p5: ptr csize_t) {.exportc: "lcn_clear_ledger_Seal", dynlib, cdecl, gcsafe, raises: [].} =
+  proc ledgerModuleCallsClear2(p1: ptr LogosResponseOwner, p4: ptr logos_bstr_size_1_256_t, p5: ptr csize_t) {.exportc: "lcn_clear_ledger_Seal", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear2(p1, p4, p5)
 
   proc ledgerModuleCallsInvoke3(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: uint32, p3: uint32, p4: uint64, p5: ptr logos_tstr_size_0_256_t, p6: ptr uint64, p7: ptr uint64): LogosResult {.exportc: "lcn_invoke_ledger_Wait", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
     callInvoke3(p0, p1, p2, p3, p4, p5, p6, p7)
 
-  proc ledgerModuleCallsClear3(p1: ptr LogosResponseOwner, p5: ptr logos_tstr_size_0_256_t, p6: ptr uint64, p7: ptr uint64) {.exportc: "lcn_clear_ledger_Wait", dynlib, cdecl, gcsafe, raises: [].} =
+  proc ledgerModuleCallsClear3(p1: ptr LogosResponseOwner, p5: ptr logos_tstr_size_0_256_t, p6: ptr uint64, p7: ptr uint64) {.exportc: "lcn_clear_ledger_Wait", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear3(p1, p5, p6, p7)

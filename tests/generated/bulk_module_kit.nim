@@ -207,7 +207,7 @@ template exportBulkModule*(T: typedesc) =
       destroyModule(instance)
     GC_unref(instance)
 
-  proc bulkModuleKitName(): cstring {.exportc: "logos_bulk_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [].} =
+  proc bulkModuleKitName(): cstring {.exportc: "logos_bulk_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "a static string".} =
     system.cstring(moduleName)
 
   proc bulkModuleKitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: "logos_bulk_module_MODULE_init", dynlib, cdecl, gcsafe, raises: [].} =
@@ -222,7 +222,7 @@ template exportBulkModule*(T: typedesc) =
     let instance {.cursor.} = cast[T](p)
     routeBulkModule(instance, bare, params)
 
-  proc bulkModuleKitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: "logos_bulk_module_MODULE_call_surface", dynlib, cdecl, gcsafe, raises: [].} =
+  proc bulkModuleKitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: "logos_bulk_module_MODULE_call_surface", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "static bytes".} =
     if outLen != nil:
       outLen[] = csize_t(callSurfaceData.len)
     addr callSurfaceData[0]

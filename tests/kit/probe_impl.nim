@@ -62,9 +62,12 @@
 ## exists), `quit-init <n>` (exit from
 ## module code), `quit-handler` (exit from the first event handler),
 ## `rc-destroy <method> <hex params>` (a Runtime Control call from
-## `_MODULE_destroy`, its result in `rc-destroy`). The four flags
-## (`block-destroy`, `block-handler`, `block-subend`, `quit-handler`) take
-## effect before every other command, wherever they are in the file.
+## `_MODULE_destroy`, its result in `rc-destroy`), `protected` (what the
+## protected realization input's file holds during `_MODULE_init`, DECISIONS
+## G400: `file <hex>`, `link`, `dir` or `absent`, appended to `protected`).
+## The four flags (`block-destroy`, `block-handler`, `block-subend`,
+## `quit-handler`) take effect before every other command, wherever they are
+## in the file.
 ## `_MODULE_apply_configuration` answers by what its input contains: `reject`
 ## (a failure status), `bad` (an invalid status), `block` (waits until
 ## `<state_dir>/go-apply` exists, then OK), `quit` (exits); anything else OK.
@@ -199,22 +202,19 @@ proc label(t: ptr Tag): string =
 
 proc onRouteEvent(
     name: cstring, data: ptr UncheckedArray[uint8], len: csize_t, userData: pointer
-) {.cdecl.} =
-  kitEnter()
+) {.lcnCallback.} =
   let t = cast[ptr Tag](userData)
   t.probe.note("deliveries", t.label & " " & $name & " " & hex(data, len))
   if t.probe.blockHandler:
     waitGo(t.probe.dir, "go-handler")
 
-proc onRouteEnd(reason: CErrorCode, userData: pointer) {.cdecl.} =
-  kitEnter()
+proc onRouteEnd(reason: CErrorCode, userData: pointer) {.lcnCallback.} =
   let t = cast[ptr Tag](userData)
   t.probe.note("ends", t.label & " " & $int64(reason))
 
 proc onSubEnd(
     id: LogosSubscriptionId, reason: CErrorCode, userData: pointer
-) {.cdecl.} =
-  kitEnter()
+) {.lcnCallback.} =
   let t = cast[ptr Tag](userData)
   t.probe.note("subends", t.label & " " & $id & " " & $int64(reason))
   if t.probe.blockSubEnd:
@@ -226,8 +226,7 @@ proc onDone(
     response: ptr UncheckedArray[uint8],
     len: csize_t,
     owner: LogosResponseOwner,
-) {.cdecl.} =
-  kitEnter()
+) {.lcnCallback.} =
   let t = cast[ptr Tag](userData)
   let line =
     if int64(res.code) == 0:
@@ -417,8 +416,7 @@ proc serveMain(p: ptr Probe) {.thread.} =
 
 proc onEvent(
     name: cstring, data: ptr UncheckedArray[uint8], len: csize_t, userData: pointer
-) {.cdecl.} =
-  kitEnter()
+) {.lcnCallback.} =
   let p = cast[ptr Probe](userData)
   if p.inside.fetchAdd(1) != 0:
     p.note("events", "overlap")
@@ -445,7 +443,12 @@ proc onEvent(
     waitGo(p.dir, "go-handler")
   discard p.inside.fetchSub(1)
 
-proc probeName(): cstring {.exportc: "logos_probe_module_MODULE_name", dynlib, cdecl.} =
+proc probeName(): cstring {.
+    exportc: "logos_probe_module_MODULE_name",
+    dynlib,
+    cdecl,
+    lcnNoNimHeap: "a static string"
+.} =
   "probe_module"
 
 proc probeInit(
@@ -517,6 +520,21 @@ proc probeInit(
         else:
           3
       )
+    of "protected":
+      let path = p.dir / ".lcn-protected-input"
+      try:
+        case getFileInfo(path, followSymlink = false).kind
+        of pcFile:
+          var line = "file "
+          for c in readFile(path):
+            line.add(toHex(ord(c), 2).toLowerAscii)
+          p.note("protected", line)
+        of pcLinkToFile, pcLinkToDir:
+          p.note("protected", "link")
+        of pcDir:
+          p.note("protected", "dir")
+      except IOError, OSError:
+        p.note("protected", "absent")
     of "env":
       var names: seq[string]
       for k, _ in envPairs():

@@ -27,7 +27,10 @@ from ../runtime/store import SnapshotName
 from ../transport/io/sock import fitsSunPath, sunPathMax
 from ../durable import ensurePrivateDir
 import
-  ./[compose, ctlmodule, diagdrain, evstore, logging, session, supervise, trustfile]
+  ./[
+    compose, credential, ctlmodule, diagdrain, evstore, logging, remoteexposure,
+    remoteside, remotetrust, session, signsvc, supervise, trustfile,
+  ]
 
 when defined(posix):
   import std/posix
@@ -71,6 +74,16 @@ type
     startedAtMs*: uint64
     graceMs*: int
     diagnostics*: Drain ## [I95 amended 2026-11-16] the Runtime's, into the log
+    remote*: Opt[RemoteStart]
+      ## [G408] with `remote.enabled`: the remote trust state the start
+      ## accepted; the remote processes take its snapshot at spawn (5-7a-2)
+    signer*: SignService
+      ## [G410] with `remote.enabled` and `remote.signing` "logosd": the
+      ## signing service, holding the TLS key; nil otherwise
+    remoteSide*: RemoteSide
+      ## [G410; G411] with `remote.enabled`: what answers the remote
+      ## processes' sign requests (the key holder, in that mode) and takes
+      ## their log lines; freed once the Runtime is destroyed
 
 func startError(exit: int, message: string): StartError =
   StartError(exit: exit, message: message)
@@ -180,7 +193,7 @@ proc assembleDaemon*(
     s: Session, opts: AssembleOptions = AssembleOptions()
 ): Result[Daemon, StartError] =
   ## Steps 4 to 9. The caller holds the session lock.
-  let (_, bytes) = readDaemonConfig(s).valueOr:
+  let (raw, bytes) = readDaemonConfig(s).valueOr:
     return err(startError(ExitRefused, error))
   # [RUNTIME l.2630-2632; I95] `init` made the store; logosd never makes one.
   # A new store under this session's fixed Runtime id would give the old
@@ -197,12 +210,75 @@ proc assembleDaemon*(
   # [G396] Both reads of the trust file apply its rules.
   let seen = checkedTrust(s).valueOr:
     return err(startError(ExitRefused, "the trust file: " & error))
+  # [G407; G408] Only with `remote.enabled` does logosd read the remote trust
+  # input and its mark; both reads apply the input's rules.
+  let remoteOn = raw.remote.isSome and raw.remote.get.enabled
+  var seenRemote = Opt.none(seq[byte])
+  if remoteOn:
+    # [plan §3.1 item 3] No remote process of an earlier run still serves.
+    checkRemoteLocks(s.workDir).isOkOr:
+      return err(startError(ExitRefused, error))
+    let t = checkedRemoteTrust(s).valueOr:
+      return err(startError(ExitRefused, "the remote trust input: " & error))
+    seenRemote = Opt.some(t.digest)
+  # [G299; G408] The remote input's second read, continuity and enrollment
+  # rules and snapshot, before either mark moves; it writes nothing. Its
+  # snapshot goes through the derived host configuration to the remote
+  # processes (5-7a-2).
+  var remote = Opt.none(RemoteStart)
+  var exposure: seq[LcnRemoteExposureEntry]
+  if remoteOn:
+    let st = confirmRemoteTrust(s, seenRemote).valueOr:
+      return err(startError(ExitRefused, "the remote trust input: " & error))
+    remote = Opt.some(st)
+    # [G412; Q4] The disables Runtime Control made durable.
+    exposure = readExposure(s).valueOr:
+      return err(startError(ExitRefused, "the remote exposure file: " & error))
   let prepared = prepareDaemon(
-    s, bytes, seen, hooksBuild = opts.hooksBuild, checkKey = true, exe = opts.exe
+    s,
+    bytes,
+    seen,
+    hooksBuild = opts.hooksBuild,
+    checkKey = true,
+    exe = opts.exe,
+    remote =
+      if remote.isSome:
+        Opt.some(RemoteSeen(snapshot: remote.get.snapshot, exposure: exposure))
+      else:
+        Opt.none(RemoteSeen),
   ).valueOr:
     return err(startError(ExitRefused, error))
   let evidenceKeys = startEvidenceKeys(s, prepared.config, seen).valueOr:
     return err(startError(ExitRefused, "the evidence keys: " & error))
+  # [G409; G410] The TLS credential: a pending rotation taken up, then the key
+  # loaded by the signing service. In key-holder mode logosd checks the
+  # certificate and never opens the key, which the holder loads.
+  var signer: SignService = nil
+  var remoteCred = Opt.none(CredentialInfo)
+  if remoteOn:
+    let moved = takeUpCredential(s).valueOr:
+      return err(startError(ExitRefused, "the TLS credential: " & error))
+    if moved:
+      logInfo("remote credential: the rotation is taken up")
+    let present = currentCredential(s).valueOr:
+      return err(startError(ExitRefused, "the TLS credential: " & error))
+    if present.isNone:
+      return err(
+        startError(
+          ExitRefused,
+          "remote.enabled needs a TLS credential: logosctl remote credential new makes one",
+        )
+      )
+    let cred = present.get
+    remoteCred = Opt.some(cred)
+    if prepared.config.remote.signing == rsLogosd:
+      signer = newSignService(cred.dir).valueOr:
+        return err(startError(ExitRefused, "the TLS credential: " & error))
+    logInfo(
+      "remote credential: certificate sha-256 " & anchorName(cred.certificateSha256) &
+        ", enrollment revision " & $cred.revisionOf & ", signed by " &
+        $prepared.config.remote.signing
+    )
   # [G299] The mark moves before the revision is used, never created here,
   # and nothing is refused after it moved (a change since the first read
   # included).
@@ -214,6 +290,34 @@ proc assembleDaemon*(
       "NON-PRODUCTION: the development switch is on (trust revision " &
         $trust.file.revision & "); this deployment is not a production one"
     )
+  if remote.isSome:
+    # [RUNTIME l.2674] The remote mark, durably, before the state is used.
+    commitRemoteMark(s, remote.get).isOkOr:
+      return err(startError(ExitRefused, "the remote trust mark: " & error))
+    let r = remote.get
+    logInfo(
+      "remote trust: revision " & $r.accepted.revision & ", " & $r.accepted.anchors.len &
+        " anchors, " & $r.accepted.keys.len & " enrollment keys" &
+        (if r.advance: " (a higher revision: the mark moved)" else: "")
+    )
+    # [G412; Q4] A retained disable whose configuration entry changed or is
+    # gone no longer applies: the file is rewritten without it.
+    let retained = prepared.composition.retained
+    for e in retained.kept:
+      logInfo("remote exposure: kept disabled: " & e.entryText)
+    if retained.dropped.len > 0:
+      writeExposure(s, retained.kept).isOkOr:
+        return err(startError(ExitRefused, "the remote exposure file: " & error))
+      for e in retained.dropped:
+        logInfo(
+          "remote exposure: dropped, its configuration entry changed or is gone: " &
+            e.entryText
+        )
+    for line in r.conflicts & r.report:
+      logWarn("remote-trust-report: " & line)
+  for line in prepared.policyReport:
+    # [G415] A Runtime the policy names without an active enrollment.
+    logWarn("authority-policy-report: " & line)
   let c = prepared.config
   let path = prepareRunDir(s, c.ctl.socketDir).valueOr:
     return err(startError(ExitRefused, error))
@@ -239,6 +343,10 @@ proc assembleDaemon*(
     )
   else:
     logInfo("lcn_call: no CLI module (no cli.artifact and no compiled library hash)")
+  if c.pm.isSome:
+    # [G399; ruling C3] Which resolver limits this start composed, and where
+    # they came from: the operator's log only (PM l.1514).
+    logInfo(pmStartLine(c.pm.get))
   # Step 9.
   let comp = prepared.composition
   var cfg = LogosRuntimeConfig(
@@ -285,6 +393,27 @@ proc assembleDaemon*(
       "call-evidence store: boot " & $store.boot & ", next seq " & $store.base & " in " &
         s.evidenceDir
     )
+  # [G410; G411] The remote hooks: the certificate the listener processes
+  # serve with and the signer they ask; the key holder starts here.
+  var side: RemoteSide = nil
+  if remoteCred.isSome:
+    let made = newRemoteSide(s, c.remote, c.value.remote.get, remoteCred.get, signer)
+    var failure = ""
+    if made.isErr:
+      failure = "the remote side: " & made.error
+    else:
+      side = made.get[0]
+      let set = runtimeSetRemoteHooks(rt, made.get[1])
+      if not set.ok:
+        failure = "the remote hooks: " & set.text
+    if failure.len > 0:
+      discard runtimeDestroy(rt)
+      closeRemoteSide(side)
+      closeStore(store)
+      freeSupervisor(sv)
+      if signer != nil:
+        signer.close()
+      return err(startError(ExitStartFailed, failure))
   let started = uint64(toUnix(getTime()) * 1000 + getTime().nanosecond div 1_000_000)
   setPresentation(
     Presentation(
@@ -312,6 +441,9 @@ proc assembleDaemon*(
       store: store,
       socketPath: path,
       startedAtMs: started,
+      remote: remote,
+      signer: signer,
+      remoteSide: side,
       graceMs:
         if grace.isSome:
           int(grace.get)
@@ -342,10 +474,16 @@ proc release*(d: var Daemon) =
   ## What the daemon holds besides the Runtime: the handoff, the supervisor
   ## and the call-evidence store. After a successful destroy, or at a
   ## Loader-loss exit. With the Runtime not destroyed, its sink may still be
-  ## called: the store is only stopped (written out), not freed.
+  ## called: the store is only stopped (written out), not freed, and the
+  ## remote side and the signing service are kept, for its sign thread.
   clearPresentation()
   setOrchestratorDiagnostics(nil)
   if d.rt == nil:
+    closeRemoteSide(d.remoteSide)
+    d.remoteSide = nil
+    if d.signer != nil:
+      d.signer.close()
+      d.signer = nil
     freeSupervisor(d.supervisor)
     d.supervisor = nil
     closeStore(d.store)

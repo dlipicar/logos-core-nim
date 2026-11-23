@@ -7,6 +7,7 @@
 ## and overwrites a released buffer before freeing it.
 
 import std/atomics
+import logos_sdk/abi/cstatus
 import logos_sdk/testing/kitruntime
 
 export kitruntime
@@ -60,6 +61,7 @@ proc routeCallOp(
     outBuf: ptr ptr UncheckedArray[uint8],
     outLen: ptr csize_t,
 ): LogosResult {.cdecl, gcsafe, raises: [].} =
+  bindingEnter()
   let st = cast[ptr RouteState](route.state)
   discard st.calls.fetchAdd(1)
   doAssert outBuf[] == nil and outLen[] == 0,
@@ -105,6 +107,7 @@ proc routeCallOp(
 proc routeReleaseOp(
     route: ptr LogosRouteHandle, buf: ptr UncheckedArray[uint8], len: csize_t
 ) {.cdecl, gcsafe, raises: [].} =
+  bindingEnter()
   let st = cast[ptr RouteState](route.state)
   discard st.releases.fetchAdd(1)
   if buf != st.given or len != st.givenLen or buf == nil:

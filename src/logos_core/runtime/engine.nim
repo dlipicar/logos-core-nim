@@ -118,11 +118,12 @@ from std/os import
   walkDir, PathComponent
 import results
 import logos_sdk/abi/types
-import logos_sdk/base/[perthread, testhooks, wipe]
+import logos_sdk/base/[entrymarks, perthread, testhooks, wipe]
 from logos_sdk/base/logtext import oneLine, supplied
 import logos_sdk/cbor/[decode, utf8]
 import logos_sdk/commitment
 from ../durable import syncDir
+from ./protinput import removeProtectedInput, MaxProtectedInputBytes
 import logos_sdk/iface/[accept, outcome, surface]
 from logos_sdk/iface/provider import matchesContracts
 import logos_sdk/kit/rc_arms
@@ -149,9 +150,9 @@ from ../permissions import
 import
   ./[
     asynccall, authbinding, authscopes, bell, bindings, callside, dcache, events,
-    execauth, hostlock, hostsup, inventory, invoke, loaderbinding, observe, plumbing,
-    rcevents, served, servedroots, sessionauth, settings, sidetable, statexfer, store,
-    subend, transported,
+    execauth, firstfresh, forwarded, hostlock, hostsup, inventory, invoke,
+    loaderbinding, observe, plumbing, rcevents, remoterecords, served, servedroots,
+    sessionauth, settings, sidetable, statexfer, store, subend, transported,
   ]
 
 export plumbing
@@ -531,6 +532,17 @@ type
     failure: Opt[InvocationFailure] ## the verdict; none: committed
     reply: ReplyChannel ## the publisher, once it waits
 
+  RemoteConn = ref object
+    ## [SPEC RUNTIME l.1691-1697; G413] One admitted remote Runtime Control
+    ## connection: bound to one forwarded consumer, whose stand-in `inst`
+    ## (its id from `forwardedId`, nothing else set) is the caller of every
+    ## Runtime Control invocation on it. It is in no other table.
+    inst: Inst
+    key: seq[byte] ## the listener's address bytes
+    closed: bool
+      ## its listener was disabled or stopped serving Runtime Control: the
+      ## connection is being closed, and a call still on it is NOT_READY
+
   State = ref object
     shared: ptr Shared
     cfg: EngineConfig
@@ -686,6 +698,13 @@ type
     rcHints: array[InvKind, RcBlob] ## [G178] the hint values, encoded once
     side: SideTable ## [D14; C-10] the private handoffs to and from the Loader
     ldr: LoaderLink ## [I89] the Module Loader and its binding
+    remote: RemoteRecords ## [G412] the remote listener and export records
+    remoteAvailable: bool
+      ## [G298, G412] a listener can be enabled: remote transport is
+      ## configured (`RemoteDriver.start`)
+    remoteConns: Table[string, RemoteConn]
+      ## [G413] the admitted remote Runtime Control connections, by token
+    remoteNext: uint64 ## [G413] the last token number given
 
 const
   MaxPasses = 8 ## [IMPL] handler passes per operation; more is an evaluation failure
@@ -747,10 +766,16 @@ proc workerLoop(s: ptr Shared) =
       job.destroy(job.context)
       s.post(Msg(kind: mkDestroyed, job: job.id))
     of jkObserveEnd:
-      runEnd(job.handle)
+      # [DECISIONS G466] Under test hooks the first to each callback is on a
+      # new thread.
+      firstOnFreshThread(
+        endKeyForTests(job.handle), runEnd, job.handle, markRuntimeThread
+      )
       s.post(Msg(kind: mkJobDone, job: job.id))
     of jkComplete:
-      runComplete(job.call)
+      firstOnFreshThread(
+        completeKeyForTests(job.call), runComplete, job.call, markRuntimeThread
+      )
       s.post(Msg(kind: mkCompleted, job: job.id, target: job.call))
     of jkRequestCancel:
       runRequestCancel(job.deferred)
@@ -1980,7 +2005,9 @@ when defined(lcnTestHooks):
     ## lifecycle table does not list; every test binary exits 1 when any did.
     offTable.load
 
-  proc offTableReport() {.noconv.} =
+  proc offTableReport() {.
+      noconv, lcnOwnRuntime: "an exit procedure: the exiting thread"
+  .} =
     let n = offTable.load
     if n > 0:
       let f = firstOffTable.load - 1
@@ -2106,8 +2133,10 @@ func configurable(x: Inst): bool =
   x.record.configuration.isSome
 
 func addressOf(st: State, id: string): LogosNSRuntimeModuleInstanceAddress =
+  ## [G413] A forwarded consumer's names its own Runtime.
+  let p = consumerParts(st.runtimeId, id)
   LogosNSRuntimeModuleInstanceAddress(
-    runtime_instance_id: st.runtimeId, module_instance_id: id
+    runtime_instance_id: p.runtime, module_instance_id: p.instance
   )
 
 proc publishConfig(st: State, x: Inst) =
@@ -3211,6 +3240,14 @@ proc failure(st: State, q: AuthzRequest, reason: string): AuthzAnswer =
 
 proc immediate(st: State, q: AuthzRequest): Opt[AuthzAnswer] =
   ## The answer that needs no evaluation, if there is one.
+  if q.consumer.isForwarded and (not st.authorityMode or st.caInst.isNil):
+    # [SPEC RUNTIME l.1690; G415, owner item O1 (i): fail closed] A consumer
+    # of another Runtime is decided only by a bound Capability Authority:
+    # never by internal policy (allow-all, a test's rules), nor by the rules
+    # protected input derives, which name local instances.
+    return Opt.some(
+      st.failure(q, "a consumer of another Runtime needs a Capability Authority")
+    )
   if not st.authorityMode:
     return Opt.some(st.authorizer.decide(q))
   if q.consumer.len == 0:
@@ -3390,8 +3427,13 @@ type DecideCtx = ref object
 proc admits(st: State, a: AuthzAnswer, operation: string, s: Subject): bool {.gcsafe.}
 
 func listOperation(k: InvKind): string =
-  if k == InvKind.Routes:
+  case k
+  of InvKind.Routes:
     $rmListRoutes
+  of InvKind.Remote_listeners:
+    $rmListRemoteListeners
+  of InvKind.Provider_exports:
+    $rmListProviderExports
   else:
     $rmListModules
 
@@ -4441,7 +4483,15 @@ proc originReady(st: State, q: Request): Opt[EngineError] =
   ## table's rows, before a success: a Runtime Control binding that is
   ## invalidated, or a Runtime that is shutting down, is NOT_READY. A request
   ## that comes through no binding (the host API) has only the second.
-  if q.attempt.len > 0:
+  if q.attempt.len > 0 and q.origin.instance.isForwarded:
+    # [G413] A remote connection whose listener no longer serves Runtime
+    # Control is being closed (`commitListener`).
+    let c = st.remoteConns.getOrDefault(q.attempt)
+    if c.isNil or c.closed or not st.remote.servesRc(c.key):
+      return Opt.some(
+        engineError(ecNotReady, "the remote Runtime Control connection is closing")
+      )
+  elif q.attempt.len > 0:
     let x = st.instances.getOrDefault(q.origin.instance)
     if x.isNil or q.attempt != x.current or x.state notin {msLoaded, msReady}:
       return
@@ -4582,6 +4632,8 @@ proc realizeThroughLoader(st: State, a: Attempt) =
       h.setEndpoint(e.ep.listener, e.ep.path, st.runtimeId, st.shared.tport.config).isOkOr:
         st.diagnose("the endpoint of " & x.id & " cannot be handed over: " & error)
         fail("the provider's endpoint cannot be handed over")
+  # [G400] The instance's protected realization input, if it has one.
+  let (protectedBytes, protectedLen) = st.side.protectedOf(x.id)
   st.side.putInbound(
     x.id,
     InboundHandoff(
@@ -4591,6 +4643,8 @@ proc realizeThroughLoader(st: State, a: Attempt) =
       invocationAccess: s.invocationAccess,
       declareContract: cast[pointer](s.declareContract),
       host: host,
+      protectedInput: protectedBytes,
+      protectedInputLen: protectedLen,
     ),
   ).isOkOr:
     st.diagnose("the private handoff of " & x.id & " cannot be placed: " & error)
@@ -5260,6 +5314,13 @@ proc caller(st: State, q: Request): Result[Inst, EngineError] =
   ## [SPEC RUNTIME §9.3 l.2553-2560] The module consumer a binding
   ## authenticates; none is NOT_AUTHORISED. Whether the binding is still
   ## usable is checked after the method's authorization (`originReady`).
+  ## [SPEC RUNTIME l.1691-1697; G413] A forwarded consumer is the one its
+  ## remote Runtime Control connection was admitted for.
+  if q.origin.instance.isForwarded:
+    let c = st.remoteConns.getOrDefault(q.attempt)
+    if c.isNil or c.inst.id != q.origin.instance:
+      return err(engineError(ecNotAuthorised, "no authenticated module consumer"))
+    return ok(c.inst)
   let x = st.instances.getOrDefault(q.origin.instance)
   if x.isNil or q.attempt notin x.tokens:
     return err(engineError(ecNotAuthorised, "no authenticated module consumer"))
@@ -5522,6 +5583,13 @@ proc retireCommitted(st: State, y: Inst) =
       )
   st.unsettled.excl(y.id)
   st.xfers.del(y.id)
+  if st.cfg.stateRoot.isSome and y.record.stateAssignment.isSome:
+    # [IMPL-DECISION G400] The state directory stays (DEPLOYMENT §19); a copy
+    # of a protected realization input does not.
+    removeProtectedInput(dirOf(st.cfg.stateRoot.get, y.record.stateAssignment.get)).isOkOr:
+      st.diagnose(
+        "the protected input of retired " & y.id & " was not removed: " & error
+      )
   # [SPEC RUNTIME l.3417, l.3420] A membership change, judged by the retained
   # facts of the record that left.
   st.hintRc(InvKind.Modules, instanceSubject(y.record.module, y.id, y.providerId))
@@ -6528,6 +6596,16 @@ proc answerPage(
     for i in p.picked:
       r.routes.add(snap.routes[i])
     q.reply.answerEncoded(encode(r))
+  of lkListeners:
+    var r = LogosNSRuntimeControlListRemoteListenersResponse(next_cursor: next)
+    for i in p.picked:
+      r.listeners.add(snap.listeners[i])
+    q.reply.answerEncoded(encode(r))
+  of lkExports:
+    var r = LogosNSRuntimeControlListProviderExportsResponse(next_cursor: next)
+    for i in p.picked:
+      r.exports.add(snap.exports[i])
+    q.reply.answerEncoded(encode(r))
 
 proc continueList(
     st: State,
@@ -6574,6 +6652,11 @@ proc listModules(st: State, q: Request, x: Inst) =
     if req.module.isSome and y.record.module != req.module.get:
       continue
     if req.instance.isSome and y.id != req.instance.get:
+      continue
+    if x.id.isForwarded and y.providerId.len > 0 and
+        not st.remote.exportedThroughEnabled(y.providerId):
+      # [SPEC RUNTIME l.2765-2767; G413] Forwarded discovery: only providers
+      # with an enabled export through an enabled listener.
       continue
     let (r, subject) = st.moduleRecord(y)
     if not st.admits(a, $rmListModules, subject):
@@ -6753,48 +6836,163 @@ proc summary(st: State, q: Request, x: Inst) =
     r.failure = Opt.some(v.failure.get.classification)
   q.reply.answerEncoded(encode(r))
 
+func exportSubject(e: ExportEntry): Subject =
+  ## [SPEC RUNTIME l.3237-3238] What an export record exposes: its provider,
+  ## with the facts of the instance that owned it when it was set.
+  instanceSubject(e.module, e.instance, e.provider)
+
 proc remoteList(st: State, q: Request, x: Inst) =
-  ## [K19 interim; G298; SPEC RUNTIME l.1626, l.3366-3372, l.3386-3392]
-  ## `list_remote_listeners` and `list_provider_exports`: authorized like
-  ## every list method, then the limit, the cursor, readiness, and an empty
-  ## page from one consistent snapshot. This Runtime has no remote transport,
-  ## so no listener or export record exists and no page continues: every
-  ## cursor is refused.
+  ## [SPEC RUNTIME l.3225-3227, l.3372-3413; G412] `list_remote_listeners`
+  ## and `list_provider_exports`: authorized like every list method, then the
+  ## limit, the cursor, readiness and a page of one snapshot. Listeners are
+  ## ordered by their address's deterministic-CBOR bytes, exports by those of
+  ## their listener's, then the provider (every one this Runtime's). A
+  ## listener is a Runtime-wide record (no subject facts); an export is judged
+  ## by its provider's.
   let operation = $q.rc.m
-  discard st.listAuthority(q, x, operation).valueOr:
+  let a = st.listAuthority(q, x, operation).valueOr:
     return
-  let (limit, cursor) =
-    if q.rc.m == rmListRemoteListeners:
+  let listeners = q.rc.m == rmListRemoteListeners
+  let (limitIn, cursor) =
+    if listeners:
       (q.rc.listListeners.limit, q.rc.listListeners.cursor)
     else:
       (q.rc.listExports.limit, q.rc.listExports.cursor)
-  discard listLimit(q, limit).valueOr:
+  let limit = listLimit(q, limitIn).valueOr:
     return
+  let kind = (if listeners: lkListeners else: lkExports)
+  # [IMPL; D4] The filters compared after normalization: the listener by its
+  # address's bytes, an omitted provider Runtime as this one; another
+  # Runtime's provider matches nothing.
+  var listenerKey = Opt.none(seq[byte])
+  var provider = Opt.none(string)
+  var foreign = false
+  if not listeners:
+    let f = q.rc.listExports
+    if f.listener.isSome:
+      listenerKey = Opt.some(addressKey(f.listener.get))
+    if f.provider.isSome:
+      let p = f.provider.get
+      let runtime = p.runtime_instance_id.get(st.runtimeId)
+      foreign = runtime != st.runtimeId
+      provider = Opt.some(runtime & "\x1F" & p.provider)
+  let filters =
+    if listeners:
+      ""
+    else:
+      (
+        if listenerKey.isSome:
+          "1" & listenerKey.get.mapIt(char(it)).join
+        else:
+          "0"
+      ) & "\x1F" & optKey(provider)
   if cursor.isSome:
-    q.reply.answerError(ecInvalidParams, BadCursor)
+    st.continueList(q, x, kind, filters, limit, cursor.get, a)
     return
   st.requireReady(q)
-  if q.rc.m == rmListRemoteListeners:
-    q.reply.answerEncoded(encode(LogosNSRuntimeControlListRemoteListenersResponse()))
-  else:
-    q.reply.answerEncoded(encode(LogosNSRuntimeControlListProviderExportsResponse()))
+  let snap = ListSnapshot(
+    consumer: x.id, attempt: q.attempt, kind: kind, filters: filters, limit: limit
+  )
+  if listeners:
+    for e in st.remote.listenerOrder:
+      let subject = Subject()
+      if not st.admits(a, operation, subject):
+        continue
+      let size = encode(e.record).get(newSeq[byte]()).len
+      snap.listeners.add(e.record)
+      snap.subjects.add(subject)
+      snap.sizes.add(size)
+      snap.bytes += size + subject.factBytes
+  elif not foreign:
+    let f = q.rc.listExports
+    for e in st.remote.exportOrder:
+      if listenerKey.isSome and e.listener != listenerKey.get:
+        continue
+      if f.provider.isSome and e.provider != f.provider.get.provider:
+        continue
+      let subject = e.exportSubject
+      if not st.admits(a, operation, subject):
+        continue
+      let size = encode(e.record).get(newSeq[byte]()).len
+      snap.exports.add(e.record)
+      snap.subjects.add(subject)
+      snap.sizes.add(size)
+      snap.bytes += size + subject.factBytes
+  st.answerPage(q, snap, 0, a, retained = false)
+
+func consumerText(st: State, x: Inst): string =
+  ## [SPEC RUNTIME l.3156-3158] The consumer a change is attributed to; a
+  ## forwarded one with its Runtime (G413).
+  consumerLabel(st.runtimeId, x.id)
+
+proc commitListener(
+    st: State, r: LogosNSRuntimeControlRemoteListenerRecord, consumer: string
+): seq[string] =
+  ## [G412] Assigns a listener record through Runtime Control. A changed
+  ## record, or a new one, is audited with its origin and hinted (RUNTIME
+  ## l.3156-3158, l.3415-3418); an unchanged one keeps its origin. Disabling
+  ## a listener stops new connections at it (its process ends, `RemoteWork`),
+  ## and turning off its Runtime Control stops new requests on its sessions
+  ## (checked at each request). [G413] Either ends its remote Runtime Control
+  ## connections: marked closing here, so a call still on one is NOT_READY,
+  ## and their tokens returned for the driver to close.
+  let key = addressKey(r.address)
+  let cur = st.remote.listener(key)
+  if cur.isSome and sameListener(cur.get.record, r):
+    return
+  st.remote.putListener(r, roRc, consumer)
+  if not (r.enabled and r.runtime_control_enabled):
+    for token, c in st.remoteConns:
+      if c.key == key and not c.closed:
+        c.closed = true
+        result.add(token)
+  st.diagnose(
+    "remote listener " & addressText(r.address) & ": " & stateText(r) & ", set by " &
+      consumer & " through " & $roRc
+  )
+  st.hintRc(InvKind.Remote_listeners, Subject())
+
+proc commitExport(
+    st: State,
+    r: LogosNSRuntimeControlProviderExportRecord,
+    owner: Inst,
+    consumer: string,
+) =
+  ## [G412] As `commitListener`, for an export of `owner`'s provider.
+  let key = addressKey(r.listener)
+  let cur = st.remote.exportOf(key, r.provider.provider)
+  if cur.isSome and cur.get.record.enabled == r.enabled:
+    return
+  st.remote.putExport(r, roRc, consumer, owner.moduleOf, owner.id)
+  let e = st.remote.exportOf(key, r.provider.provider).get
+  st.diagnose(
+    "provider export of " & r.provider.provider & " through " & addressText(r.listener) &
+      ": enabled " & $r.enabled & ", set by " & consumer & " through " & $roRc
+  )
+  st.hintRc(InvKind.Provider_exports, e.exportSubject)
+
+proc exportOwner(st: State, provider: string): Inst =
+  for y in st.instances.values:
+    if y.providerId.len > 0 and y.providerId == provider:
+      return y
 
 proc setExport(st: State, q: Request, x: Inst) =
-  ## [K19 interim; G298; SPEC RUNTIME l.3434-3442] `set_provider_export`. A
+  ## [SPEC RUNTIME l.3289-3312, l.3434-3442; G412] `set_provider_export`. A
   ## provider of another Runtime is an invalid export request the request
   ## itself discloses: INVALID_PARAMS. The provider is the target: unknown,
   ## hidden or denied is one non-revealing NOT_AUTHORISED (l.3439), as for
-  ## `describe_provider`. An allowed request names a listener with no record,
-  ## since no remote listener exists here: INVALID_PARAMS (l.3438), with no
-  ## detail.
-  let p = q.rc.setExport.export.provider
+  ## `describe_provider`. Then an address that contradicts its profile, or a
+  ## listener with no record, is INVALID_PARAMS without detail (l.3296-3298,
+  ## l.3309-3310), and readiness. An export may be enabled while its listener
+  ## is disabled (l.3311-3312). Enabling first removes a retained disable on
+  ## the call's thread (Q4), then commits (`rqRemoteCommit`); anything else
+  ## commits here and then records what is off.
+  let req = q.rc.setExport.export
+  let p = req.provider
   if p.runtime_instance_id.isSome and p.runtime_instance_id.get != st.runtimeId:
     q.reply.answerError(ecInvalidParams, "the provider names another Runtime")
     return
-  var owner: Inst
-  for y in st.instances.values:
-    if y.providerId.len > 0 and y.providerId == p.provider:
-      owner = y
+  let owner = st.exportOwner(p.provider)
   if owner.isNil and st.authorityMode:
     q.reply.answerError(ecNotAuthorised, "not authorised")
     return
@@ -6814,8 +7012,150 @@ proc setExport(st: State, q: Request, x: Inst) =
     q.reply.answerError(ecNotAuthorised, "not authorised")
     return
   # [SPEC RUNTIME l.1831-1832] A failure of the method's own conditions comes
-  # before readiness, which no success here would pass.
-  q.reply.answerError(ecInvalidParams, "the export names no remote listener record")
+  # before readiness.
+  if badAddress(req.listener):
+    q.reply.answerError(ecInvalidParams, "the export record is not valid")
+    return
+  let key = addressKey(req.listener)
+  if st.remote.listener(key).isNone:
+    q.reply.answerError(ecInvalidParams, "the export names no remote listener record")
+    return
+  st.requireReady(q)
+  let cur = st.remote.exportOf(key, p.provider)
+  let wasOn = cur.isSome and cur.get.record.enabled
+  var w = RemoteWork(
+    key: key,
+    persist: true,
+    provider: p.provider,
+    off: (if req.enabled: {} else: {efEnabled}),
+    consumer: st.consumerText(x),
+  )
+  if req.enabled and not wasOn:
+    w.pending = true
+    q.reply.answer(Reply(remote: w))
+    return
+  st.commitExport(req, owner, w.consumer)
+  var r = req
+  r.provider = st.remote.normalized(p)
+  let bytes = encode(LogosNSRuntimeControlSetProviderExportResponse(`export`: r))
+  if bytes.isErr:
+    q.reply.answerError(ecModule, "the response cannot be encoded")
+    return
+  q.reply.answer(Reply(bytes: bytes.get, remote: w))
+
+proc setListener(st: State, q: Request, x: Inst) =
+  ## [SPEC RUNTIME l.2768-2769, l.3289-3306; G412, G298 re-decided]
+  ## `set_remote_listener`: authorized, then an address that contradicts its
+  ## profile is INVALID_PARAMS without detail (l.3295-3298), then readiness.
+  ## A record exists for every valid address once set, disabled or not; only
+  ## enabling can fail for want of remote transport (a `quic` address, or no
+  ## remote program here): MODULE_ERROR, the state unchanged (l.3293).
+  ## Turning anything on is done on the call's thread before the commit (the
+  ## retained disable removed, the listener process started and listening:
+  ## l.3291-3292), then committed (`rqRemoteCommit`). A disable commits here
+  ## first, then its process ends and the fields left off are recorded (Q4).
+  st.require(
+    q,
+    AuthzRequest(
+      action: aaRuntimeControl, operation: $rmSetRemoteListener, consumer: x.id
+    ),
+  )
+  let want = q.rc.setListener.listener
+  if badAddress(want.address):
+    q.reply.answerError(ecInvalidParams, "the listener record is not valid")
+    return
+  st.requireReady(q)
+  let key = addressKey(want.address)
+  let cur = st.remote.listener(key)
+  let before =
+    if cur.isSome:
+      cur.get.record
+    else:
+      defaultListener(want.address)
+  let enabling = want.enabled and not before.enabled
+  if enabling:
+    let refusal = enableRefusal(want.address, st.remoteAvailable)
+    if refusal.isSome:
+      q.reply.answerError(ecModule, refusal.get)
+      return
+  var w = RemoteWork(key: key, persist: true, consumer: st.consumerText(x))
+  if not want.enabled:
+    w.off.incl(efEnabled)
+  if not want.runtime_control_enabled:
+    w.off.incl(efRuntimeControl)
+  if enabling or (want.runtime_control_enabled and not before.runtime_control_enabled):
+    w.pending = true
+    w.start = enabling
+    if enabling:
+      let t = want.address.tlsTcp
+      w.host = t.host
+      w.port = uint16(t.port)
+    q.reply.answer(Reply(remote: w))
+    return
+  w.close = st.commitListener(want, w.consumer)
+  w.stop = before.enabled and not want.enabled
+  let bytes = encode(LogosNSRuntimeControlSetRemoteListenerResponse(listener: want))
+  if bytes.isErr:
+    q.reply.answerError(ecModule, "the response cannot be encoded")
+    return
+  q.reply.answer(Reply(bytes: bytes.get, remote: w))
+
+proc remoteCommit(st: State, q: Request) =
+  ## [G412] Phase 3 of a remote record change that turned something on: the
+  ## call's thread did its work (the retained disable removed, the listener
+  ## started) under the engine's remote lock, so no other change came
+  ## between. The consumer must still hold its binding and the Runtime be
+  ## ready; the call's own authorization was phase 1's.
+  let x = st.caller(q).valueOr:
+    q.reply.answerError(error.code, error.message)
+    return
+  st.requireReady(q)
+  case q.rc.m
+  of rmSetRemoteListener:
+    let r = q.rc.setListener.listener
+    discard st.commitListener(r, st.consumerText(x)) # it turns something on
+    q.reply.answerEncoded(
+      encode(LogosNSRuntimeControlSetRemoteListenerResponse(listener: r))
+    )
+  of rmSetProviderExport:
+    let req = q.rc.setExport.export
+    let owner = st.exportOwner(req.provider.provider)
+    if owner.isNil:
+      q.reply.answerError(ecNotAuthorised, "not authorised")
+      return
+    st.commitExport(req, owner, st.consumerText(x))
+    var r = req
+    r.provider = st.remote.normalized(req.provider)
+    q.reply.answerEncoded(
+      encode(LogosNSRuntimeControlSetProviderExportResponse(`export`: r))
+    )
+  else:
+    q.reply.answerError(ecInvalidParams, "not a remote record change")
+
+proc remoteHello(st: State, q: Request) =
+  ## [SPEC RUNTIME l.1691-1699, l.2738-2747; G413] Admits a remote Runtime
+  ## Control connection whose Hello the remote judge checked (the peer, the
+  ## token's ownership): bound to the forwarded consumer `origin` while its
+  ## listener (`payload`) is enabled and serves Runtime Control. Anything
+  ## else is NOT_AUTHORISED; a Runtime shutting down is NOT_READY.
+  let consumer = q.origin.instance
+  if not consumer.isForwarded or not st.remote.servesRc(q.payload):
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  if st.shuttingDown:
+    q.reply.answerError(ecNotReady, "the Runtime is shutting down")
+    return
+  inc st.remoteNext
+  let token = "remote-" & $st.remoteNext
+  st.remoteConns[token] =
+    RemoteConn(inst: Inst(id: consumer, state: msReady), key: q.payload)
+  q.reply.answer(Reply(id: token))
+
+proc remoteClosed(st: State, q: Request) =
+  ## [G413] A remote Runtime Control connection ended: its consumer binds
+  ## nothing more.
+  st.remoteConns.del(q.attempt)
+  q.reply.answer(Reply())
 
 proc describeProvider(st: State, q: Request, x: Inst) =
   ## [SPEC RUNTIME §2.4 l.448-458; CA l.250-257] The exact call surface
@@ -6825,6 +7165,9 @@ proc describeProvider(st: State, q: Request, x: Inst) =
   ## for each exact contract (CAP-0042, CAP-0043), asked before readiness so a
   ## caller without them never learns whether it was bound (RUNTIME
   ## l.1347-1348); then readiness: never bound is NOT_READY (l.660).
+  ## [SPEC RUNTIME l.2765-2767; G413] A forwarded consumer discovers only a
+  ## provider with an enabled export through an enabled listener: any other
+  ## is the same NOT_AUTHORISED as an unknown one.
   let p = q.rc.describe.provider
   if p.runtime_instance_id.isSome and p.runtime_instance_id.get != st.runtimeId:
     q.reply.answerError(ecInvalidParams, "the provider names another Runtime")
@@ -6833,6 +7176,8 @@ proc describeProvider(st: State, q: Request, x: Inst) =
   for y in st.instances.values:
     if y.providerId.len > 0 and y.providerId == p.provider:
       owner = y
+  if x.id.isForwarded and not st.remote.exportedThroughEnabled(p.provider):
+    owner = nil
   if owner.isNil and st.authorityMode:
     q.reply.answerError(ecNotAuthorised, "not authorised")
     return
@@ -7526,18 +7871,38 @@ proc rc(st: State, q: Request) =
   let x = st.caller(q).valueOr:
     q.reply.answerError(error.code, error.message)
     return
+  if x.id.isForwarded:
+    case q.rc.m
+    of rmGetExecutionPermissions, rmReportFailure:
+      # [SPEC RUNTIME l.2491-2496, l.3462-3467] Realization-bound: a remote
+      # Runtime's binding gives no association with a local realization.
+      q.reply.answerError(ecNotAuthorised, "no authenticated module realization")
+      return
+    of rmEstablishRoute:
+      # [G413 interim, until 5-7a-3] A route for a consumer of another
+      # Runtime is a remote-transport route (RUNTIME l.2879-2890), which this
+      # Runtime does not establish yet; the method's own authority first.
+      st.require(
+        q,
+        AuthzRequest(
+          action: aaRuntimeControl, operation: $rmEstablishRoute, consumer: x.id
+        ),
+      )
+      q.reply.answerError(
+        ecModule,
+        "a route for a consumer of another Runtime needs remote-transport routes, " &
+          "which this Runtime does not establish yet",
+      )
+      return
+    else:
+      discard
   case q.rc.m
   of rmGetSelf:
-    # [SPEC RUNTIME §9.3 l.2553-2560] Caller-bound: no policy grant.
+    # [SPEC RUNTIME §9.3 l.2553-2560] Caller-bound: no policy grant. [l.2485;
+    # G413] A forwarded consumer's address names its own Runtime.
     st.requireReady(q)
     q.reply.answerEncoded(
-      encode(
-        LogosNSRuntimeControlGetSelfResponse(
-          consumer: LogosNSRuntimeModuleInstanceAddress(
-            runtime_instance_id: st.runtimeId, module_instance_id: x.id
-          )
-        )
-      )
+      encode(LogosNSRuntimeControlGetSelfResponse(consumer: st.addressOf(x.id)))
     )
   of rmGetExecutionPermissions:
     # [SPEC RUNTIME §9.3 l.2562-2574] Caller-bound. [IMPL-DECISION G282] The
@@ -7611,27 +7976,7 @@ proc rc(st: State, q: Request) =
   of rmSetProviderExport:
     st.setExport(q, x)
   of rmSetRemoteListener:
-    # [K19 interim; G298 amended (U3); SPEC RUNTIME l.1626, l.2830, l.3431-3442]
-    # Authorized, then: enabling is refused, since no listener can be
-    # activated without remote transport; disabling assigns the state every
-    # listener has by default, so it succeeds with the requested record. No
-    # record is kept for the default state, so the lists stay empty, an
-    # export naming the listener still finds no record, and no
-    # `inventory_changed` hint is sent (l.3418: nothing changed).
-    st.require(
-      q,
-      AuthzRequest(
-        action: aaRuntimeControl, operation: $rmSetRemoteListener, consumer: x.id
-      ),
-    )
-    st.requireReady(q)
-    let listener = q.rc.setListener.listener
-    if listener.enabled:
-      q.reply.answerError(ecModule, "remote transport is not supported by this Runtime")
-    else:
-      q.reply.answerEncoded(
-        encode(LogosNSRuntimeControlSetRemoteListenerResponse(listener: listener))
-      )
+    st.setListener(q, x)
   of rmShutdownRuntime:
     # [SPEC RUNTIME §9.3 l.3695-3700] Runtime-wide; the response acknowledges
     # acceptance and is attempted before teardown.
@@ -10733,6 +11078,12 @@ proc handle(st: State, q: Request) {.gcsafe.} =
     st.rc(q)
   of rqConfigCommit:
     st.configCommit(q)
+  of rqRemoteCommit:
+    st.remoteCommit(q)
+  of rqRemoteHello:
+    st.remoteHello(q)
+  of rqRemoteClosed:
+    st.remoteClosed(q)
   of rqMaterialize:
     st.materialize(q)
   of rqLinkCall:
@@ -12352,6 +12703,10 @@ proc runtimeLoop(s: ptr Shared) =
     first.request.reply.answer(Reply(error: failed))
     s.finished = true
     return
+  # [G412] The configuration's records, under the identity the store settled.
+  let rs = cfg.remote.get(RemoteSetup())
+  st.remote = configRecords(st.runtimeId, rs.listeners, rs.exports)
+  st.remoteAvailable = rs.driver.start != nil
   # [plan §2.6 step 1] The bootstrap mechanism's one registration.
   discard st.realizer.registerStatic(loaderStaticRegistration())
   st.side = s.side
@@ -12461,6 +12816,7 @@ proc freeEngine(e: Engine) =
   e.rcJobs.close()
   e.closeSlots()
   deinitLock(e.slotLock)
+  deinitLock(e.remoteLock)
   freeBell(e.bell)
   freeAuditLog(e.audit)
   freeSideTable(e.side)
@@ -12522,6 +12878,20 @@ proc openEngine*(cfg: EngineConfig): Result[Engine, EngineError] =
   tcfg.maxPayloadDepth = depth # [G241] one payload depth for every decoder
   tcfg.terminationDrain = 0
     # [plan §2.8] the Runtime decides every call before it terminates a session
+  for i, (instance, bytes) in cfg.protectedInputs:
+    # [IMPL-DECISION G400] What the host configuration checks, for a
+    # configuration built in code.
+    if instance.len == 0 or instance.len > 128 or bytes.len == 0 or
+        bytes.len > MaxProtectedInputBytes:
+      return
+        err(engineError(ecInvalidParams, "protected_inputs: an entry is out of bounds"))
+    for j in 0 ..< i:
+      if cfg.protectedInputs[j][0] == instance:
+        return err(
+          engineError(
+            ecInvalidParams, "protected_inputs: " & instance & " has two entries"
+          )
+        )
   let tp = newTransportPorts(tcfg).valueOr:
     return err(engineError(ecInvalidParams, "transport: " & error))
   let e = createShared(Shared)
@@ -12538,6 +12908,10 @@ proc openEngine*(cfg: EngineConfig): Result[Engine, EngineError] =
   e.rcJobs.open()
   e.bell = newBell()
   e.side = newSideTable()
+  for (instance, bytes) in cfg.protectedInputs:
+    # [G400] Before any thread starts, kept until the table is freed; the
+    # entries were checked before anything was made.
+    discard e.side.addProtected(instance, bytes)
   if cfg.moduleHost.isSome:
     # [plan §2.3; G265] Its threads start with the first spawn.
     e.hosts = newSupervisor(cfg.moduleHost.get, cfg.moduleHostEnv)
@@ -12546,6 +12920,9 @@ proc openEngine*(cfg: EngineConfig): Result[Engine, EngineError] =
     e.ownFaults = cfg.loaderFaults.isNil
     e.faults = (if e.ownFaults: newLoaderFaultBox() else: cfg.loaderFaults)
   initLock(e.slotLock)
+  initLock(e.remoteLock)
+  if cfg.remote.isSome:
+    e.remote = cfg.remote.get.driver
   try:
     createThread(e.runtime, runtimeMain, e)
   except ResourceExhaustedError:

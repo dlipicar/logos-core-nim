@@ -310,7 +310,7 @@ template exportSensorModule*(T: typedesc) =
     ## (DECISIONS G437).
     GC_unref(cast[T](p))
 
-  proc sensorModuleKitName(): cstring {.exportc: "logos_sensor_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [].} =
+  proc sensorModuleKitName(): cstring {.exportc: "logos_sensor_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "a static string".} =
     system.cstring(moduleName)
 
   proc sensorModuleKitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: "logos_sensor_module_MODULE_init", dynlib, cdecl, gcsafe, raises: [].} =
@@ -325,7 +325,7 @@ template exportSensorModule*(T: typedesc) =
     let instance {.cursor.} = cast[T](p)
     routeConfinedSensorModule(instance, bare, params, len, inv)
 
-  proc sensorModuleKitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: "logos_sensor_module_MODULE_call_surface", dynlib, cdecl, gcsafe, raises: [].} =
+  proc sensorModuleKitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: "logos_sensor_module_MODULE_call_surface", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "static bytes".} =
     if outLen != nil:
       outLen[] = csize_t(callSurfaceData.len)
     addr callSurfaceData[0]
@@ -348,7 +348,7 @@ template exportSensorModule*(T: typedesc) =
 
   let sensorModuleKitAsyncApiData = LogosAsyncProviderApi(abiVersion: AsyncProviderAbiVersion, structSize: csize_t(sizeof(LogosAsyncProviderApi)), submit: sensorModuleKitSubmit, requestCancel: sensorModuleKitRequestCancel)
 
-  proc sensorModuleKitAsyncApi(): ptr LogosAsyncProviderApi {.exportc: "logos_sensor_module_MODULE_async_api", dynlib, cdecl, gcsafe, raises: [].} =
+  proc sensorModuleKitAsyncApi(): ptr LogosAsyncProviderApi {.exportc: "logos_sensor_module_MODULE_async_api", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "a static descriptor".} =
     unsafeAddr sensorModuleKitAsyncApiData
 
   proc sensorModuleKitCall0(p0: ptr LogosModuleContext, p1: ptr LogosResponseOwner, p2: ptr logos_sensor_NS_control_Settings_t): LogosResult {.exportc: "logos_sensor_module_CALL_sensor_NS_control_Configure", dynlib, cdecl, gcsafe, raises: [].} =

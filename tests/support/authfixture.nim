@@ -131,7 +131,12 @@ proc subject*(
     modules: seq[string] = @[],
     signers: seq[seq[byte]] = @[],
     packages: seq[string] = @[],
+    runtimes: seq[string] = @[],
 ): LcnApSubject =
+  if runtimes.len > 0:
+    var x = runtimes
+    sortSet(x)
+    result.runtimes = Opt.some(x)
   if instances.len > 0:
     var x = instances
     sortSet(x)
@@ -151,6 +156,13 @@ proc subject*(
 
 func anyone*(): LcnApSubject =
   LcnApSubject()
+
+func selector*(s: LcnApSubject): LcnApSelector =
+  ## [G415] A provider selector or runtime-control / module-execution target
+  ## of a subject's local fields.
+  LcnApSelector(
+    instances: s.instances, modules: s.modules, signers: s.signers, packages: s.packages
+  )
 
 func targetSubject*(s: LcnApSubject): LcnApTarget =
   LcnApTarget(kind: LcnApTargetKind.lcn_Ap_subject, arm_lcn_Ap_subject: s)
@@ -184,7 +196,9 @@ proc paPattern*(
     providers = Opt.none(LcnApSubject),
     access = Opt.none(LcnApAccess),
 ): LcnApScope =
-  var p = LcnApProviderAccess(providers: providers, access: access)
+  var p = LcnApProviderAccess(access: access)
+  if providers.isSome:
+    p.providers = Opt.some(selector(providers.get))
   p.contract =
     case contract
     of crExact:
@@ -212,14 +226,21 @@ proc rcPattern*(
 ): LcnApScope =
   LcnApScope(
     kind: LcnApScopeKind.lcn_Ap_runtime_control,
-    arm_lcn_Ap_runtime_control:
-      LcnApRuntimeControl(methods: methods, events: events, targets: targets),
+    arm_lcn_Ap_runtime_control: LcnApRuntimeControl(
+      methods: methods,
+      events: events,
+      targets:
+        if targets.isSome:
+          Opt.some(selector(targets.get))
+        else:
+          Opt.none(LcnApSelector),
+    ),
   )
 
 proc mePattern*(
     targets: LcnApSubject, actions: seq[LcnApModuleExecutionActionsLIChoiceKind]
 ): LcnApScope =
-  var p = LcnApModuleExecution(targets: targets)
+  var p = LcnApModuleExecution(targets: selector(targets))
   for a in actions:
     p.actions.add LcnApModuleExecutionActionsLIChoice(kind: a)
   sortSet(p.actions)
@@ -397,11 +418,13 @@ proc testConfig*(
     limits = AuthorityLimits(),
     runtimeId = Rt,
     profile: ProfileSource = nil,
+    enrolled: seq[string] = @[],
 ): AuthorityConfig =
   AuthorityConfig(
     stateDir: dir,
     policy: policy,
     runtimeId: runtimeId,
+    enrolled: enrolled,
     profile: profile,
     facts: facts,
     clock: clock,
@@ -418,8 +441,11 @@ proc openTest*(
     limits = AuthorityLimits(),
     runtimeId = Rt,
     profile: ProfileSource = nil,
+    enrolled: seq[string] = @[],
 ): Authority =
-  openAuthority(testConfig(dir, policy, facts, clock, sink, limits, runtimeId, profile))
+  openAuthority(
+    testConfig(dir, policy, facts, clock, sink, limits, runtimeId, profile, enrolled)
+  )
     .expect("opens")
 
 proc privateDir*(path: string) =

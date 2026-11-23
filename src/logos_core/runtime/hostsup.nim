@@ -55,7 +55,7 @@
 import std/[atomics, locks]
 import results
 import logos_sdk/abi/[checks, cstatus, types]
-import logos_sdk/base/[perthread, testhooks]
+import logos_sdk/base/[parentwatch, perthread, testhooks]
 import logos_sdk/iface/[accept, surface]
 import ../transport/io/api except decodeMessage
 import ./[carrier, callside, events, hostio, subend]
@@ -694,12 +694,20 @@ when defined(posix):
       carrier: cint,
       listener: cint = -1,
       lock: cint = -1,
+      args = Opt.none(seq[string]),
   ): Result[int, string] =
     ## [IMPL] One process started as a host is (`hostspawn.c`): the carrier on
     ## fd 3, `env` its whole environment. The caller reaps it. The supervision
     ## thread spawns hosts with it; the host suites, their own children.
+    ## `args` follow the program's name; by default `--parent=<this process>`
+    ## (G264, amended 2026-11-21), and only the host suites pass others.
     when defined(posix):
-      var argv = [cstring(ProgramName), nil]
+      let given = args.valueOr:
+        @[ParentFlag & $getpid()]
+      var argv = newSeq[cstring](given.len + 2)
+      argv[0] = cstring(ProgramName)
+      for i in 0 ..< given.len:
+        argv[i + 1] = cstring(given[i]) # into `given`, not a loop copy
       var envp = newSeq[cstring](env.len + 1)
       for i, e in env:
         envp[i] = cstring(e)
@@ -1727,7 +1735,8 @@ when defined(posix):
           cint(-ECANCELED)
         else:
           when defined(posix):
-            var argv = [cstring(ProgramName), nil]
+            let parent = ParentFlag & $getpid() # [G264, amended 2026-11-21]
+            var argv = [cstring(ProgramName), cstring(parent), nil]
             lcnHostSpawn(
               s.program,
               cast[cstringArray](addr argv[0]),
@@ -1951,6 +1960,7 @@ else:
       carrier: cint,
       listener: cint = -1,
       lock: cint = -1,
+      args = Opt.none(seq[string]),
   ): Result[int, string] =
     err(Unsupported)
 

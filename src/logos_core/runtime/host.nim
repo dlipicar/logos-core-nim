@@ -26,13 +26,15 @@
 
 {.push raises: [].}
 
-import std/[locks, os, sets]
+import std/[locks, os, sequtils, sets]
 when defined(posix):
   import std/posix
 import results
 import logos_sdk/abi/[host, types]
 import logos_sdk/iface/outcome
-import ./[callside, engine, evidence, host_config, native, plumbing]
+import
+  ./[callside, engine, evidence, host_config, native, plumbing, remoterc, remotesup]
+from ./remoterecords import addressKey, addressText, isQuic, tlsTcp
 from ../crypto/cose import MaxCoseKidBytes
 from ../authority/facts import SharedFacts, newSharedFacts, freeSharedFacts
 from ../authority/provider import
@@ -41,6 +43,9 @@ from ./authscopes import AuthorityModule
 import logos_sdk/base/testhooks
 
 export host, outcome.ErrorCode, plumbing.TerminationHook, CallRecordSink, Diagnostic
+export
+  remotesup.RemoteHooks, RemoteSign, RemoteNote, remoteLockDir, lockFileName,
+  plumbing.RemotePersist, plumbing.ExposureField
 
 testHooksMarker("host")
 
@@ -101,6 +106,15 @@ type
     recordSink: CallRecordSink
       ## [G304; G301] the in-process host's receiver of call records; nil: none
     recordSinkData: pointer
+    remoteHooks: RemoteHooks
+      ## [G410, G411] the in-process host's TLS certificate and signer
+    remoteHooked: bool
+    remote: RemoteSupervisor
+      ## [G411] made at start with `runtime.remote_program`, the remote
+      ## section and the hooks; closed once shutdown completed
+    remoteRc: RemoteRc
+      ## [G413] the inbound Runtime Control of `remote`'s listeners, made once
+      ## the engine exists; closed after `remote`, before the engine
 
 # Per-thread results ---------------------------------------------------------------
 
@@ -292,6 +306,45 @@ proc runtimeSetCallRecordSink*(
     h.recordSinkData = data
   answer(ecOk)
 
+proc runtimeSetRemoteHooks*(
+    rt: ptr LogosRuntimeHandle, hooks: RemoteHooks
+): LogosResult =
+  ## [IMPL-DECISION G304; G410, G411] In-process hosts only (no C export, as
+  ## `auditRecords`): the TLS certificate the listener processes serve with,
+  ## the signer that answers their sign requests (on the remote supervisor's
+  ## sign thread; it must not call into the Runtime), the record of durable
+  ## disables (Q4) and a log line sink. Without them no listener can be
+  ## enabled here (G298). Set before `start`: NOT_READY once a start was
+  ## attempted; no certificate, or neither a signer nor a test key, is
+  ## INVALID_PARAMS.
+  entry()
+  if rt == nil:
+    return answer(ecInvalidParams, "runtime is null")
+  if hooks.certificate.len == 0:
+    return answer(ecInvalidParams, "the remote hooks give no certificate")
+  if hooks.sign == nil and hooks.testKey.len == 0:
+    return answer(ecInvalidParams, "the remote hooks give no signer")
+  let h = hostOf(rt)
+  withLock h.lock:
+    if h.startAttempted:
+      return answer(ecNotReady, "start was already attempted")
+    h.remoteHooks = hooks
+    h.remoteHooked = true
+  answer(ecOk)
+
+proc closeRemote(h: ptr HostRuntime) =
+  ## [plan §3.1 item 5] Every remote process ended and reaped, then the
+  ## inbound Runtime Control's workers joined (G413).
+  var sup: RemoteSupervisor
+  var rrc: RemoteRc
+  withLock h.lock:
+    sup = h.remote
+    h.remote = nil
+    rrc = h.remoteRc
+    h.remoteRc = nil
+  closeRemoteSupervisor(sup)
+  closeRemoteRc(rrc)
+
 proc engineOf*(rt: ptr LogosRuntimeHandle): Engine =
   ## In-process hosts and tests: the engine, for observation; nil before
   ## `start` made one.
@@ -467,11 +520,37 @@ proc launch(h: ptr HostRuntime): LogosResult =
     moduleHostEnv: c.moduleHostEnv,
     permissions: c.permissions,
     initialSettings: c.initialSettings,
+    protectedInputs: c.protectedInputs.mapIt((it.instance, it.input)),
     onTerminationRequired: h.terminationHook,
     terminationData: h.terminationData,
     callRecordSink: h.recordSink,
     callRecordSinkData: h.recordSinkData,
   )
+  var sup: RemoteSupervisor = nil
+  if c.remote.isSome:
+    # [G411, G412] The records as the host configuration checked them, and
+    # with a remote program and the host's hooks the supervisor that serves
+    # them. Without either no listener can be enabled (G298), so an enabled
+    # one in the configuration fails the start.
+    let rc = c.remote.get
+    if c.remoteProgram.isSome and h.remoteHooked:
+      sup =
+        newRemoteSupervisor(c.remoteProgram.get, c.workDir, rc.snapshot, h.remoteHooks)
+      if sup == nil:
+        return answer(ecModule, "the remote supervision cannot start")
+    else:
+      for l in rc.listeners:
+        if l.enabled:
+          return answer(
+            ecModule,
+            "remote listener " & addressText(l.address) &
+              ": remote transport is not supported by this Runtime",
+          )
+    cfg.remote = Opt.some(
+      RemoteSetup(listeners: rc.listeners, exports: rc.exports, driver: sup.driver)
+    )
+    withLock h.lock:
+      h.remote = sup
   if c.authority.isSome:
     # [I85; G47] The attribute source exists before the engine opens, since
     # restoring the store fills it. Its own copy of the Runtime id is not read
@@ -486,6 +565,7 @@ proc launch(h: ptr HostRuntime): LogosResult =
       )
     )
   var e: Engine
+  var failed = Opt.none(EngineError)
   withLock h.lock:
     if h.shutdownRequested:
       # [IMPL] R1: a request that overlapped `start` before the engine existed.
@@ -493,12 +573,37 @@ proc launch(h: ptr HostRuntime): LogosResult =
     # Bootstrap policy is the engine's from its first request (RUN-0305).
     # [IMPL] A store the configuration names another identity for is
     # INVALID_PARAMS; one that cannot be used is MODULE_ERROR (I82).
-    e = openEngine(cfg).valueOr:
-      return answer(error.code, error.message)
-    h.engine = e
-    broadcast(h.cond) # a waiter parked before the engine existed
+    let opened = openEngine(cfg)
+    if opened.isErr:
+      h.remote = nil
+      failed = Opt.some(opened.error)
+    else:
+      e = opened.get
+      h.engine = e
+      broadcast(h.cond) # a waiter parked before the engine existed
+  if failed.isSome:
+    closeRemoteSupervisor(sup) # nothing of it reached the engine
+    return answer(failed.get.code, failed.get.message)
   let runtimeId = e.runtimeInstanceId()
   h.producer = copyText(runtimeId)
+  if sup != nil:
+    # [G413] Inbound Runtime Control, before any listener can relay a Hello.
+    let rrc = newRemoteRc(e, sup, c.remote.get.snapshot)
+    if rrc == nil:
+      return answer(ecModule, "the remote Runtime Control cannot start")
+    withLock h.lock:
+      h.remoteRc = rrc
+    # [SPEC RUNTIME l.3291-3292, l.3319-3321] The configuration's enabled
+    # listeners activated before anything runs, as Runtime Control would;
+    # one that cannot listen fails the start (TRANSPORT_ERROR).
+    for l in c.remote.get.listeners:
+      if l.enabled and not l.address.isQuic:
+        let t = l.address.tlsTcp
+        sup.startListener(addressKey(l.address), t.host, uint16(t.port)).isOkOr:
+          return answer(
+            error.code,
+            "remote listener " & addressText(l.address) & ": " & error.message,
+          )
   if c.authority.isSome:
     # [C9] Wired before bootstrap initializes the authority, at the directory
     # the realizer gives its state assignment, with the identity the engine
@@ -515,6 +620,11 @@ proc launch(h: ptr HostRuntime): LogosResult =
         policy: c.authorityPolicy,
         runtimeId: runtimeId,
         facts: h.facts,
+        enrolled:
+          if c.remote.isSome:
+            c.remote.get.enrolled
+          else:
+            @[],
         profile: c.permissions,
       ),
     ).isOkOr:
@@ -592,6 +702,7 @@ proc runtimeWaitForShutdown*(rt: ptr LogosRuntimeHandle): LogosResult =
   e = h.engine
   release(h.lock)
   let r = e.awaitShutdown()
+  h.closeRemote()
   withLock h.lock:
     if not h.shutdownDone:
       if r.isOk:
@@ -611,6 +722,8 @@ proc runtimeDestroy*(rt: ptr LogosRuntimeHandle): LogosResult =
   if rt == nil:
     return answer(ecInvalidParams, "runtime is null")
   let h = hostOf(rt)
+  if h.startAttempted and (h.engine == nil or h.shutdownDone):
+    h.closeRemote()
   withLock h.lock:
     if h.startAttempted:
       if h.engine == nil:

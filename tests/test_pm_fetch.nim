@@ -477,7 +477,9 @@ suite "engine: route upkeep (G402)":
     let c = w.take({cmEstablish})
     w.handle(established("main", c.key, "route-1"))
     discard w.take({cmWatch})
-    w.e.stop()
+    # [G455] `stop` answers the operations still running; none is.
+    let answers = w.e.stop()
+    check answers.len == 0
     w.handle(routeLost("main", "route-1"))
     w.handle(readinessOf("main", rdReady))
     w.emit(w.e.resolve(1, RootReference(package: Opt.some("logos.example"))))

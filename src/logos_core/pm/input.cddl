@@ -9,6 +9,7 @@ lcn.pm_input = {
   trust: bstr .size (1..1048576),   ; the session trust file's accepted bytes
   storage: [* lcn.pm_binding],      ; at least one, by rule
   catalog: lcn.pm_catalog_ref,
+  resolver_limits: lcn.pm_resolver_limits,
   ? limits: lcn.pm_limits,
 }
 
@@ -26,6 +27,19 @@ lcn.pm_catalog_ref = {
   storage: tstr .size (1..128),
   object: bstr .size (1..4096),
   digest: bstr .size 32,
+}
+
+; The resolver limits (PACKAGE MANAGER l.1241-1254; G399 as ruled on
+; 2026-11-22): protected policy input, required, with all four keys; each a
+; positive integer no greater than its maximum (package/resolver.nim's
+; MaxResolverLimits, docs/CONFORMANCE.md). The Package Manager has no default:
+; the embedding host resolves them (logosd: the operator's values, or its
+; preset, docs/DAEMON.md). Not in `limits`, where an absent key is a default.
+lcn.pm_resolver_limits = {
+  partial_closure_names: uint64,
+  dependency_depth: uint64,
+  candidates_per_name: uint64,
+  assignment_attempts: uint64,
 }
 
 ; The bounds, each checked by rule as written here; an absent one is its

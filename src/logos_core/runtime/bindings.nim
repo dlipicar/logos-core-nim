@@ -23,6 +23,7 @@
 import std/[atomics, locks]
 import results
 import logos_sdk/abi/[checks, types]
+import logos_sdk/base/entrymarks
 import logos_sdk/cbor/utf8
 import logos_sdk/hash/hashinput
 import logos_sdk/iface/[accept, outcome, payload, surface]
@@ -71,7 +72,7 @@ proc rcReleaseResponseOp(
     binding: ptr LogosRuntimeControlBinding,
     response: ptr UncheckedArray[uint8],
     responseLen: csize_t,
-) {.cdecl.} =
+) {.cdecl, lcnNoNimHeap: "releaseGiven: zeroes and frees a C allocation".} =
   releaseGiven(response) # [DECISIONS G276]
 
 proc rcSubscribeOp(
@@ -142,7 +143,9 @@ proc rcConnectRemoteOp(
   # and transport failures keep their codes once a connect path exists.
   status(ecNotAuthorised, "not authorised")
 
-proc rcReleaseOp(binding: ptr LogosRuntimeControlBinding) {.cdecl.} =
+proc rcReleaseOp(
+    binding: ptr LogosRuntimeControlBinding
+) {.cdecl, lcnNoNimHeap: "does nothing".} =
   ## [SPEC INTERFACE §5.2 l.3864] The initialization input's binding is
   ## borrowed and never released by the module; a release is ignored [IMPL].
   discard
@@ -216,7 +219,7 @@ proc routeCallOp(
 
 proc routeReleaseResponseOp(
     route: ptr LogosRouteHandle, response: ptr UncheckedArray[uint8], len: csize_t
-) {.cdecl.} =
+) {.cdecl, lcnNoNimHeap: "releaseGiven: zeroes and frees a C allocation".} =
   ## The Runtime's copy: the provider's buffer is long released. It is zeroed
   ## to the size it was given with, before it is freed [DECISIONS G276].
   releaseGiven(response)
@@ -486,7 +489,10 @@ proc declareContractOp(
     root: ptr ContractRoot,
     schema: ptr UncheckedArray[uint8],
     schemaLen: csize_t,
-) {.cdecl.} =
+) {.
+    cdecl,
+    lcnOwnRuntime: "the realizer calls it on its own thread, before _MODULE_init (I106)"
+.} =
   ## [SPEC INTERFACE l.3351; DECISIONS I106] `InitServices.declareContract`:
   ## the realizer, before `_MODULE_init`.
   let s = cast[ptr AttemptServices](publishUserData)
@@ -543,3 +549,10 @@ proc runEnd*(handle: pointer) =
       h.cb = cbDone
       broadcast(h.cond)
   dropHandle(h)
+
+when defined(lcnTestHooks):
+  proc endKeyForTests*(handle: pointer): pointer =
+    ## [DECISIONS G466] Test hook: the terminal callback `runEnd` runs.
+    let h = cast[ptr HandleState](handle)
+    withLock h.lock:
+      result = cast[pointer](h.handler)

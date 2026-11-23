@@ -4,8 +4,12 @@
 ##
 ## It has no configuration. A locator `fetch-fake/<size>/<seed>` names `size` bytes of BLAKE3's
 ## extendable output over `seed`, so a test names any object without sending its bytes; a seed
-## beginning `absent-` names an object the fake cannot obtain (`unavailable`); any other locator
-## is `invalid-locator`. It starts `starting`, holding nothing. `fetch_fake.set_readiness` moves it
+## beginning `absent-` names an object the fake cannot obtain (`unavailable`). A locator
+## `fetch-fake/state/<name>` names the file `<state_dir>/objects/<name>`, which the test writes
+## before the start (Tier 5 step 5-3b, Q1 (c)): real documents, such as a catalog and signed
+## archives. The name is 1 to 64 bytes from `A-Z a-z 0-9 . _ -` without a leading `.`, so it has
+## no separator and reaches nothing outside `objects/`; a missing file is `unavailable`. Any other
+## locator is `invalid-locator`. It starts `starting`, holding nothing. `fetch_fake.set_readiness` moves it
 ## (publishing the event on a change) and sets the locators it serves while not `ready`;
 ## `fetch_fake.set_fault` makes one locator answer `unavailable` a number of times, or hold each
 ## read before it answers. Methods work in every placement, so no in-process hook is needed.
@@ -20,6 +24,10 @@ const
     ## [DECISIONS G395] the contract's bound on `length` (STORAGE-FETCH.md §3)
   LocatorPrefix* = "fetch-fake/"
   AbsentPrefix* = "absent-"
+  StatePrefix* = "fetch-fake/state/"
+    ## [Tier 5 step 5-3b, Q1 (c)] a file of the fake's state directory, under `objects/`
+  MaxStateName* = 64
+  StateNameBytes = {'A' .. 'Z', 'a' .. 'z', '0' .. '9', '.', '_', '-'}
 
 type
   Fault = object
@@ -28,6 +36,7 @@ type
 
   FetchFake* = ref object
     services: ModuleServices
+    objects: string ## `<state_dir>/objects`, or none without a state directory
     lock: Lock
     readiness: LcnNSStorageFetchReadinessKind
     held: seq[seq[byte]] ## served while not `ready`
@@ -36,6 +45,12 @@ type
   FakeObject* = object ## What a locator names.
     size*: uint64
     seed*: string
+
+  Served = object
+    ## What a locator the fake can serve names: derived bytes, or a state file.
+    file: string ## the state file's path; none: `derived`
+    derived: FakeObject
+    size: uint64
 
 func bytesOf*(s: string): seq[byte] =
   for c in s:
@@ -69,6 +84,29 @@ func parseFakeLocator*(locator: openArray[byte]): Opt[FakeObject] =
     size = size * 10 + d
   Opt.some(FakeObject(size: size, seed: rest[slash + 1 .. ^1]))
 
+func stateLocator*(name: string): seq[byte] =
+  ## [Q1 (c)] The locator of the state file `objects/<name>`.
+  bytesOf(StatePrefix & name)
+
+func stateName*(locator: openArray[byte]): Opt[Opt[string]] =
+  ## [Q1 (c), Fable F4] For a locator of the state form, its name when the name
+  ## is within the bound, else `some(none)`; `none` for any other locator.
+  if locator.len < StatePrefix.len:
+    return Opt.none(Opt[string])
+  for i, c in StatePrefix:
+    if locator[i] != byte(c):
+      return Opt.none(Opt[string])
+  let n = locator.len - StatePrefix.len
+  if n < 1 or n > MaxStateName or locator[StatePrefix.len] == byte('.'):
+    return Opt.some(Opt.none(string))
+  var name = newString(n)
+  for i in 0 ..< n:
+    let c = char(locator[StatePrefix.len + i])
+    if c notin StateNameBytes:
+      return Opt.some(Opt.none(string))
+    name[i] = c
+  Opt.some(Opt.some(name))
+
 proc fakeBytes*(o: FakeObject, offset: uint64, length: int): seq[byte] =
   ## `length` bytes of the object from `offset` (the caller keeps within its size).
   result = newSeq[byte](length)
@@ -94,7 +132,10 @@ proc initModule(
     _: type FetchFake, init: ModuleInit
 ): Result[FetchFake, InvocationFailure] =
   let f = FetchFake(
-    services: init.services, readiness: LcnNSStorageFetchReadinessKind.Starting
+    services: init.services,
+    objects: (if init.stateDir.isSome: init.stateDir.get / "objects"
+    else: ""),
+    readiness: LcnNSStorageFetchReadinessKind.Starting,
   )
   initLock(f.lock)
   ok(f)
@@ -104,26 +145,72 @@ proc destroyModule(f: FetchFake) =
 
 proc available(
     f: FetchFake, locator: seq[byte]
-): Result[(FakeObject, uint32), LcnNSStorageFetchFailure] =
+): Result[(Served, uint32), LcnNSStorageFetchFailure] =
   ## [DECISIONS G395] After the length: the locator, then
   ## availability (readiness and the object). Spends one injected `unavailable`; the delay
   ## a read holds.
   type K = LcnNSStorageFetchFailureCodeChoiceKind
-  let o = parseFakeLocator(locator)
-  if o.isNone:
-    return err(failed(K.Invalid_locator, "not a fetch-fake locator"))
+  let state = stateName(locator)
+  var served: Served
+  if state.isSome:
+    if state.get.isNone:
+      return err(failed(K.Invalid_locator, "not a fetch-fake state name"))
+    served.file = state.get.get
+  else:
+    let o = parseFakeLocator(locator)
+    if o.isNone:
+      return err(failed(K.Invalid_locator, "not a fetch-fake locator"))
+    served.derived = o.get
+    served.size = o.get.size
+  var delay = 0'u32
   withLock f.lock:
     if f.readiness != LcnNSStorageFetchReadinessKind.Ready and locator notin f.held:
       return err(failed(K.Not_ready, "the fake is " & toLowerAscii($f.readiness)))
-    if o.get.seed.startsWith(AbsentPrefix):
+    if served.file.len == 0 and served.derived.seed.startsWith(AbsentPrefix):
       return err(failed(K.Unavailable, "the fake cannot obtain this object"))
-    var delay = 0'u32
     f.faults.withValue(locator, fault):
       delay = fault.delayMs
       if fault.unavailable > 0:
         fault.unavailable -= 1
         return err(failed(K.Unavailable, "an injected fault"))
-    return ok((o.get, delay))
+  if served.file.len > 0:
+    # [Q1 (c)] A regular file of `objects/`, its size as it is now.
+    if f.objects.len == 0:
+      return err(failed(K.Unavailable, "the fake has no state directory"))
+    served.file = f.objects / served.file
+    try:
+      if getFileInfo(served.file, followSymlink = false).kind != pcFile:
+        return err(failed(K.Unavailable, "the fake holds no such file"))
+      served.size = uint64(getFileSize(served.file))
+    except OSError:
+      return err(failed(K.Unavailable, "the fake holds no such file"))
+  ok((served, delay))
+
+proc servedBytes(
+    s: Served, offset: uint64, length: int
+): Result[seq[byte], LcnNSStorageFetchFailure] =
+  if s.file.len == 0:
+    return ok(fakeBytes(s.derived, offset, length))
+  var data = newSeq[byte](length)
+  try:
+    var file = open(s.file)
+    defer:
+      file.close()
+    file.setFilePos(int64(offset))
+    if length > 0 and file.readBytes(data, 0, length) != length:
+      return err(
+        failed(
+          LcnNSStorageFetchFailureCodeChoiceKind.Unavailable,
+          "the file changed while read",
+        )
+      )
+  except IOError, OSError:
+    return err(
+      failed(
+        LcnNSStorageFetchFailureCodeChoiceKind.Unavailable, "the file could not be read"
+      )
+    )
+  ok(data)
 
 proc stat_object(
     f: FetchFake, request: LcnNSStorageFetchStatObjectRequest
@@ -172,12 +259,13 @@ proc read_object(
   if delay > 0:
     sleep(int(delay))
   let n = min(uint64(request.length), o.size - request.offset)
+  let data = o.servedBytes(request.offset, int(n))
+  if data.isErr:
+    refuse(data.error)
   ok(
     LcnNSStorageFetchReadObjectResponse(
       kind: K.Map_data,
-      arm_Map_data: LcnNSStorageFetchReadObjectResponseARMapDataMap(
-        data: fakeBytes(o, request.offset, int(n))
-      ),
+      arm_Map_data: LcnNSStorageFetchReadObjectResponseARMapDataMap(data: data.get),
     )
   )
 

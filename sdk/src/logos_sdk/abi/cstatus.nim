@@ -9,21 +9,19 @@
 
 import results
 import ./[checks, types]
+import ../base/entry
 import ../iface/outcome
 
-export outcome
+export outcome, entry
 
 proc cMalloc*(size: csize_t): pointer {.importc: "malloc", header: "<stdlib.h>".}
 proc cFree*(p: pointer) {.importc: "free", header: "<stdlib.h>".}
 
 template bindingEnter*() =
   ## [IMPL] As the module kit's entries: a thread this Nim runtime did not
-  ## create (a module's own) registers before its first allocation.
-  setupForeignThreadGc()
-  enterThread()
-  when not defined(gcDestructors):
-    var stackBottom {.volatile, noinit.}: pointer
-    nimGC_setStackBottom(addr stackBottom)
+  ## create (a module's own) registers before its first allocation
+  ## (`base/entry.enterForeignThread`; DECISIONS G464).
+  enterForeignThread()
 
 var
   statusMessage {.threadvar.}: array[MaxMessageBytes + 1, char]

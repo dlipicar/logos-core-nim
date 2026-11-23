@@ -40,10 +40,19 @@
 ## (`vcache.nim`). A source naming no binding is unavailable, and the name is
 ## logged once per start. With no catalog in use, an operation fails
 ## `package-unavailable`, never as if the catalog were empty (PM l.1308-1309).
+##
+## **Turns** (G455): a resolution runs one turn of work at a time. When a turn
+## is spent the engine returns `cmContinue`, and the shell posts
+## `evContinue` for the next turn of the event loop, so routes, timers and
+## other operations go on between turns, and operations alternate turn by
+## turn. `cancel` drops an operation whose caller gave it up; a continue that
+## arrives for an operation that is gone is ignored (Fable F3). What a finished
+## or cancelled operation's run holds is freed a turn at a time, by continues
+## of their own (`ReleaseOperation`), never at once.
 
-{.push raises: [].}
+{.push raises: [], gcsafe.}
 
-import std/[sets, strutils, tables]
+import std/[algorithm, sets, strutils, tables]
 import results
 import logos_sdk/base/hex
 import ../package/[errors, records, resolver]
@@ -52,6 +61,9 @@ import ./[input, catalog, fetcher, vcache, driver]
 export results, input, catalog, fetcher, vcache, driver
 
 const
+  ReleaseOperation* = 0'u64
+    ## [IMPL; G455] the operation id of the continues that free finished and
+    ## cancelled runs; no request has it
   RouteBackoffMs* = [1_000'u32, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000]
     ## [IMPL; G402] the waits before establishing again after a refusal; the
     ## last repeats
@@ -94,6 +106,9 @@ type
     cmWriteKept ## replace `catalog.kept` with `kept` (sync and rename)
     cmReply ## the outcome of `resolve`'s request
     cmLog ## a line for the module's log
+    cmContinue
+      ## [G455] report `evContinue` for `operation` in a later turn of the
+      ## event loop, never in the drain that issued it (Fable F2)
 
   Command* = object
     case kind*: CommandKind
@@ -119,6 +134,8 @@ type
       outcome*: Result[Resolution, PackageError]
     of cmLog:
       text*: string
+    of cmContinue:
+      operation*: uint64
 
   RouteAnswer* = enum
     raReady
@@ -132,6 +149,7 @@ type
     evReadiness
     evAnswer ## the answer to `cmStat` or `cmRead`
     evTimer
+    evContinue ## [G455] the next turn of `cmContinue`'s operation
 
   Event* = object
     case kind*: EventKind
@@ -152,6 +170,8 @@ type
       reply*: Answer
     of evTimer:
       timer*: uint64
+    of evContinue:
+      continued*: uint64
 
   JobWait = enum
     jwNone
@@ -204,7 +224,6 @@ type
 
   Engine* = object
     input*: PmInput
-    resolverLimits: ResolverLimits
     keys: KeySource
     catalog*: CatalogState
     cache*: VerificationCache
@@ -215,6 +234,9 @@ type
     acquireBackoff: int
     acquireTimer: uint64
     requests: Table[uint64, Driver]
+    releasing: seq[Driver] ## [G455] finished or cancelled, freed a turn at a time
+    releaseQueued: bool ## a `ReleaseOperation` continue is issued
+    turnWork: int64 ## [G455] the work of one resolution turn
     calls: Table[uint64, (int, uint64, int)] ## call id -> (binding, job, generation)
     timers: Table[uint64, TimerTarget]
     unknownLogged: HashSet[string]
@@ -227,18 +249,23 @@ type
 proc initEngine*(
     input: PmInput,
     keptBytes: Opt[seq[byte]],
-    resolverLimits: ResolverLimits,
     keys: KeySource,
     platform = hostPlatform(),
     lgxLimits = DefaultLgxLimits,
     pathRules = hostPathRules(),
+    turnWork = ResolverTurnWork,
 ): (Engine, seq[Command]) =
   ## The engine at `_init`, before any I/O: the catalog state from the kept
-  ## file (`keptBytes`), and the log lines that start produced.
+  ## file (`keptBytes`), and the log lines that start produced. The resolver
+  ## limits are the input's (G399, planning's ruling of 2026-11-22): no caller
+  ## can pass values the input does not hold. `turnWork` is the work of one
+  ## resolution turn (G455): `ResolverTurnWork`, a constant; the tests give
+  ## others, which change no outcome.
+  doAssert turnWork > 0, "a turn spends some work"
   var e = Engine(
     input: input,
-    resolverLimits: resolverLimits,
     keys: keys,
+    turnWork: turnWork,
     cache:
       initVerificationCache(input.limits.cacheEntries, platform, lgxLimits, pathRules),
     catalogBinding: -1,
@@ -305,6 +332,10 @@ func catalogInUse*(e: Engine): Opt[Catalog] =
 
 func pendingRequests*(e: Engine): int =
   e.requests.len
+
+func releasingRuns*(e: Engine): int =
+  ## [G455] The finished or cancelled operations' runs still being freed.
+  e.releasing.len
 
 func queued*(e: Engine, binding: string): int =
   let i = e.index(binding)
@@ -622,17 +653,62 @@ proc catalogDone(e: var Engine, step: FetchStep, cmds: var seq[Command]) =
 
 # Resolution -------------------------------------------------------------------------
 
+func limitValue(e: Engine, name: string): int =
+  ## The configured value of the resolver limit `name` (`ResolverCounters.limit`).
+  let l = e.input.resolverLimits
+  case name
+  of "partial_closure_names": l.names
+  of "dependency_depth": l.depth
+  of "candidates_per_name": l.candidates
+  else: l.attempts
+
+proc retire(e: var Engine, d: sink Driver, cmds: var seq[Command]) =
+  ## [G455] `d`'s run is freed by later turns, one at a time.
+  e.releasing.add(d)
+  if not e.releaseQueued:
+    e.releaseQueued = true
+    cmds.add(Command(kind: cmContinue, operation: ReleaseOperation))
+
+proc releaseTurn(e: var Engine, cmds: var seq[Command]) =
+  e.releaseQueued = false
+  if e.releasing.len == 0:
+    return
+  if e.releasing[0].release():
+    e.releasing.delete(0)
+  if e.releasing.len > 0:
+    e.releaseQueued = true
+    cmds.add(Command(kind: cmContinue, operation: ReleaseOperation))
+
 proc advanceRequest(e: var Engine, request: uint64, cmds: var seq[Command]) =
   let d = e.requests.getOrDefault(request)
   if d.isNil:
     return
   while true:
-    let s = d.step()
+    var s = d.step()
     case s.kind
     of dsDone:
       e.requests.del(request)
-      cmds.add(Command(kind: cmReply, request: request, outcome: s.outcome))
+      let tripped = d.counters.limit
+      if tripped.len > 0:
+        # [G399; ruling M5] The operator's log names the limit, with its value:
+        # the caller sees only `dependency-unavailable` (PM l.1501-1502, l.1514).
+        cmds.log(
+          "a root operation stopped at the resolver limit " & tripped & " (" &
+            $e.limitValue(tripped) & ")"
+        )
+      cmds.add(Command(kind: cmReply, request: request, outcome: move s.outcome))
+      e.retire(d, cmds)
       return
+    of dsTurn:
+      # [G455] The turn's work is spent: the next one comes in a later turn of
+      # the event loop.
+      cmds.add(Command(kind: cmContinue, operation: request))
+      return
+    of dsRetained:
+      # [G455] 5-3c resolves against no installed state, so no record is
+      # asked for; 5-5 answers it from its worker (G448).
+      d.supplyRetained(s.record, Result[void, string].err("no installed state"))
+      continue
     of dsNeed:
       let source = s.source
       let bi = e.index(source.storage)
@@ -691,16 +767,23 @@ proc start*(e: var Engine): seq[Command] =
     e.establish(bi, result)
 
 proc resolve*(e: var Engine, request: uint64, root: RootReference): seq[Command] =
-  ## [G405] One root operation; its outcome is a later `cmReply`.
+  ## [G405] One root operation; its outcome is a later `cmReply`. A request id
+  ## in use, or 0 (`ReleaseOperation`'s), is refused `invalid-request`.
   if e.stopped:
     return
-  if request in e.requests:
+  if request == ReleaseOperation or request in e.requests:
     result.add(
       Command(
         kind: cmReply,
         request: request,
         outcome: Result[Resolution, PackageError].err(
-          packageError(pecInvalidRequest, "the request id is in use")
+          packageError(
+            pecInvalidRequest,
+            if request == ReleaseOperation:
+              "the request id is reserved"
+            else:
+              "the request id is in use",
+          )
         ),
       )
     )
@@ -716,8 +799,9 @@ proc resolve*(e: var Engine, request: uint64, root: RootReference): seq[Command]
       )
     )
     return
-  e.requests[request] =
-    initDriver(e.catalog.inUse.get.entries, e.input.trust, e.resolverLimits, root)
+  e.requests[request] = initDriver(
+    e.catalog.inUse.get.entries, e.input.trust, e.input.resolverLimits, root, e.turnWork
+  )
   e.advanceRequest(request, result)
 
 proc onAnswer(e: var Engine, call: uint64, a: Answer, cmds: var seq[Command]) =
@@ -807,13 +891,60 @@ proc handle*(e: var Engine, ev: Event): seq[Command] =
     e.onAnswer(ev.call, ev.reply, result)
   of evTimer:
     e.onTimer(ev.timer, result)
+  of evContinue:
+    if ev.continued == ReleaseOperation:
+      e.releaseTurn(result)
+    else:
+      # [G455; Fable F3] An operation that is gone (done, cancelled) is not
+      # advanced.
+      e.advanceRequest(ev.continued, result)
 
-proc stop*(e: var Engine) =
-  ## `_MODULE_destroy` began: route upkeep and retrieval stop, and no command
-  ## follows (G437).
+proc cancel*(e: var Engine, request: uint64): seq[Command] =
+  ## [G455; Fable F3] The caller gave the operation up: it takes no more turns
+  ## and nothing answers it; its run is freed by later turns. Its retrieval, if
+  ## one is queued behind another, is dropped too; one that has started ends
+  ## as it would, and its answer is ignored. A later `evContinue` for it is
+  ## ignored.
+  if e.stopped or request notin e.requests:
+    return
+  let d = e.requests.getOrDefault(request)
+  e.requests.del(request)
+  e.retire(d, result)
+  for b in e.bindings.mitems:
+    var i = b.jobs.high
+    while i >= 1:
+      if not b.jobs[i].catalog and b.jobs[i].request == request:
+        b.jobs.delete(i)
+      dec i
+
+proc stop*(e: var Engine): seq[Command] =
+  ## `_MODULE_destroy` began: route upkeep, retrieval and resolution stop, and
+  ## no command follows (G437). Each root operation still running, sliced or
+  ## waiting for a retrieval, is answered `package-unavailable` here, in
+  ## request order, and its driver dropped (G405, G455); so are the runs being
+  ## released, at once, since the module is going away.
+  if e.stopped:
+    return
   e.stopped = true
   for b in e.bindings.mitems:
     b.state = rsStopped
+  var pending: seq[uint64]
+  for id in e.requests.keys:
+    pending.add(id)
+  pending.sort()
+  for id in pending:
+    result.add(
+      Command(
+        kind: cmReply,
+        request: id,
+        outcome: Result[Resolution, PackageError].err(
+          packageError(pecPackageUnavailable, "the Package Manager is stopping")
+        ),
+      )
+    )
+  e.requests.clear()
+  e.releasing.setLen(0)
+  e.releaseQueued = false
 
 # Event constructors, for the shell and the tests ------------------------------------
 
@@ -848,6 +979,9 @@ func answered*(call: uint64, a: Answer): Event =
 
 func fired*(timer: uint64): Event =
   Event(kind: evTimer, timer: timer)
+
+func continued*(operation: uint64): Event =
+  Event(kind: evContinue, continued: operation)
 
 func sized*(size: uint64): Answer =
   Answer(kind: akValue, size: size)
