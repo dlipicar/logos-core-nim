@@ -164,6 +164,23 @@ func peerRefused(m: Message, msg: string): HelloFailure =
 
 # Callee ----------------------------------------------------------------------------
 
+proc readHello*(
+    frame: openArray[byte], limits = defaultLimits()
+): Result[(Hello, bool), HelloFailure] =
+  ## [SPEC TRANSPORT §2.3, §3.1] The first message of a connection whose
+  ## endpoint judges its Hello itself (remote Runtime Control, G413): the
+  ## Hello, and whether its `schema` is well formed (its VERSION_MISMATCH
+  ## comes after the module and token checks). A well-formed ProtocolError is
+  ## the peer refusing (close, no reply); any other message INVALID_PARAMS.
+  let first = ?readFirst(frame, limits.payloadDepth)
+  case first.message.kind
+  of mkHello:
+    ok((first.message.hello, first.schemaOk))
+  of mkProtocolError:
+    err(peerRefused(first.message, "the caller sent ProtocolError"))
+  else:
+    err(failure(ecInvalidParams, hrEnvelope, "the first message is not a Hello"))
+
 proc acceptHello*(
     ep: CalleeEndpoint,
     tickets: var TicketStore[RouteBinding],

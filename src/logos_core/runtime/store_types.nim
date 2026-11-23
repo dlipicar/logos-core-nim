@@ -10,7 +10,7 @@ import logos_sdk/codegen/common_types
 export nimrt, common_types
 
 const
-  primaryDocument = "; logos-core-nim.runtime-state.v2: the Runtime\'s persistent state (DECISIONS\x0A; I82). One Logos deterministic-CBOR lcn.rs_state value in\x0A; <store_dir>/runtime-state.cbor, written by runtime/store.nim and nothing else.\x0A;\x0A; Arrays may be empty here. The checks the schema cannot express (unique ids,\x0A; intent fields, keys naming known instances, unshared state assignments) are\x0A; applied when the store is read; a failure leaves the file as it is.\x0A;\x0A; The lcn.rs_record rules repeat host_config.cddl\'s lcn.app_module rules\x0A; without `instance` and the configuration inputs (test_nimgen compares\x0A; them), plus the accepted configuration binding\'s digest (DECISIONS I87).\x0A\x0A; v2 (re-pin P5a; DECISIONS G357): completed_shutdown and enforced. A v1 store\x0A; is read as a v2 store without them; it is always written as v2, which older\x0A; builds refuse. completed_shutdown is present only in the snapshots a\x0A; completed shutdown writes (RUNTIME l.3637): the next run\'s first write drops it.\x0Alcn.rs_state = {\x0A  format: \"logos-core-nim.runtime-state.v1\" / \"logos-core-nim.runtime-state.v2\",\x0A  runtime_instance_id: tstr .size (1..128),\x0A  epoch: uint64,\x0A  instances: [* lcn.rs_instance],\x0A  retired: [* lcn.rs_retired],\x0A  create_keys: [* lcn.rs_create_key],\x0A  ? completed_shutdown: true,\x0A}\x0A\x0Alcn.rs_instance = {\x0A  instance: tstr .size (1..128),\x0A  ? provider: tstr .size (1..128),\x0A  source: \"host\" / \"create_module\",\x0A  record: lcn.rs_record,\x0A  state: \"unloaded\" / \"loaded\" / \"ready\" / \"stopping\" / \"error\",\x0A  ? failure: lcn.rs_failure,\x0A  revision: uint64,\x0A  intent: \"uninitialized\" / \"requested\" / \"stopped\",\x0A  ? intent_revision: uint64,\x0A  ? origin: lcn.rs_origin,\x0A  ? enforced: lcn.rs_failure,\x0A}\x0A\x0A; a classification as RUNTIME l.3605 spells it, loader-<code> included (l.3607).\x0A; enforced: the classification an enforcement stop leaves when it completes\x0A; (RUNTIME l.3613), kept aside while the instance is `stopping`.\x0Alcn.rs_failure = {\x0A  classification: tstr .size (1..64),\x0A  ? reason: tstr .size (1..512),\x0A}\x0A\x0Alcn.rs_origin =\x0A  { kind: \"host\" } /\x0A  { kind: \"instance\", instance: tstr .size (1..128) }\x0A\x0A; A retired host-assigned instance id, and the host-assigned state\x0A; assignment it keeps reserved. Runtime-assigned names need no tombstone.\x0Alcn.rs_retired = {\x0A  instance: tstr .size (1..128),\x0A  ? state_assignment: tstr .size (1..128),\x0A}\x0A\x0A; one create_module key association (RUNTIME l.3627-3628)\x0Alcn.rs_create_key = {\x0A  consumer: tstr .size (1..128),\x0A  key: tstr .size (1..128),\x0A  module: tstr .size (1..64),\x0A  instance: tstr .size (1..128),\x0A}\x0A\x0Alcn.rs_record = {\x0A  module: tstr .size (1..64),\x0A  implementation: lcn.rs_implementation,\x0A  ? primary_contract: logos.schema_commitment,\x0A  ? implements: [* logos.schema_commitment],\x0A  ? extends: [* logos.schema_commitment],\x0A  ? requires: [* lcn.rs_requirement],\x0A  ? requested_permissions: [* lcn.rs_permission],\x0A  ? state_assignment: tstr .size (1..128),\x0A  ? configuration_commitment: bstr .size 32,\x0A}\x0A\x0Alcn.rs_path = tstr .size (1..4096)\x0A\x0A; hosted_dynamic: Tier 4b step 4b-3; a store holding it is refused by older\x0A; builds. Nothing about a Module Host (pid, path, descriptor) is stored.\x0Alcn.rs_implementation =\x0A  { strategy: \"direct_static\", binding: tstr .size (1..128) } /\x0A  { strategy: \"direct_dynamic\", artifact: lcn.rs_artifact } /\x0A  { strategy: \"hosted_dynamic\", placement: \"process\", artifact: lcn.rs_artifact }\x0A\x0Alcn.rs_artifact = {\x0A  id: tstr .size (1..128),\x0A  local_path: lcn.rs_path,\x0A  hash: bstr .size 32,\x0A  hash_suite: \"logos.hash-suite.blake3-256\",\x0A}\x0A\x0Alcn.rs_requirement = {\x0A  contract: logos.schema_commitment,\x0A  cardinality: \"single\" / \"all-runtime-visible\",\x0A}\x0A\x0Alcn.rs_permission = {\x0A  permission: tstr .size (1..128),\x0A  constraints: bstr .size (1..1048576),\x0A  ? reason: tstr .size (1..512),\x0A}\x0A\x0A; one side record (runtime/store.nim putSide): the instance it belongs to\x0Alcn.rs_side = {\x0A  instance: tstr .size (1..128),\x0A  value: bstr,\x0A}\x0A\x0A; [IMPL-DECISION I87] one configurable instance\'s configuration (side record\x0A; kind `cfg`): the whole accepted binding, so an instance restores from its\x0A; side record alone, and its state. Both are deterministic-CBOR CONFIG\x0A; values (logos.module_configuration.schema_binding and\x0A; .configuration_state), never the in-flight attempted record. The binding\'s\x0A; blake3 digest is the instance record\'s configuration_commitment.\x0Alcn.cfg_record = {\x0A  binding: bstr,\x0A  state: bstr,\x0A  ? last_provisioned: bstr .size 32,\x0A}\x0A\x0A; [I93] one instance\'s permission settings (side record kind `prm`), present\x0A; for every instance while a permission profile is selected\x0A; (docs/PERMISSIONS.md): the logos.runtime_control.permission_settings_state\x0A; it reports. The revision is at least 1 and failure is present only with\x0A; failed (checked when it is read, runtime/settings.nim).\x0Alcn.prm_record = {\x0A  revision: uint64,\x0A  permissions: [* lcn.rs_permission_setting],\x0A  application: \"pending\" / \"applied\" / \"failed\",\x0A  ? failure: \"enforcement-failed\",\x0A}\x0A\x0Alcn.rs_permission_setting = {\x0A  permission: tstr .size (1..128),\x0A  constraints: bstr .size (1..1048576),\x0A}\x0A\x0A; [IMPL-DECISION I96] where a transferred instance\'s state came from (side\x0A; record kind `xfer`, keyed by the replacement): the deployment\'s\x0A; state_transfers entry as applied (DECISIONS G305, G306). Written before the\x0A; commit that creates the replacement; kept while the replacement is known or\x0A; retired (RUNTIME l.3588); reaped at open only for an id neither is (a crash\x0A; before the commit). bytes and files: copied, or 0 for a move, which reads\x0A; nothing. epoch: the revision epoch of the start that applied it; at: Unix\x0A; seconds.\x0Alcn.xfer_record = {\x0A  from: tstr .size (1..128),\x0A  from_assignment: tstr .size (1..128),\x0A  mode: \"move\" / \"copy\",\x0A  bytes: uint64,\x0A  files: uint64,\x0A  epoch: uint64,\x0A  at: uint64,\x0A}\x0A"
+  primaryDocument = "; logos-core-nim.runtime-state.v2: the Runtime\'s persistent state (DECISIONS\x0A; I82). One Logos deterministic-CBOR lcn.rs_state value in\x0A; <store_dir>/runtime-state.cbor, written by runtime/store.nim and nothing else.\x0A;\x0A; Arrays may be empty here. The checks the schema cannot express (unique ids,\x0A; intent fields, keys naming known instances, unshared state assignments) are\x0A; applied when the store is read; a failure leaves the file as it is.\x0A;\x0A; The lcn.rs_record rules repeat host_config.cddl\'s lcn.app_module rules\x0A; without `instance` and the configuration inputs (test_nimgen compares\x0A; them), plus the accepted configuration binding\'s digest (DECISIONS I87).\x0A\x0A; v2 (re-pin P5a; DECISIONS G357): completed_shutdown and enforced. A v1 store\x0A; is read as a v2 store without them; it is always written as v2, which older\x0A; builds refuse. completed_shutdown is present only in the snapshots a\x0A; completed shutdown writes (RUNTIME l.3637): the next run\'s first write drops it.\x0Alcn.rs_state = {\x0A  format: \"logos-core-nim.runtime-state.v1\" / \"logos-core-nim.runtime-state.v2\",\x0A  runtime_instance_id: tstr .size (1..128),\x0A  epoch: uint64,\x0A  instances: [* lcn.rs_instance],\x0A  retired: [* lcn.rs_retired],\x0A  create_keys: [* lcn.rs_create_key],\x0A  ? completed_shutdown: true,\x0A}\x0A\x0Alcn.rs_instance = {\x0A  instance: tstr .size (1..128),\x0A  ? provider: tstr .size (1..128),\x0A  source: \"host\" / \"create_module\",\x0A  record: lcn.rs_record,\x0A  state: \"unloaded\" / \"loaded\" / \"ready\" / \"stopping\" / \"error\",\x0A  ? failure: lcn.rs_failure,\x0A  revision: uint64,\x0A  intent: \"uninitialized\" / \"requested\" / \"stopped\",\x0A  ? intent_revision: uint64,\x0A  ? origin: lcn.rs_origin,\x0A  ? enforced: lcn.rs_failure,\x0A}\x0A\x0A; a classification as RUNTIME l.3605 spells it, loader-<code> included (l.3607).\x0A; enforced: the classification an enforcement stop leaves when it completes\x0A; (RUNTIME l.3613), kept aside while the instance is `stopping`.\x0Alcn.rs_failure = {\x0A  classification: tstr .size (1..64),\x0A  ? reason: tstr .size (1..512),\x0A}\x0A\x0A; [G413] runtime: the Runtime of a forwarded consumer, a module instance of\x0A; another Runtime whose request established the intent over remote Runtime\x0A; Control (RUNTIME l.3407); absent for a local instance. Present only with such\x0A; an origin, so a store without one is unchanged; a build before 5-7a-2\x0A; refuses a store that has one.\x0Alcn.rs_origin =\x0A  { kind: \"host\" } /\x0A  { kind: \"instance\", instance: tstr .size (1..128), ? runtime: tstr .size (1..128) }\x0A\x0A; A retired host-assigned instance id, and the host-assigned state\x0A; assignment it keeps reserved. Runtime-assigned names need no tombstone.\x0Alcn.rs_retired = {\x0A  instance: tstr .size (1..128),\x0A  ? state_assignment: tstr .size (1..128),\x0A}\x0A\x0A; one create_module key association (RUNTIME l.3627-3628); consumer_runtime:\x0A; a forwarded consumer\'s Runtime (G413), as in lcn.rs_origin\x0Alcn.rs_create_key = {\x0A  consumer: tstr .size (1..128),\x0A  ? consumer_runtime: tstr .size (1..128),\x0A  key: tstr .size (1..128),\x0A  module: tstr .size (1..64),\x0A  instance: tstr .size (1..128),\x0A}\x0A\x0Alcn.rs_record = {\x0A  module: tstr .size (1..64),\x0A  implementation: lcn.rs_implementation,\x0A  ? primary_contract: logos.schema_commitment,\x0A  ? implements: [* logos.schema_commitment],\x0A  ? extends: [* logos.schema_commitment],\x0A  ? requires: [* lcn.rs_requirement],\x0A  ? requested_permissions: [* lcn.rs_permission],\x0A  ? state_assignment: tstr .size (1..128),\x0A  ? configuration_commitment: bstr .size 32,\x0A}\x0A\x0Alcn.rs_path = tstr .size (1..4096)\x0A\x0A; hosted_dynamic: Tier 4b step 4b-3; a store holding it is refused by older\x0A; builds. Nothing about a Module Host (pid, path, descriptor) is stored.\x0Alcn.rs_implementation =\x0A  { strategy: \"direct_static\", binding: tstr .size (1..128) } /\x0A  { strategy: \"direct_dynamic\", artifact: lcn.rs_artifact } /\x0A  { strategy: \"hosted_dynamic\", placement: \"process\", artifact: lcn.rs_artifact }\x0A\x0Alcn.rs_artifact = {\x0A  id: tstr .size (1..128),\x0A  local_path: lcn.rs_path,\x0A  hash: bstr .size 32,\x0A  hash_suite: \"logos.hash-suite.blake3-256\",\x0A}\x0A\x0Alcn.rs_requirement = {\x0A  contract: logos.schema_commitment,\x0A  cardinality: \"single\" / \"all-runtime-visible\",\x0A}\x0A\x0Alcn.rs_permission = {\x0A  permission: tstr .size (1..128),\x0A  constraints: bstr .size (1..1048576),\x0A  ? reason: tstr .size (1..512),\x0A}\x0A\x0A; one side record (runtime/store.nim putSide): the instance it belongs to\x0Alcn.rs_side = {\x0A  instance: tstr .size (1..128),\x0A  value: bstr,\x0A}\x0A\x0A; [IMPL-DECISION I87] one configurable instance\'s configuration (side record\x0A; kind `cfg`): the whole accepted binding, so an instance restores from its\x0A; side record alone, and its state. Both are deterministic-CBOR CONFIG\x0A; values (logos.module_configuration.schema_binding and\x0A; .configuration_state), never the in-flight attempted record. The binding\'s\x0A; blake3 digest is the instance record\'s configuration_commitment.\x0Alcn.cfg_record = {\x0A  binding: bstr,\x0A  state: bstr,\x0A  ? last_provisioned: bstr .size 32,\x0A}\x0A\x0A; [I93] one instance\'s permission settings (side record kind `prm`), present\x0A; for every instance while a permission profile is selected\x0A; (docs/PERMISSIONS.md): the logos.runtime_control.permission_settings_state\x0A; it reports. The revision is at least 1 and failure is present only with\x0A; failed (checked when it is read, runtime/settings.nim).\x0Alcn.prm_record = {\x0A  revision: uint64,\x0A  permissions: [* lcn.rs_permission_setting],\x0A  application: \"pending\" / \"applied\" / \"failed\",\x0A  ? failure: \"enforcement-failed\",\x0A}\x0A\x0Alcn.rs_permission_setting = {\x0A  permission: tstr .size (1..128),\x0A  constraints: bstr .size (1..1048576),\x0A}\x0A\x0A; [IMPL-DECISION I96] where a transferred instance\'s state came from (side\x0A; record kind `xfer`, keyed by the replacement): the deployment\'s\x0A; state_transfers entry as applied (DECISIONS G305, G306). Written before the\x0A; commit that creates the replacement; kept while the replacement is known or\x0A; retired (RUNTIME l.3588); reaped at open only for an id neither is (a crash\x0A; before the commit). bytes and files: copied, or 0 for a move, which reads\x0A; nothing. epoch: the revision epoch of the start that applied it; at: Unix\x0A; seconds.\x0Alcn.xfer_record = {\x0A  from: tstr .size (1..128),\x0A  from_assignment: tstr .size (1..128),\x0A  mode: \"move\" / \"copy\",\x0A  bytes: uint64,\x0A  files: uint64,\x0A  epoch: uint64,\x0A  at: uint64,\x0A}\x0A"
   interfaceDocuments: array[0, string] = []
   supportingDocuments: array[0, string] = []
 
@@ -59,6 +59,7 @@ type
 
   LcnRsCreateKey* = object
     consumer*: string
+    consumer_runtime*: Opt[string]
     instance*: string
     key*: string
     module*: string
@@ -158,6 +159,7 @@ type
   LcnRsOriginARInstanceMap* = object
     instance*: string
     kind*: string = "instance"
+    runtime*: Opt[string]
 
   LcnRsOriginKind* {.pure.} = enum
     Host
@@ -518,12 +520,19 @@ proc fromChecked*(T: type LcnRsArtifact, v: CborValue): LcnRsArtifact =
 
 proc stepEncLcnRsCreateKey*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   let x {.used.} = cast[ptr LcnRsCreateKey](src)
-  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](4))
+  var n = 4
+  if x.consumer_runtime.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
   dst[] = node
   var k = 0
   node.entries[k].key = cbor("consumer")
   node.entries[k].value = cbor(x.consumer)
   inc k
+  if x.consumer_runtime.isSome:
+    node.entries[k].key = cbor("consumer_runtime")
+    node.entries[k].value = cbor(x.consumer_runtime.get)
+    inc k
   node.entries[k].key = cbor("instance")
   node.entries[k].value = cbor(x.instance)
   inc k
@@ -538,6 +547,9 @@ proc stepDecLcnRsCreateKey*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnRsCreateKey](dst)
   r[] = LcnRsCreateKey()
   r.consumer = v.lookup("consumer").get.text
+  let f8 = v.lookup("consumer_runtime")
+  if f8.isSome:
+    r.consumer_runtime = Opt.some(f8.get.text)
   r.instance = v.lookup("instance").get.text
   r.key = v.lookup("key").get.text
   r.module = v.lookup("module").get.text
@@ -570,9 +582,9 @@ proc stepDecLcnRsFailure*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnRsFailure](dst)
   r[] = LcnRsFailure()
   r.classification = v.lookup("classification").get.text
-  let f8 = v.lookup("reason")
-  if f8.isSome:
-    r.reason = Opt.some(f8.get.text)
+  let f9 = v.lookup("reason")
+  if f9.isSome:
+    r.reason = Opt.some(f9.get.text)
 
 proc toCbor*(x: LcnRsFailure): CborValue =
   runEnc(stepEncLcnRsFailure, addr x)
@@ -597,8 +609,8 @@ proc stepEncLcnRsImplementationARDirectDynamicMap*(w: var EncWork, src: pointer,
 proc stepDecLcnRsImplementationARDirectDynamicMap*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnRsImplementationARDirectDynamicMap](dst)
   r[] = LcnRsImplementationARDirectDynamicMap()
-  let f9 = v.lookup("artifact").get
-  w.later(stepDecLcnRsArtifact, f9, addr r.artifact)
+  let f10 = v.lookup("artifact").get
+  w.later(stepDecLcnRsArtifact, f10, addr r.artifact)
 
 proc toCbor*(x: LcnRsImplementationARDirectDynamicMap): CborValue =
   runEnc(stepEncLcnRsImplementationARDirectDynamicMap, addr x)
@@ -651,8 +663,8 @@ proc stepEncLcnRsImplementationARProcessHostedDynamicMap*(w: var EncWork, src: p
 proc stepDecLcnRsImplementationARProcessHostedDynamicMap*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnRsImplementationARProcessHostedDynamicMap](dst)
   r[] = LcnRsImplementationARProcessHostedDynamicMap()
-  let f10 = v.lookup("artifact").get
-  w.later(stepDecLcnRsArtifact, f10, addr r.artifact)
+  let f11 = v.lookup("artifact").get
+  w.later(stepDecLcnRsArtifact, f11, addr r.artifact)
 
 proc toCbor*(x: LcnRsImplementationARProcessHostedDynamicMap): CborValue =
   runEnc(stepEncLcnRsImplementationARProcessHostedDynamicMap, addr x)
@@ -847,34 +859,34 @@ proc stepEncLcnRsInstance*(w: var EncWork, src: pointer, dst: ptr CborValue) =
 proc stepDecLcnRsInstance*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnRsInstance](dst)
   r[] = LcnRsInstance()
-  let f11 = v.lookup("enforced")
-  if f11.isSome:
-    r.enforced = Opt.some(default(LcnRsFailure))
-    w.later(stepDecLcnRsFailure, f11.get, addr r.enforced.get)
-  let f12 = v.lookup("failure")
+  let f12 = v.lookup("enforced")
   if f12.isSome:
+    r.enforced = Opt.some(default(LcnRsFailure))
+    w.later(stepDecLcnRsFailure, f12.get, addr r.enforced.get)
+  let f13 = v.lookup("failure")
+  if f13.isSome:
     r.failure = Opt.some(default(LcnRsFailure))
-    w.later(stepDecLcnRsFailure, f12.get, addr r.failure.get)
+    w.later(stepDecLcnRsFailure, f13.get, addr r.failure.get)
   r.instance = v.lookup("instance").get.text
-  let f13 = v.lookup("intent").get
-  w.later(stepDecLcnRsInstanceIntentChoice, f13, addr r.intent)
-  let f14 = v.lookup("intent_revision")
-  if f14.isSome:
-    r.intent_revision = Opt.some(uint64(f14.get.uint))
-  let f15 = v.lookup("origin")
+  let f14 = v.lookup("intent").get
+  w.later(stepDecLcnRsInstanceIntentChoice, f14, addr r.intent)
+  let f15 = v.lookup("intent_revision")
   if f15.isSome:
-    r.origin = Opt.some(default(LcnRsOrigin))
-    w.later(stepDecLcnRsOrigin, f15.get, addr r.origin.get)
-  let f16 = v.lookup("provider")
+    r.intent_revision = Opt.some(uint64(f15.get.uint))
+  let f16 = v.lookup("origin")
   if f16.isSome:
-    r.provider = Opt.some(f16.get.text)
-  let f17 = v.lookup("record").get
-  w.later(stepDecLcnRsRecord, f17, addr r.record)
+    r.origin = Opt.some(default(LcnRsOrigin))
+    w.later(stepDecLcnRsOrigin, f16.get, addr r.origin.get)
+  let f17 = v.lookup("provider")
+  if f17.isSome:
+    r.provider = Opt.some(f17.get.text)
+  let f18 = v.lookup("record").get
+  w.later(stepDecLcnRsRecord, f18, addr r.record)
   r.revision = uint64(v.lookup("revision").get.uint)
-  let f18 = v.lookup("source").get
-  w.later(stepDecLcnRsInstanceSourceChoice, f18, addr r.source)
-  let f19 = v.lookup("state").get
-  w.later(stepDecLcnRsInstanceStateChoice, f19, addr r.state)
+  let f19 = v.lookup("source").get
+  w.later(stepDecLcnRsInstanceSourceChoice, f19, addr r.source)
+  let f20 = v.lookup("state").get
+  w.later(stepDecLcnRsInstanceStateChoice, f20, addr r.state)
 
 proc toCbor*(x: LcnRsInstance): CborValue =
   runEnc(stepEncLcnRsInstance, addr x)
@@ -907,7 +919,10 @@ proc fromChecked*(T: type LcnRsOriginARHostMap, v: CborValue): LcnRsOriginARHost
 
 proc stepEncLcnRsOriginARInstanceMap*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   let x {.used.} = cast[ptr LcnRsOriginARInstanceMap](src)
-  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  var n = 2
+  if x.runtime.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
   dst[] = node
   var k = 0
   node.entries[k].key = cbor("instance")
@@ -916,11 +931,18 @@ proc stepEncLcnRsOriginARInstanceMap*(w: var EncWork, src: pointer, dst: ptr Cbo
   node.entries[k].key = cbor("kind")
   node.entries[k].value = cbor("instance")
   inc k
+  if x.runtime.isSome:
+    node.entries[k].key = cbor("runtime")
+    node.entries[k].value = cbor(x.runtime.get)
+    inc k
 
 proc stepDecLcnRsOriginARInstanceMap*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnRsOriginARInstanceMap](dst)
   r[] = LcnRsOriginARInstanceMap()
   r.instance = v.lookup("instance").get.text
+  let f21 = v.lookup("runtime")
+  if f21.isSome:
+    r.runtime = Opt.some(f21.get.text)
 
 proc toCbor*(x: LcnRsOriginARInstanceMap): CborValue =
   runEnc(stepEncLcnRsOriginARInstanceMap, addr x)
@@ -988,9 +1010,9 @@ proc stepDecLcnRsPermission*(w: var DecWork, v: CborValue, dst: pointer) =
   r[] = LcnRsPermission()
   r.constraints = v.lookup("constraints").get.bytes
   r.permission = v.lookup("permission").get.text
-  let f20 = v.lookup("reason")
-  if f20.isSome:
-    r.reason = Opt.some(f20.get.text)
+  let f22 = v.lookup("reason")
+  if f22.isSome:
+    r.reason = Opt.some(f22.get.text)
 
 proc toCbor*(x: LcnRsPermission): CborValue =
   runEnc(stepEncLcnRsPermission, addr x)
@@ -1052,20 +1074,20 @@ proc stepEncLcnRsRecord*(w: var EncWork, src: pointer, dst: ptr CborValue) =
     inc k
   if x.extends.isSome:
     node.entries[k].key = cbor("extends")
-    let a22 = newCborArray(x.extends.get.len)
-    node.entries[k].value = a22
-    for i23 in 0 ..< x.extends.get.len:
-      w.later(stepEncSchemaCommitment, addr x.extends.get[i23], addr a22.items[i23])
+    let a24 = newCborArray(x.extends.get.len)
+    node.entries[k].value = a24
+    for i25 in 0 ..< x.extends.get.len:
+      w.later(stepEncSchemaCommitment, addr x.extends.get[i25], addr a24.items[i25])
     inc k
   node.entries[k].key = cbor("implementation")
   w.later(stepEncLcnRsImplementation, addr x.implementation, addr node.entries[k].value)
   inc k
   if x.implements.isSome:
     node.entries[k].key = cbor("implements")
-    let a27 = newCborArray(x.implements.get.len)
-    node.entries[k].value = a27
-    for i28 in 0 ..< x.implements.get.len:
-      w.later(stepEncSchemaCommitment, addr x.implements.get[i28], addr a27.items[i28])
+    let a29 = newCborArray(x.implements.get.len)
+    node.entries[k].value = a29
+    for i30 in 0 ..< x.implements.get.len:
+      w.later(stepEncSchemaCommitment, addr x.implements.get[i30], addr a29.items[i30])
     inc k
   node.entries[k].key = cbor("module")
   node.entries[k].value = cbor(x.module)
@@ -1076,17 +1098,17 @@ proc stepEncLcnRsRecord*(w: var EncWork, src: pointer, dst: ptr CborValue) =
     inc k
   if x.requested_permissions.isSome:
     node.entries[k].key = cbor("requested_permissions")
-    let a32 = newCborArray(x.requested_permissions.get.len)
-    node.entries[k].value = a32
-    for i33 in 0 ..< x.requested_permissions.get.len:
-      w.later(stepEncLcnRsPermission, addr x.requested_permissions.get[i33], addr a32.items[i33])
+    let a34 = newCborArray(x.requested_permissions.get.len)
+    node.entries[k].value = a34
+    for i35 in 0 ..< x.requested_permissions.get.len:
+      w.later(stepEncLcnRsPermission, addr x.requested_permissions.get[i35], addr a34.items[i35])
     inc k
   if x.requires.isSome:
     node.entries[k].key = cbor("requires")
-    let a36 = newCborArray(x.requires.get.len)
-    node.entries[k].value = a36
-    for i37 in 0 ..< x.requires.get.len:
-      w.later(stepEncLcnRsRequirement, addr x.requires.get[i37], addr a36.items[i37])
+    let a38 = newCborArray(x.requires.get.len)
+    node.entries[k].value = a38
+    for i39 in 0 ..< x.requires.get.len:
+      w.later(stepEncLcnRsRequirement, addr x.requires.get[i39], addr a38.items[i39])
     inc k
   if x.state_assignment.isSome:
     node.entries[k].key = cbor("state_assignment")
@@ -1096,43 +1118,43 @@ proc stepEncLcnRsRecord*(w: var EncWork, src: pointer, dst: ptr CborValue) =
 proc stepDecLcnRsRecord*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnRsRecord](dst)
   r[] = LcnRsRecord()
-  let f21 = v.lookup("configuration_commitment")
-  if f21.isSome:
-    r.configuration_commitment = Opt.some(f21.get.bytes)
-  let f24 = v.lookup("extends")
-  if f24.isSome:
+  let f23 = v.lookup("configuration_commitment")
+  if f23.isSome:
+    r.configuration_commitment = Opt.some(f23.get.bytes)
+  let f26 = v.lookup("extends")
+  if f26.isSome:
     r.extends = Opt.some(default(seq[SchemaCommitment]))
-    r.extends.get.setLen(f24.get.items.len)
-    for i25 in 0 ..< f24.get.items.len:
-      w.later(stepDecSchemaCommitment, f24.get.items[i25], addr r.extends.get[i25])
-  let f26 = v.lookup("implementation").get
-  w.later(stepDecLcnRsImplementation, f26, addr r.implementation)
-  let f29 = v.lookup("implements")
-  if f29.isSome:
-    r.implements = Opt.some(default(seq[SchemaCommitment]))
-    r.implements.get.setLen(f29.get.items.len)
-    for i30 in 0 ..< f29.get.items.len:
-      w.later(stepDecSchemaCommitment, f29.get.items[i30], addr r.implements.get[i30])
-  r.module = v.lookup("module").get.text
-  let f31 = v.lookup("primary_contract")
+    r.extends.get.setLen(f26.get.items.len)
+    for i27 in 0 ..< f26.get.items.len:
+      w.later(stepDecSchemaCommitment, f26.get.items[i27], addr r.extends.get[i27])
+  let f28 = v.lookup("implementation").get
+  w.later(stepDecLcnRsImplementation, f28, addr r.implementation)
+  let f31 = v.lookup("implements")
   if f31.isSome:
+    r.implements = Opt.some(default(seq[SchemaCommitment]))
+    r.implements.get.setLen(f31.get.items.len)
+    for i32 in 0 ..< f31.get.items.len:
+      w.later(stepDecSchemaCommitment, f31.get.items[i32], addr r.implements.get[i32])
+  r.module = v.lookup("module").get.text
+  let f33 = v.lookup("primary_contract")
+  if f33.isSome:
     r.primary_contract = Opt.some(default(SchemaCommitment))
-    w.later(stepDecSchemaCommitment, f31.get, addr r.primary_contract.get)
-  let f34 = v.lookup("requested_permissions")
-  if f34.isSome:
+    w.later(stepDecSchemaCommitment, f33.get, addr r.primary_contract.get)
+  let f36 = v.lookup("requested_permissions")
+  if f36.isSome:
     r.requested_permissions = Opt.some(default(seq[LcnRsPermission]))
-    r.requested_permissions.get.setLen(f34.get.items.len)
-    for i35 in 0 ..< f34.get.items.len:
-      w.later(stepDecLcnRsPermission, f34.get.items[i35], addr r.requested_permissions.get[i35])
-  let f38 = v.lookup("requires")
-  if f38.isSome:
-    r.requires = Opt.some(default(seq[LcnRsRequirement]))
-    r.requires.get.setLen(f38.get.items.len)
-    for i39 in 0 ..< f38.get.items.len:
-      w.later(stepDecLcnRsRequirement, f38.get.items[i39], addr r.requires.get[i39])
-  let f40 = v.lookup("state_assignment")
+    r.requested_permissions.get.setLen(f36.get.items.len)
+    for i37 in 0 ..< f36.get.items.len:
+      w.later(stepDecLcnRsPermission, f36.get.items[i37], addr r.requested_permissions.get[i37])
+  let f40 = v.lookup("requires")
   if f40.isSome:
-    r.state_assignment = Opt.some(f40.get.text)
+    r.requires = Opt.some(default(seq[LcnRsRequirement]))
+    r.requires.get.setLen(f40.get.items.len)
+    for i41 in 0 ..< f40.get.items.len:
+      w.later(stepDecLcnRsRequirement, f40.get.items[i41], addr r.requires.get[i41])
+  let f42 = v.lookup("state_assignment")
+  if f42.isSome:
+    r.state_assignment = Opt.some(f42.get.text)
 
 proc toCbor*(x: LcnRsRecord): CborValue =
   runEnc(stepEncLcnRsRecord, addr x)
@@ -1183,10 +1205,10 @@ proc stepEncLcnRsRequirement*(w: var EncWork, src: pointer, dst: ptr CborValue) 
 proc stepDecLcnRsRequirement*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnRsRequirement](dst)
   r[] = LcnRsRequirement()
-  let f41 = v.lookup("cardinality").get
-  w.later(stepDecLcnRsRequirementCardinalityChoice, f41, addr r.cardinality)
-  let f42 = v.lookup("contract").get
-  w.later(stepDecSchemaCommitment, f42, addr r.contract)
+  let f43 = v.lookup("cardinality").get
+  w.later(stepDecLcnRsRequirementCardinalityChoice, f43, addr r.cardinality)
+  let f44 = v.lookup("contract").get
+  w.later(stepDecSchemaCommitment, f44, addr r.contract)
 
 proc toCbor*(x: LcnRsRequirement): CborValue =
   runEnc(stepEncLcnRsRequirement, addr x)
@@ -1216,9 +1238,9 @@ proc stepDecLcnRsRetired*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnRsRetired](dst)
   r[] = LcnRsRetired()
   r.instance = v.lookup("instance").get.text
-  let f43 = v.lookup("state_assignment")
-  if f43.isSome:
-    r.state_assignment = Opt.some(f43.get.text)
+  let f45 = v.lookup("state_assignment")
+  if f45.isSome:
+    r.state_assignment = Opt.some(f45.get.text)
 
 proc toCbor*(x: LcnRsRetired): CborValue =
   runEnc(stepEncLcnRsRetired, addr x)
@@ -1293,10 +1315,10 @@ proc stepEncLcnRsState*(w: var EncWork, src: pointer, dst: ptr CborValue) =
     node.entries[k].value = cbor(true)
     inc k
   node.entries[k].key = cbor("create_keys")
-  let a45 = newCborArray(x.create_keys.len)
-  node.entries[k].value = a45
-  for i46 in 0 ..< x.create_keys.len:
-    w.later(stepEncLcnRsCreateKey, addr x.create_keys[i46], addr a45.items[i46])
+  let a47 = newCborArray(x.create_keys.len)
+  node.entries[k].value = a47
+  for i48 in 0 ..< x.create_keys.len:
+    w.later(stepEncLcnRsCreateKey, addr x.create_keys[i48], addr a47.items[i48])
   inc k
   node.entries[k].key = cbor("epoch")
   node.entries[k].value = cbor(uint64(x.epoch))
@@ -1305,16 +1327,16 @@ proc stepEncLcnRsState*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   w.later(stepEncLcnRsStateFormatChoice, addr x.format, addr node.entries[k].value)
   inc k
   node.entries[k].key = cbor("instances")
-  let a50 = newCborArray(x.instances.len)
-  node.entries[k].value = a50
-  for i51 in 0 ..< x.instances.len:
-    w.later(stepEncLcnRsInstance, addr x.instances[i51], addr a50.items[i51])
+  let a52 = newCborArray(x.instances.len)
+  node.entries[k].value = a52
+  for i53 in 0 ..< x.instances.len:
+    w.later(stepEncLcnRsInstance, addr x.instances[i53], addr a52.items[i53])
   inc k
   node.entries[k].key = cbor("retired")
-  let a54 = newCborArray(x.retired.len)
-  node.entries[k].value = a54
-  for i55 in 0 ..< x.retired.len:
-    w.later(stepEncLcnRsRetired, addr x.retired[i55], addr a54.items[i55])
+  let a56 = newCborArray(x.retired.len)
+  node.entries[k].value = a56
+  for i57 in 0 ..< x.retired.len:
+    w.later(stepEncLcnRsRetired, addr x.retired[i57], addr a56.items[i57])
   inc k
   node.entries[k].key = cbor("runtime_instance_id")
   node.entries[k].value = cbor(x.runtime_instance_id)
@@ -1323,24 +1345,24 @@ proc stepEncLcnRsState*(w: var EncWork, src: pointer, dst: ptr CborValue) =
 proc stepDecLcnRsState*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnRsState](dst)
   r[] = LcnRsState()
-  let f44 = v.lookup("completed_shutdown")
-  if f44.isSome:
+  let f46 = v.lookup("completed_shutdown")
+  if f46.isSome:
     r.completed_shutdown = Opt.some(true)
-  let f47 = v.lookup("create_keys").get
-  r.create_keys.setLen(f47.items.len)
-  for i48 in 0 ..< f47.items.len:
-    w.later(stepDecLcnRsCreateKey, f47.items[i48], addr r.create_keys[i48])
+  let f49 = v.lookup("create_keys").get
+  r.create_keys.setLen(f49.items.len)
+  for i50 in 0 ..< f49.items.len:
+    w.later(stepDecLcnRsCreateKey, f49.items[i50], addr r.create_keys[i50])
   r.epoch = uint64(v.lookup("epoch").get.uint)
-  let f49 = v.lookup("format").get
-  w.later(stepDecLcnRsStateFormatChoice, f49, addr r.format)
-  let f52 = v.lookup("instances").get
-  r.instances.setLen(f52.items.len)
-  for i53 in 0 ..< f52.items.len:
-    w.later(stepDecLcnRsInstance, f52.items[i53], addr r.instances[i53])
-  let f56 = v.lookup("retired").get
-  r.retired.setLen(f56.items.len)
-  for i57 in 0 ..< f56.items.len:
-    w.later(stepDecLcnRsRetired, f56.items[i57], addr r.retired[i57])
+  let f51 = v.lookup("format").get
+  w.later(stepDecLcnRsStateFormatChoice, f51, addr r.format)
+  let f54 = v.lookup("instances").get
+  r.instances.setLen(f54.items.len)
+  for i55 in 0 ..< f54.items.len:
+    w.later(stepDecLcnRsInstance, f54.items[i55], addr r.instances[i55])
+  let f58 = v.lookup("retired").get
+  r.retired.setLen(f58.items.len)
+  for i59 in 0 ..< f58.items.len:
+    w.later(stepDecLcnRsRetired, f58.items[i59], addr r.retired[i59])
   r.runtime_instance_id = v.lookup("runtime_instance_id").get.text
 
 proc toCbor*(x: LcnRsState): CborValue =
@@ -1413,8 +1435,8 @@ proc stepDecLcnXferRecord*(w: var DecWork, v: CborValue, dst: pointer) =
   r.files = uint64(v.lookup("files").get.uint)
   r.`from` = v.lookup("from").get.text
   r.from_assignment = v.lookup("from_assignment").get.text
-  let f58 = v.lookup("mode").get
-  w.later(stepDecLcnXferRecordModeChoice, f58, addr r.mode)
+  let f60 = v.lookup("mode").get
+  w.later(stepDecLcnXferRecordModeChoice, f60, addr r.mode)
 
 proc toCbor*(x: LcnXferRecord): CborValue =
   runEnc(stepEncLcnXferRecord, addr x)
