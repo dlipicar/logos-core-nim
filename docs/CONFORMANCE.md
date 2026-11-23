@@ -1271,9 +1271,9 @@ and, on a miss, opens it in memory with `openLgx`: the gzip member, the USTAR en
 signature, and the selected variant's artifacts against their digests. `archive_bytes` bounds the
 archive, 1 GiB by default ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) §2).
 
-It was measured for 5-3c's plan §5 and for 5-5. 5-5-3 moves the inspection off the module thread, and
-5-5-2b replaces the in-memory reader with a streaming one and measures again at the same sizes. The
-setup:
+It was measured for 5-3c's plan §5 and for 5-5. 5-5-2b replaced the in-memory reader with a streaming
+one, and 5-5-3 moved the inspection off the module thread to a spool file; both measured again at the
+same sizes ("The streaming reader", "The worker and the spool"). The setup:
 - the archive is signed for the host, with one data artifact of pseudo-random, so incompressible,
   bytes (`tools/pmbench.nim archive`);
 - `tools/pmbench.nim inspect` reads it and times a miss, a hit and BLAKE3 alone;
@@ -1312,8 +1312,8 @@ Step 5-5-2b (DECISIONS G446, G75's sixth row, G29's note of 2026-11-22). `packag
 one pass of 1 MiB pieces. Over a file (`inspectLgx(fileSource(path), …)`) one inspection keeps the manifest
 files, the path table, a digest per selected file and the selected variant's documents (at most 64 MiB), so its
 peak does not grow with the archive. Over bytes the caller already holds the archive, and `openLgx` also keeps the
-selected artifacts' bytes. The verification cache inspects that way until 5-5-3 moves inspection to the spool.
-An installed package is inflated twice, once to judge it and once to extract it.
+selected artifacts' bytes. Since 5-5-3 the verification cache inspects over the archive's spool file ("The worker
+and the spool"). An installed package is inflated twice, once to judge it and once to extract it.
 
 - **Tested:** `test_lgx_peak` runs each inspection in a child process and reads its peak resident size. Over a
   file the peaks at 64 MiB and 256 MiB of incompressible content differ by at most 8 MiB and stay under 96 MiB.
@@ -1346,6 +1346,52 @@ An installed package is inflated twice, once to judge it and once to extract it.
   `LCN_LGX_PEAK_GIB=1` gives the same bound under orc in a debug build: 11.3 MiB for an archive of 1,057,314,997
   bytes, the largest the default compressed limit admits for its shape, and 1.82 GiB for the reader before 5-5-2b
   at 256 MiB.
+
+## The worker and the spool
+
+Step 5-5-3 (DECISIONS G446's spool half, G447). Each retrieved archive goes, 1 MiB `read_object` answer at a time,
+to the Package Manager's worker thread, which appends it to a spool file with its BLAKE3 and then judges the file
+with the streaming reader; the module thread looks the digest up and receives the judgment. So no archive is in
+memory and no inspection runs on the module thread.
+
+- **Tested:** `test_pm_driver` "the worker and the spool (G446, G447)" (at most `SpoolLag` pieces unwritten, the
+  file's modes, the share's wait, a cancel, a spool write that fails, decoding a turn at a time), with 5-3b's and
+  5-3c's suites unchanged on the worker.
+- **Measured** (`tools/pmbench.nim spool`: the fetcher's spooled mode, the jobs over a channel, the worker's appends
+  and judgment, the module thread's receipt and decoding, both sides on one thread and timed apart; CPU time, the
+  archives of "The streaming reader", three processes each, each process's peak; Mac, `-d:release`). The module
+  thread's work per piece is the fetcher's copy of the answer and the hand-over. A hit spools and hashes the archive
+  again and answers from the cache; a miss also runs the inspection pass.
+
+  | Archive | Module thread per piece (longest), in all: orc | refc | Worker, miss / hit: orc | refc | Peak, orc / refc |
+  |---|---|---|---|---|---|
+  | 1 MiB | 0.06-0.09 ms (0.18), 0.13-0.19 ms | 0.13 ms (0.30), 0.25-0.32 ms | 3.8-4.2 / 1.1-1.2 ms | 4.7-5.1 / 1.1-1.2 ms | 13.8 / 19.9 MiB |
+  | 64 MiB | 0.03 ms (0.16), 2.0-2.4 ms | 0.08 ms (0.24), 5.2 ms | 106-115 / 55-59 ms | 107-112 / 57-58 ms | 13.8 / 24.4 MiB |
+  | 1 GiB | 0.03 ms (0.20), 28-34 ms | 0.075 ms (0.24), 76-79 ms | 1.63-1.69 / 0.86-0.95 s | 1.66-1.72 / 0.88-0.93 s | 13.8 / 25.2 MiB |
+
+  Beside the earlier figures for 1 GiB: before 5-5-2b a miss held the module thread 6.03 s and peaked at 8,833 MiB
+  (5-3c-1, "The archive's inspection"); 5-5-2b's reader in memory 2.90 s and 2,056 MiB, over a file 0.79 s and
+  10.6 MiB. Now the module thread holds at most 0.2 ms at a time, and the worker's miss is the hash (about
+  0.9 s a GiB) and the inspection pass (about 0.8 s). A piece crosses as a `string`: as a `seq[byte]`, refc's
+  channel copied it one element at a time, 3.4 ms a piece on the module thread.
+- **The judgment's receipt** (`tools/pmbench.nim receive`; plan W3). A judgment crosses with its contracts encoded
+  and is decoded at most 1,024 dependency entries and contracts a turn (`DecodeTurnUnits`). The largest a 4 MiB
+  manifest allows, beside 5-3c's longest turn (under 11 ms on the Mac, "Resolver limits"):
+
+  | Judgment | orc: send / receive | orc: turns (longest), decoding in all | refc: send / receive | refc: turns (longest), decoding in all |
+  |---|---|---|---|---|
+  | 80,000 dependencies, no contracts | 0 / 0 | 79 (0.41-0.54 ms), 2.2-2.5 ms | 4.2-5.6 / 17.6-22.6 ms | 79 (8.6-10.7 ms), 17-20 ms |
+  | 1 dependency, 22,000 contracts | 0 / 0 | 22 (1.74-1.84 ms), 24-25 ms | 0.8 / 2.6-3.4 ms | 22 (8.1-8.2 ms), 44-47 ms |
+  | 20,000 dependencies, 20,000 contracts | 0 / 0 | 40 (1.78-1.99 ms), 24 ms | 1.8 / 8.5-8.9 ms | 40 (7.2-7.9 ms), 39-41 ms |
+
+  Under orc, which the packaged logosd is (DAEMON.md §1), a judgment is moved and every turn is under 2 ms. Under
+  refc the receive copies it in one step, up to about 23 ms for 80,000 entries, twice 5-3c's longest turn, and a
+  decoding turn takes up to about 11 ms. That is the refc test variant's figure; the fallback of plan W3 (pieces of
+  4,096 entries) is not built (G447).
+- **The verification cache's bound** (G447): no inspection over 256 KiB by its estimate is cached, so the cache
+  holds at most `cache_entries` × 256 KiB, 64 MiB at the default and 1 GiB at the maximum. The estimate's
+  constants were measured as the heap's growth over many copies, under orc and refc, and `test_pm_vcache` holds the
+  estimate above it for three shapes.
 
 ## Event output overflow
 

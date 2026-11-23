@@ -692,6 +692,23 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   PKG-0487, PKG-0489, PKG-0499, PKG-0500, PKG-0610 and PKG-0611 by test; PKG-0488 and PKG-0498 by inspection.
   16 units. PKG-0487 to PKG-0489 rest on the owner's Q5 (a), answered 2026-11-22. PKG 323/323.
 
+- 2026-11-23, Tier 5 step 5-5-3 (I121; G447, G446's spool half, G453's limits, G75's note, G477's key), the
+  worker and the spool:
+  - `pm/worker.nim`: one thread per instance, started at `_MODULE_init` after the store's start (moved here from
+    5-5-4) and joined at `_MODULE_destroy`; answers reach the module thread through the kit's `post`.
+  - `pm/jobs.nim`: the jobs and answers, checked free of references at compile time; a judgment crosses with its
+    contracts encoded and is decoded a turn at a time (1,024 entries and contracts). Two departures from the plan,
+    the encoded judgment (D1) and no failure event (D2), accepted by planning with Fable's conditions.
+  - `pm/spool.nim`: `<state_dir>/install/spool/`, each archive appended 1 MiB at a time with its BLAKE3, 0600 and
+    exclusive, judged and deleted; the inspections' share of 4 × `archive_bytes`; a write that fails makes the
+    archive unavailable.
+  - The verification cache keeps no inspection over 256 KiB by the walk's estimate; `lcn.pm_limits` gains
+    `operation_entries` and `operation_deadline_ms`; the LGX limits scale with `archive_bytes` (the owner's Q3 (d)).
+  - Suite "the worker and the spool" in `test_pm_driver`, cases in `test_pm_input` and `test_pm_vcache`;
+    `tools/pmbench.nim spool` and `receive`; CONFORMANCE "The worker and the spool"; DEPLOYMENT §12's budget.
+
+  Claimed: PKG-0011, PKG-0012, PKG-0192 and PKG-0271. 4 units. PKG 327/327.
+
 ## Tiers at f4f83471 (the original plan)
 
 | Tier | Area | Verdict |

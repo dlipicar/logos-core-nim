@@ -46,6 +46,12 @@ default = "deferred:tier-5"
 "§17" = "deferred:tier-5"
 
 [units]
+# §1: no installation script runs (PKG-0011) and the selected material is under the Package Manager's
+# control before any use (PKG-0012): claimed by step 5-5-3, the worker and the spool (DECISIONS G446, G447;
+# tests/test_pm_driver.nim): an archive's bytes reach only a 0600 spool file of the instance's root, read
+# by the reader alone, and the selected files only the record directory (5-5-2, PKG-0219, PKG-0499).
+"PKG-0011" = "claimed"
+"PKG-0012" = "claimed"
 # Stay deferred past the re-pin to 6cac8335; work item 5-5 owns them (spec/repin-pending.toml [deferred]).
 # §15's durable commit and the restart after a crash (PKG-0610, PKG-0611) are claimed by step 5-5-2, the
 # store (DECISIONS G445; tests/test_pm_store.nim); the signer replacement's operation (PKG-0608, PKG-0609)
@@ -173,9 +179,9 @@ default = "deferred:tier-5"
 "PKG-0470" = "deferred:tier-5"
 # §7.1: installation and extraction; Runtime and Module Loader execution. The destination checked inside
 # the root (PKG-0204) and the selected artifacts extracted before any use (PKG-0219) are claimed through
-# "§7.1" by step 5-5-2 (DECISIONS G446; tests/test_pm_store.nim); nothing executed from an archive
-# (PKG-0192) is 5-5-3's, with the spool.
-"PKG-0192" = "deferred:tier-5"
+# "§7.1" by step 5-5-2 (DECISIONS G446; tests/test_pm_store.nim); nothing built or executed from an
+# archive (PKG-0192) is claimed by step 5-5-3, with the spool (G447; tests/test_pm_driver.nim).
+"PKG-0192" = "claimed"
 # PKG-0220 (only a verified private copy is mapped) is the realizer's staging,
 # tested with C-08 (I88): claimed with §7.1.
 # §7.1: shared installation state and the deployment profile's documentation. Step 5-5-2 claims through
@@ -184,8 +190,10 @@ default = "deferred:tier-5"
 # item). All three rest on the owner's Q5 (a), answered 2026-11-22 (DECISIONS G444). The
 # platform profile (PKG-0493) is 5-5-4's.
 "PKG-0493" = "deferred:tier-5"
-# §8: materialization through a source profile.
-"PKG-0271" = "deferred:tier-5"
+# §8: materialization through a source profile. Claimed by step 5-5-3: a spool file that cannot be
+# written makes the archive unavailable, and its operation `package-unavailable` (G446; tests/test_pm_driver.nim).
+# An extraction write that fails is the store's `sfWrite` (5-5-2), answered by 5-5-4's operations.
+"PKG-0271" = "claimed"
 # §8: a missing artifact of the realized output is the Nix realization profile's (work
 # item 5-10). A resolved location outside the variant directory is checked when an
 # extracted path is installed (PM l.933, l.1503), so work item 5-5 owns PKG-0274 and

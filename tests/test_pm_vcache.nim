@@ -354,15 +354,13 @@ suite "verification cache: the byte bound (G447)":
         var d: Blake3Digest
         for k in 0 ..< 4:
           d[k] = byte((i shr (8 * k)) and 0xff)
-        discard c.admit(
-          d,
-          Opened(
-            inspection: shaped(0, 0, 0, i + 1),
-            profile: signingProfile(),
-            kid: bytesOf("org"),
-            variant: "linux-x86_64",
-          ),
+        let o = Opened(
+          inspection: shaped(0, 0, 0, i + 1),
+          profile: signingProfile(),
+          kid: bytesOf("org"),
+          variant: "linux-x86_64",
         )
+        discard c.admit(d, o, o.inspection.estimatedBytes)
       GC_fullCollect()
       let each = (getOccupiedMem() - before) div 4096
       let estimate = shaped(0, 0, 0, 4096).estimatedBytes

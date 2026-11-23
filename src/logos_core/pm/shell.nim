@@ -14,9 +14,14 @@
 ##   (G400) is read and decoded as `lcn.pm_input` (G399). An instance without a
 ##   state directory, without the file, or with a refused input fails its
 ##   initialization, and the failure names what is missing or the field. The
-##   kept catalog (`catalog.kept`, G401) is loaded and the engine made. Nothing
-##   waits on a route, so the instance is Runtime-ready at once; the engine
-##   starts in the module thread's next turn, after `_MODULE_init` returned.
+##   kept catalog (`catalog.kept`, G401) is loaded and the engine made. The
+##   installation root is opened (`store.openStore`, G444, G445; POSIX): its
+##   lock taken, its index read, and what a crash left deleted, the spool
+##   included. Then the worker thread starts (`worker.nim`, G447) with the
+##   spool directory `install/spool/` (0700). A root that cannot be opened, or
+##   a worker that cannot start, fails the initialization. Nothing waits on a
+##   route, so the instance is Runtime-ready at once; the engine starts in the
+##   module thread's next turn, after `_MODULE_init` returned.
 ## - **Routes** (G402): `establish_route` to `lcn.storage_fetch` with the
 ##   provider record of the binding's instance (looked up with `list_modules`
 ##   before each establishment), the engine's fresh key, and access to
@@ -46,11 +51,14 @@
 ##   line (`logtext.oneLine`), on stderr unless the module gives its own sink.
 ##   The engine's lines hold names, codes, digests and counts, never a
 ##   payload.
+## - **The worker's jobs** (`cmWork`, G447) are queued for its thread; its
+##   answers come back through the kit's `post` and are queued as events.
 ## - **`closeShell`** (`_MODULE_destroy`): the engine stops (no command
 ##   follows, G437), timers are cancelled, outstanding calls are cancelled and
 ##   awaited (bounded), the route set is closed, and a root operation still
-##   running is answered `package-unavailable`. Only `catalog.kept` was ever
-##   written.
+##   running is answered `package-unavailable`. Then the worker is stopped and
+##   joined, which deletes its spool files, and the installation root is
+##   released. Only `catalog.kept` and spool files were ever written.
 
 {.push raises: [], gcsafe.}
 
@@ -65,7 +73,14 @@ import
 import ../durable
 import ../runtime/protinput
 import ../package/[errors, resolver]
-import ./engine
+import ./[engine, worker]
+
+when defined(posix):
+  import ./store
+else:
+  const
+    InstallDir = "install"
+    SpoolDir = "spool"
 
 export engine
 
@@ -106,6 +121,9 @@ type
     replies: Table[uint64, Future[Result[Resolution, PackageError]].Raising([])]
     nextRequest: uint64
     closed: bool
+    worker: Worker ## [G447]
+    when defined(posix):
+      store: InstalledStore ## [G444] held from `_init` to `_destroy`
 
   LinkStatus* = object
     binding*: BindingStatus
@@ -493,6 +511,14 @@ proc exec(s: Shell, c: var Command) =
     let t = Turn(shell: s, operation: c.operation)
     GC_ref(t)
     callSoon(continueSoon, cast[pointer](t))
+  of cmWork:
+    s.worker.submit(move c.job)
+
+proc onWorkerResult(
+    owner: pointer, r: sink WorkerResult
+) {.nimcall, gcsafe, raises: [].} =
+  ## [G447] The worker's answer, on the module thread: an event like any other.
+  cast[Shell](owner).post(worked(r))
 
 # Start -----------------------------------------------------------------------------------
 
@@ -537,12 +563,40 @@ proc openShell*(
     refuse(moduleError("lcn.pm_input is refused: " & error))
   let kept = readBounded(dir / KeptName, input.limits.catalogBytes + KeptOverheadBytes).valueOr:
     refuse(moduleError("the kept catalog could not be read: " & error))
+  # [G444, G445] The installation root: its lock, its index, and the start's cleanup,
+  # the spool's included, before the worker writes there (G447).
+  when defined(posix):
+    var store = openStore(dir).valueOr:
+      refuse(moduleError("the installation root could not be opened: " & error.detail))
+    for note in store.notes:
+      log("package-manager: " & oneLine(note))
+  let spoolDir = dir / InstallDir / SpoolDir
+  ensurePrivateDir(spoolDir).isOkOr:
+    when defined(posix):
+      store.close()
+    refuse(moduleError("the spool directory could not be made: " & error))
   let routeSet = newRouteSet(init.services).valueOr:
+    when defined(posix):
+      store.close()
     refuse(error)
   var (e, notes) = initEngine(
     input, kept, freshKey, platform, pathRules = pathRules, turnWork = turnWork
   )
   let s = Shell(engine: move e, routeSet: routeSet, stateDir: dir, log: log)
+  when defined(posix):
+    s.store = move store
+  let started = startWorker(
+    init.services.poster,
+    cast[pointer](s),
+    onWorkerResult,
+    s.engine.workerConfig(spoolDir),
+  )
+  if started.isErr:
+    discard s.routeSet.close()
+    when defined(posix):
+      s.store.close()
+    refuse(moduleError(started.error))
+  s.worker = started.get
   s.run(move notes)
   GC_ref(s)
   callSoon(startSoon, cast[pointer](s))
@@ -642,5 +696,10 @@ proc closeShell*(s: Shell): Future[void] {.async: (raises: []).} =
   s.routeSet = nil
   s.links.clear()
   s.retired.setLen(0)
+  # [G447] The worker after the engine: no job follows; it deletes its spool files.
+  await stopWorker(s.worker)
+  s.worker = nil
+  when defined(posix):
+    s.store.close()
 
 {.pop.}

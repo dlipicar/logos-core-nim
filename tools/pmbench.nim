@@ -22,6 +22,19 @@
 ## answer) and BLAKE3 alone. Writing the file first keeps the archive's construction out of the
 ## inspecting process's peak memory.
 ##
+## `spool <file> <dir>` (5-5-3, G447) measures the same archive's inspection as the Package Manager
+## now runs it: the module thread hands each 1 MiB `read_object` answer to the worker (the fetcher's
+## spooled mode, a job, a channel), the worker appends it to a spool file in `<dir>` with its digest,
+## then judges the file (`vcache.judge` over `fileSource`), and the module thread receives the
+## encoded judgment and decodes it `DecodeTurnUnits` at a time before the cache admits it. Both
+## sides run on one thread here, each timed apart: the module thread's longest hold and total, and
+## the worker's total; then a hit, which spools and digests again and answers from the cache.
+##
+## `receive <dependencies> <contracts>` (5-5-3, G447; plan §4.4's W3) times one judgment's hand-over:
+## an eligible inspection with that many dependency entries, the contracts (commitments) all listed by
+## the first, sent on a channel as the worker sends it and received as the module thread does, then
+## decoded a budget at a time. It prints the send, the receive, the turns and the longest.
+##
 ## Through the driver (5-3c-2, G455) the run is resumed turn by turn: a step ends at each inspection
 ## and at each spent turn, so the longest step is the longest hold on the module thread. `--budget
 ## <work>` sets the work of one turn (`ResolverTurnWork` by default; 0: no turns), and the steps line
@@ -36,10 +49,12 @@
 ##   pmbench lift 255 4
 ##   pmbench --sync oracle dense 1024
 ##   pmbench archive 64 /tmp/a64.lgx && pmbench inspect /tmp/a64.lgx
+##   pmbench spool /tmp/a64.lgx /tmp/spool
+##   pmbench receive 80000 0 && pmbench receive 1 22000
 
 import std/[monotimes, os, strutils, times]
-import ../src/logos_core/pm/vcache
-import ../tests/support/[oracle_resolver, pmfixture, pmshapes]
+import ../src/logos_core/pm/[engine, vcache]
+import ../tests/support/[lgxbuild, oracle_resolver, pmfixture, pmshapes]
 
 proc sync(which: string, s: Shape, limits: ResolverLimits) =
   ## One synchronous resolution by the resolver (`new`) or the oracle.
@@ -162,13 +177,201 @@ proc inspectFile(path: string) =
     let d = blake3(data.toOpenArrayByte(0, data.high))
   doAssert d.len > 0
 
+type Clock = object
+  cpu: float
+  longest: float
+  count: int
+
+template timedOn(c: var Clock, body: untyped) =
+  let cpu0 = cpuTime()
+  body
+  let spent = cpuTime() - cpu0
+  c.cpu += spent
+  c.longest = max(c.longest, spent)
+  inc c.count
+
+func ms(seconds: float): string =
+  formatFloat(seconds * 1000.0, ffDecimal, 3)
+
+proc spoolOnce(
+    path, dir: string,
+    trustBytes: seq[byte],
+    trust: TrustInput,
+    c: var VerificationCache,
+    label: string,
+) =
+  ## [G447] One retrieval of the archive at `path` as 5-5-3 runs it.
+  var file: File
+  doAssert open(file, path)
+  let size = getFileSize(file)
+  var jobsCh: Channel[WorkerJob]
+  var resultsCh: Channel[WorkerResult]
+  jobsCh.open()
+  resultsCh.open()
+  var worker: WorkerState
+  discard worker.runJob(
+    WorkerJob(
+      kind: wjStart,
+      config:
+        workerConfig(dir, trustBytes, hostPlatform(), DefaultLgxLimits, hostPathRules()),
+    ),
+    nil,
+  )
+  var module, piece, decode, work: Clock
+  var f = initRetrieval(bytesOf("bench"), int64(size), 1000, spooled = true)
+  discard f.start()
+  var step = f.onAnswer(sized(uint64(size)))
+  var buffer = newSeq[byte](ReadStep)
+  var first = true
+  while step.kind == skCall:
+    let n = file.readBytes(buffer, 0, int(step.call.length))
+    doAssert n == int(step.call.length)
+    let answer = dataOf(buffer.toOpenArray(0, n - 1))
+    piece.timedOn:
+      step = f.onAnswer(answer)
+      var job = WorkerJob(kind: wjAppend, file: 1, chunk: f.takeChunk())
+      if first:
+        job.first = true
+        job.name = spoolName(1, 1)
+        first = false
+      jobsCh.send(move job)
+    work.timedOn:
+      let j = jobsCh.recv()
+      let r = worker.runJob(j, nil).get
+      doAssert r.failure.len == 0, r.failure
+  file.close()
+  doAssert step.kind == skDone
+  var digest: WorkerResult
+  work.timedOn:
+    digest = worker.runJob(WorkerJob(kind: wjFinish, file: 1), nil).get
+  doAssert digest.failure.len == 0 and digest.size == size
+  var x: Inspection
+  var found = false
+  module.timedOn:
+    let hit = c.lookup(digest.digest, trust)
+    if hit.isSome:
+      x = hit.get
+      found = true
+  if not found:
+    var opened: WorkerResult
+    work.timedOn:
+      opened = worker.runJob(WorkerJob(kind: wjOpen, file: 1), nil).get
+      resultsCh.send(opened)
+    var d: Decoding
+    var estimate: int
+    module.timedOn:
+      var got = resultsCh.recv()
+      estimate = got.opened.estimatedBytes
+      d = initDecoding(move got.opened)
+    var turns = 0
+    while true:
+      var budget = DecodeTurnUnits
+      var done = false
+      decode.timedOn:
+        done = d.decodeSome(budget)
+      inc turns
+      if done:
+        break
+    module.timedOn:
+      x = c.admit(digest.digest, d.take(), estimate)
+    echo "  ", label, " decode turns=", turns, " longest_ms=", ms(decode.longest)
+  work.timedOn:
+    discard worker.runJob(WorkerJob(kind: wjDrop, file: 1), nil)
+  worker.close()
+  jobsCh.close()
+  resultsCh.close()
+  echo "  ",
+    label,
+    " kind=",
+    x.kind,
+    (if x.kind == ikIneligible: " error=" & $x.error else: ""),
+    " pieces=",
+    piece.count,
+    " module: piece_mean_ms=",
+    ms(piece.cpu / float(max(piece.count, 1))),
+    " piece_longest_ms=",
+    ms(piece.longest),
+    " longest_ms=",
+    ms(max(piece.longest, max(module.longest, decode.longest))),
+    " total_ms=",
+    ms(piece.cpu + module.cpu + decode.cpu),
+    " worker: total_ms=",
+    ms(work.cpu)
+
+proc spoolFile(path, dir: string) =
+  ## [G447] A miss, then a hit, of the archive at `path` through the worker's jobs.
+  let (_, pub) = testKey(7)
+  let trust = trustInputOf([("bench", pub, @["logos.bench"])])
+  let trustBytes = trustOf([anchorOf("bench", ["logos.bench"], pub)]).trustBytes
+  createDir(dir)
+  var c = initVerificationCache(4)
+  echo "spool ", path, " bytes=", getFileSize(path)
+  spoolOnce(path, dir, trustBytes, trust, c, "miss")
+  spoolOnce(path, dir, trustBytes, trust, c, "hit")
+  echo "  opened=", c.counters.opened, " hits=", c.counters.hits
+
+proc receive(deps, contracts: int) =
+  ## [G447; W3] One judgment's hand-over and its decoding.
+  var w = WireOpened(kind: ikEligible)
+  w.identity = PackageIdentity(package: "logos.bench", version: "1.0.0")
+  for i in 0 ..< deps:
+    w.dependencies.add(
+      WireDependency(package: "dependency-" & $i, kind: rkCompatible, version: "1.0.0")
+    )
+  var root = newSeq[byte](32)
+  for i in 0 ..< contracts:
+    for k in 0 ..< 4:
+      root[k] = byte((i shr (8 * k)) and 0xff)
+    w.dependencies[0].contracts.add(textOf(encodeCbor(commitmentValue(root))))
+  var ch: Channel[WorkerResult]
+  ch.open()
+  var send, recv, decode: Clock
+  send.timedOn:
+    ch.send(WorkerResult(kind: wrOpened, file: 1, opened: move w))
+  var r: WorkerResult
+  recv.timedOn:
+    r = ch.recv()
+  var d: Decoding
+  recv.timedOn:
+    d = initDecoding(move r.opened)
+  while true:
+    var budget = DecodeTurnUnits
+    var done = false
+    decode.timedOn:
+      done = d.decodeSome(budget)
+    if done:
+      break
+  let o = d.take()
+  doAssert o.inspection.dependencies.len == deps
+  ch.close()
+  echo "receive dependencies=",
+    deps,
+    " contracts=",
+    contracts,
+    " send_ms=",
+    ms(send.cpu),
+    " receive_ms=",
+    ms(recv.cpu),
+    " turns=",
+    decode.count,
+    " longest_turn_ms=",
+    ms(decode.longest),
+    " decode_ms=",
+    ms(decode.cpu)
+
 proc main() =
   var args = commandLineParams()
+  if args.len == 3 and args[0] == "receive":
+    receive(parseInt(args[1]), parseInt(args[2]))
+    return
   if args.len == 3 and args[0] == "archive":
     archive(parseInt(args[1]), args[2])
     return
   if args.len == 2 and args[0] == "inspect":
     inspectFile(args[1])
+    return
+  if args.len == 3 and args[0] == "spool":
+    spoolFile(args[1], args[2])
     return
   var which = ""
   var budget = ResolverTurnWork
@@ -186,7 +389,7 @@ proc main() =
   if args.len < 2:
     quit(
       "usage: pmbench [--budget <work>] [--sync new|oracle|input] <wide|dense|chain|hub|layered|lift> <size> [k | v | L] [names depth candidates attempts]\n" &
-        "       pmbench archive <MiB> <file> | pmbench inspect <file>",
+        "       pmbench archive <MiB> <file> | pmbench inspect <file> | pmbench spool <file> <dir>",
       2,
     )
   let shapeName = args[0]

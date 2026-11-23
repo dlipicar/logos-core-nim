@@ -49,6 +49,25 @@
 ## arrives for an operation that is gone is ignored (Fable F3). What a finished
 ## or cancelled operation's run holds is freed a turn at a time, by continues
 ## of their own (`ReleaseOperation`), never at once.
+##
+## **The worker** (5-5-3; G446, G447): an archive is never held in memory. Its
+## retrieval hands each `read_object` answer to the worker (`cmWork`), which
+## appends it to the archive's spool file; at most `SpoolLag` pieces are
+## unwritten, then the next read waits for the worker. Once `stat_object`
+## gives the size, the retrieval takes that much of the inspections' share of
+## the spool (`SpoolShareArchives` × `archive_bytes`), waiting first in, first
+## out while it would pass it; the first always fits. With every byte written
+## the worker gives the digest: a cache hit answers at once, a miss has the
+## worker judge the file (`vcache.judge`). Either way the spool file is then
+## deleted and its share released. The judgment crosses encoded (`jobs.nim`)
+## and is decoded `DecodeTurnUnits` at a time, a turn each, by continues of
+## their own (`DecodeOperation`); a small one at once. Nothing sees a judgment
+## before it is whole, and one whose operation went is not finished but freed
+## by the same turns. A spool file that cannot
+## be written ends the retrieval: the archive is unavailable and the log names
+## the cause (PM l.1094). An archive whose operation is gone (cancelled,
+## answered) is dropped at its next step. The catalog's retrieval is kept in
+## memory, bounded by `catalog_bytes`.
 
 {.push raises: [], gcsafe.}
 
@@ -56,14 +75,20 @@ import std/[algorithm, sets, strutils, tables]
 import results
 import logos_sdk/base/hex
 import ../package/[errors, records, resolver]
-import ./[input, catalog, fetcher, vcache, driver]
+import ./[input, catalog, fetcher, vcache, driver, jobs]
 
-export results, input, catalog, fetcher, vcache, driver
+export results, input, catalog, fetcher, vcache, driver, jobs
 
 const
   ReleaseOperation* = 0'u64
     ## [IMPL; G455] the operation id of the continues that free finished and
     ## cancelled runs; no request has it
+  DecodeOperation* = high(uint64)
+    ## [IMPL; G447] the operation id of the continues that decode the worker's
+    ## judgments; no request has it
+  SpoolLag* = 4
+    ## [IMPL; G447] the pieces of one retrieval handed to the worker and not yet
+    ## written; the next `read_object` waits while this many are
   RouteBackoffMs* = [1_000'u32, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000]
     ## [IMPL; G402] the waits before establishing again after a refusal; the
     ## last repeats
@@ -109,6 +134,9 @@ type
     cmContinue
       ## [G455] report `evContinue` for `operation` in a later turn of the
       ## event loop, never in the drain that issued it (Fable F2)
+    cmWork
+      ## [G447] hand `job` to the worker; its answer, if it has one, is an
+      ## `evWorked`
 
   Command* = object
     case kind*: CommandKind
@@ -136,6 +164,8 @@ type
       text*: string
     of cmContinue:
       operation*: uint64
+    of cmWork:
+      job*: WorkerJob
 
   RouteAnswer* = enum
     raReady
@@ -150,6 +180,7 @@ type
     evAnswer ## the answer to `cmStat` or `cmRead`
     evTimer
     evContinue ## [G455] the next turn of `cmContinue`'s operation
+    evWorked ## [G447] the worker's answer to a `cmWork`
 
   Event* = object
     case kind*: EventKind
@@ -172,6 +203,8 @@ type
       timer*: uint64
     of evContinue:
       continued*: uint64
+    of evWorked:
+      worked*: WorkerResult
 
   JobWait = enum
     jwNone
@@ -179,6 +212,8 @@ type
     jwRoute ## waiting for the route; the timer bounds the wait
     jwReady ## waiting for `ready`; the timer bounds the wait
     jwBackoff ## the timer ends the back-off
+    jwSpool ## [G447] `SpoolLag` pieces are not yet written
+    jwShare ## [G446] the archive waits for its part of the inspections' share
 
   Job = object
     id: uint64
@@ -204,6 +239,31 @@ type
     readiness: Opt[Readiness]
     jobs: seq[Job] ## the head runs
     active: bool ## the head has started
+
+  SpoolPhase = enum
+    spWriting ## the retrieval runs
+    spFinishing ## every piece is handed on; the digest is asked for
+    spOpening ## the worker judges the file
+
+  Spool = object
+    ## [G446, G447] An archive's spool file, from the share's grant to its deletion. Its
+    ## id is the retrieval job's.
+    request: uint64
+    source: PackageSource
+    binding: int
+    reserved: int64 ## its part of the inspections' share
+    created: bool ## the first piece, which creates the file, is handed on
+    unacked: int ## pieces handed to the worker and not yet written
+    phase: SpoolPhase
+    digest: Blake3Digest
+
+  Decode = object ## [G447] A judgment being decoded on this thread, a turn at a time.
+    request: uint64
+    source: PackageSource
+    digest: Blake3Digest
+    estimate: int
+      ## the cache's estimate, from the encoded lengths (`jobs.estimatedBytes`)
+    decoding: Decoding
 
   TimerKind = enum
     tkRoute ## a binding's establishment back-off
@@ -240,6 +300,13 @@ type
     calls: Table[uint64, (int, uint64, int)] ## call id -> (binding, job, generation)
     timers: Table[uint64, TimerTarget]
     unknownLogged: HashSet[string]
+    spools: Table[uint64, Spool] ## [G447] by the retrieval job's id
+    shareUsed: int64 ## [G446] the spool's bytes the archives hold
+    shareWaiters: seq[(int, uint64)] ## [G446] (binding, job), first in, first out
+    decodes: seq[Decode] ## [G447] first in, first out
+    dropping: seq[Decoding]
+      ## [G447] judgments whose operation went while they were decoded, freed a turn at a time
+    decodeQueued: bool ## a `DecodeOperation` continue is issued
     next: uint64
     started: bool
     stopped*: bool
@@ -338,6 +405,33 @@ func pendingRequests*(e: Engine): int =
 func releasingRuns*(e: Engine): int =
   ## [G455] The finished or cancelled operations' runs still being freed.
   e.releasing.len
+
+func spooled*(e: Engine): int =
+  ## [G447] The spool files the engine holds: retrieved, being written, or judged.
+  e.spools.len
+
+func shareUsed*(e: Engine): int64 =
+  ## [G446] The bytes of the inspections' share the spool files hold.
+  e.shareUsed
+
+func shareWaiting*(e: Engine): int =
+  ## [G446] The retrievals waiting for their part of the share (stale entries included
+  ## until reached).
+  e.shareWaiters.len
+
+func decoding*(e: Engine): int =
+  ## [G447] The judgments being decoded a turn at a time.
+  e.decodes.len
+
+func droppingDecodes*(e: Engine): int =
+  ## [G447] The dropped judgments still being freed a turn at a time.
+  e.dropping.len
+
+proc workerConfig*(e: Engine, spoolDir: string): WorkerConfig =
+  ## [G447] What the shell starts the worker with: the inputs the cache judges by.
+  workerConfig(
+    spoolDir, e.input.trustBytes, e.cache.platform, e.cache.lgxLimits, e.cache.pathRules
+  )
 
 func queued*(e: Engine, binding: string): int =
   let i = e.index(binding)
@@ -513,6 +607,9 @@ proc apply(
         jwNone,
         cmds,
       )
+      return
+    if j.fetch.spooled and e.spools.getOrDefault(j.id).unacked >= SpoolLag:
+      j.wait = jwSpool # [G447] an acknowledgement resumes it
       return
     if not b.usable:
       j.wait = jwRoute
@@ -740,18 +837,258 @@ proc advanceRequest(e: var Engine, request: uint64, cmds: var seq[Command]) =
         request: request,
         source: source,
         fetch: initRetrieval(
-          source.objectLocator, e.input.limits.archiveBytes,
+          source.objectLocator,
+          e.input.limits.archiveBytes,
           e.input.limits.readDeadlineMs,
+          spooled = true,
         ),
       )
       e.enqueue(bi, job, cmds)
       return
+
+# Spool files and the worker (G446, G447) ----------------------------------------------
+
+proc work(cmds: var seq[Command], job: sink WorkerJob) =
+  cmds.add(Command(kind: cmWork, job: job))
+
+func shareCap(e: Engine): int64 =
+  ## [IMPL; G446] The inspections' share of the spool.
+  int64(SpoolShareArchives) * e.input.limits.archiveBytes
+
+proc supplyTo(
+    e: var Engine,
+    request: uint64,
+    source: PackageSource,
+    x: sink Inspection,
+    cmds: var seq[Command],
+) =
+  ## The archive's inspection, to its operation if that is still running.
+  let d = e.requests.getOrDefault(request)
+  if d.isNil:
+    return
+  d.supply(source, x)
+  e.advanceRequest(request, cmds)
+
+proc reserve(e: var Engine, bi: int, size: int64) =
+  ## [G446] The head job's archive takes `size` bytes of the share; its first piece
+  ## creates its spool file.
+  template j(): untyped =
+    e.bindings[bi].jobs[0]
+
+  e.shareUsed += size
+  e.spools[j.id] =
+    Spool(request: j.request, source: j.source, binding: bi, reserved: size)
+
+proc append(e: var Engine, file: uint64, chunk: sink string, cmds: var seq[Command]) =
+  ## [G447] A piece for the worker, the first creating the spool file.
+  var sp = addr e.spools.mgetOrPut(file, Spool())
+  var job = WorkerJob(kind: wjAppend, file: file, chunk: chunk)
+  if not sp.created:
+    sp.created = true
+    job.first = true
+    job.name = spoolName(sp.request, file)
+  inc sp.unacked
+  cmds.work(job)
+
+proc fits(e: Engine, size: int64): bool =
+  e.shareUsed == 0 or e.shareUsed + size <= e.shareCap
+
+proc grantShare(e: var Engine, cmds: var seq[Command]) =
+  ## [G446] The waiting retrievals that now fit, first in, first out.
+  while e.shareWaiters.len > 0 and not e.stopped:
+    let (bi, id) = e.shareWaiters[0]
+    template j(): untyped =
+      e.bindings[bi].jobs[0]
+
+    if e.bindings[bi].jobs.len == 0 or j.id != id or j.wait != jwShare:
+      e.shareWaiters.delete(0) # it ended meanwhile
+      continue
+    let size = int64(j.fetch.size.get(0))
+    if not e.fits(size):
+      return
+    e.shareWaiters.delete(0)
+    j.wait = jwNone
+    e.reserve(bi, size)
+    let step =
+      if j.fetch.finished:
+        FetchStep(kind: skDone)
+      else:
+        j.fetch.resume()
+    e.apply(bi, step, jwNone, cmds)
+
+proc unspool(e: var Engine, file: uint64, cmds: var seq[Command]) =
+  ## [G446] The archive's spool file is deleted and its share released.
+  var sp: Spool
+  if not e.spools.pop(file, sp):
+    return
+  cmds.work(WorkerJob(kind: wjDrop, file: file))
+  e.shareUsed -= sp.reserved
+  e.grantShare(cmds)
+
+proc spoolFailed(failure: string): string =
+  "the archive could not be written to the spool on the state directory's file system: " &
+    failure
+
+proc finishDecode(e: var Engine, dc: sink Decode, cmds: var seq[Command]) =
+  ## [G447] A decoded judgment: admitted to the cache and supplied.
+  var o = dc.decoding.take()
+  let x = e.cache.admit(dc.digest, o, dc.estimate)
+  e.supplyTo(dc.request, dc.source, x, cmds)
+
+proc queueDecodeTurn(e: var Engine, cmds: var seq[Command]) =
+  if (e.decodes.len > 0 or e.dropping.len > 0) and not e.decodeQueued:
+    e.decodeQueued = true
+    cmds.add(Command(kind: cmContinue, operation: DecodeOperation))
+
+proc decodeTurn(e: var Engine, cmds: var seq[Command]) =
+  ## [G447] One turn of decoding: at most `DecodeTurnUnits` entries and contracts, decoded
+  ## or freed. A judgment whose operation went is not finished: what it holds is freed in
+  ## turns (Fable's D1 condition 5; its archive is no other operation's, which retrieves
+  ## and judges its own). Nothing sees a judgment before it is whole.
+  e.decodeQueued = false
+  var budget = DecodeTurnUnits
+  while budget > 0:
+    if e.dropping.len > 0:
+      if e.dropping[0].releaseSome(budget):
+        e.dropping.delete(0)
+      continue
+    if e.decodes.len == 0:
+      break
+    if e.decodes[0].request notin e.requests:
+      var dc = move e.decodes[0] # its operation is gone
+      e.decodes.delete(0)
+      e.dropping.add(move dc.decoding)
+      continue
+    if not e.decodes[0].decoding.decodeSome(budget):
+      break
+    var dc = move e.decodes[0]
+    e.decodes.delete(0)
+    e.finishDecode(dc, cmds)
+  e.queueDecodeTurn(cmds)
+
+proc spoolEnds(e: var Engine, file: uint64, reason: string, cmds: var seq[Command]) =
+  ## [G446] A spool file failed while its retrieval runs: the retrieval ends now.
+  let bi = e.spools.getOrDefault(file).binding
+  if e.bindings[bi].jobs.len == 0 or e.bindings[bi].jobs[0].id != file or
+      not e.bindings[bi].active:
+    return
+  template j(): untyped =
+    e.bindings[bi].jobs[0]
+
+  if j.call != 0:
+    e.calls.del(j.call) # its answer is ignored
+    j.call = 0
+  j.timer = 0
+  j.wait = jwNone
+  let step = j.fetch.abandon(reason)
+  e.apply(bi, step, jwNone, cmds)
+
+proc onWorked(e: var Engine, r: sink WorkerResult, cmds: var seq[Command]) =
+  ## [G447] The worker's answer about spool file `r.file`; one the engine dropped is
+  ## ignored.
+  if r.file notin e.spools:
+    return
+  template sp(): untyped =
+    e.spools.mgetOrPut(r.file, Spool())
+      # present: checked above, and read before `unspool`
+
+  case r.kind
+  of wrAppended:
+    dec sp.unacked
+    if sp.phase != spWriting:
+      return
+    let bi = sp.binding
+    if r.failure.len > 0:
+      cmds.log(spoolFailed(r.failure))
+      e.spoolEnds(r.file, "the archive could not be spooled", cmds)
+      return
+    if e.bindings[bi].jobs.len > 0 and e.bindings[bi].jobs[0].id == r.file and
+        e.bindings[bi].jobs[0].wait == jwSpool and sp.unacked < SpoolLag:
+      e.bindings[bi].jobs[0].wait = jwNone
+      let step = e.bindings[bi].jobs[0].fetch.resume()
+      e.apply(bi, step, jwNone, cmds)
+  of wrDigest:
+    let (request, source) = (sp.request, sp.source)
+    if request notin e.requests:
+      e.unspool(r.file, cmds)
+      return
+    if r.failure.len > 0:
+      cmds.log(spoolFailed(r.failure))
+      e.unspool(r.file, cmds)
+      e.supplyTo(
+        request,
+        source,
+        Inspection(kind: ikUnavailable, reason: "the archive could not be spooled"),
+        cmds,
+      )
+      return
+    let hit = e.cache.lookup(r.digest, e.input.trust)
+    if hit.isSome:
+      e.unspool(r.file, cmds)
+      e.supplyTo(request, source, hit.get, cmds)
+      return
+    sp.digest = r.digest
+    sp.phase = spOpening
+    cmds.work(WorkerJob(kind: wjOpen, file: r.file))
+  of wrOpened:
+    let (request, source, digest) = (sp.request, sp.source, sp.digest)
+    e.unspool(r.file, cmds)
+    let units = r.opened.units
+    if request notin e.requests:
+      if units > DecodeTurnUnits:
+        e.dropping.add(initDecoding(move r.opened)) # freed in turns, as a dropped decode
+        e.queueDecodeTurn(cmds)
+      return
+    let estimate = r.opened.estimatedBytes
+    var dc = Decode(
+      request: request,
+      source: source,
+      digest: digest,
+      estimate: estimate,
+      decoding: initDecoding(move r.opened),
+    )
+    if e.decodes.len == 0 and units <= DecodeTurnUnits:
+      var budget = DecodeTurnUnits
+      doAssert dc.decoding.decodeSome(budget)
+      e.finishDecode(dc, cmds)
+      return
+    e.decodes.add(move dc)
+    e.queueDecodeTurn(cmds)
 
 proc deliver(
     e: var Engine, bi: int, job: Job, step: FetchStep, cmds: var seq[Command]
 ) =
   if job.catalog:
     e.catalogDone(step, cmds)
+    return
+  if job.fetch.spooled:
+    case step.kind
+    of skDone:
+      # [G447] Every piece is handed on: the worker gives the digest once they are
+      # written.
+      if job.request notin e.requests or job.id notin e.spools:
+        e.unspool(job.id, cmds)
+        e.supplyTo(
+          job.request,
+          job.source,
+          Inspection(kind: ikUnavailable, reason: "the archive was not spooled"),
+          cmds,
+        )
+        return
+      if not e.spools.getOrDefault(job.id).created:
+        e.append(job.id, "", cmds) # an empty archive: its file still exists
+      e.spools.mgetOrPut(job.id, Spool()).phase = spFinishing
+      cmds.work(WorkerJob(kind: wjFinish, file: job.id))
+    of skUnavailable:
+      e.unspool(job.id, cmds)
+      e.supplyTo(
+        job.request,
+        job.source,
+        Inspection(kind: ikUnavailable, reason: step.reason),
+        cmds,
+      )
+    else:
+      discard
     return
   let d = e.requests.getOrDefault(job.request)
   if d.isNil:
@@ -777,10 +1114,12 @@ proc start*(e: var Engine): seq[Command] =
 
 proc resolve*(e: var Engine, request: uint64, root: RootReference): seq[Command] =
   ## [G405] One root operation; its outcome is a later `cmReply`. A request id
-  ## in use, or 0 (`ReleaseOperation`'s), is refused `invalid-request`.
+  ## in use, `ReleaseOperation`'s or `DecodeOperation`'s, is refused
+  ## `invalid-request`.
   if e.stopped:
     return
-  if request == ReleaseOperation or request in e.requests:
+  let reserved = request == ReleaseOperation or request == DecodeOperation
+  if reserved or request in e.requests:
     result.add(
       Command(
         kind: cmReply,
@@ -788,10 +1127,7 @@ proc resolve*(e: var Engine, request: uint64, root: RootReference): seq[Command]
         outcome: Result[Resolution, PackageError].err(
           packageError(
             pecInvalidRequest,
-            if request == ReleaseOperation:
-              "the request id is reserved"
-            else:
-              "the request id is in use",
+            if reserved: "the request id is reserved" else: "the request id is in use",
           )
         ),
       )
@@ -834,7 +1170,23 @@ proc onAnswer(e: var Engine, call: uint64, a: Answer, cmds: var seq[Command]) =
   elif a.kind == akFailure and a.code == fcNotReady:
     waitFor = jwReady
     e.bindings[bi].readiness = Opt.none(Readiness)
+  let stat = e.bindings[bi].jobs[0].fetch.pending.kind == ckStat
   let step = e.bindings[bi].jobs[0].fetch.onAnswer(a)
+  template j(): untyped =
+    e.bindings[bi].jobs[0]
+
+  if j.fetch.spooled and step.kind in {skCall, skDone}:
+    if stat:
+      # [G446] The size is known: the archive's part of the share, or a wait for it.
+      let size = int64(j.fetch.size.get(0))
+      if e.shareWaiters.len > 0 or not e.fits(size):
+        j.wait = jwShare
+        e.shareWaiters.add((bi, j.id))
+        return
+      e.reserve(bi, size)
+    elif j.fetch.hasChunk and j.id in e.spools:
+      # [G447] The piece goes to the worker, never kept here.
+      e.append(j.id, j.fetch.takeChunk(), cmds)
   e.apply(bi, step, waitFor, cmds)
   if a.kind == akRouteLost:
     if e.bindings[bi].generation == generation:
@@ -878,10 +1230,10 @@ proc onTimer(e: var Engine, id: uint64, cmds: var seq[Command]) =
     of jwBackoff:
       let step = e.bindings[bi].jobs[0].fetch.resume()
       e.apply(bi, step, jwNone, cmds)
-    of jwNone:
+    of jwNone, jwSpool, jwShare:
       discard
 
-proc handle*(e: var Engine, ev: Event): seq[Command] =
+proc handle*(e: var Engine, ev: sink Event): seq[Command] =
   ## One event; nothing after `stop`.
   if e.stopped or not e.started:
     return
@@ -905,9 +1257,13 @@ proc handle*(e: var Engine, ev: Event): seq[Command] =
     e.onAnswer(ev.call, ev.reply, result)
   of evTimer:
     e.onTimer(ev.timer, result)
+  of evWorked:
+    e.onWorked(move ev.worked, result)
   of evContinue:
     if ev.continued == ReleaseOperation:
       e.releaseTurn(result)
+    elif ev.continued == DecodeOperation:
+      e.decodeTurn(result)
     else:
       # [G455; Fable F3] An operation that is gone (done, cancelled) is not
       # advanced.
@@ -916,9 +1272,9 @@ proc handle*(e: var Engine, ev: Event): seq[Command] =
 proc cancel*(e: var Engine, request: uint64): seq[Command] =
   ## [G455; Fable F3] The caller gave the operation up: it takes no more turns
   ## and nothing answers it; its run is freed by later turns. Its retrieval, if
-  ## one is queued behind another, is dropped too; one that has started ends
-  ## as it would, and its answer is ignored. A later `evContinue` for it is
-  ## ignored.
+  ## one is queued behind another or waits for the share (G446), is dropped
+  ## too; one that has started ends as it would, its answer is ignored, and its
+  ## spool file is deleted (G447). A later `evContinue` for it is ignored.
   if e.stopped or request notin e.requests:
     return
   let d = e.requests.getOrDefault(request)
@@ -930,6 +1286,17 @@ proc cancel*(e: var Engine, request: uint64): seq[Command] =
       if not b.jobs[i].catalog and b.jobs[i].request == request:
         b.jobs.delete(i)
       dec i
+  for bi in 0 ..< e.bindings.len:
+    if e.bindings[bi].jobs.len > 0 and not e.bindings[bi].jobs[0].catalog and
+        e.bindings[bi].jobs[0].request == request and
+        e.bindings[bi].jobs[0].wait == jwShare:
+      e.bindings[bi].jobs[0].wait = jwNone
+      e.apply(
+        bi,
+        FetchStep(kind: skUnavailable, reason: "the operation is cancelled"),
+        jwNone,
+        result,
+      )
 
 proc stop*(e: var Engine): seq[Command] =
   ## `_MODULE_destroy` began: route upkeep, retrieval and resolution stop, and
@@ -959,6 +1326,13 @@ proc stop*(e: var Engine): seq[Command] =
   e.requests.clear()
   e.releasing.setLen(0)
   e.releaseQueued = false
+  # [G447] The shell stops the worker, which deletes the spool files it holds.
+  e.spools.clear()
+  e.shareWaiters.setLen(0)
+  e.shareUsed = 0
+  e.decodes.setLen(0)
+  e.dropping.setLen(0)
+  e.decodeQueued = false
 
 # Event constructors, for the shell and the tests ------------------------------------
 
@@ -996,6 +1370,9 @@ func fired*(timer: uint64): Event =
 
 func continued*(operation: uint64): Event =
   Event(kind: evContinue, continued: operation)
+
+func worked*(r: sink WorkerResult): Event =
+  Event(kind: evWorked, worked: r)
 
 func sized*(size: uint64): Answer =
   Answer(kind: akValue, size: size)

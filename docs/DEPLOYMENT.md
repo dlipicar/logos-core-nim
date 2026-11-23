@@ -441,18 +441,38 @@ reached:
     Any accepted signer with a package in the closure can bring these costs, not only the root's, so
     a raised limit is the operator's choice for every package its trust admits;
 - the Package Manager's own bounds, `package_manager.limits` ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md)
-  §2): one archive (`archive_bytes`, 1 GiB by default, held in memory in the Package Manager's process
-  while it is inspected; one inspection peaks at about 8.2 times the archive, 8.8 GiB for 1 GiB, and
-  holds the module thread about 4 to 6 s: CONFORMANCE "The archive's inspection"), the catalog document (4 MiB) and its entries (65,536), and the verification
-  cache (256 entries). A larger archive leaves its candidate unavailable; a larger catalog is refused
-  and the one in use stays; the cache drops its least recently used entry;
+  §2): one archive (`archive_bytes`, 1 GiB by default, spooled to the instance's state directory and
+  judged by the worker thread, never held in memory: the budget below), the catalog document (4 MiB) and
+  its entries (65,536), the verification cache (256 entries, each at most 256 KiB by its estimate),
+  the records, entries and contracts one operation reads (`operation_entries`, 262,144) and one
+  operation's time (`operation_deadline_ms`, 1 h; checked from 5-5-4). A larger archive leaves its
+  candidate unavailable; a larger catalog is refused and the one in use stays; the cache drops its
+  least recently used entry, and keeps no inspection over its estimate's bound; an operation past
+  `operation_entries` ends `package-unavailable`, and the log names the key;
 - the LGX reader's table (DECISIONS G75, `DefaultLgxLimits`): compressed 1 GiB, decompressed 4 GiB,
   65,536 entries, one entry 1 GiB, the selected variant's files 4 GiB, and its kept contract and
-  configuration documents 64 MiB in all (fixed, not derived from `archive_bytes`; G446). A package past
-  any of them is `invalid-package`. The reader reads an archive in 1 MiB pieces, so over a file its
-  memory does not grow with the archive: 11 to 13 MiB at 1 GiB (CONFORMANCE, "The streaming reader").
-  Until 5-5-3 moves inspection to a spool file, the Package Manager still holds each archive in memory
-  while it is inspected, as above.
+  configuration documents 64 MiB in all (fixed, not derived from `archive_bytes`; G446). The table is
+  the cap: an `archive_bytes` below 1 GiB lowers decompressed and extracted in the table's proportion,
+  today four times `archive_bytes`, and one entry to the decompressed bound (DECISIONS G453). A package
+  past any of them is `invalid-package`. The reader reads an archive in 1 MiB pieces, so its memory does
+  not grow with the archive: 11 to 13 MiB at 1 GiB (CONFORMANCE, "The streaming reader").
+
+### The Package Manager's budget
+
+What one Package Manager instance holds, by part (DECISIONS G446, G447, G477; plan 5-5 §4.13). The rows
+marked 5-5-4 come with the operations: until then the instance installs nothing, and `pmtest_module`'s
+`resolve` runs any number of resolutions at once.
+
+| Part | Resource | Lives for | Bound |
+|---|---|---|---|
+| The spool | disk, the state directory's file system | an archive's judgment | the archives spooled at once are at most 4 × `archive_bytes`, 4 GiB at the default; a retrieval that would pass it waits. With 5-5-4 a mutation keeps its selected archives under 4 × `archive_bytes` of its own, so the host's spool is at most 8 × `archive_bytes`, 8 GiB. Not synced; the start empties it |
+| The reader's working set | worker memory | one inspection | 1 MiB pieces, a 4 MiB manifest, at most 64 MiB of documents: 10.6 MiB measured at 1 GiB under orc, 13.2 MiB under refc. One worker per instance, one job at a time; the benchmark's whole process, both sides, peaked at 13.8 MiB under orc judging 1 GiB (CONFORMANCE "The worker and the spool") |
+| The resolver's state | module thread memory | an operation | `operation_entries` × the bytes a unit takes: at the default at most about 460 MiB (1.8 KiB a unit, the worst measured, with the corrected unit); at the maximum, 2^24, about 29 GiB for one operation (DECISIONS G477). With 5-5-4's two slots, two in flight per instance, about 0.9 GiB at the default |
+| The verification cache | module thread memory | the instance | `cache_entries` × 256 KiB by the estimate: 64 MiB at the default, 1 GiB at the maximum |
+| The catalog | module thread memory | the instance, and a copy for each operation | the catalog in use, from at most `catalog_bytes` (4 MiB): about 43 MiB under orc and 66 MiB under refc for the most entries 4 MiB holds (49,930 short ones), its document's bytes included. Each running operation's resolver takes its own copy of the entries (`pm/driver.nim` `initDriver`), about 20 MiB under orc at that size |
+| A judgment in flight | both threads | one hand-over, then its decoding turns | one encoded judgment, at most the manifest's 4 MiB of bytes, moved under orc and copied under refc (up to about 23 ms of the module thread for 80,000 entries), then decoded at most 1,024 entries and contracts a turn; one whose operation went is freed at the same rate |
+| An archive's pieces in flight | memory, the worker's queue | one retrieval | at most 4 pieces of 1 MiB (`SpoolLag`) per retrieval, one retrieval at a time per binding |
+| The installed-state snapshots, a response being built, retired directories, the queues, a request's wait, an operation's time | | | 5-5-4 |
 
 ### Admission pools
 

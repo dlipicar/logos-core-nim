@@ -5,12 +5,12 @@ document, how it is acquired and refreshed, catalog policy (PKG-0472, PM l.834-8
 bindings and retrieval, and how trust is applied when a package is inspected. Each choice keeps the
 verification of PM §4.1 to §4.4 (PKG-0473): nothing here replaces a package's own signature, adds
 trust or claims freshness. The decisions are DECISIONS G399 to G406 and, for installation, G444 to
-G446 and G450 to G452; the code is `src/logos_core/pm/`.
+G447 and G450 to G453; the code is `src/logos_core/pm/`.
 
 Tier 5 step 5-3b builds the engine (5-3b-1) and the module that hosts it (5-3b-2). Step 5-5 builds
 installation: 5-5-1 the installed records, the responses, the handoff's construction and the admission
-bound (§8, §12, §13); 5-5-2 the store's root and extraction (§8, §9); the worker and the operations
-(§10, §11) follow. Until 5-6a, the Package Manager runs under a test name (`pmtest_module`);
+bound (§8, §12, §13); 5-5-2 the store's root and extraction (§8, §9); 5-5-3 the worker and the spool
+(§10); the operations (§11) follow. Until 5-6a, the Package Manager runs under a test name (`pmtest_module`);
 `list_packages`, installation and the §15 methods come in later steps (5-5, 5-6a, 5-6b).
 
 ## 1. Placement and the data path
@@ -60,11 +60,13 @@ Manager does not start with one.
 
 | Bound | Range | Default | What it bounds |
 |---|---|---|---|
-| `archive_bytes` | 1 to 1,073,741,824 | 1 GiB | one archive, held in memory while it is inspected |
+| `archive_bytes` | 1 to 1,073,741,824 | 1 GiB | one archive, spooled to the state directory and read in pieces, never held in memory (§10); the other LGX bounds keep G75's proportions to it (G453) |
 | `catalog_bytes` | 1 to 4,194,304 | 4 MiB | the catalog document |
 | `catalog_entries` | 1 to 65,536 | 65,536 | the catalog's entries |
 | `cache_entries` | 1 to 4,096 | 256 | the verification cache (§5) |
 | `read_deadline_ms` | 1 to 86,400,000 | 300,000 | one call, and the wait for `ready` after `not-ready` (§4) |
+| `operation_entries` | 1 to 16,777,216 | 262,144 | the records, dependency entries and contracts one root operation reads (§4, G477) |
+| `operation_deadline_ms` | 1 to 86,400,000 | 3,600,000 | one root operation, from taking its slot (G449; checked from 5-5-4) |
 
 **The channel** (G400). The value is the instance's protected realization input: the host
 configuration's `protected_inputs` names the instance and carries the bytes, and the Module Loader
@@ -192,7 +194,9 @@ binding's instance with `list_modules` and takes that record's provider.
 **Retrieving one object** (the catalog or an archive), one object at a time per binding:
 1. `stat_object`. A size over the bound (`catalog_bytes` or `archive_bytes`) is refused before any
    read. **`unavailable` is not retried**: the provider has spent its whole lookup bound on that call.
-2. `read_object` in 1 MiB steps, one after another; the BLAKE3-256 digest is computed while reading.
+2. `read_object` in 1 MiB steps, one after another. The catalog is kept in memory and its BLAKE3-256
+   digest computed while reading; an archive's pieces go to the worker, which appends them to the
+   archive's spool file and hashes them (§10).
 3. `unavailable` from a `read_object` after a successful `stat_object`: the same offset again after a
    back-off of 1, 2 and 4 s, at most three times in a row. A locator names fixed bytes, so a read
    resumes from its offset.
@@ -202,7 +206,7 @@ binding's instance with `list_modules` and takes that record's provider.
    `invalid-length`, an invocation error, a call past its deadline, or data other than
    `min(length, size - offset)` bytes. The provider's `detail` is logged as foreign text.
 6. The bytes are untrusted until verified: the catalog by its pinned digest and decoding, an archive
-   by `openLgx` (PM l.389, l.397, l.443-444).
+   by the inspection pass over its spool file (§10; PM l.389, l.397, l.443-444).
 
 **The deadline,** `read_deadline_ms`, 300,000 ms by default, bounds one call (`stat_object`,
 `read_object` or `fetch_readiness`) and the wait for `ready` after `not-ready`. A single `read_object`
@@ -235,8 +239,8 @@ driver holds for the operation's life, on the module thread:
   for each contract it provides, each record once (one walk, `inputUnits`). A count equal to the bound
   goes on; the read that takes it over ends the operation with `package-unavailable` (PM l.1308-1309),
   and the caller's message does not state the bound. The four resolver limits and their counters are
-  untouched. The resolver half is built; the protected key `operation_entries` in `lcn.pm_limits`
-  comes with 5-5-3, and until then the driver runs with no bound.
+  untouched. The bound is `operation_entries` (§2), passed to every root operation; when it ends one,
+  the operator's log names the key and its value.
 
 The locator encodings of each provider are STORAGE-FETCH §5's table. In logosd the bindings are
 `package_manager.storage` ([DAEMON.md](DAEMON.md) §3), each naming a `hosted_dynamic` instance that
@@ -255,6 +259,11 @@ three calls and the event, and `list_modules`, which is not narrowed to them (DA
   the selected variant and the resolver's inspection. It is in memory only, at most `cache_entries`,
   least recently used first out. Only an archive that verified is cached. Archive bytes are not
   cached: each candidate reached is retrieved again, and a hit spares only its verification.
+- **Its byte bound** (G447): an inspection over 256 KiB by its estimate answers its call and is not
+  cached (the counter `uncached`), so the cache holds at most `cache_entries` × 256 KiB, 64 MiB at the
+  default. The estimate is fixed by rule over the resolver's walk (G477), a constant for each record,
+  dependency entry and contract plus the bytes of its strings and encodings, so the same archive is
+  cached, or not, on every machine. No honest manifest comes near it.
 - **Every hit is judged again** (PKG-0077): the entry stands only while the trust input in use has an
   anchor with the same kid, holding the same key, under the same profile, authorizing the exact
   package name. Otherwise it is dropped and the archive is opened again, which then fails
@@ -328,7 +337,8 @@ This implementation applies the mandatory package-signature and artifact-verific
   the owner's Q5 (a)). `lock` is held for the store's life, so a second instance on the
   same root does not start (PKG-0487). `index` is the committed set. `r/<rid>/` is one record:
   `a/<path>`, the selected variant's files; `m/manifest.cbor` and `m/manifest.cose`, the signed bytes;
-  `m/record.<g>`. `spool/` is the running operations' (5-5-3). `rid` is 128 random bits, never reused.
+  `m/record.<g>`. `spool/` holds the archives being retrieved and judged (§10). `rid` is 128 random
+  bits, never reused.
   Directories are 0700 and files 0400; nothing is made executable or rewritten.
 - **Path rules:** the host's, made case-insensitive when a probe in the root finds the filesystem
   folds case (PKG-0489). Every path of the variant, and every directory prefix, is checked under them
@@ -341,12 +351,13 @@ This implementation applies the mandatory package-signature and artifact-verific
   elsewhere a plain `fsync` of each file and directory, ending at `r/`, and on Darwin the drive flush
   is the index's own `F_FULLFSYNC`. An identity is installed once (PKG-0182). A crash before the rename
   leaves the old state, after it the new one (PKG-0611).
-- **The start:** the lock, the probe, then the index. No index and an empty `r/` is a fresh root; no
+- **The start** runs at `_MODULE_init`, before the worker starts; a root that cannot be opened fails
+  initialization. The lock, the probe, then the index. No index and an empty `r/` is a fresh root; no
   index while `r/` holds entries stops the start and deletes nothing. Each named record is loaded,
   checked against its signed manifest and its admission bound at the current path (PKG-0471); a
   failure stops the start and names the identity. Then what no record names is deleted.
 - **Retirement:** what a commit stops naming is deleted once no holder of an older snapshot that reads
-  files remains (`collect`); the worker that runs it, and the holders, are 5-5-3's and 5-5-4's.
+  files remains (`collect`); running it on the worker, and the holders, are 5-5-4's.
 - **The retained hash** (`checkRetained`; PKG-0181, PKG-0293): each artifact file, opened below `a/`
   with no link followed, against its signed digest. A packaged native library is one of them.
 - **A damaged record** fails every operation that reaches it with `artifact-integrity-failed`; the
@@ -354,7 +365,7 @@ This implementation applies the mandatory package-signature and artifact-verific
 
 ## 9. Extraction
 
-Part 5-5-2 builds the writing and part 5-5-2b the reader; the spool (Q2) is 5-5-3's (G446).
+Part 5-5-2 builds the writing, part 5-5-2b the reader and part 5-5-3 the spool it reads from (§10).
 
 - **Descriptor-relative** (`pm/extract.nim`; PKG-0204, PKG-0274): the record directory is made with
   `mkdirat` under the `install/r/` descriptor; each directory below it with `mkdirat` and opened
@@ -388,9 +399,39 @@ a file or from bytes, and never inflated whole:
   record's manifest, signature and fields come from the inspection, not from the file. A source that no
   longer gives the judged package (another file, a changed byte, a truncation) fails the staging, and
   its directory is removed; the operation will answer `package-unavailable` (5-5-4).
-- **Until 5-5-3,** the verification cache still inspects the archive it holds in memory (`openLgx`), so
-  `archive_bytes` (§2) is still held while it is inspected; the spool and the worker move the reading
-  to a file.
+- **Where it reads from:** the worker runs the inspection pass over the archive's spool file (§10), so
+  no archive is held in memory. `openLgx` over bytes in memory stays for tools and tests.
+
+## 10. The worker and the spool
+
+Part 5-5-3 (DECISIONS G446's spool half, G447; `pm/worker.nim`, `pm/jobs.nim`, `pm/spool.nim`).
+
+- **One worker thread per instance** reads and writes archives, so none is written, read or judged on
+  the module thread. It starts at `_MODULE_init`, after the store's start, with its own copy of the
+  trust input, the platform, the LGX limits and the path rules for that start; a thread that cannot be
+  created fails initialization. Its jobs run one at a time, in order. Its answers reach the module
+  thread through the kit's `post`, one drain at a time; it never calls the kit otherwise.
+- **Nothing that crosses holds a reference** (checked at compile time). A judgment crosses with its
+  contracts as their deterministic encodings and is decoded on the module thread at most 1,024
+  dependency entries and contracts a turn, between other events, so a 4 MiB manifest never takes one
+  long step. Under orc a message is moved; under refc it is copied, up to about 23 ms for an
+  80,000-entry judgment (CONFORMANCE).
+- **The spool** is `<state_dir>/install/spool/`, 0700, emptied by the store's start. Each archive
+  retrieved goes to its own file there, `<request>-<n>.lgx`, created 0600 and exclusively, never
+  following a link. The fetcher hands each 1 MiB answer to the worker, which appends and hashes it; at
+  most four pieces of one retrieval are unwritten, then the next read waits. At the end the digest is
+  looked up in the verification cache: a hit answers at once, a miss has the worker judge the file.
+  Either way the file is deleted. Nothing in the spool is executed, mapped or synced.
+- **Its share:** the archives spooled at once are at most 4 × `archive_bytes` in all, 4 GiB at the
+  default. A retrieval whose archive would pass it waits, first in, first out, until a file is deleted;
+  the first always fits. With the operations (5-5-4) a mutation keeps its selected archives for
+  extraction under a budget of its own, and the host's spool is at most 8 × `archive_bytes`
+  ([DEPLOYMENT.md](DEPLOYMENT.md) §12).
+- **A full disk:** a spool write that fails makes the archive unavailable, as a failed read does (PM
+  l.1094), so its operation fails `package-unavailable`; the operator's log names the state directory's
+  file system and the cause. It is not resource exhaustion.
+- **At `_MODULE_destroy`** the worker stops after its current piece or header, deletes its spool files
+  and is joined before the instance's state is freed.
 
 ## 12. Responses, messages and the admission bound
 

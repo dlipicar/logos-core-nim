@@ -115,6 +115,15 @@ func initVerificationCache*(
 func len*(c: VerificationCache): int =
   c.entries.len
 
+func platform*(c: VerificationCache): Platform =
+  c.platform
+
+func lgxLimits*(c: VerificationCache): LgxLimits =
+  c.limits
+
+func pathRules*(c: VerificationCache): PathRules =
+  c.pathRules
+
 func contains*(c: VerificationCache, digest: Blake3Digest): bool =
   digest in c.entries
 
@@ -200,20 +209,23 @@ proc lookup*(
   Opt.none(Inspection)
 
 proc admit*(
-    c: var VerificationCache, digest: Blake3Digest, o: sink Opened
+    c: var VerificationCache, digest: Blake3Digest, o: sink Opened, estimate: int
 ): Inspection =
   ## [G403, G447] The judgment of the archive whose BLAKE3-256 is `digest`, answered; kept when
-  ## it verified and its estimate is at most `MaxCachedInspectionBytes`. An ineligible or
-  ## unavailable archive is never kept, so its error is always the current one.
+  ## it verified and `estimate`, its `estimatedBytes`, is at most `MaxCachedInspectionBytes`.
+  ## The caller gives the estimate: the engine sums it from the encoded judgment's lengths
+  ## (`jobs.estimatedBytes`), so no contract is walked here (Fable's D1 condition 6). An
+  ## ineligible or unavailable archive is never kept, so its error is always the current one.
   if o.inspection.kind == ikUnavailable:
     return o.inspection
   inc c.counters.opened
   if o.inspection.kind != ikEligible:
     return o.inspection
-  if o.inspection.estimatedBytes > MaxCachedInspectionBytes:
+  if estimate > MaxCachedInspectionBytes:
     inc c.counters.uncached
     return o.inspection
-  if c.entries.len >= c.capacity:
+  if digest notin c.entries and c.entries.len >= c.capacity:
+    # Two retrievals of the same bytes may both have missed: the later one replaces.
     c.evictOne()
   let answer = o.inspection
   c.entries[digest] = CacheEntry(
@@ -238,7 +250,9 @@ proc inspect*(
   let hit = c.lookup(digest, trust)
   if hit.isSome:
     return hit.get
-  c.admit(digest, judge(bytesSource(@data), trust, c.platform, c.limits, c.pathRules))
+  let o = judge(bytesSource(@data), trust, c.platform, c.limits, c.pathRules)
+  let estimate = o.inspection.estimatedBytes
+  c.admit(digest, o, estimate)
 
 proc judge*(c: var VerificationCache, trust: TrustInput): int =
   ## Drops every entry `trust` no longer accepts, and says how many. A hit
