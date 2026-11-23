@@ -1463,10 +1463,11 @@ provider only if each of its contracts may be discovered, so without v1's rule e
 module's `policy-classes.json`); its `spend` and `keys` classes are for local subjects only. The third
 allows the `blockchain_module` instance its own `publish-event` on v2's root; without it every
 `chain_progress_event`, `new_block_event` and `lib_event` is skipped (Streams). Its permission
-settings must hold the profile's minimum: `permissions.initial` names it with
-`logos-core-nim.host-ambient` and the empty constraints. With no entry, or one without host-ambient, its
-start is refused `NOT_AUTHORISED`
-(`authority-denied`; DECISIONS G110; [PERMISSIONS.md](PERMISSIONS.md), "Admission and the snapshot").
+settings must hold the profile's minimum, `logos-core-nim.host-ambient` with the empty constraints. With
+no `permissions.initial` entry for the module, logosd writes that entry itself ("Permission settings"
+above; G294), so the entry is optional. An entry that is present but lacks host-ambient refuses the start
+`NOT_AUTHORISED` (`authority-denied`; DECISIONS G110; [PERMISSIONS.md](PERMISSIONS.md), "Admission and
+the snapshot").
 
 ### Streams (G349)
 

@@ -107,6 +107,10 @@ This accepts the contract (INTERFACE §1.1, §5.3) and writes into `generated/`:
 | `counter_module_kit.nim` | the exported symbols, over your handlers; `export<Module>(T)` |
 | `counter_module_kit.exports`, `.map` | the library's export list for macOS ld and GNU ld (§8) |
 
+Where a contract allows any value, the types hold a `CborValue` (`logos_sdk/cbor`). It is a tree: build
+it bottom up, sharing a subtree if you like, but never make a value contain itself. One that does is
+never freed, under orc or refc (core's DECISIONS G478).
+
 Regenerate whenever the contract changes; never edit the output. Other forms:
 
 - `--interface:FILE` (repeatable): an interface the module implements, named by its root in the
@@ -358,6 +362,12 @@ and passes. `logos_sdk/testing/lockcheck`'s `installMismatches` does that from t
 pass the names of any packages you take from a develop link, written in the suite itself rather than
 read from the environment. The same suite checks that `nimbledeps/bin/lcn-gen` resolves into the
 directory `nimble.paths` names for `logos_sdk`: the link follows the last install, not the lock.
+
+**A suite that builds core itself.** An install gives your module the SDK's dependencies and no
+others. A suite that also compiles core's own sources from a core checkout, such as one that builds
+and runs logosd, needs core's dependencies too: logosd's configuration reaches the Package Manager's
+LGX reader, which imports zlib. Add each package core's `nimble.paths` names that yours does not,
+and keep your own copy of any both name (the blockchain module's `tests/config.nims`; DECISIONS I134).
 
 **The generated-code check.** A module repository that commits its generated files compares them with a
 fresh generation by the installed SDK's `lcn-gen`, which Nimble builds at install with the module

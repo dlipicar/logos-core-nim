@@ -71,8 +71,16 @@
 ## <work>` sets the work of one turn (`ResolverTurnWork` by default; 0: no turns), and the steps line
 ## gives the turns and the work counted. The release line times the turns that then free the run.
 ##
-## Usage: pmbench [--budget <work>] [--sync new|oracle|input] <shape> <size> [k | v | L] [names depth candidates attempts]
+## The contract shapes (5-3c-3, G455) take the contracts first: `contracts <c>
+## [k]` (k manifests of two entries listing c contracts each, on names whose records provide none),
+## `provider <p> [l]` (a record providing p contracts, which a later bind looks l of up, out of order
+## so they are sorted) and `versioned <c> [v]` (v versions each listing c contracts, each given up).
+## The steps line gives `largest_step`, the most work counted between two turn checks: what one turn
+## can overrun its budget by.
+##
+## Usage: pmbench [--budget <work>] [--sync new|oracle|input] <shape> <size> [k | v | L | l] [names depth candidates attempts]
 ##   pmbench wide 80000 20 4096 4095 4096 1000
+##   pmbench contracts 18000 1 256 32 256 1024
 ##   pmbench dense 1024
 ##   pmbench chain 4096
 ##   pmbench hub 255 1
@@ -856,7 +864,7 @@ proc main() =
     args = args[2 .. ^1]
   if args.len < 2:
     quit(
-      "usage: pmbench [--budget <work>] [--sync new|oracle|input] <wide|dense|chain|hub|layered|lift> <size> [k | v | L] [names depth candidates attempts]\n" &
+      "usage: pmbench [--budget <work>] [--sync new|oracle|input] <wide|dense|chain|hub|layered|lift|contracts|provider|versioned> <size> [k | v | L | l] [names depth candidates attempts]\n" &
         "       pmbench archive <MiB> <file> | pmbench inspect <file> | pmbench spool <file> <dir>",
       2,
     )
@@ -864,7 +872,9 @@ proc main() =
   let size = parseInt(args[1])
   var rest = args[2 .. ^1]
   var k = defaultParameter(shapeName)
-  if shapeName in ["wide", "hub", "layered", "lift"] and rest.len > 0:
+  if shapeName in
+      ["wide", "hub", "layered", "lift", "contracts", "provider", "versioned"] and
+      rest.len > 0:
     k = parseInt(rest[0])
     rest = rest[1 .. ^1]
   let m = MaxResolverLimits
@@ -880,9 +890,10 @@ proc main() =
     " size=",
     size,
     (
-      if shapeName == "wide": " k=" & $k
-      elif shapeName in ["hub", "lift"]: " v=" & $k
+      if shapeName in ["wide", "contracts"]: " k=" & $k
+      elif shapeName in ["hub", "lift", "versioned"]: " v=" & $k
       elif shapeName == "layered": " L=" & $k
+      elif shapeName == "provider": " l=" & $k
       else: ""
     ),
     " limits=",
@@ -924,7 +935,9 @@ proc main() =
     " turns=",
     r.turns,
     " work=",
-    r.work
+    r.work,
+    " largest_step=",
+    r.largestStep
   echo "  setup_ms=",
     r.setup.inMicroseconds.float / 1000.0,
     " setup_cpu_ms=",

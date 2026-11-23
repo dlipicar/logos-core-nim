@@ -624,8 +624,10 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
     operation with `package-unavailable` (PM l.1308-1309), the four limits untouched. The synchronous API runs with
     none; 5-5-3 adds the protected key `operation_entries` and weighs its cache over the same walk. No unit changes
     status.
-  - Not yet within the turn bound: records whose dependency entries list contracts (G455's exception; one entry of
-    18,000 held the thread 5.2 s in one turn). 5-3c-3 is the fix, before 5-6a.
+  - Contracts within the turn bound (5-3c-3, G455): each is numbered once per run at G477's read point, in a sliced
+    step that counts it with its bytes. Requirements and candidates hold spans of numbers, compared by binary search
+    with each probe counted, and a name's need is gathered once per frame. Before it, one entry listing 18,000
+    contracts held the thread for 5.2 s in one turn. No unit changes status.
   - `test_resolver` drives 2,000 seeded catalogs through the run under six turn budgets against the oracle;
     `test_pm_driver` gains the engine's turns (alternation, stop, cancel, release) and each shape under every
     budget; `test_pm_hosted` a sliced operation with a second operation and a readiness event between its turns.
@@ -660,6 +662,13 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
 
   Its contract and configuration schema freeze at N-4.5's merge (G480). No unit changes status: the module's hosted
   case adds evidence for RUN-0815, claimed since step 4b-3.2.
+
+- 2026-11-23, Tier 5 step N-5.4 (I134; I124's item for N-3), the blockchain module on the foreign-thread entry rule:
+  `report_failure` through `RouteSet.prepareRc` (G464), the procedures its workers and subscriptions post marked
+  `{.lcnModuleThread.}` (G465), and the library clone's flake check `blockchain-module-lint-callbacks` (G467;
+  0 findings), merged at the clone's `407dfb768`. In package mode a module suite that builds core's daemon needs
+  core's own dependencies, which `sdk/docs/MODULE-KIT.md` §9 now says. v2's contract and root are unchanged. No
+  unit changes status.
 
 - 2026-11-22, Tier 5 step 5-5-1 (I121; G445's files, G450, G451, G452), installed records, responses, the
   handoff's construction and the admission bound, all pure code:

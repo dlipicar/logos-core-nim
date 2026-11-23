@@ -2097,6 +2097,9 @@ suite "pkg.resolver: the resumable run (G455)":
 
 # The operation bound (Tier 5 step 5-3c; DECISIONS G477) ---------------------------------
 
+var lastNumbered: tuple[records, contracts: int]
+  ## [G455] (5-3c-3) What `boundedBy`'s last run numbered.
+
 proc boundedBy(
     u: Universe,
     root: RootReference,
@@ -2132,6 +2135,7 @@ proc boundedBy(
       counters = run.counters
       result = described(s.outcome, run.counters)
       break
+  lastNumbered = run.numbered
   while not run.release():
     discard
   result.add("inspected " & u.log.join(" "))
@@ -2139,6 +2143,70 @@ proc boundedBy(
 
 func isPrefixOf(a, b: seq[string]): bool =
   a.len <= b.len and a == b[0 ..< a.len]
+
+suite "pkg.resolver: contracts and pins, numbered once (G455, 5-3c-3)":
+  test "[TXT-0485] [IMPL-DECISION G455] two recorded edges pinning one identity to two commitments allow none of its records, as the oracle's list of pins does":
+    let u = Universe()
+    u.install("C", "1.0.0")
+    u.install("B", "1.0.0", ["C ^1.0.0"], edges = ["C@1.0.0"])
+    u.install("D", "1.0.0", ["C ^1.0.0"], edges = ["C@1.0.0/other"])
+    u.add("C", "1.0.0", seed = "other")
+    u.add("R", "1.0.0", ["B ^1.0.0", "D ^1.0.0"])
+    check u.resolveName("R").code == "dependency-unavailable"
+    let root = RootReference(package: Opt.some("R"))
+    let want = u.resolveBy(root, limits(), oracle = true)
+    check u.resolveBy(root, limits(), oracle = false) == want
+    # One pin alone allows its commitment: the installed one.
+    let v = Universe()
+    v.install("C", "1.0.0")
+    v.install("B", "1.0.0", ["C ^1.0.0"], edges = ["C@1.0.0"])
+    v.install("D", "1.0.0", ["C ^1.0.0"], edges = ["C@1.0.0"])
+    v.add("C", "1.0.0", seed = "other")
+    v.add("R", "1.0.0", ["B ^1.0.0", "D ^1.0.0"])
+    check v.resolveName("R").picked == @["B@1.0.0", "C@1.0.0", "D@1.0.0", "R@1.0.0"]
+    check v.resolveBy(root, limits(), oracle = false) ==
+      v.resolveBy(root, limits(), oracle = true)
+
+  test "[IMPL-DECISION G455] a contract listed by several records and provided by another has one number; a requirement is met by a provider's numbers, not by an encoding":
+    let u = Universe()
+    u.add("A", "1.0.0", ["P ^1.0.0 +x +y"])
+    u.add("B", "1.0.0", ["P ^1.0.0 +y"])
+    u.add("P", "1.0.0", provides = ["y", "x", "z"])
+    u.add("R", "1.0.0", ["A ^1.0.0", "B ^1.0.0"])
+    let root = RootReference(package: Opt.some("R"))
+    var c: ResolverCounters
+    let got = u.boundedBy(root, limits(), Opt.none(int), counters = c)
+    check got[0] == "root R@1.0.0 unchanged=false"
+    check lastNumbered == (4, 3) # R, A, B and P; x, y and z
+    check got == u.boundedBy(root, limits(), Opt.none(int), 1, c)
+    check u.resolveBy(root, limits(), oracle = false) ==
+      u.resolveBy(root, limits(), oracle = true)
+
+  test "[IMPL-DECISION G455] an inspection shared with a cache, as the verification cache's copies are (G403): a run drops only its own references to the contracts it numbers, so a second operation over the same inspections gives the first's answer and the cached contracts stay whole":
+    # The universe answers each source with a copy of the one inspection it keeps, whose
+    # contract trees the copy shares, as `VerificationCache.inspect` does.
+    let u = Universe()
+    u.add("A", "1.0.0", ["P ^1.0.0 +x +y"])
+    u.add("B", "1.0.0", ["P ^1.0.0 +y"])
+    u.add("P", "1.0.0", provides = ["y", "x", "z"])
+    u.add("R", "1.0.0", ["A ^1.0.0", "B ^1.0.0"])
+    proc held(u: Universe): seq[seq[byte]] =
+      for x in u.outcomes.values:
+        for d in x.dependencies:
+          for c in d.contracts:
+            result.add(encodeCbor(c))
+        for c in x.provides:
+          result.add(encodeCbor(c))
+
+    let before = u.held
+    check before.len == 6 # x and y, y, and y, x and z
+    let root = RootReference(package: Opt.some("R"))
+    let first = u.resolveBy(root, limits(), oracle = false)
+    check first[0].startsWith("root R@1.0.0")
+    check u.held == before
+    check u.resolveBy(root, limits(), oracle = false) == first
+    check u.held == before
+    check u.resolveBy(root, limits(), oracle = true) == first
 
 suite "pkg.resolver: the operation bound (G477)":
   test "[IMPL-DECISION G477] one walk gives a record's input units: the record, each dependency entry and the contracts it lists, each provided contract":
@@ -2187,23 +2255,29 @@ suite "pkg.resolver: the operation bound (G477)":
     check c.bound == ""
     check want[^2] == "inspected a@1.0.0#0 b@1.1.0#0 b@1.0.0#0"
     check want[^1] == "checked c@1.0.0"
+    # [G455] (5-3c-3) The records read and used have their contracts numbered, each once:
+    # a@1.0.0, b@1.0.0 and the installed c, not the ineligible b@1.1.0; y, which a lists and
+    # c provides, has one number, with x and z.
+    check lastNumbered == (3, 3)
     # The same count whatever the budget: an evaluation that waits for the retained bytes
     # is made again, and the record is counted once.
     for budget in [1'i64, 3, NoTurnBudget]:
       checkpoint "budget " & $budget
       check u.boundedBy(root, lim, Opt.none(int), budget, c) == want
       check c.entries == 10
+      check lastNumbered == (3, 3)
       # At the bound: the count equals it, and nothing stops.
       check u.boundedBy(root, lim, Opt.some(10), budget, c) == want
       check c.bound == ""
       # Each stop is at the record whose inputs take the count over the bound, which is
       # read and no more: one over the bound at 9, further over below.
-      for (bound, inspected, checked) in [
-        (9, "a@1.0.0#0 b@1.1.0#0 b@1.0.0#0", ""),
-        (6, "a@1.0.0#0 b@1.1.0#0 b@1.0.0#0", ""),
-        (5, "a@1.0.0#0 b@1.1.0#0", ""),
-        (4, "a@1.0.0#0", ""),
-        (1, "a@1.0.0#0", ""),
+      # [G455] (5-3c-3) The record that takes the count over is not numbered.
+      for (bound, inspected, checked, numbered) in [
+        (9, "a@1.0.0#0 b@1.1.0#0 b@1.0.0#0", "", (2, 2)),
+        (6, "a@1.0.0#0 b@1.1.0#0 b@1.0.0#0", "", (1, 2)),
+        (5, "a@1.0.0#0 b@1.1.0#0", "", (1, 2)),
+        (4, "a@1.0.0#0", "", (0, 0)),
+        (1, "a@1.0.0#0", "", (0, 0)),
       ]:
         checkpoint "bound " & $bound
         let got = u.boundedBy(root, lim, Opt.some(bound), budget, c)
@@ -2215,6 +2289,7 @@ suite "pkg.resolver: the operation bound (G477)":
         check c.bound == "operation_entries"
         check c.limit == ""
         check c.entries > bound
+        check lastNumbered == numbered
 
   test "[IMPL-DECISION G477] a source root is counted once, when its inspection is supplied":
     let u = Universe()
