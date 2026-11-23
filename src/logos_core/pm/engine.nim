@@ -59,11 +59,11 @@
 ## out while it would pass it; the first always fits. With every byte written
 ## the worker gives the digest: a cache hit answers at once, a miss has the
 ## worker judge the file (`vcache.judge`). Either way the spool file is then
-## deleted and its share released. The judgment crosses encoded (`jobs.nim`)
-## and is decoded `DecodeTurnUnits` at a time, a turn each, by continues of
-## their own (`DecodeOperation`); a small one at once. Nothing sees a judgment
-## before it is whole, and one whose operation went is not finished but freed
-## by the same turns. A spool file that cannot
+## deleted and its share released. The judgment crosses as it is (G482: its
+## contracts are encodings in one buffer), and is admitted to the cache and
+## supplied in the turn it arrives. One whose operation went is freed: its
+## encodings at once, its dependency entries `DecodeTurnUnits` at a time, a turn
+## each, by continues of their own (`DecodeOperation`). A spool file that cannot
 ## be written ends the retrieval: the archive is unavailable and the log names
 ## the cause (PM l.1094). An archive whose operation is gone (cancelled,
 ## answered) is dropped at its next step. The catalog's retrieval is kept in
@@ -108,8 +108,9 @@ const
     ## [IMPL; G455] the operation id of the continues that free finished and
     ## cancelled runs; no request has it
   DecodeOperation* = high(uint64)
-    ## [IMPL; G447] the operation id of the continues that decode the worker's
-    ## judgments; no request has it
+    ## [IMPL; G447, G482] the operation id of the continues that free the entries of
+    ## judgments whose operation went (before G482 they also decoded the worker's
+    ## judgments); no request has it
   SpoolBudgetArchives* = 4
     ## [IMPL; G446; plan §4.3] a mutation's spool budget, in archives of
     ## `archive_bytes`: 4 GiB at the preset; never less than one archive
@@ -306,14 +307,6 @@ type
     variant: string
     refetch: bool ## [G446] fetched again by digest at extraction: not judged here
 
-  Decode = object ## [G447] A judgment being decoded on this thread, a turn at a time.
-    request: uint64
-    source: PackageSource
-    digest: Blake3Digest
-    estimate: int
-      ## the cache's estimate, from the encoded lengths (`jobs.estimatedBytes`)
-    decoding: Decoding
-
   TimerKind = enum
     tkRoute ## a binding's establishment back-off
     tkJob ## a job's call deadline, wait bound or back-off
@@ -471,9 +464,8 @@ type
     budgetArchives: int ## [G446] `SpoolBudgetArchives`; the tests give others
     evictions: int ## [G446] archives a mutation's budget deleted, since the start
     shareWaiters: seq[(int, uint64)] ## [G446] (binding, job), first in, first out
-    decodes: seq[Decode] ## [G447] first in, first out
-    dropping: seq[Decoding]
-      ## [G447] judgments whose operation went while they were decoded, freed a turn at a time
+    dropping: seq[seq[InspectedDependency]]
+      ## [G447, G482] the entries of judgments whose operation went, freed a turn at a time
     decodeQueued: bool ## a `DecodeOperation` continue is issued
     slots: array[SlotKind, Slot] ## [G449]
     operations: Table[uint64, Operation] ## [G449] running or waiting, by request
@@ -626,12 +618,8 @@ func shareWaiting*(e: Engine): int =
   ## until reached).
   e.shareWaiters.len
 
-func decoding*(e: Engine): int =
-  ## [G447] The judgments being decoded a turn at a time.
-  e.decodes.len
-
-func droppingDecodes*(e: Engine): int =
-  ## [G447] The dropped judgments still being freed a turn at a time.
+func droppingJudgments*(e: Engine): int =
+  ## [G447, G482] The dropped judgments whose entries are still being freed a turn at a time.
   e.dropping.len
 
 func slotRunning*(e: Engine, slot: SlotKind): Opt[uint64] =
@@ -1311,42 +1299,21 @@ proc spoolFailed(failure: string): string =
   "the archive could not be written to the spool on the state directory's file system: " &
     failure
 
-proc finishDecode(e: var Engine, dc: sink Decode, cmds: var seq[Command]) =
-  ## [G447] A decoded judgment: admitted to the cache and supplied.
-  var o = dc.decoding.take()
-  let x = e.cache.admit(dc.digest, o, dc.estimate)
-  e.supplyTo(dc.request, dc.source, x, cmds)
-
-proc queueDecodeTurn(e: var Engine, cmds: var seq[Command]) =
-  if (e.decodes.len > 0 or e.dropping.len > 0) and not e.decodeQueued:
+proc queueDropTurn(e: var Engine, cmds: var seq[Command]) =
+  if e.dropping.len > 0 and not e.decodeQueued:
     e.decodeQueued = true
     cmds.add(Command(kind: cmContinue, operation: DecodeOperation))
 
-proc decodeTurn(e: var Engine, cmds: var seq[Command]) =
-  ## [G447] One turn of decoding: at most `DecodeTurnUnits` entries and contracts, decoded
-  ## or freed. A judgment whose operation went is not finished: what it holds is freed in
-  ## turns (Fable's D1 condition 5; its archive is no other operation's, which retrieves
-  ## and judges its own). Nothing sees a judgment before it is whole.
+proc dropTurn(e: var Engine, cmds: var seq[Command]) =
+  ## [G447, G482] One turn of freeing: at most `DecodeTurnUnits` dependency entries of
+  ## judgments whose operation went (Fable's D1 condition 5; its archive is no other
+  ## operation's, which retrieves and judges its own).
   e.decodeQueued = false
   var budget = DecodeTurnUnits
-  while budget > 0:
-    if e.dropping.len > 0:
-      if e.dropping[0].releaseSome(budget):
-        e.dropping.delete(0)
-      continue
-    if e.decodes.len == 0:
-      break
-    if e.decodes[0].request notin e.requests:
-      var dc = move e.decodes[0] # its operation is gone
-      e.decodes.delete(0)
-      e.dropping.add(move dc.decoding)
-      continue
-    if not e.decodes[0].decoding.decodeSome(budget):
-      break
-    var dc = move e.decodes[0]
-    e.decodes.delete(0)
-    e.finishDecode(dc, cmds)
-  e.queueDecodeTurn(cmds)
+  while budget > 0 and e.dropping.len > 0:
+    if e.dropping[0].releaseSome(budget):
+      e.dropping.delete(0)
+  e.queueDropTurn(cmds)
 
 proc spoolEnds(e: var Engine, file: uint64, reason: string, cmds: var seq[Command]) =
   ## [G446] A spool file failed while its retrieval runs: the retrieval ends now.
@@ -1521,12 +1488,12 @@ proc onWorked(e: var Engine, r: sink WorkerResult, cmds: var seq[Command]) =
   of wrOpened:
     let (request, source, digest) = (sp.request, sp.source, sp.digest)
     if sp.mutation and request in e.requests:
-      e.keep(r.file, r.opened.kind == ikEligible)
-      if r.opened.kind == ikEligible:
+      e.keep(r.file, r.opened.inspection.kind == ikEligible)
+      if r.opened.inspection.kind == ikEligible:
         e.judged(
           r.file,
-          r.opened.identity,
-          r.opened.commitment,
+          r.opened.inspection.identity,
+          r.opened.inspection.commitment,
           PackageSigner(profile: r.opened.profile, key: r.opened.key),
           r.opened.variant,
         )
@@ -1534,28 +1501,21 @@ proc onWorked(e: var Engine, r: sink WorkerResult, cmds: var seq[Command]) =
       e.unspool(r.file, cmds)
     if r.reply.len > 0 and request in e.requests:
       e.operations.withValue(request, op):
-        op.inspections[judgedKey(r.opened.identity, r.opened.commitment)] = move r.reply
-    let units = r.opened.units
+        op.inspections[
+          judgedKey(r.opened.inspection.identity, r.opened.inspection.commitment)
+        ] = move r.reply
     if request notin e.requests:
-      if units > DecodeTurnUnits:
-        e.dropping.add(initDecoding(move r.opened)) # freed in turns, as a dropped decode
-        e.queueDecodeTurn(cmds)
+      # [G482] Its encodings go now, two blocks; its entries in turns when there are many.
+      if r.opened.inspection.kind == ikEligible and
+          r.opened.inspection.dependencies.len > DecodeTurnUnits:
+        e.dropping.add(move r.opened.inspection.dependencies)
+        e.queueDropTurn(cmds)
       return
-    let estimate = r.opened.estimatedBytes
-    var dc = Decode(
-      request: request,
-      source: source,
-      digest: digest,
-      estimate: estimate,
-      decoding: initDecoding(move r.opened),
-    )
-    if e.decodes.len == 0 and units <= DecodeTurnUnits:
-      var budget = DecodeTurnUnits
-      doAssert dc.decoding.decodeSome(budget)
-      e.finishDecode(dc, cmds)
-      return
-    e.decodes.add(move dc)
-    e.queueDecodeTurn(cmds)
+    # [G447, G482] Admitted and supplied in the turn it arrives: nothing is decoded. The
+    # cache's estimate is by lengths.
+    let estimate = r.opened.inspection.estimatedBytes
+    let x = e.cache.admit(digest, move r.opened, estimate)
+    e.supplyTo(request, source, x, cmds)
   of wrRetained, wrStaged, wrCommitted, wrReply, wrCollected:
     discard # answered above
 
@@ -2419,8 +2379,7 @@ proc stagedTurn(e: var Engine, request: uint64, cmds: var seq[Command]) =
       var budget = DecodeTurnUnits
       if p.deps.decodeSome(budget):
         p.depsDone = true
-        var o = p.deps.take()
-        p.dependencies = move o.inspection.dependencies
+        p.dependencies = p.deps.take()
     elif p.decoded.len < p.modules.len:
       let k = p.decoded.len
       let v = decodeCbor(p.modules[k])
@@ -2464,14 +2423,7 @@ proc onStaged(e: var Engine, r: sink WorkerResult, cmds: var seq[Command]) =
       p.base = r.base
       p.modules = move r.modules
       p.artifacts = move r.artifacts
-      p.deps = initDecoding(
-        WireOpened(
-          kind: ikEligible,
-          identity: p.selected.identity,
-          commitment: p.selected.commitment,
-          dependencies: move r.dependencies,
-        )
-      )
+      p.deps = initDecoding(move r.staged)
       op.phase = mpDecoding
   if signerOnly:
     e.commitPending(r.request, cmds)
@@ -2836,7 +2788,7 @@ proc handle*(e: var Engine, ev: sink Event): seq[Command] =
     if ev.continued == ReleaseOperation:
       e.releaseTurn(result)
     elif ev.continued == DecodeOperation:
-      e.decodeTurn(result)
+      e.dropTurn(result)
     elif ev.continued in e.requests:
       e.advanceRequest(ev.continued, result)
     else:
@@ -2923,7 +2875,6 @@ proc stop*(e: var Engine): seq[Command] =
   e.spools.clear()
   e.shareWaiters.setLen(0)
   e.shareUsed = 0
-  e.decodes.setLen(0)
   e.dropping.setLen(0)
   e.decodeQueued = false
 

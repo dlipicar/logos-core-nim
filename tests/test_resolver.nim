@@ -4,7 +4,7 @@
 ## logs every source it is asked about; one test resolves real signed LGX
 ## packages through `lgxInspector`.
 
-import std/[algorithm, random, sequtils, sets, strutils, tables]
+import std/[algorithm, hashes, random, sequtils, sets, strutils, tables]
 import unittest2
 import logos_sdk/[cbor, pins]
 import logos_sdk/base/hex
@@ -13,7 +13,7 @@ import logos_sdk/crypto/blake3, ../src/logos_core/crypto/slhdsa
 import ../src/logos_core/pins as core_pins
 import ../src/logos_core/package/[lgx, resolver, signing, trust]
 import ../src/logos_core/daemon/config
-import ./support/[oracle_resolver, pmshapes]
+import ./support/[oracle_resolver, pmshapes, valueinspection]
 
 proc b(s: string): seq[byte] =
   @(s.toOpenArrayByte(0, s.high))
@@ -90,7 +90,8 @@ proc source(name, version: string, n = 0): PackageSource =
 type
   Universe = ref object
     catalog: seq[CatalogEntry]
-    outcomes: Table[seq[byte], Inspection]
+    outcomes: Table[seq[byte], ValueInspection]
+      ## [G482] values: the oracle reads them, the resolver is given them `held`
     installed: seq[InstalledPackage]
     log: seq[string] ## the sources inspected, in order
     altered: HashSet[string] ## installed identities whose retained bytes are altered
@@ -120,7 +121,7 @@ proc add(
   u.outcomes[s.encoded] =
     case outcome
     of ikEligible:
-      Inspection(
+      ValueInspection(
         kind: ikEligible,
         identity:
           if claims.len > 0:
@@ -132,9 +133,9 @@ proc add(
         provides: provided(providing(provides)),
       )
     of ikIneligible:
-      Inspection(kind: ikIneligible, error: packageError(code, "test: " & $code))
+      ValueInspection(kind: ikIneligible, error: packageError(code, "test: " & $code))
     of ikUnavailable:
-      Inspection(kind: ikUnavailable, reason: "test: the source is unreachable")
+      ValueInspection(kind: ikUnavailable, reason: "test: the source is unreachable")
 
 proc publicKey(fill: byte): PublicKey =
   for i in 0 ..< PublicKeyBytes:
@@ -179,15 +180,21 @@ proc trust(u: Universe): TrustInput =
     names.add(p.identity.package)
   doAssert result.addAnchor(b("universe"), acceptedKey, names).isOk
 
-proc inspector(u: Universe): Inspector =
+proc valueInspector(u: Universe): ValueInspector =
+  ## [G482] The universe's answers as values (the oracle's), logging each source asked for.
   let outcomes = u.outcomes
   result = proc(
       s: PackageSource, trust: TrustInput
-  ): Inspection {.gcsafe, raises: [].} =
+  ): ValueInspection {.gcsafe, raises: [].} =
     u.log.add(str(s.objectLocator))
     outcomes.getOrDefault(
-      s.encoded, Inspection(kind: ikUnavailable, reason: "test: no such source")
+      s.encoded, ValueInspection(kind: ikUnavailable, reason: "test: no such source")
     )
+
+proc inspector(u: Universe): Inspector =
+  ## [G482] The same answers `held`, as the resolver holds them, each checked against its
+  ## values.
+  resolverInspector(u.valueInspector)
 
 proc retained(u: Universe): RetainedCheck =
   result = proc(p: InstalledPackage): Result[void, string] {.gcsafe, raises: [].} =
@@ -523,7 +530,15 @@ suite "pkg.catalog: inspection records (PM §6)":
     let i = inspection(v, v.manifest.modules)
     check i.kind == ikEligible
     check i.identity == ident("app@1.0.0")
-    check i.dependencies == @[dep("lib ^1.0.0")]
+    check i.matches(
+      ValueInspection(
+        kind: ikEligible,
+        identity: ident("app@1.0.0"),
+        commitment: v.commitment,
+        dependencies: @[dep("lib ^1.0.0")],
+        provides: provided(v.manifest.modules),
+      )
+    )
     check v.manifest.modules[0].requires.len == 1
     check v.manifest.variants.len == 2
 
@@ -924,7 +939,7 @@ suite "pkg.resolver: dependency resolution (PM §11)":
       check (if r.isOk: "ok" else: $r.error.code) == outcome
       let i = inspect(source("lib", "1.0.0"), anchors)
       check i.kind == ikEligible
-      check i.provides.len == (if host == darwinHost: 1 else: 0)
+      check i.providedCount == (if host == darwinHost: 1 else: 0)
 
   test "[PKG-0318] an installed record satisfies a dependency without being materialized":
     let u = Universe()
@@ -1525,7 +1540,7 @@ proc resolveBy(
   )
   let r =
     if oracle:
-      oracleResolve(input, root, c)
+      oracleResolve(input, u.valueInspector, root, c)
     else:
       resolve(input, root, c)
   result = described(r, c)
@@ -1961,7 +1976,7 @@ suite "pkg.resolver: the resolver gives the frozen oracle's results (G454)":
           $lim.candidates & "/" & $lim.attempts
         var c, k: ResolverCounters
         let input = s.inputOf(lim)
-        let want = described(oracleResolve(input, s.rootOf, k), k)
+        let want = described(oracleResolve(input, s.valueInspector, s.rootOf, k), k)
         let got = described(resolve(input, s.rootOf, c), c)
         check got == want
 
@@ -2182,40 +2197,184 @@ suite "pkg.resolver: contracts and pins, numbered once (G455, 5-3c-3)":
     check u.resolveBy(root, limits(), oracle = false) ==
       u.resolveBy(root, limits(), oracle = true)
 
-  test "[IMPL-DECISION G455] an inspection shared with a cache, as the verification cache's copies are (G403): a run drops only its own references to the contracts it numbers, so a second operation over the same inspections gives the first's answer and the cached contracts stay whole":
-    # The universe answers each source with a copy of the one inspection it keeps, whose
-    # contract trees the copy shares, as `VerificationCache.inspect` does.
+  test "[IMPL-DECISION G455] [IMPL-DECISION G482] an inspection shared with a cache, as the verification cache's copies are (G403): a run takes the encodings of its own copy only, so a second operation over the same inspections gives the first's answer and the kept inspections stay whole":
+    # Each source is answered with a copy of the one inspection kept for it, as
+    # `VerificationCache.lookup` answers.
     let u = Universe()
     u.add("A", "1.0.0", ["P ^1.0.0 +x +y"])
     u.add("B", "1.0.0", ["P ^1.0.0 +y"])
     u.add("P", "1.0.0", provides = ["y", "x", "z"])
     u.add("R", "1.0.0", ["A ^1.0.0", "B ^1.0.0"])
-    proc held(u: Universe): seq[seq[byte]] =
-      for x in u.outcomes.values:
-        for d in x.dependencies:
-          for c in d.contracts:
-            result.add(encodeCbor(c))
-        for c in x.provides:
-          result.add(encodeCbor(c))
-
-    let before = u.held
-    check before.len == 6 # x and y, y, and y, x and z
+    let kept = new Table[seq[byte], Inspection]
+    for k, v in u.outcomes:
+      kept[][k] = held(v)
+    let inspect: Inspector = proc(
+        s: PackageSource, trust: TrustInput
+    ): Inspection {.gcsafe, raises: [].} =
+      kept[].getOrDefault(
+        s.encoded, Inspection(kind: ikUnavailable, reason: "test: no such source")
+      )
     let root = RootReference(package: Opt.some("R"))
-    let first = u.resolveBy(root, limits(), oracle = false)
+    proc once(): seq[string] =
+      var c: ResolverCounters
+      let input = ResolverInput(
+        installed: u.installed,
+        catalog: u.catalog,
+        limits: limits(),
+        trust: u.trust,
+        inspect: inspect,
+        retained: u.retained,
+      )
+      described(resolve(input, root, c), c)
+
+    proc whole(): bool =
+      result = true
+      for k, v in u.outcomes:
+        if not kept[].getOrDefault(k).matches(v):
+          return false
+
+    let first = once()
     check first[0].startsWith("root R@1.0.0")
-    check u.held == before
-    check u.resolveBy(root, limits(), oracle = false) == first
-    check u.held == before
-    check u.resolveBy(root, limits(), oracle = true) == first
+    check kept[].getOrDefault(source("P", "1.0.0").encoded).contractCount == 3
+    check whole()
+    check once() == first
+    check whole()
+    check u.resolveBy(root, limits(), oracle = false) ==
+      u.resolveBy(root, limits(), oracle = true)
+
+suite "pkg.resolver: an inspection's encodings (G482)":
+  test "[IMPL-DECISION G482] the builder keeps each list as given, in order: each entry's contracts, then the provided ones, each a range of one buffer; only `inspection(v, modules)` deduplicates, as `provided` does":
+    let x = eligibleInspection(
+      ident("a@1.0.0"),
+      commitOf("a@1.0.0"),
+      @[dep("bb ^1.0.0 +x +y +x"), dep("c =2.0.0"), dep("d ^1.0.0 +z")],
+      @[contract("p"), contract("q"), contract("p")],
+    )
+    check x.dependencies.mapIt(it.package) == @["bb", "c", "d"]
+    check x.dependencies.mapIt(it.listedCount) == @[3, 0, 1]
+    check x.contractCount == 7
+    check x.providedCount == 3 # the repeat is kept
+    var at = 0
+    var got: seq[(int, seq[byte])]
+    var k = 0
+    for (entry, r) in x.contractRanges:
+      check r.a == at
+      check x.contractAt(k) == r
+      at = r.b + 1
+      inc k
+      got.add((entry, @(x.contractData.toOpenArrayByte(r.a, r.b))))
+    check at == x.contractData.len
+    check got ==
+      @[
+        (0, encodeCbor(contract("x"))),
+        (0, encodeCbor(contract("y"))),
+        (0, encodeCbor(contract("x"))),
+        (2, encodeCbor(contract("z"))),
+        (-1, encodeCbor(contract("p"))),
+        (-1, encodeCbor(contract("q"))),
+        (-1, encodeCbor(contract("p"))),
+      ]
+    # A record's: its selected declarations' contracts once each, in declaration order.
+    let v = verified(appManifest())
+    let modules = providing(["y", "x", "y"]) & providing(["x", "z"])
+    let i = inspection(v, modules)
+    check i.providedCount == 3
+    check valueinspection.encodings(i)[1] == provided(modules).mapIt(encodeCbor(it))
+    check i.matches(valueInspection(v, modules))
+    # None: no buffer, no range.
+    let none =
+      eligibleInspection(ident("e@1.0.0"), commitOf("e@1.0.0"), @[dep("f ^1.0.0")], [])
+    check none.contractCount == 0
+    check none.providedCount == 0
+    check none.contractData.len == 0
+    check none.inputCount == 2
+    for _ in none.contractRanges:
+      fail()
+
+  test "[IMPL-DECISION G482] the builder's guard: an inspection's encodings fit `int32` offsets (a test hook lowers the bound)":
+    when defined(lcnTestHooks):
+      let size = encodedSize(contract("x"))
+      inspectionBytesForTests = 2 * size
+      check eligibleInspection(
+        ident("a@1.0.0"), commitOf("a"), [], @[contract("x"), contract("y")]
+      ).contractCount == 2
+      expect AssertionDefect:
+        discard eligibleInspection(
+          ident("a@1.0.0"),
+          commitOf("a"),
+          @[dep("b ^1.0.0 +z")],
+          @[contract("x"), contract("y")],
+        )
+      inspectionBytesForTests = 0
+    else:
+      skip()
+
+  test "[IMPL-DECISION G482] a contract's range hashes as the same bytes in a `seq` of their own: every probe, and the work, is what it was":
+    let x = eligibleInspection(
+      ident("a@1.0.0"),
+      commitOf("a"),
+      @[dep("b ^1.0.0 +x +y"), dep("c ^1.0.0 +z")],
+      @[contract("p")],
+    )
+    for (_, r) in x.contractRanges:
+      let own = @(x.contractData.toOpenArrayByte(r.a, r.b))
+      check hash(x.contractData.toOpenArrayByte(r.a, r.b)) == hash(own)
+
+  test "[IMPL-DECISION G482] a catalog record's encodings leave its inspection when its walk starts (Fable's condition 1), and a run given up during the walk frees them":
+    when defined(lcnTestHooks):
+      var names: seq[string]
+      for i in 0 ..< 3000:
+        names.add("c" & $i)
+      let u = Universe()
+      u.add("R", "1.0.0", ["P ^1.0.0 +" & names.join(" +")])
+      u.add("P", "1.0.0", provides = names)
+      let input = ResolverInput(
+        catalog: u.catalog,
+        limits: limits(),
+        trust: u.trust,
+        inspect: u.inspector,
+        retained: u.retained,
+      )
+      let r = source("R", "1.0.0")
+      let run = startRun(input, RootReference(package: Opt.some("R")), 64)
+      var supplied, during = false
+      while not during:
+        let s = run.resume()
+        case s.kind
+        of suNeedSource:
+          run.supply(s.source, input.inspect(s.source, input.trust))
+          if s.source == r:
+            check run.heldContractsForTests(r) == 3000 # supplied, not walked yet
+            supplied = true
+        of suNeedRetained:
+          run.supplyRetained(s.record, Result[void, string].ok())
+        of suTurn:
+          # Within R's walk: its numbers are not done, and its inspection holds none.
+          if supplied and run.numbered.records == 0 and run.numbered.contracts > 0:
+            check run.heldContractsForTests(r) == 0
+            during = true
+        of suDone:
+          break
+      check during
+      when not (defined(asan) or defined(tsan) or defined(msan) or defined(useMalloc)):
+        GC_fullCollect()
+        let before = getOccupiedMem()
+        discard run.release() # the steps go, and with them the walk's encodings
+        GC_fullCollect()
+        check before - getOccupiedMem() >= 3000 * encodedSize(contract("c0"))
+      while not run.release():
+        discard
+      check run.supplied == 0
+    else:
+      skip()
 
 suite "pkg.resolver: the operation bound (G477)":
   test "[IMPL-DECISION G477] one walk gives a record's input units: the record, each dependency entry and the contracts it lists, each provided contract":
-    let x = Inspection(
-      kind: ikEligible,
-      identity: ident("a@1.0.0"),
-      commitment: commitOf("a@1.0.0"),
-      dependencies: @[dep("bb ^1.0.0 +x +y"), dep("c =2.0.0")],
-      provides: @[contract("p")],
+    let x = eligibleInspection(
+      ident("a@1.0.0"),
+      commitOf("a@1.0.0"),
+      @[dep("bb ^1.0.0 +x +y"), dep("c =2.0.0")],
+      @[contract("p")],
     )
     var walked: seq[InputUnit]
     for u in x.inputUnits:
@@ -2313,12 +2472,15 @@ suite "pkg.resolver: the operation bound (G477)":
     for round in 0 ..< 1_000:
       let g = rng.generated(seen)
       checkpoint "round " & $round
-      # The count by lengths is the walk's.
-      for x in g.u.outcomes.values:
-        var n = 0
-        for _ in x.inputUnits:
-          inc n
-        check x.inputCount == n
+      # The count by lengths is the walk's, and [G482] the walk over the encodings is the walk
+      # over the values, unit by unit.
+      for v in g.u.outcomes.values:
+        let x = held(v)
+        var units: seq[InputUnit]
+        for w in x.inputUnits:
+          units.add(w)
+        check units == valueUnits(v)
+        check x.inputCount == units.len
       for p in g.u.installed:
         var n = 0
         for _ in p.inputUnits:

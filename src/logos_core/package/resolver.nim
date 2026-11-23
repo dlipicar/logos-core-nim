@@ -34,7 +34,7 @@ import std/[algorithm, hashes, sequtils, sets, tables]
 import results
 import logos_sdk/cbor
 import logos_sdk/base/testhooks
-import ./[errors, lgx, manifest, records, semver, signing, trust]
+import ./[errors, lgx, manifest, records, reffree, semver, signing, trust]
 
 testHooksMarker("resolver")
 
@@ -56,15 +56,41 @@ type
     ikIneligible ## a candidate rule fails: the record is excluded
     ikUnavailable ## its material could not be located or materialized
 
-  Inspection* = object ## What one source record yields for the requested operation.
+  ContractBytes = object
+    ## [IMPL-DECISION G482] An eligible inspection's contracts, each as its
+    ## deterministic encoding, back to back in one buffer: contract `k` is
+    ## `bytes[ends[k-1] ..< ends[k]]`. A `string`, which refc's channel copies in
+    ## one block (G447); the encodings go in two deallocations. Each encoding is
+    ## its own range of the manifest's bytes (the decoder accepts only
+    ## deterministic ones), so the buffer is at most the manifest's 4 MiB and an
+    ## `int32` holds every offset.
+    bytes: string
+    ends: seq[int32]
+
+  InspectedDependency* = object
+    ## [IMPL-DECISION G482] A dependency entry of an eligible inspection: the
+    ## manifest's, with the contracts it lists held in the inspection's
+    ## encodings, in order (`listedCount`, `contractAt`).
+    package*: string
+    kind*: RequirementKind
+    version*: string
+    count: int32 ## how many of the inspection's contracts it lists, in order
+
+  Inspection* = object
+    ## What one source record yields for the requested operation.
+    ## [IMPL-DECISION G482] It holds no reference (`requireRefFree`), so it
+    ## crosses the Package Manager's worker channel as it is. Only
+    ## `eligibleInspection` makes one that holds contracts.
     case kind*: InspectionKind
     of ikEligible:
       identity*: PackageIdentity ## the verified manifest's
       commitment*: ManifestCommitment
-      dependencies*: seq[PackageDependency] ## the manifest's, in declaration order
-      provides*: seq[CborValue]
+      dependencies*: seq[InspectedDependency] ## the manifest's, in declaration order
+      contracts: ContractBytes
+        ## each entry's listed contracts as it lists them, entry by entry, then
         ## [SPEC PM §11 l.1213] the contracts its selected module declarations
         ## provide (`provided`)
+      providedAt: int32 ## where the provided ones start in `contracts`
     of ikIneligible:
       error*: PackageError
     of ikUnavailable:
@@ -206,21 +232,135 @@ type
     of suDone:
       outcome*: Result[Resolution, PackageError]
 
+# An inspection's contracts (G482) ----------------------------------------------------
+
+requireRefFree(Inspection)
+
+when defined(lcnTestHooks):
+  var inspectionBytesForTests* {.threadvar.}: int
+    ## Test hook (D27; DECISIONS I89) [IMPL-DECISION G482] (5-3c-4): when not 0, the most
+    ## encoded bytes `eligibleInspection` takes instead of `high(int32)`, so a suite reaches
+    ## its guard without 2 GiB of contracts. Inert at 0; set by a suite on its own thread.
+
+func eligibleInspection*(
+    identity: PackageIdentity,
+    commitment: ManifestCommitment,
+    deps: openArray[PackageDependency],
+    provides: openArray[CborValue],
+): Inspection =
+  ## [IMPL-DECISION G482] An eligible inspection: `deps`, the manifest's
+  ## dependencies in declaration order, and `provides`, the contracts the record
+  ## provides, each list kept as given. Each contract is encoded once, here (on
+  ## the Package Manager's worker), into one buffer sized for all of them, so it
+  ## has no slack. `inspection(v, modules)` gives `provided(modules)`, once each.
+  var n = provides.len
+  var size = 0
+  for d in deps:
+    n += d.contracts.len
+    for c in d.contracts:
+      size += encodedSize(c)
+  for c in provides:
+    size += encodedSize(c)
+  var most = int(high(int32))
+  when defined(lcnTestHooks):
+    {.cast(noSideEffect), cast(gcsafe).}:
+      if inspectionBytesForTests != 0:
+        most = inspectionBytesForTests
+  doAssert size <= most,
+    "an inspection's encodings are at most its manifest's size (G482)"
+  result = Inspection(kind: ikEligible, identity: identity, commitment: commitment)
+  result.dependencies = newSeqOfCap[InspectedDependency](deps.len)
+  result.contracts.bytes = newStringOfCap(size)
+  result.contracts.ends = newSeqOfCap[int32](n)
+  template addContract(c: CborValue) =
+    let enc = encodeCbor(c)
+    let at = result.contracts.bytes.len
+    result.contracts.bytes.setLen(at + enc.len)
+    if enc.len > 0:
+      copyMem(addr result.contracts.bytes[at], unsafeAddr enc[0], enc.len)
+    result.contracts.ends.add(int32(result.contracts.bytes.len))
+
+  for d in deps:
+    result.dependencies.add(
+      InspectedDependency(
+        package: d.package,
+        kind: d.kind,
+        version: d.version,
+        count: int32(d.contracts.len),
+      )
+    )
+    for c in d.contracts:
+      addContract(c)
+  result.providedAt = int32(result.contracts.ends.len)
+  for c in provides:
+    addContract(c)
+
+func listedCount*(d: InspectedDependency): int =
+  ## [IMPL-DECISION G482] How many contracts the entry lists.
+  int(d.count)
+
+func contractCount*(x: Inspection): int =
+  ## [IMPL-DECISION G482] The contracts an eligible inspection holds: each
+  ## entry's listed ones, entry by entry, then the provided ones.
+  x.contracts.ends.len
+
+func providedCount*(x: Inspection): int =
+  ## [IMPL-DECISION G482] The contracts it provides (`provided`).
+  if x.contracts.ends.len == 0:
+    0
+  else:
+    x.contracts.ends.len - int(x.providedAt)
+
+func contractAt*(x: Inspection, k: int): Slice[int] =
+  ## [IMPL-DECISION G482] Where contract `k` (`contractCount`'s order) is in
+  ## `contractData`.
+  let lo =
+    if k == 0:
+      0
+    else:
+      int(x.contracts.ends[k - 1])
+  lo .. int(x.contracts.ends[k]) - 1
+
+func contractData*(x: Inspection): lent string =
+  ## [IMPL-DECISION G482] The deterministic encodings of an eligible
+  ## inspection's contracts, back to back (`contractAt`).
+  x.contracts.bytes
+
+iterator contractRanges*(x: Inspection): tuple[entry: int, at: Slice[int]] =
+  ## [IMPL-DECISION G482] Each contract an eligible inspection holds, in order,
+  ## and where it is in `contractData`: the entry that lists it, or -1 for a
+  ## provided one.
+  let n = x.contracts.ends.len
+  var k = 0
+  if n > 0:
+    for i, d in x.dependencies:
+      for _ in 0 ..< int(d.count):
+        yield (i, x.contractAt(k))
+        inc k
+  while k < n:
+    yield (-1, x.contractAt(k))
+    inc k
+
 # A record's input units --------------------------------------------------------------
 
 iterator inputUnits*(x: Inspection): InputUnit =
   ## [IMPL-DECISION G477] One inspection's input, unit by unit: the record,
   ## then each dependency entry followed by the contracts it lists, then each
-  ## provided contract.
+  ## provided contract. [IMPL-DECISION G482] A contract's bytes are its
+  ## encoding's length.
   case x.kind
   of ikEligible:
     yield (iuRecord, x.identity.package.len + x.identity.version.len)
+    var k = 0
+    let n = x.contracts.ends.len
     for d in x.dependencies:
       yield (iuDependency, d.package.len + d.version.len)
-      for c in d.contracts:
-        yield (iuDependencyContract, encodedSize(c))
-    for c in x.provides:
-      yield (iuProvided, encodedSize(c))
+      for _ in 0 ..< (if n > 0: int(d.count) else: 0):
+        yield (iuDependencyContract, x.contractAt(k).len)
+        inc k
+    while k < n:
+      yield (iuProvided, x.contractAt(k).len)
+      inc k
   of ikIneligible:
     yield (iuRecord, x.error.msg.len)
   of ikUnavailable:
@@ -245,13 +385,10 @@ iterator inputUnits*(p: InstalledPackage): InputUnit =
 
 func inputCount*(x: Inspection): int =
   ## [IMPL-DECISION G477] The units one inspection holds
-  ## (`ResolverCounters.entries`): the count of its walk, by lengths, so no
-  ## contract is encoded to be counted.
+  ## (`ResolverCounters.entries`): the count of its walk, by lengths.
   result = 1
   if x.kind == ikEligible:
-    result += x.dependencies.len + x.provides.len
-    for d in x.dependencies:
-      result += d.contracts.len
+    result += x.dependencies.len + x.contracts.ends.len
 
 func inputCount*(p: InstalledPackage): int =
   ## [IMPL-DECISION G477] The units one installed record holds: the count of
@@ -439,7 +576,7 @@ type
   CatalogPick = object
     commitment: ManifestCommitment
     source: PackageSource
-    deps: seq[PackageDependency]
+    deps: seq[InspectedDependency]
     numbers: int32 ## its record's numbers (`Resolver.lists`)
     provides: Span ## the numbers of the contracts it provides, ascending
 
@@ -819,15 +956,16 @@ type
     ## Where `internSteps` is in a record: `stage` 0 is its dependency entries
     ## (entry `i`, contract `j`); for a catalog record 1 is its provided
     ## contracts, and for an installed record 1 to 3 are module `i`'s primary
-    ## contract, `implements` and `extends`; 4 is the end.
-    stage, i, j: int
+    ## contract, `implements` and `extends`; 4 is the end. `k` is a catalog
+    ## record's next contract in the walk's encodings (G482).
+    stage, i, j, k: int
 
   ContractStep = enum
     csDone ## the record's contracts are all numbered
     csEntry ## the walk moved to another entry or module: a unit
-    csContract ## a contract, encoded
+    csContract ## a contract: its encoding
 
-template dependencyStage(deps: untyped, freeing: static bool) =
+template dependencyStage(deps: untyped, listed: untyped, contract: untyped) =
   if c.i >= deps.len:
     nums.entryAt.add(int32(nums.list.len)) # where the provided ones start
     c.stage = 1
@@ -837,33 +975,35 @@ template dependencyStage(deps: untyped, freeing: static bool) =
   if c.j == 0 and nums.entryAt.len == c.i:
     nums.entryAt.add(int32(nums.list.len))
     return csEntry
-  if c.j < deps[c.i].contracts.len:
-    enc = encodeCbor(deps[c.i].contracts[c.j])
-    when freeing:
-      deps[c.i].contracts[c.j] = CborValue()
+  if c.j < listed:
+    contract
     inc c.j
     return csContract
-  when freeing:
-    deps[c.i].contracts = @[]
   inc c.i
   c.j = 0
   return csEntry
 
 proc nextCatalog(
-    x: var Inspection, c: var Cursor, nums: var Numbers, enc: var seq[byte]
+    x: Inspection,
+    walk: ContractBytes,
+    c: var Cursor,
+    nums: var Numbers,
+    at: var Slice[int],
 ): ContractStep =
-  ## A catalog record's next contract, encoded, and freed: nothing in the run
-  ## reads it again.
+  ## [IMPL-DECISION G482] A catalog record's next contract: where its encoding
+  ## is in `walk`, the record's encodings, which the walk took from the
+  ## inspection when it started. `x` gives the entries' counts.
+  template next() =
+    at = (if c.k == 0: 0 else: int(walk.ends[c.k - 1])) .. int(walk.ends[c.k]) - 1
+    inc c.k
+
   case c.stage
   of 0:
-    dependencyStage(x.dependencies, true)
+    dependencyStage(x.dependencies, int(x.dependencies[c.i].count), next())
   of 1:
-    if c.j < x.provides.len:
-      enc = encodeCbor(x.provides[c.j])
-      x.provides[c.j] = CborValue()
-      inc c.j
+    if c.k < walk.ends.len:
+      next()
       return csContract
-    x.provides = @[]
     c.stage = 4
     return csEntry
   else:
@@ -874,9 +1014,12 @@ proc nextInstalled(
 ): ContractStep =
   ## An installed record's next contract, encoded: each its dependency
   ## entries list, then each its module declarations name (PM l.1213).
+  template encodeNext() =
+    enc = encodeCbor(p.dependencies[c.i].contracts[c.j])
+
   case c.stage
   of 0:
-    dependencyStage(p.dependencies, false)
+    dependencyStage(p.dependencies, p.dependencies[c.i].contracts.len, encodeNext())
   of 1, 2, 3:
     if c.i >= p.modules.len:
       c.stage = 4
@@ -917,16 +1060,20 @@ const EntryStepsPerLookup = 32
 proc nextContract(
     r: var Resolver,
     need: InternNeed,
+    walk: ContractBytes,
     c: var Cursor,
     nums: var Numbers,
     enc: var seq[byte],
+    at: var Slice[int],
     steps: var int,
 ): ContractStep =
   ## [IMPL-DECISION G455] (5-3c-3) The next steps of `internSteps`' walk, up to
-  ## and with its next contract: `steps` of them, each a unit. A catalog record
-  ## is looked up for each call, so no view of the table is held across a
-  ## yield (rule I2); one lookup takes up to `EntryStepsPerLookup` steps, none
-  ## of which yields, so an entry that lists nothing costs no lookup of its own.
+  ## and with its next contract: `steps` of them, each a unit. An installed
+  ## record's contract is encoded into `enc`; a catalog record's is the range
+  ## `at` of `walk` (G482). A catalog record is looked up for each call, for
+  ## its entries' counts, so no view of the table is held across a yield (rule
+  ## I2); one lookup takes up to `EntryStepsPerLookup` steps, none of which
+  ## yields, so an entry that lists nothing costs no lookup of its own.
   steps = 1
   if need.installed >= 0:
     return nextInstalled(r.installed[need.installed], c, nums, enc)
@@ -934,20 +1081,15 @@ proc nextContract(
   steps = 0
   r.inspected.withValue(need.source, v):
     while true:
-      result = nextCatalog(v[], c, nums, enc)
+      result = nextCatalog(v[], walk, c, nums, at)
       inc steps
       if result != csEntry or steps >= EntryStepsPerLookup:
         break
 
 func listsNoContract(x: Inspection): bool =
   ## [IMPL-DECISION G455] (5-3c-3) Whether an eligible catalog record lists and
-  ## provides no contract.
-  if x.provides.len > 0:
-    return false
-  for d in x.dependencies:
-    if d.contracts.len > 0:
-      return false
-  true
+  ## provides no contract. [IMPL-DECISION G482] By its encodings' count.
+  x.contracts.ends.len == 0
 
 func listsNoContract(p: InstalledPackage): bool =
   ## Whether an installed record lists and declares no contract.
@@ -1131,12 +1273,14 @@ func unsupportedOnly(e: Eval): bool =
   e.errors.allIt(it.code == pecUnsupportedManifest) and
     (e.installedError.isSome or e.errors.len > 0)
 
-func fresh(
-    r: Resolver, deps: seq[PackageDependency], numbers: int32
+func fresh[D: PackageDependency | InspectedDependency](
+    r: Resolver, deps: seq[D], numbers: int32
 ): (seq[string], seq[Req]) =
   # [IMPL-DECISION G455] Sized once: growing them took a third of the build of
   # a maximum-size manifest's list. (5-3c-3) A requirement's contracts are a
-  # span of its record's numbers: none is copied or encoded.
+  # span of its record's numbers: none is copied or encoded. [G482] An
+  # installed record's entries or an inspection's: only their package, kind
+  # and version are read.
   result[0] = newSeqOfCap[string](deps.len)
   result[1] = newSeqOfCap[Req](deps.len)
   for i, d in deps:
@@ -2068,19 +2212,25 @@ when defined(lcnTestHooks):
     ## and all of them probe one chain, as encodings chosen to collide would. Inert at 0; set
     ## by a suite on its own thread.
 
-proc contractHash(enc: seq[byte]): Hash {.inline.} =
+proc contractHash(enc: openArray[byte]): Hash {.inline.} =
   ## [IMPL-DECISION G455] (5-3c-3) An encoding's hash: std/hashes', unkeyed, so the same
   ## inputs give the same probes, work and turns in every run (Fable's review of 5-3c-3 §1).
   ## Its keys are chosen by a signer; a chain of collisions costs probes, each a unit and a
-  ## turn check, never a step of its own.
+  ## turn check, never a step of its own. [IMPL-DECISION G482] The same function over the
+  ## same bytes whether they are a range of a record's encodings or a `seq` of their own
+  ## (std/hashes has one `hash` for both, and a test holds them equal), so every probe, and
+  ## the work, is what it was.
   result = hash(enc)
   when defined(lcnTestHooks):
     {.cast(gcsafe).}:
       if contractHashShiftForTests != 0:
         result = result shl contractHashShiftForTests
 
+func sameBytes(a: seq[byte], b: openArray[byte]): bool {.inline.} =
+  a.len == b.len and (a.len == 0 or equalMem(unsafeAddr a[0], unsafeAddr b[0], a.len))
+
 template probeSteps(
-    r: ref Resolver, old: bool, h: Hash, enc: seq[byte], found: var int32
+    r: ref Resolver, old: bool, h: Hash, enc: untyped, found: var int32
 ) =
   ## [IMPL-DECISION G455] (5-3c-3) The number of the contract encoded as `enc` in the slots
   ## (`old`: the slots before their last growth), or -1. Each probe is a unit and a turn
@@ -2102,7 +2252,7 @@ template probeSteps(
           slotAt(r.slots, i) - 1
       if n < 0:
         break probing
-      if r.hashes.at(n) == h and r.encodings.at(n) == enc:
+      if r.hashes.at(n) == h and sameBytes(r.encodings.at(n), enc):
         found = n
         break probing
       i = (i + 1) and m
@@ -2125,9 +2275,11 @@ template placeSteps(r: ref Resolver, h: Hash, n: int32) =
         break placing
       i = (i + 1) and m
 
-template numberSteps(r: ref Resolver, enc: var seq[byte], num: var int32) =
+template numberSteps(r: ref Resolver, enc: untyped, keep: untyped, num: var int32) =
   ## [IMPL-DECISION G455] (5-3c-3) The number of the contract encoded as `enc`, numbered now
-  ## if it is new (`enc` is then moved into the table). Each probe and each number moved is
+  ## if it is new (`keep`, the encoding as a `seq`, is then put in the table: an installed
+  ## record's encoding moved, or [G482] a copy of a range of a catalog record's encodings,
+  ## the one allocation the encode made before). Each probe and each number moved is
   ## a unit and a turn check: the work is the steps walked (Fable's review of 5-3c-3 §1).
   ## Nothing it does is a step of the table's size:
   ## - the lists by number are `Blocks`, which grow without copying;
@@ -2152,7 +2304,7 @@ template numberSteps(r: ref Resolver, enc: var seq[byte], num: var int32) =
       r.slots = newSeq[seq[int32]](max(1, r.slotCount shr BlockBits))
       spendBy(r, 1 + r.slots.len shr 2) # the blocks' list, zeroed
     num = int32(r.encodings.len)
-    r.encodings.add(move enc)
+    r.encodings.add(keep)
     r.hashes.add(h)
     r.marks.add(0'u32)
     placeSteps(r, h, num)
@@ -2174,12 +2326,15 @@ proc internSteps(r: ref Resolver): RunSteps =
   ## entry's as it lists them, then the record's provided ones, once each and
   ## ascending. A contract costs a unit and its encoded bytes (an overcount is
   ## safe; Fable's review of the contract turns), its probes and its marks; an
-  ## entry or a module a unit. A catalog record's contracts are freed as they
-  ## are numbered: nothing in the run reads them again.
+  ## entry or a module a unit. [IMPL-DECISION G482] A catalog record's encodings
+  ## leave its inspection when the walk starts (Fable's condition 1: no view of
+  ## the table is held across a turn check), and go when it ends: nothing in the
+  ## run reads them again.
   iterator body(): Suspension {.closure, gcsafe, raises: [].} =
     let need = r.intern.get
     r.intern = Opt.none(InternNeed)
     var nums: Numbers
+    var walk: ContractBytes ## a catalog record's encodings, taken from its inspection
     block:
       # Sized once, so neither list grows: its contracts and its entries,
       # counted by its entries and modules.
@@ -2197,15 +2352,17 @@ proc internSteps(r: ref Resolver): RunSteps =
       else:
         r.inspected.withValue(need.source, v):
           entries = v.dependencies.len
-          contracts = v[].inputCount - 1 - entries
+          contracts = v.contracts.ends.len
+          walk = move v.contracts
       spendBy(r, 1 + entries + modules)
       nums.list = newSeqOfCap[int32](contracts)
       nums.entryAt = newSeqOfCap[int32](entries + 1)
     var cur: Cursor
     while true:
       var enc: seq[byte]
+      var at: Slice[int]
       var steps: int
-      let step = r[].nextContract(need, cur, nums, enc, steps)
+      let step = r[].nextContract(need, walk, cur, nums, enc, at, steps)
       spendBy(r, steps - 1) # the entry steps before this one
       case step
       of csDone:
@@ -2213,10 +2370,20 @@ proc internSteps(r: ref Resolver): RunSteps =
       of csEntry:
         tick(r)
       of csContract:
-        spendBy(r, 1 + enc.len)
         var num: int32
-        numberSteps(r, enc, num)
+        if need.installed >= 0:
+          spendBy(r, 1 + enc.len)
+          numberSteps(r, enc, move enc, num)
+        else:
+          spendBy(r, 1 + at.len)
+          numberSteps(
+            r,
+            walk.bytes.toOpenArrayByte(at.a, at.b),
+            @(walk.bytes.toOpenArrayByte(at.a, at.b)),
+            num,
+          )
         nums.list.add(num)
+    walk = ContractBytes() # its two blocks, freed: no unit
     # Its provided contracts once each, then ascending: in order already
     # unless an earlier record numbered some of them.
     let start = int(nums.entryAt[^1])
@@ -2696,6 +2863,16 @@ func numbered*(run: ResolverRun): tuple[records, contracts: int] =
   ## numbered, and the contracts numbered: each once. For the suites.
   (run.r.lists.len, run.r.encodings.len)
 
+when defined(lcnTestHooks):
+  proc heldContractsForTests*(run: ResolverRun, source: PackageSource): int =
+    ## Test hook (D27; DECISIONS I89) [IMPL-DECISION G482] (5-3c-4): the contracts the
+    ## supplied inspection of `source` still holds (none once its walk took them); -1: none
+    ## supplied, or not eligible.
+    result = -1
+    run.r.inspected.withValue(source.encoded, v):
+      if v.kind == ikEligible:
+        result = v[].contractCount
+
 proc resume*(run: ResolverRun): Suspension =
   ## [IMPL-DECISION G455] Runs one turn: until the run needs something, its
   ## turn's work is spent, or it gives its outcome. Never after `suDone`.
@@ -2816,13 +2993,10 @@ func inspection*(
 ): Inspection =
   ## [SPEC PM §11] An eligible record: its dependencies are the manifest's,
   ## unconditional across variants and modules, and it provides what
-  ## `modules`, its selected declarations, provide.
-  Inspection(
-    kind: ikEligible,
-    identity: v.manifest.identity,
-    commitment: v.commitment,
-    dependencies: v.manifest.dependencies,
-    provides: provided(modules),
+  ## `modules`, its selected declarations, provide (`provided`: once each).
+  ## [IMPL-DECISION G482] Held as `eligibleInspection` holds them.
+  eligibleInspection(
+    v.manifest.identity, v.commitment, v.manifest.dependencies, provided(modules)
   )
 
 func inspection*(p: LgxPackage): Inspection =

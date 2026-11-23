@@ -26,14 +26,21 @@
 ## now runs it: the module thread hands each 1 MiB `read_object` answer to the worker (the fetcher's
 ## spooled mode, a job, a channel), the worker appends it to a spool file in `<dir>` with its digest,
 ## then judges the file (`vcache.judge` over `fileSource`), and the module thread receives the
-## encoded judgment and decodes it `DecodeTurnUnits` at a time before the cache admits it. Both
+## judgment and the cache admits it (5-3c-4, G482: it crosses as it is, nothing is decoded). Both
 ## sides run on one thread here, each timed apart: the module thread's longest hold and total, and
 ## the worker's total; then a hit, which spools and digests again and answers from the cache.
 ##
-## `receive <dependencies> <contracts>` (5-5-3, G447; plan §4.4's W3) times one judgment's hand-over:
-## an eligible inspection with that many dependency entries, the contracts (commitments) all listed by
-## the first, sent on a channel as the worker sends it and received as the module thread does, then
-## decoded a budget at a time. It prints the send, the receive, the turns and the longest.
+## `receive <dependencies> <contracts>` (5-5-3, G447; plan §4.4's W3; 5-3c-4, G482) times one
+## judgment's hand-over: an eligible inspection with that many dependency entries, the contracts
+## (commitments) all listed by the first, built as the worker builds it (`eligibleInspection`), sent
+## on a channel as the worker sends it and received as the module thread does, then weighed for the
+## cache (`estimatedBytes`, by lengths). It prints the build, the send, the receive and the weighing.
+## No turn decodes it (D1's turns before G482).
+##
+## `unitbytes` (5-3c-4, G482, G447's constants) measures what an inspection holds in the heap, as
+## 5-5-3 measured the cache's constants: the heap's growth over many inspections built one by one,
+## for shapes of contracts listed and provided, and prints each contract's bytes beyond its encoding.
+## Run it under orc and refc with `-d:release`.
 ##
 ## `installed <records> <dependencies>` (5-5-4, G449; plan §9's measurements; Fable's 5-5-4 check §4)
 ## builds a snapshot of that many records at the longest identities (a 128-byte name, PM §4's bound, and a
@@ -90,6 +97,7 @@
 ##   pmbench archive 64 /tmp/a64.lgx && pmbench inspect /tmp/a64.lgx
 ##   pmbench spool /tmp/a64.lgx /tmp/spool
 ##   pmbench receive 80000 0 && pmbench receive 1 22000
+##   pmbench unitbytes
 ##   pmbench installed 200000 0 && pmbench installed 10000 4
 ##   pmbench module 4096
 ##   pmbench commit 10000 /tmp/installed
@@ -125,7 +133,7 @@ proc sync(which: string, s: Shape, limits: ResolverLimits) =
   let cpu0 = cpuTime()
   let outcome =
     if which == "oracle":
-      oracleResolve(input, s.rootOf, c)
+      oracleResolve(input, s.valueInspector, s.rootOf, c)
     else:
       resolve(input, s.rootOf, c, work)
   let cpu = cpuTime() - cpu0
@@ -274,7 +282,7 @@ proc spoolOnce(
     ),
     nil,
   )
-  var module, piece, decode, work: Clock
+  var module, piece, work: Clock
   var f = initRetrieval(bytesOf("bench"), int64(size), 1000, spooled = true)
   discard f.start()
   var step = f.onAnswer(sized(uint64(size)))
@@ -314,24 +322,11 @@ proc spoolOnce(
     work.timedOn:
       opened = worker.runJob(WorkerJob(kind: wjOpen, file: 1), nil).get
       resultsCh.send(opened)
-    var d: Decoding
-    var estimate: int
     module.timedOn:
+      # [G482] Admitted on receipt: nothing is decoded.
       var got = resultsCh.recv()
-      estimate = got.opened.estimatedBytes
-      d = initDecoding(move got.opened)
-    var turns = 0
-    while true:
-      var budget = DecodeTurnUnits
-      var done = false
-      decode.timedOn:
-        done = d.decodeSome(budget)
-      inc turns
-      if done:
-        break
-    module.timedOn:
-      x = c.admit(digest.digest, d.take(), estimate)
-    echo "  ", label, " decode turns=", turns, " longest_ms=", ms(decode.longest)
+      let estimate = got.opened.inspection.estimatedBytes
+      x = c.admit(digest.digest, move got.opened, estimate)
   work.timedOn:
     discard worker.runJob(WorkerJob(kind: wjDrop, file: 1), nil)
   worker.close()
@@ -349,9 +344,9 @@ proc spoolOnce(
     " piece_longest_ms=",
     ms(piece.longest),
     " longest_ms=",
-    ms(max(piece.longest, max(module.longest, decode.longest))),
+    ms(max(piece.longest, module.longest)),
     " total_ms=",
-    ms(piece.cpu + module.cpu + decode.cpu),
+    ms(piece.cpu + module.cpu),
     " worker: total_ms=",
     ms(work.cpu)
 
@@ -368,53 +363,148 @@ proc spoolFile(path, dir: string) =
   echo "  opened=", c.counters.opened, " hits=", c.counters.hits
 
 proc receive(deps, contracts: int) =
-  ## [G447; W3] One judgment's hand-over and its decoding.
-  var w = WireOpened(kind: ikEligible)
-  w.identity = PackageIdentity(package: "logos.bench", version: "1.0.0")
+  ## [G447; W3; G482] One judgment's hand-over: built, sent, received and weighed.
+  var values: seq[PackageDependency]
   for i in 0 ..< deps:
-    w.dependencies.add(
-      WireDependency(package: "dependency-" & $i, kind: rkCompatible, version: "1.0.0")
+    values.add(
+      PackageDependency(
+        package: "dependency-" & $i, kind: rkCompatible, version: "1.0.0"
+      )
     )
   var root = newSeq[byte](32)
   for i in 0 ..< contracts:
     for k in 0 ..< 4:
       root[k] = byte((i shr (8 * k)) and 0xff)
-    w.dependencies[0].contracts.add(textOf(encodeCbor(commitmentValue(root))))
+    values[0].contracts.add(commitmentValue(root))
+  var build, send, recv, weigh: Clock
+  var x: Inspection
+  build.timedOn:
+    x = eligibleInspection(
+      PackageIdentity(package: "logos.bench", version: "1.0.0"),
+      ManifestCommitment(),
+      values,
+      [],
+    )
+  values = @[]
   var ch: Channel[WorkerResult]
   ch.open()
-  var send, recv, decode: Clock
   send.timedOn:
-    ch.send(WorkerResult(kind: wrOpened, file: 1, opened: move w))
+    ch.send(WorkerResult(kind: wrOpened, file: 1, opened: Opened(inspection: move x)))
   var r: WorkerResult
   recv.timedOn:
     r = ch.recv()
-  var d: Decoding
-  recv.timedOn:
-    d = initDecoding(move r.opened)
-  while true:
-    var budget = DecodeTurnUnits
-    var done = false
-    decode.timedOn:
-      done = d.decodeSome(budget)
-    if done:
-      break
-  let o = d.take()
-  doAssert o.inspection.dependencies.len == deps
+  var estimate: int
+  weigh.timedOn:
+    estimate = r.opened.inspection.estimatedBytes
+  doAssert r.opened.inspection.dependencies.len == deps
+  doAssert r.opened.inspection.contractCount == contracts
   ch.close()
   echo "receive dependencies=",
     deps,
     " contracts=",
     contracts,
+    " bytes=",
+    r.opened.inspection.contractData.len,
+    " build_ms=",
+    ms(build.cpu),
     " send_ms=",
     ms(send.cpu),
     " receive_ms=",
     ms(recv.cpu),
-    " turns=",
-    decode.count,
-    " longest_turn_ms=",
-    ms(decode.longest),
-    " decode_ms=",
-    ms(decode.cpu)
+    " estimate_ms=",
+    ms(weigh.cpu),
+    " estimate=",
+    estimate,
+    " turns=0"
+
+proc benchContract(i: int): CborValue =
+  ## A commitment, decoded from its bytes, as a manifest's reader holds one.
+  var root = newSeq[byte](32)
+  for k in 0 ..< 4:
+    root[k] = byte((i shr (8 * k)) and 0xff)
+  decodeCbor(encodeCbor(commitmentValue(root))).get
+
+proc unitBytes() =
+  ## [G447, G482] The heap an inspection holds, per contract beyond its encoding: the growth over
+  ## `copies` inspections built one by one, less the same shape with no contract, over the
+  ## contracts, less each one's encoded length.
+  proc shaped(deps, perDep, provided, salt: int): Inspection =
+    var values: seq[PackageDependency]
+    for d in 0 ..< deps:
+      var dep = PackageDependency(
+        package: "logos.d" & align($d, 9, '0'), kind: rkCompatible, version: "1.0.0"
+      )
+      for c in 0 ..< perDep:
+        dep.contracts.add(benchContract(salt * 7919 + d * 131 + c))
+      values.add(dep)
+    var provides: seq[CborValue]
+    for c in 0 ..< provided:
+      provides.add(benchContract(salt * 104_729 + c))
+    eligibleInspection(
+      PackageIdentity(package: "logos.shape", version: "1.0." & $salt),
+      ManifestCommitment(),
+      values,
+      provides,
+    )
+
+  proc held(deps, perDep, provided, copies: int): float {.noinline.} =
+    # Each measurement frees what it built and collects before the next starts: under refc a
+    # previous one's garbage collected during this one would count against it.
+    GC_fullCollect()
+    GC_fullCollect()
+    var all = newSeq[Inspection](copies)
+    let before = getOccupiedMem()
+    for i in 0 ..< copies:
+      all[i] = shaped(deps, perDep, provided, i + 1)
+    GC_fullCollect()
+    result = float(getOccupiedMem() - before) / float(copies)
+    doAssert all.len == copies
+    all = @[]
+    GC_fullCollect()
+    GC_fullCollect()
+
+  let enc = encodedSize(benchContract(1))
+  echo "unitbytes mm=",
+    (when defined(gcOrc): "orc" elif defined(gcRefc): "refc" else: "other"),
+    " release=",
+    defined(release),
+    " encoding=",
+    enc
+  discard held(10, 1, 10, 256) # the allocator's first growth, counted against nothing
+  # Every count of provided contracts up to 160 (a buffer's rounding to its size class or to
+  # pages weighs most on a few contracts), then larger ones; a dependency entry listing them;
+  # many entries listing one each.
+  var shapes: seq[(string, int, int, int)]
+  for n in 1 .. 160:
+    shapes.add(("provided " & $n, 0, 0, n))
+  for n in [192, 256, 384, 512, 1000, 2048, 4096, 22000]:
+    shapes.add(("provided " & $n, 0, 0, n))
+  for n in [1, 2, 3, 10, 11, 21, 22, 100, 1000, 22000]:
+    shapes.add(("listed 1 x " & $n, 1, n, 0))
+  for n in [10, 100, 1000]:
+    shapes.add(("listed " & $n & " x 1", n, 1, 0))
+  var worst = 0.0
+  var worstName = ""
+  for (name, deps, perDep, provided) in shapes:
+    let n = deps * perDep + provided
+    let copies = max(8, min(4096, 1_048_576 div (n * enc)))
+    let without = held(deps, 0, 0, copies)
+    let with = held(deps, perDep, provided, copies)
+    let beyond = (with - without) / float(n) - float(enc)
+    if beyond > worst:
+      worst = beyond
+      worstName = name
+    echo "  ",
+      name,
+      ": copies=",
+      copies,
+      " held=",
+      formatFloat(with, ffDecimal, 1),
+      " without_contracts=",
+      formatFloat(without, ffDecimal, 1),
+      " per_contract_beyond_encoding=",
+      formatFloat(beyond, ffDecimal, 1)
+  echo "  worst=", formatFloat(worst, ffDecimal, 1), " (", worstName, ")"
 
 proc longestIdentity(i: int): PackageIdentity =
   ## A name at PM §4's 128-byte bound and a version as long, distinct for each `i`.
@@ -840,6 +930,9 @@ proc main() =
   if args.len == 3 and args[0] == "receive":
     receive(parseInt(args[1]), parseInt(args[2]))
     return
+  if args.len == 1 and args[0] == "unitbytes":
+    unitBytes()
+    return
   if args.len == 3 and args[0] == "archive":
     archive(parseInt(args[1]), args[2])
     return
@@ -883,8 +976,9 @@ proc main() =
     lim[i] = parseInt(rest[i])
   let limits = resolverLimits(lim[0], lim[1], lim[2], lim[3]).get
   let built = getMonoTime()
-  let s = shapeOf(shapeName, size, k).valueOr:
+  var s = shapeOf(shapeName, size, k).valueOr:
     quit("unknown shape " & shapeName, 2)
+  s.unchecked = true # [G482] each answer is held as the worker would send it, unchecked
   let buildMs = (getMonoTime() - built).inMilliseconds
   echo shapeName,
     " size=",

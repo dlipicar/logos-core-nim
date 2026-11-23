@@ -13,7 +13,7 @@ import ../src/logos_core/pins as core_pins
 import ../src/logos_core/package/[errors, resolver]
 import ../src/logos_core/daemon/config
 import ../src/logos_core/pm/input_types as pm_input_types
-import ./support/[pmfixture, pmshapes, pmworld]
+import ./support/[pmfixture, pmshapes, pmworld, valueinspection]
 
 # Synthetic catalogs -----------------------------------------------------------------
 
@@ -66,16 +66,16 @@ proc add(
   u.outcomes[s.encoded] =
     case outcome
     of ikEligible:
-      Inspection(
-        kind: ikEligible,
-        identity: ident(
+      eligibleInspection(
+        ident(
           if claims.len > 0:
             claims
           else:
             name & "@" & version
         ),
-        commitment: commitOf(name & "@" & version & "#" & $n),
-        dependencies: deps.mapIt(dep(it)),
+        commitOf(name & "@" & version & "#" & $n),
+        deps.mapIt(dep(it)),
+        [],
       )
     of ikIneligible:
       Inspection(kind: ikIneligible, error: packageError(pecSignature, "not signed"))
@@ -926,11 +926,11 @@ proc spoolFiles(s: Scene): int =
 proc reads(s: Scene): int =
   s.calls.countIt(it.kind == cmRead)
 
-proc contractBytes(i: int): string =
-  textOf(encodeCbor(cbor("contract-" & $i)))
+proc contract(i: int): CborValue =
+  cbor("contract-" & $i)
 
-proc judgedWire(s: Scene, archive: seq[byte]): WireOpened =
-  ## The worker's encoded judgment of `archive`, as `wjOpen` answers it.
+proc judgedOpened(s: Scene, archive: seq[byte]): Opened =
+  ## The worker's judgment of `archive`, as `wjOpen` answers it.
   var w: WorkerState
   discard
     w.runJob(WorkerJob(kind: wjStart, config: s.w.e.workerConfig(s.w.spoolDir)), nil)
@@ -949,14 +949,21 @@ proc judgedWire(s: Scene, archive: seq[byte]): WireOpened =
   discard w.runJob(WorkerJob(kind: wjDrop, file: 900), nil)
   w.close()
 
-proc padOpen(s: var Scene, job: WorkerJob, contracts: int) =
-  ## Runs `wjOpen` and hands the engine its judgment with `contracts` more provided.
+proc padOpen(s: var Scene, job: WorkerJob, contracts = 0, entries = 0) =
+  ## Runs `wjOpen` and hands the engine its judgment with `contracts` more provided and
+  ## `entries` more dependency entries, which no catalog entry satisfies.
   s.w.work.delete(0)
   s.w.jobs.add(job.kind)
   var r = s.w.worker.runJob(job, nil).get
-  doAssert r.opened.kind == ikEligible
+  doAssert r.opened.inspection.kind == ikEligible
+  var v = values(r.opened.inspection)
   for i in 0 ..< contracts:
-    r.opened.provides.add(contractBytes(i))
+    v.provides.add(contract(i))
+  for i in 0 ..< entries:
+    v.dependencies.add(
+      PackageDependency(package: "zz.pad" & $i, kind: rkCompatible, version: "1.0.0")
+    )
+  r.opened.inspection = held(v)
   s.w.handle(worked(r))
 
 proc drive(s: var Scene) =
@@ -972,11 +979,11 @@ proc drive(s: var Scene) =
       break
 
 suite "the worker and the spool (G446, G447)":
-  test "[IMPL-DECISION G447] what crosses to the worker holds no reference, checked at compile time":
+  test "[IMPL-DECISION G447] [IMPL-DECISION G482] what crosses to the worker holds no reference, the inspection included, checked at compile time":
     check refFree(WorkerJob)
     check refFree(WorkerResult)
-    check refFree(WireOpened)
-    check not refFree(Inspection) # its contracts are `CborValue`s
+    check refFree(Opened)
+    check refFree(Inspection) # [G482] its contracts are encodings in one buffer
     check not refFree(CborValue)
     check not refFree(HoldsRef)
     check not refFree(HoldsClosure)
@@ -984,17 +991,20 @@ suite "the worker and the spool (G446, G447)":
     check not refFree(seq[HoldsRef])
     check not refFree(cstring)
     check compiles(requireRefFree(WorkerJob))
-    check not compiles(requireRefFree(Inspection))
+    check compiles(requireRefFree(Inspection))
+    check not compiles(requireRefFree(CborValue))
 
-  test "[IMPL-DECISION G447] a judgment crosses encoded and is decoded a budget at a time, unchanged":
-    var w = WireOpened(kind: ikEligible, identity: ident("app@1.0.0"))
-    w.dependencies.add(WireDependency(package: "lib", kind: rkExact, version: "1.0.0"))
+  test "[IMPL-DECISION G447] [IMPL-DECISION G482] a staged record's dependencies are decoded a budget at a time, unchanged":
+    var deps = @[PackageDependency(package: "lib", kind: rkExact, version: "1.0.0")]
     for i in 0 ..< 50:
-      w.dependencies[0].contracts.add(contractBytes(i))
+      deps[0].contracts.add(contract(i))
     for i in 0 ..< 3000:
-      w.provides.add(contractBytes(1000 + i))
-    check w.units == 3051 # the entry and its 50 contracts, and 3,000 provided
-    var d = initDecoding(w)
+      deps.add(
+        PackageDependency(package: "d" & $i, kind: rkCompatible, version: "1.0.0")
+      )
+    let staged = eligibleInspection(ident("app@1.0.0"), commitOf("app"), deps, [])
+    check staged.dependencies.len + staged.contractCount == 3051
+    var d = initDecoding(staged)
     var budget = DecodeTurnUnits
     check not d.decodeSome(budget)
     check budget == 0
@@ -1003,75 +1013,74 @@ suite "the worker and the spool (G446, G447)":
     budget = DecodeTurnUnits
     check d.decodeSome(budget)
     check budget == 3 * DecodeTurnUnits - 3051
-    let o = d.take()
-    check o.inspection.kind == ikEligible
-    check o.inspection.identity == w.identity
-    check o.inspection.dependencies.len == 1
-    check o.inspection.dependencies[0].version == "1.0.0"
-    check o.inspection.dependencies[0].contracts.mapIt(textOf(encodeCbor(it))) ==
-      w.dependencies[0].contracts
-    check o.inspection.provides.mapIt(textOf(encodeCbor(it))) == w.provides
+    let got = d.take()
+    check got.len == deps.len
+    check got.mapIt(it.package) == deps.mapIt(it.package)
+    check got.mapIt(it.version) == deps.mapIt(it.version)
+    check got[0].kind == rkExact
+    check got[0].contracts.mapIt(encodeCbor(it)) ==
+      deps[0].contracts.mapIt(encodeCbor(it))
     # A budget that runs out at every place, entries without contracts among them: each entry
     # once, and every contract in order.
-    var many = WireOpened(kind: ikEligible, identity: ident("app@1.0.0"))
+    var many: seq[PackageDependency]
     for i in 0 ..< 7:
-      var dep = WireDependency(package: "d" & $i, kind: rkCompatible, version: "1.0.0")
+      var dep =
+        PackageDependency(package: "d" & $i, kind: rkCompatible, version: "1.0.0")
       for c in 0 ..< i mod 3:
-        dep.contracts.add(contractBytes(10 * i + c))
-      many.dependencies.add(dep)
-    many.provides.add(contractBytes(99))
+        dep.contracts.add(contract(10 * i + c))
+      many.add(dep)
+    let units = 7 + 0 + 1 + 2 + 0 + 1 + 2 + 0
     for step in 1 .. 4:
-      var e = initDecoding(many)
+      var e =
+        initDecoding(eligibleInspection(ident("app@1.0.0"), commitOf("app"), many, []))
       var turns = 0
       while true:
         var b = step
         inc turns
         if e.decodeSome(b):
           break
-      check turns >= many.units div step
-      let got = e.take().inspection
-      check got.dependencies.mapIt(it.package) == many.dependencies.mapIt(it.package)
-      for i, dep in got.dependencies:
-        check dep.contracts.mapIt(textOf(encodeCbor(it))) ==
-          many.dependencies[i].contracts
-      check got.provides.mapIt(textOf(encodeCbor(it))) == many.provides
-    # [Fable's D1 condition 2] Bytes that do not decode are a fault in this process.
-    var bad = initDecoding(WireOpened(kind: ikEligible, provides: @["\xff"]))
-    budget = 1
-    expect AssertionDefect:
-      discard bad.decodeSome(budget)
+      check turns >= units div step
+      let back = e.take()
+      check back.mapIt(it.package) == many.mapIt(it.package)
+      for i, dep in back:
+        check dep.contracts.mapIt(encodeCbor(it)) ==
+          many[i].contracts.mapIt(encodeCbor(it))
 
-  test "[IMPL-DECISION G447] a real judgment, every field set, crosses and comes back the same, and the cache's estimate by its encoded lengths is the walk's":
+  test "[IMPL-DECISION G447] [IMPL-DECISION G482] a real judgment, every field set, crosses a channel as it is, and the cache's estimate by lengths is the walk's":
     var s = scene([(entryOf("app", "1.0.0"), app100)])
-    var wire = s.judgedWire(app100)
-    check wire.kind == ikEligible
-    check wire.profile.len > 0
-    check wire.kid.len > 0
-    check wire.variant.len > 0
-    check wire.dependencies.len > 0
+    var o = s.judgedOpened(app100)
+    check o.inspection.kind == ikEligible
+    check o.profile.len > 0
+    check o.kid.len > 0
+    check o.variant.len > 0
+    check o.inspection.dependencies.len > 0
+    var v = values(o.inspection)
     for i in 0 ..< 40:
-      wire.dependencies[0].contracts.add(contractBytes(i))
+      v.dependencies[0].contracts.add(contract(i))
     for i in 0 ..< 30:
-      wire.provides.add(contractBytes(100 + i))
-    var d = initDecoding(wire)
-    var budget = 7
-    while not d.decodeSome(budget):
-      budget = 7
-    let o = d.take()
-    check o.inspection.estimatedBytes == wire.estimatedBytes
-    check toWire(o) == wire
-    for other in [
-      WireOpened(
+      v.provides.add(contract(100 + i))
+    o.inspection = held(v)
+    var ch: Channel[WorkerResult]
+    ch.open()
+    ch.send(WorkerResult(kind: wrOpened, file: 7, opened: o))
+    let back = ch.recv()
+    ch.close()
+    check back.opened.inspection.matches(v)
+    check back.opened.profile == o.profile
+    check back.opened.kid == o.kid
+    check back.opened.key == o.key
+    check back.opened.variant == o.variant
+    for x in [
+      back.opened.inspection,
+      Inspection(
         kind: ikIneligible, error: packageError(pecInvalidPackage, "an archive's fault")
       ),
-      WireOpened(kind: ikUnavailable, reason: "the archive could not be read"),
+      Inspection(kind: ikUnavailable, reason: "the archive could not be read"),
     ]:
-      var d2 = initDecoding(other)
-      var b2 = 1
-      check d2.decodeSome(b2)
-      let o2 = d2.take()
-      check o2.inspection.estimatedBytes == other.estimatedBytes
-      check toWire(o2) == other
+      var walked = 0
+      for u in x.inputUnits:
+        walked += unitBytes(u.kind) + u.bytes
+      check x.estimatedBytes == walked
 
   test "[PKG-0012] [PKG-0011] [PKG-0192] [IMPL-DECISION G447] an archive is spooled, never held: at most SpoolLag pieces wait for the worker; its file is the instance's own, never executable, and deleted once judged":
     let size = 5 * ReadStep + 100
@@ -1186,7 +1195,7 @@ suite "the worker and the spool (G446, G447)":
     check s.w.e.spooled == 0
     check s.w.e.shareUsed == 0
 
-  test "[IMPL-DECISION G447] a judgment of more than DecodeTurnUnits entries and contracts is decoded a turn at a time, between other events; the outcome is the same":
+  test "[IMPL-DECISION G447] [IMPL-DECISION G482] a judgment of more than DecodeTurnUnits contracts is admitted and supplied in the turn it arrives: no turn decodes it; the outcome is the same":
     let entries =
       @[(entryOf("app", "1.0.0"), app100), (entryOf("lib", "1.2.0"), lib120)]
     var whole = scene(entries)
@@ -1203,20 +1212,13 @@ suite "the worker and the spool (G446, G447)":
       elif s.w.work.len > 0:
         let job = s.w.work[0]
         if job.kind == wjOpen and not padded:
-          # app's judgment, with 2500 more provided contracts
-          s.w.work.delete(0)
-          s.w.jobs.add(job.kind)
-          var r = s.w.worker.runJob(job, nil).get
-          check r.opened.kind == ikEligible
-          for i in 0 ..< 2500:
-            r.opened.provides.add(contractBytes(i))
-          check r.opened.units > 2 * DecodeTurnUnits
-          check r.opened.units <= 3 * DecodeTurnUnits
+          # app's judgment, with 2500 more provided contracts: three decode turns before G482
+          s.padOpen(job, contracts = 2500)
           padded = true
-          s.w.handle(worked(r))
-          check s.w.e.decoding == 1
-          check DecodeOperation in s.w.continues
-          check s.w.e.spooled == 0 # deleted once judged, before the decoding
+          check s.w.e.cache.counters.opened == 1 # admitted in this turn
+          check DecodeOperation notin s.w.continues
+          check s.w.e.droppingJudgments == 0
+          check s.w.e.spooled == 0 # deleted once judged
         else:
           discard s.w.runOne()
       elif s.w.continues.len > 0:
@@ -1226,10 +1228,9 @@ suite "the worker and the spool (G446, G447)":
       else:
         break
     check padded
-    check turns == 3
+    check turns == 0
     check s.w.replies.len == 1
     check s.replyTo(1).summary == want
-    check s.w.e.decoding == 0
     s.w.emit(s.w.e.resolve(DecodeOperation, root("app")))
     check s.replyTo(DecodeOperation).error.code == pecInvalidRequest
     check s.spoolFiles == 0
@@ -1253,111 +1254,34 @@ suite "the worker and the spool (G446, G447)":
     check step.kind == skDone
     check step.digest == blake3(a)
 
-  test "[IMPL-DECISION G447] a second operation reaching an archive whose judgment is being decoded judges it itself: nothing sees a part (Fable's D1 condition 3)":
-    let entries =
-      @[(entryOf("app", "1.0.0"), app100), (entryOf("lib", "1.2.0"), lib120)]
-    var whole = scene(entries)
-    let want = whole.resolveIn(root("app")).summary
-    var s = scene(entries)
-    s.w.holdWork = true
-    s.w.emit(s.w.e.resolve(1, root("app")))
-    var padded, second, overlapped = false
-    while true:
-      if s.w.has({cmStat, cmRead}):
-        s.answerCall()
-      elif s.w.work.len > 0:
-        let job = s.w.work[0]
-        if job.kind == wjOpen and not padded:
-          s.padOpen(job, 10 * DecodeTurnUnits) # ten turns
-          padded = true
-          check s.w.e.decoding == 1
-          check s.w.e.cache.counters.opened == 0
-          s.w.emit(s.w.e.resolve(2, root("app")))
-          second = true
-        else:
-          if job.kind == wjOpen and padded and s.w.e.decoding >= 1:
-            # The second operation's own judgment of app: its digest missed the cache,
-            # which holds nothing of the first's yet.
-            check s.w.e.cache.counters.opened == 0
-            overlapped = true
-          discard s.w.runOne()
-      elif s.w.continues.len > 0:
-        discard s.w.turn()
-      else:
-        break
-    check second
-    check overlapped
-    check s.replyTo(1).summary == want
-    check s.replyTo(2).summary == want
-    check s.w.e.decoding == 0
-    check s.spoolFiles == 0
-
-  test "[IMPL-DECISION G447] [IMPL-DECISION G455] a judgment whose operation is cancelled while it is decoded, or before it arrives, is not finished: it is freed a turn at a time (Fable's D1 condition 5)":
+  test "[IMPL-DECISION G447] [IMPL-DECISION G455] [IMPL-DECISION G482] a judgment whose operation is cancelled before it arrives is not admitted: its encodings go at once, and its dependency entries a turn at a time when there are many (Fable's D1 condition 5)":
     let entries = @[(entryOf("app", "1.0.0"), app100)]
-    var s = scene(entries)
-    s.w.holdWork = true
-    s.w.emit(s.w.e.resolve(1, root("app")))
-    var padded = false
-    while not padded:
-      if s.w.has({cmStat, cmRead}):
-        s.answerCall()
-      elif s.w.work.len > 0:
-        let job = s.w.work[0]
-        if job.kind == wjOpen:
-          s.padOpen(job, 2500)
-          padded = true
+    for (pad, freeTurns) in [(2500, 3), (500, 0)]:
+      checkpoint $pad & " entries"
+      var late = scene(entries)
+      late.w.holdWork = true
+      late.w.emit(late.w.e.resolve(1, root("app")))
+      while true:
+        if late.w.has({cmStat, cmRead}):
+          late.answerCall()
+        elif late.w.work.len > 0:
+          let job = late.w.work[0]
+          if job.kind == wjOpen:
+            late.w.emit(late.w.e.cancel(1))
+            late.padOpen(job, contracts = 2500, entries = pad)
+            break
+          discard late.w.runOne()
         else:
-          discard s.w.runOne()
-      else:
-        discard s.w.turn()
-    check s.w.e.decoding == 1
-    while s.w.continues[0] != DecodeOperation:
-      discard s.w.turn()
-    discard s.w.turn() # one turn of decoding
-    check s.w.e.decoding == 1
-    s.w.emit(s.w.e.cancel(1))
-    var turns = 0
-    while s.w.continues.len > 0:
-      if s.w.continues[0] == DecodeOperation:
-        inc turns
-        if turns == 1:
-          discard s.w.turn()
-          check s.w.e.decoding == 0
-          check s.w.e.droppingDecodes == 1 # its 1,024 decoded and 2,500 encoded units
-          continue
-      discard s.w.turn()
-    check turns >= 4
-    check s.w.e.droppingDecodes == 0
-    check s.w.e.cache.counters.opened == 0 # never admitted
-    check s.w.replies.len == 0
-    s.w.runWork() # the spool file's deletion, queued when the judgment arrived
-    check s.spoolFiles == 0
-    # Cancelled before its judgment arrives: the late answer is freed the same way.
-    var late = scene(entries)
-    late.w.holdWork = true
-    late.w.emit(late.w.e.resolve(1, root("app")))
-    while true:
-      if late.w.has({cmStat, cmRead}):
-        late.answerCall()
-      elif late.w.work.len > 0:
-        let job = late.w.work[0]
-        if job.kind == wjOpen:
-          late.w.emit(late.w.e.cancel(1))
-          late.padOpen(job, 2500)
-          break
-        discard late.w.runOne()
-      else:
+          discard late.w.turn()
+      check late.w.e.droppingJudgments == (if freeTurns > 0: 1 else: 0)
+      var lateTurns = 0
+      while late.w.continues.len > 0:
+        if late.w.continues[0] == DecodeOperation:
+          inc lateTurns
         discard late.w.turn()
-    check late.w.e.decoding == 0
-    check late.w.e.droppingDecodes == 1
-    var lateTurns = 0
-    while late.w.continues.len > 0:
-      if late.w.continues[0] == DecodeOperation:
-        inc lateTurns
-      discard late.w.turn()
-    check lateTurns >= 3
-    check late.w.e.droppingDecodes == 0
-    check late.w.e.cache.counters.opened == 0
-    check late.w.replies.len == 0
-    late.w.runWork()
-    check late.spoolFiles == 0
+      check lateTurns == freeTurns # 2,500 and app's own entries, 1,024 a turn
+      check late.w.e.droppingJudgments == 0
+      check late.w.e.cache.counters.opened == 0 # never admitted
+      check late.w.replies.len == 0
+      late.w.runWork()
+      check late.spoolFiles == 0
