@@ -70,6 +70,9 @@ type
 
   TlsListener* = ref object
     server: StreamServer
+    adopted: cint
+      ## [G411] a listening socket another process bound (`serveAdopted`);
+      ## -1 for `server`
     ctx: TlsContext
     check: PeerCheck
     signer: Signer
@@ -547,6 +550,102 @@ proc acceptLoop(l: TlsListener) {.async: (raises: []).} =
         l.removeTask(task)
     )
 
+when defined(posix):
+  from std/posix as px import nil
+
+  proc readable(
+      fd: AsyncFD
+  ): Future[void] {.async: (raw: true, raises: [CancelledError]).} =
+    ## Completes once `fd` can be read (a connection waits to be accepted).
+    let f = Future[void].Raising([CancelledError]).init("tls.readable")
+    proc ready(udata: pointer) {.gcsafe, raises: [].} =
+      discard removeReader2(fd)
+      if not f.finished:
+        f.complete()
+
+    if addReader2(fd, ready).isErr:
+      f.complete()
+    f.cancelCallback = proc(udata: pointer) {.gcsafe, raises: [].} =
+      discard removeReader2(fd)
+    f
+
+  proc acceptAdopted(l: TlsListener) {.async: (raises: []).} =
+    ## As `acceptLoop`, on a socket this process did not bind: each accepted
+    ## connection becomes a stream transport of its own descriptor.
+    let fd = AsyncFD(l.adopted)
+    while not l.closing:
+      try:
+        await readable(fd)
+      except CancelledError:
+        return
+      while not l.closing:
+        let c = px.accept(px.SocketHandle(l.adopted), nil, nil)
+        if cint(c) < 0:
+          break # EAGAIN, or a connection that went away before its accept
+        let one: cint = 1
+        discard px.setsockopt(
+          c, px.IPPROTO_TCP, px.TCP_NODELAY, unsafeAddr one, px.SockLen(sizeof(one))
+        )
+        discard px.fcntl(cint(c), px.F_SETFD, px.FD_CLOEXEC)
+        # Linux does not pass O_NONBLOCK on from the listening socket.
+        let fl = px.fcntl(cint(c), px.F_GETFL)
+        if fl < 0 or px.fcntl(cint(c), px.F_SETFL, fl or px.O_NONBLOCK) < 0:
+          discard px.close(cint(c))
+          continue
+        if l.handshaking.len >= l.cfg.maxHandshakes or
+            l.tasks.len >= l.cfg.maxConnections:
+          inc l.refusedOverBound
+          discard px.close(cint(c))
+          continue
+        let tr = fromPipe2(AsyncFD(c)).valueOr:
+          discard px.close(cint(c))
+          continue
+        let task = l.serveOne(tr)
+        l.tasks.add(task)
+        task.addCallback(
+          proc(udata: pointer) {.gcsafe, raises: [].} =
+            l.removeTask(task)
+        )
+
+proc serveAdopted*(
+    fd: cint,
+    ctx: TlsContext,
+    peerCheck: PeerCheck,
+    signer: Signer,
+    config: TlsConfig,
+    onStream: StreamHandler,
+    registry: StreamRegistry = nil,
+): Result[TlsListener, string] =
+  ## [G411] As `serve`, on a listening TCP socket the parent bound and passed
+  ## down (a remote listener process's fd 4). The socket is made
+  ## non-blocking; the listener owns it from here.
+  ?config.check()
+  if ctx == nil or ctx.role != tlsServer:
+    return err("a listener needs a server context")
+  if peerCheck == nil or signer == nil or onStream == nil:
+    return err("a listener needs a peer check, a signer and a handler")
+  when defined(posix):
+    let flags = px.fcntl(fd, px.F_GETFL)
+    if flags < 0 or px.fcntl(fd, px.F_SETFL, flags or px.O_NONBLOCK) < 0:
+      return err("the listening socket is not usable")
+    register2(AsyncFD(fd)).isOkOr:
+      return err("the listening socket cannot be watched: " & $int(error))
+    let l = TlsListener(
+      adopted: fd,
+      ctx: ctx,
+      check: peerCheck,
+      signer: signer,
+      cfg: config,
+      onStream: onStream,
+      tasks: @[],
+      handshaking: @[],
+      registry: (if registry == nil: newStreamRegistry() else: registry),
+    )
+    l.acceptor = l.acceptAdopted()
+    ok(l)
+  else:
+    err("not supported on this platform")
+
 proc serve*(
     host: string,
     port: uint16,
@@ -572,6 +671,7 @@ proc serve*(
     return err("cannot listen on " & host & ":" & $port & ": " & x.msg)
   let l = TlsListener(
     server: server,
+    adopted: -1,
     ctx: ctx,
     check: peerCheck,
     signer: signer,
@@ -585,6 +685,19 @@ proc serve*(
   ok(l)
 
 proc localPort*(l: TlsListener): uint16 =
+  if l.server == nil:
+    when defined(posix):
+      var a: px.Sockaddr_storage
+      var n = px.SockLen(sizeof(a))
+      if px.getsockname(
+        px.SocketHandle(l.adopted), cast[ptr px.SockAddr](addr a), addr n
+      ) != 0:
+        return 0
+      if cint(a.ss_family) == px.AF_INET:
+        return px.ntohs(uint16(cast[ptr px.Sockaddr_in](addr a).sin_port))
+      if cint(a.ss_family) == px.AF_INET6:
+        return px.ntohs(uint16(cast[ptr px.Sockaddr_in6](addr a).sin6_port))
+    return 0
   uint16(l.server.localAddress().port)
 
 proc registry*(l: TlsListener): StreamRegistry =
@@ -642,11 +755,17 @@ proc close*(l: TlsListener) {.async: (raises: []).} =
   if l.closing:
     return
   l.closing = true
-  try:
-    l.server.stop()
-  except TransportOsError:
-    discard
-  await l.server.closeWait()
+  if l.server != nil:
+    try:
+      l.server.stop()
+    except TransportOsError:
+      discard
+    await l.server.closeWait()
+  else:
+    when defined(posix):
+      if l.acceptor != nil and not l.acceptor.finished:
+        await l.acceptor.cancelAndWait()
+      discard unregisterAndCloseFd(AsyncFD(l.adopted))
   if l.acceptor != nil and not l.acceptor.finished:
     try:
       discard await l.acceptor.withTimeout(milliseconds(l.cfg.closeWaitMs))

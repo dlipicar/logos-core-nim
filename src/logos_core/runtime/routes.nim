@@ -24,7 +24,7 @@ import logos_sdk/cbor
 import logos_sdk/commitment
 import logos_sdk/hash/hashinput
 import logos_sdk/iface/[accept, names, outcome]
-import logos_sdk/kit/rc_types, ./routing
+import logos_sdk/kit/rc_types, ./[forwarded, routing]
 
 export rc_types, routing
 
@@ -357,7 +357,8 @@ func record*(r: Route, runtimeId: string): LogosNSRuntimeControlRouteRecord =
   result = LogosNSRuntimeControlRouteRecord(
     route: r.id,
     consumer: LogosNSRuntimeModuleInstanceAddress(
-      runtime_instance_id: runtimeId, module_instance_id: r.consumer
+      runtime_instance_id: consumerParts(runtimeId, r.consumer).runtime,
+      module_instance_id: consumerParts(runtimeId, r.consumer).instance,
     ),
     target_provider: LogosNSRuntimeModuleProviderAddress(
       provider: r.provider, runtime_instance_id: Opt.some(runtimeId)

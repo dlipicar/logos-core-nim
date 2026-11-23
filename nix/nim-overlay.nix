@@ -19,4 +19,7 @@ final: prev: {
     # 2.2.10 and later no longer compile with this flag.
     kochArgs = builtins.filter (f: f != "-d:nativeStacktrace") old.kochArgs;
   });
+  # [G436] Nimble 0.26.2 from that tree's dist/nimble, in place of nixpkgs' 0.20.1, for the dev shell
+  # and the android shell.
+  nimble = final.callPackage ./nimble.nix { nim = final.nim-2_2; };
 }

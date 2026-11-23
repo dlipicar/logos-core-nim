@@ -55,8 +55,10 @@ lcn.app_config = {
   ? call_audit: lcn.app_call_audit,
   ? routing: [* lcn.app_routing_rule],
   ? transport: lcn.app_transport,
+  ? remote: lcn.app_remote,
   ? permissions: lcn.app_permissions,
   ? state_transfers: [* lcn.app_state_transfer],
+  ? protected_inputs: [* lcn.app_protected_input],
 }
 
 lcn.app_runtime = {
@@ -72,11 +74,15 @@ lcn.app_runtime = {
   ? endpoint_dir: lcn.app_path,
   ? module_host: lcn.app_path,
   ? module_host_env: [* lcn.app_env_name],
+  ? remote_program: lcn.app_path,
 }
 
 ; module_host: the logos-module-host program, an absolute path (Tier 4b step
 ; 4b-3); without it hosted_dynamic is refused. module_host_env: the names of
 ; the variables every Module Host gets from the daemon's environment.
+; remote_program: the logos_remote program, an absolute path (Tier 5 step
+; 5-7a-2; DECISIONS G411); without it no remote profile is enabled here, and
+; enabling a remote listener is MODULE_ERROR (G412).
 lcn.app_env_name = tstr .size (1..128)
 
 lcn.app_path = tstr .size (1..4096)
@@ -135,6 +141,21 @@ lcn.app_transport = {
   ? max_outbound: uint16,
   ? max_calls: uint32,
   ? max_in_flight: uint32,
+}
+
+; Remote transport (RUNTIME §9.3.9; Tier 5 step 5-7a-2; DECISIONS G408, G412,
+; G415; docs/REMOTE.md). Only the embedding host sets it (logosd's compose).
+; snapshot: this start's trust snapshot, one deterministic-CBOR lcn.rch_snapshot
+; (remote/carrier.cddl); its Runtimes with an active record are the enrolled
+; ones. listeners and exports: the deployment's records (RUNTIME l.3319-3321),
+; held as Runtime Control holds them (lcn.rc_x is logos.runtime_control.x and
+; lcn.rt_x is logos.runtime.x, generated from the mirrored contract), each
+; address at most once and each export naming a listener here, validated as
+; Runtime Control validates them.
+lcn.app_remote = {
+  snapshot: bstr .size (1..16842752),
+  ? listeners: [* lcn.rc_remote_listener_record],
+  ? exports: [* lcn.rc_provider_export_record],
 }
 
 ; The permission profile (RUNTIME l.1595, l.2526-2604; DECISIONS G110, G279,
@@ -253,6 +274,19 @@ lcn.app_declaration = {
   ? requested_permissions: [* lcn.app_permission],
   ? persistent_state: true,
   ? configuration: lcn.app_configuration,
+}
+
+; The protected realization input of one instance (decision G400): protected
+; construction input (RUNTIME l.1600-1601) that only the embedding host sets.
+; At each realization attempt the Module Loader writes `input` to
+; `<state_dir>/.lcn-protected-input`, and removes it when initialization
+; returns, at release and at retirement (docs/HOST-CONFIG.md). The instance is
+; listed in `modules`, has a state_assignment, and has at most one entry. Not
+; for secrets: the file passes through a directory that backups and state
+; copies may read.
+lcn.app_protected_input = {
+  instance: lcn.app_instance_id,
+  input: bstr .size (1..16777216),
 }
 ```
 
@@ -568,6 +602,29 @@ present, not empty, and only with `store_dir` and `state_root`.
 An instance is the `from` of one entry at most and the `to` of one entry at most. Neither side may be
 the Module Loader's instance, a Runtime-assigned name, or the Capability Authority instance. Anything
 else is refused at `create` with `LOGOS_ERR_INVALID_PARAMS` and "state_transfers: …".
+
+### `protected_inputs`
+
+Protected construction input for one instance (DECISIONS G400; RUNTIME l.1600-1601): bytes only the
+embedding host sets, which the instance reads at its initialization. logosd uses it to hand the
+Package Manager its `lcn.pm_input` ([DAEMON.md](DAEMON.md) §3). Optional; when present, not empty.
+
+| Field | Meaning |
+|---|---|
+| `instance` | An instance listed in `modules`, with a `state_assignment`. At most one entry per instance. |
+| `input` | 1 byte to 16 MiB, passed as they are. |
+
+At each realization attempt the Module Loader writes `input` to `<state_dir>/.lcn-protected-input`
+(below, "The Module Loader"); the module reads it during `_MODULE_init`. It is not configuration: no
+Runtime Control method reads, replaces or applies it, `create_module` cannot carry it, and it is never
+in a record, an error, a log line, an event or a carrier frame. A refused entry is `LOGOS_ERR_INVALID_PARAMS`
+at `create`, with "protected_inputs: <instance> is not listed in modules", "… has no
+state_assignment" or "… has two entries"; the message names the instance, never the bytes.
+
+**Not for secrets.** The bytes pass through a file in the instance's state directory, which backups
+and state copies may read while it exists, and which any process of the Runtime's user can read or
+replace. Use it for input that must not be changed by a module or a Runtime Control caller, not for
+input that must stay unread.
 
 ## Module configuration
 
@@ -1021,6 +1078,19 @@ advertise is refused with `unsupported-strategy` before any artifact is read (LO
   `LOGOS_ERR_MODULE`; the Loader stays, asked only to release, until that release returns, and
   `destroy` is `LOGOS_ERR_NOT_READY` until then. Keeping the Loader delays no withdrawal: each
   instance's routes and Runtime Control binding end when its stop begins.
+- **The protected realization input** (G400; `protected_inputs` above). The name
+  `.lcn-protected-input` is reserved in every state directory, with the temporary names
+  `.lcn-protected-input.<32 hex>`. Once an attempt's state directory is established, before
+  `_MODULE_init` or before its Module Host starts, the Loader writes the instance's bytes there: to a
+  new temporary file (`O_EXCL`, `O_NOFOLLOW`, mode 0600; a name that exists is never opened), flushed
+  and renamed onto the reserved name, with every step relative to the directory and following no link.
+  Whatever is at the reserved name first is removed without following it (a symbolic link goes, its
+  target stays); a directory there fails the attempt `realization-failed`, as does a write that
+  fails. An attempt for an instance without protected input removes a leftover first, so a module
+  never reads a file not written for its attempt. The file is removed when `_MODULE_init` returns,
+  success or failure, again at release, and when the instance is retired; its directory stays. The
+  bytes' digest is part of the realization request's key (LOADER l.368-370), so a changed input is a
+  new request.
 
 ## Module Hosts
 
@@ -1039,10 +1109,14 @@ ends it for the Module Loader; nothing restarts it (LOADER l.105). The packaged 
   descriptor 3 the private carrier to the Runtime (a socket pair the Runtime makes; DECISIONS G266);
   descriptor 4 a provider's listener (below); descriptor 5 the instance's restart lock (below); no
   other descriptor of the Runtime; a process group of its own; an empty signal mask, and SIGPIPE,
-  SIGTERM, SIGINT and SIGHUP at their default actions. `argv` is only the program's name: nothing
-  about the instance is in its command line or environment. On Linux it is killed when the
-  Runtime's supervision thread ends (`PR_SET_PDEATHSIG`). It runs as the Runtime's user: placement
-  `process` is a separate address space, not a sandbox (LOADER §3).
+  SIGTERM, SIGINT and SIGHUP at their default actions. `argv` is the program's name and
+  `--parent=<pid>`, the Runtime's process id: nothing about the instance is in its command line or
+  environment. Before anything else the host binds itself to that process (DECISIONS G264, amended
+  2026-11-21): on Linux it sets `PR_SET_PDEATHSIG`, so it is killed when the Runtime's supervision
+  thread ends, and then, on Linux and macOS, it checks that its parent is still that pid. A host whose
+  Runtime ended before that check has been adopted and exits 70; one started without a valid
+  `--parent` exits 2. It runs as the Runtime's user: placement `process` is a separate address
+  space, not a sandbox (LOADER §3).
 - **Supervision** (DECISIONS G265). One supervision thread per Runtime, started with the first host,
   watches every carrier and reaps each host it started (`waitpid` on its own pids, never on any
   child). After every end, an orderly one too, the host's whole process group is killed, and the
@@ -1125,7 +1199,7 @@ this file; the others are fixed (tests set the engine limits smaller).
 | lifecycle workers (`MaxWorkers`): bind, init, destroy, completion callbacks, `observe_end` handlers, apply hooks | 64, started on demand | fixed |
 | overflow lifecycle workers (`MaxNestedWorkers`) | 64 more, one per `starvationDelay` (50 ms) while jobs wait behind 64 busy workers and none finishes; nothing is ever refused (DECISIONS G242) | fixed |
 | call workers for asynchronous calls (`MaxCallWorkers`) | 64, started on demand | fixed |
-| overflow call workers (`MaxNestedCallWorkers`) | 64 more, the same way; when calls still wait for `refuseDelay` (1 s) with all 128 busy, the oldest call that has not started completes `LOGOS_ERR_MODULE` "no call worker is available" through its callback (G242) | fixed |
+| overflow call workers (`MaxNestedCallWorkers`) | 64 more, the same way; when calls still wait for `refuseDelay` (1 s) with all 128 busy, the oldest call that has not started completes `LOGOS_ERR_MODULE` "no call worker is available" through its callback (G242). For a refusal, a call worker is busy while it runs a job: one started but not yet running one is not. If no call worker takes or finishes a job for 10 × `refuseDelay` (10 s) while calls wait at the bound, the oldest is refused anyway, one each such period | fixed |
 | asynchronous calls prepared and not released (`MaxAsyncCalls`) | 4096; one more is `LOGOS_ERR_MODULE` (INTERFACE l.1998) | fixed |
 | evaluation workers and queue (`EvalWorkers`, `EvalQueue`) | 4 threads, 256 waiting | fixed |
 | handler passes per operation (`MaxPasses`) | 8; more is an evaluation failure | fixed |
@@ -1374,6 +1448,11 @@ At the next `start`, before the orchestration instance or anything else starts (
 directory name is gone; after `copy` its directory stays as it was, for a later rollback or a purge.
 An applied entry is satisfied: left in the configuration, it changes nothing at later starts, and can
 be removed whenever convenient.
+
+A `copy` skips the protected realization input's reserved name and its temporary names at the top of
+the source (G400): one instance's input never reaches another's directory, and is not counted against
+`max_bytes`. A `move` takes the directory as it is; the replacement's first attempt replaces or
+removes the file before its initialization.
 
 - **What `b` gets.** The files only. Its configuration comes from its own entry (CONFIG l.255-261),
   its permission settings from its own provisioning, and its grants from the policy; `a`'s

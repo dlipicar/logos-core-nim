@@ -56,12 +56,22 @@ proc spawnChild*(
     args: openArray[string],
     dir, name: string,
     env: openArray[(string, string)] = [],
+    channel: cint = -1,
 ): Child =
-  ## Runs `exe args` with stdout and stderr in `dir/name.out` and `.err`.
+  ## Runs `exe args` with stdout and stderr in `dir/name.out` and `.err`, and
+  ## `channel`, when given, as its fd 3 (the key holder's, Tier 5 step 5-7a-1).
   result.outPath = dir / (name & ".out")
   result.errPath = dir / (name & ".err")
   var fa: Tposix_spawn_file_actions
   doAssert posix_spawn_file_actions_init(fa) == 0
+  # dup2 onto itself would keep close-on-exec: a channel already at 3 moves first.
+  let src =
+    if channel == 3:
+      dup(channel)
+    else:
+      channel
+  if src >= 0:
+    doAssert posix_spawn_file_actions_adddup2(fa, src, 3) == 0
   doAssert posix_spawn_file_actions_addopen(
     fa, 1, cstring(result.outPath), O_WRONLY or O_CREAT or O_TRUNC, 0o600
   ) == 0
@@ -79,6 +89,8 @@ proc spawnChild*(
   deallocCStringArray(envp)
   discard posix_spawn_file_actions_destroy(fa)
   discard posix_spawnattr_destroy(attr)
+  if src >= 0 and src != channel:
+    discard posix.close(src)
   doAssert r == 0, "posix_spawn " & exe & ": " & $strerror(r)
   running.add(result.pid)
 

@@ -14,12 +14,17 @@
 ##   sends `realize` and withdraws it when the reply arrives. The Loader writes
 ##   back one field, `failedPhase`: `fpInit` when the error it returns came
 ##   from `_MODULE_init` itself (RUNTIME l.1566-1569; G250). A hosted attempt's
-##   entry also names its Module Host (4b-3; `hostsup.Host`, C-10).
+##   entry also names its Module Host (4b-3; `hostsup.Host`, C-10). An
+##   instance with protected realization input (G400) has its bytes here too.
 ## - **Outbound**, keyed by realization id: what the Runtime needs to call an
 ##   active direct provider and to publish for it (its dispatch, free and
 ##   asynchronous entries, its context, whether it declares events). The
 ##   Loader writes it when a realization becomes active and withdraws it once
 ##   `_MODULE_destroy` has returned (LDR-0152).
+## - **Protected inputs** ([IMPL-DECISION G400]), keyed by module instance:
+##   each instance's protected realization input, copied in once when the
+##   engine is made, before any thread starts, and freed with the table. Each
+##   attempt's inbound entry points at its instance's copy.
 ## - **Journal** (a test hook, only under `lcnTestHooks`; plan §2.12): each
 ##   request the Loader served, as plain values, in order.
 
@@ -74,6 +79,12 @@ type
       ## [plan §2.4, §2.5; C-10] a hosted attempt's `hostsup.Host`: its
       ## carrier, launch state and (4b-3.2) transferred listener; nil for a
       ## direct attempt
+    protectedInput*: ptr UncheckedArray[byte]
+      ## [G400] the instance's protected realization input, which the Loader
+      ## writes to `<state_dir>/.lcn-protected-input` (`protinput`): the
+      ## engine's copy in shared memory, kept for the instance's life; nil:
+      ## none
+    protectedInputLen*: int
 
   OutboundHandoff* = object
     ## [SPEC LOADER l.704] What the Runtime calls an active direct
@@ -96,10 +107,17 @@ type
     handoff: OutboundHandoff
     next: ptr OutEntry
 
+  ProtEntry = object
+    key: Key
+    data: ptr UncheckedArray[byte]
+    len: int
+    next: ptr ProtEntry
+
   SideTableObj = object
     lock: Lock
     inbound: ptr InEntry
     outbound: ptr OutEntry
+    protected: ptr ProtEntry
     when defined(lcnTestHooks):
       journal: ptr JournalSlot
       journalTail: ptr JournalSlot
@@ -139,6 +157,12 @@ proc freeSideTable*(t: SideTable) =
     let n = o.next
     freeShared(o)
     o = n
+  var q = t.protected
+  while q != nil:
+    let n = q.next
+    deallocShared(q.data)
+    freeShared(q)
+    q = n
   when defined(lcnTestHooks):
     var j = t.journal
     while j != nil:
@@ -163,6 +187,45 @@ proc findOut(t: SideTable, k: Key): ptr OutEntry =
       return p
     p = p.next
   nil
+
+# Protected inputs (G400) --------------------------------------------------------------
+
+proc addProtected*(
+    t: SideTable, instance: string, data: openArray[byte]
+): Result[void, string] =
+  ## [G400] Keeps a copy of `instance`'s protected realization input for the
+  ## table's life. Called before any thread starts; a second for one instance
+  ## is refused.
+  let k = toKey(instance).valueOr:
+    return err("the module instance id has 1 to 128 bytes")
+  if data.len == 0:
+    return err("the protected input is empty")
+  var p = t.protected
+  while p != nil:
+    if p.key == k:
+      return err("the instance already has a protected input")
+    p = p.next
+  let e = createShared(ProtEntry)
+  e.key = k
+  e.len = data.len
+  e.data = cast[ptr UncheckedArray[byte]](allocShared(data.len))
+  copyMem(e.data, unsafeAddr data[0], data.len)
+  withLock t.lock:
+    e.next = t.protected
+    t.protected = e
+  ok()
+
+proc protectedOf*(t: SideTable, instance: string): (ptr UncheckedArray[byte], int) =
+  ## [G400] Where `instance`'s copy is and its length; (nil, 0): none.
+  let k = toKey(instance).valueOr:
+    return (nil, 0)
+  withLock t.lock:
+    var p = t.protected
+    while p != nil:
+      if p.key == k:
+        return (p.data, p.len)
+      p = p.next
+  (nil, 0)
 
 # Inbound ------------------------------------------------------------------------------
 
