@@ -6504,22 +6504,81 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
       counted one unit for a push or a pop, and with 80,000 names on the heap each made about 30 string
       comparisons: the wide shape's attempts took 6 ms a turn, and up to 16 ms, at the maxima.
     - **What a turn can overrun by:** one step that is not an iterator. The largest are building one candidate
-      from one manifest (its requirement list, about 3 ms on the loaded Mac for 80,000 entries), one
-      scan of one name's requirements (`pinsFor`, `needed`), one re-entered `evaluate`, one sort (the names, one
-      name's versions out of order, one identity's records) and one table's growth. The bench reports the longest
-      turn.
-    - **The exception: contracts** (found while measuring G477; Fable's review `fable-checks/step5-3c2-contract-turns.md`
-      and planning's ruling of 2026-11-22). A record whose dependency entries list contracts, or that provides
-      many, is not yet within the turn bound. One manifest with one dependency entry listing 18,000 contracts (PM
-      l.295), on a name that has a record, held the module thread for 5.2 s in one turn on the Mac (1,000
-      contracts: 12 ms; 4,000: 0.69 s; 8,000: 1.6 s), inside the preset and G477's proposed default; ten entries
-      of 8,000 on names that never bind gave turns of 0.15 s. The work count reads 80 for it: no contract is
-      counted. The causes: `needed` deduplicates a name's listed contracts by a scan of the list it builds
-      (quadratic in them; on master since 7e88549); contracts are encoded outside any sliced step (`fresh`, the
-      picks' and the installed candidates' provided contracts, `provided`); and they are compared under one
-      unit for an entry (`meets`, the pick filter). **5-3c-3 is the fix** (each contract interned once in a sliced
-      step, at G477's read point, as a number; the comparisons counted by the steps walked), and it is to be in
-      before 5-6a.
+      from one manifest (its requirement list, about 3 ms on the loaded Mac for 80,000 entries), one re-entered
+      `evaluate`, one sort (the names, one name's versions out of order, one identity's records) and one table's
+      growth. The bench reports the longest turn, and the run its largest step (`largestStep`, the most work
+      between two checks of the budget).
+    - **Contracts are numbered once** (5-3c-3; found while measuring G477; Fable's review
+      `fable-checks/step5-3c2-contract-turns.md` and planning's ruling of 2026-11-22). Until 5-3c-3 a record whose
+      dependency entries list contracts, or that provides many, was outside the turn bound: one manifest with one
+      dependency entry listing 18,000 contracts (PM l.295), on a name that has a record, held the module thread for
+      5.2 s in one turn on the Mac (1,000 contracts: 12 ms; 4,000: 0.69 s; 8,000: 1.6 s), inside the preset and
+      G477's proposed default, and its work count read 80. `needed` deduplicated a name's listed contracts by a scan
+      of the list it built (quadratic in them; on master since 7e88549), contracts were encoded outside any sliced
+      step (`fresh`, the picks' and the installed candidates' provided contracts, `provided`), and they were
+      compared under one unit for an entry (`meets`, the pick filter). Now:
+      - **Each contract is interned once per run** (Fable §1, §3), at G477's read point after its check: a catalog
+        record once its inspection is supplied within the bound, an installed record at its first evaluation, the
+        source root before it is charged. A sliced step of its own does it, `internSteps`: a contract costs one
+        unit and its encoded bytes (an overcount is safe), with its probes and marks. `evaluate` returns pending for
+        a record read but not yet numbered, as for a missing inspection, so no evaluation encodes, and each record
+        is numbered once.
+      - **What a record without contracts costs.** One that lists and provides none is numbered in the step
+        that reads it (`numberedEmpty`), with no pending return and no `internSteps`: a unit, and one for each
+        16 of its entries and modules, whose lengths the walk that found none read (a read costs far less than a
+        unit; a unit each doubled the wide shape's largest step, to 160,043). Its numbers are empty, and so is
+        every span of them.
+        In `internSteps` a catalog record is looked up again at each call of the walk (rule I2: no view of the
+        table across a yield), so one lookup takes up to 32 of its steps, none of which yields, each a unit. A
+        frame whose requirements list no contract filters a candidate's records by its pins in place
+        (`allowPinned`, `allowSteps`' unit for each record), not in a sliced step of its own.
+      - **Measured against 5-3c-2** (3b2d6a0; `tools/pmbench.nim` on framework.lan, quiet, the two builds
+        alternating, three rounds). Before these three, a lookup for every step of every entry and a sliced
+        step for every record and every candidate made the shapes without contracts slower in all: dense 4,096
+        by 12%, layered 4,096 in 64 layers by 15%, chain 4,095 by 50%. After: dense 4,096, layered 4,096 and
+        dense 1,024 within 3%; chain 4,095 about 23 ms against 20; lift 30 with 65,500 versions of `y` 59 ms
+        against 54 (8%); the preset's shapes within their noise. The longest turns are unchanged.
+      - **A number is an `int32`** over the encoding, the equality the oracle pins. The table keeps each encoding
+        once, with its hash, in blocks of 4,096, so no list of them grows in one step. Its slots are blocks
+        allocated when first used, and when they grow the old ones move two numbers at each insert, so no growth
+        is one step either.
+      - **The hash is std/hashes', unkeyed**, so the same inputs give the same probes, work and turns in every run,
+        as the suites require. A signer chooses the encodings and can make them collide, so each probe, and each
+        number moved when the slots grow, is a unit and a turn check (planning's ruling on Fable's review, §1): a
+        chain of collisions costs turns, never a step. A test hook (D27) shifts every hash so that all of them
+        collide: 2,200 contracts then count 5.7 million more units, the largest step is unchanged (256), and every
+        budget gives the same outcome, counters and work.
+      - **What a record keeps:** one list of numbers, sized once: each dependency entry's contracts as listed, then
+        its provided contracts once each and ascending (a bottom-up merge sort through a buffer, a unit for each
+        number moved, when they are not in order already). As each contract is numbered the run drops its own
+        reference to it, since nothing in the run reads it again (Fable §3: otherwise an inspection the cache did
+        not keep is freed later in one uncounted piece).
+      - **Only what the run owns is freed.** Today the engine answers each source through the verification cache
+        (G403), and an eligible inspection is a copy that shares its contract trees with the cache entry, so the
+        trees stay whole for the entry and are freed by their last holder. The run changes only its own lists, never a shared value, and
+        credits no shared bytes as freed (planning's condition). A second operation over the same inspections gives
+        the first's answer, a test.
+      - **Spans, not copies** (addition 1): `Req.contracts`, `Cand.provides` and `CatalogPick.provides` are spans
+        into a record's list, so a bind copies no contracts. The rest of a requirement's copy is counted with its
+        version's bytes.
+      - **The work is the steps walked** (Fable §2): a listed number is looked up in a candidate's provided ones by
+        binary search, each probe spent, in `bindSteps`, in the pick filter (`allowSteps`) and in the installed
+        check.
+      - **A name's need, once per frame** (addition 2): `needSteps` gathers the numbers its requirements list, a
+        unit each, deduplicated by marks, when the frame is pushed, with its pins as a first pin and a conflict
+        (addition 3). Two distinct pins exclude every commitment, as `pinsFor`'s list did. The frame keeps them,
+        and they are freed when it is popped.
+      - **The release** (addition 4) frees the lists and the encodings one at a time, and counts an inspection by
+        its `inputCount`.
+      - The largest step is then 256 units in the contract shapes at up to 1.15 million contracts (a block of slots
+        allocated, a unit for each 16), and 1,251 in the provider shape (the sort's buffer for 20,000 provided
+        numbers, zeroed, a unit for each 16), and does not grow with the contracts listed (CONFORMANCE "The
+        resumable run"). Before each probe was a unit of its own, it was about 1,000 to 1,250.
+      - **What the turn test cannot see** (Fable's review, §4). The suites assert the largest step, which catches
+        work counted in one lump. They cannot catch work that is not counted at all, which was this defect (80
+        units for 5 s). The detector for that is the bench's time per unit for the contract shapes against the plain
+        shapes', read in the same run, so a loaded machine neither hides nor fakes it. It is read at every change
+        to `resolver.nim`, and it is not a suite gate (CONFORMANCE "The resumable run").
   - **The setup is the run's first steps** (found by the bench, not in the plan). G454's setup (the names numbered,
     each name's versions in precedence order, each identity's records in source order) ran before the first turn,
     linear in the catalog: about 0.4 s at the catalog's 65,536 entries (`package_manager.limits`) on the Mac, and
@@ -6565,8 +6624,8 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
     while a second operation, a readiness event and status calls go through, which fails with a continue that is
     only posted.
   - **Costs:** CONFORMANCE "The resumable run"; DEPLOYMENT §12.
-- **Status:** decided 2026-11-22 (planning's rulings on the 5-3c plan); built 5-3c-2 (I122). Contracts are
-  outside the turn bound until 5-3c-3 (the exception above).
+- **Status:** decided 2026-11-22 (planning's rulings on the 5-3c plan); built 5-3c-2 (I122); contracts numbered
+  once in 5-3c-3 (I122).
 
 ---
 
@@ -6630,7 +6689,11 @@ their history.
   - requirements on names that never bind (the fan: k bound manifests of the same 80,000 names): about 0.8 KiB a
     unit, and the same for dense 4,096 (6.5 GiB); with distinct names, about 1.6 to 1.8 KiB, the worst measured;
   - dependency entries listing contracts (k bound manifests of 10 entries with 8,000 contracts each, or 1 entry with
-    18,000): about 1.5 KiB a unit; held and never bound, about 1.0 KiB;
+    18,000): about 1.5 KiB a unit, and held and never bound about 1.0 KiB, until 5-3c-3 numbered them (G455). Since
+    then (`memprobe2.nim`'s `fancd`), 0.3 to 0.45 KiB a unit when no two manifests list the same contract: a 4-byte
+    number for each listed contract, and each distinct one's 221-byte encoding kept once. When they repeat, the peak
+    is one manifest's decoded contracts while they are numbered, about 150 MiB for 80,000, for 8 or 16 manifests
+    alike;
   - inspections of plain entries held and never bound: 0.1 to 0.2 KiB.
   - So at most about 460 MiB of resolver state for one operation at the proposed default, and about 29 GiB at the
     proposed maximum (1.8 KiB a unit). Two operations in flight per instance (5-5's §4.13) double it.
@@ -6646,9 +6709,9 @@ their history.
   - `test_pm_driver`: each shape at its count and one below, under three budgets; dense(10)'s and chain(10)'s counts.
 - **Not here:** the key, its check and the log line (5-5-3); the cache's weights over the walk (5-5-3); the compact
   representation (B, next in 5-3c, by measurement; its first target is a requirement's 192 bytes, 144 of them an
-  inline `Opt[ManifestCommitment]`). 5-3c-3 (G455's contract exception) interns each contract once per run as a
-  number, after this bound's check at the same read point, so it measures the figures above again; the count does
-  not change.
+  inline `Opt[ManifestCommitment]`). 5-3c-3 (G455) numbers each contract once per run, after this bound's check at
+  the same read point; the figures above are measured again for it (requirements and plain inspections within 2%),
+  and the count does not change.
 
 ### G78 — Authority inside the CLI's embedded Runtime
 - **Kind:** FREE · **Specs:** RUNTIME §9 l.1490-1493 (internal policy allowed for local trusted

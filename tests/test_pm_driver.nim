@@ -806,6 +806,64 @@ suite "the resolver measurement's shapes, by their counts (ruling M6; G443)":
       # several (a list's growth, a setup entry's bytes; chain: 522 turns for 1,231 units).
       check most >= int(base.work div 4)
 
+  test "[IMPL-DECISION G455] (5-3c-3) contracts within the turn bound: each contract shape gives one outcome, the same counters, work and retrievals under every budget; every contract is counted with its bytes, and no step walks them in one go":
+    # Each contract is numbered when its record is read: a unit and its 221 encoded bytes at
+    # least. So the work exceeds them all, where before it counted none (5.2 s in one turn for
+    # 18,000 contracts in one entry, G455's exception). And the most work between two turn
+    # checks is a constant: one contract and the slots' growth, never a walk of an entry's or a
+    # record's contracts.
+    const LargestStep = 2_048
+    for (name, s, contracts, outcome) in [
+      ("contracts", contracts(2_000, 2), 2 * 2 * 2_000, "error dependency-unavailable"),
+      ("provider", provider(5_000, 300), 1 + 5_000 + 300, "q@1.0.0"),
+      ("versioned", versioned(1_000, 4), 4 * 1_000, "error dependency-unavailable"),
+    ]:
+      checkpoint name
+      let base = driveShape(s, preset, NoTurnBudget)
+      check base.outcome.summary.startsWith(outcome)
+      check base.work > contracts * 222
+      check base.largestStep <= LargestStep
+      for budget in [ResolverTurnWork, 1_000, 64, 1]:
+        checkpoint name & " under " & $budget
+        let r = driveShape(s, preset, budget)
+        check r.outcome.summary == base.outcome.summary
+        check r.counters == base.counters
+        check r.work == base.work
+        check r.steps == base.steps + r.turns
+        check r.largestStep <= LargestStep
+        # Each resume spends less than its budget and one step more.
+        check r.steps >= int(base.work div (budget + LargestStep))
+
+  test "[IMPL-DECISION G455] (5-3c-3) contracts whose hashes collide (a test hook): each probe of the chain is a unit and a turn check, so the chain costs work and turns, never a step; the outcome, counters and work are the same under every budget":
+    # The hash is unkeyed (the work must be the same in every run), so a signer can choose
+    # encodings that collide (Fable's review of 5-3c-3 §1). The hook shifts each hash left by
+    # 40 bits: every encoding starts at the same slot, and the k-th new one walks past the k
+    # before it.
+    const LargestStep = 2_048
+    # contracts(1_100, 1): two entries of 1,100, a chain longer than LargestStep.
+    let n = 2 * 1_100
+    let spread = driveShape(contracts(1_100, 1), preset)
+    contractHashShiftForTests = 40
+    try:
+      let chained = driveShape(contracts(1_100, 1), preset)
+      check chained.outcome.summary == spread.outcome.summary
+      check chained.counters == spread.counters
+      check chained.work - spread.work >= int64(n * (n - 1) div 4)
+      check chained.largestStep <= LargestStep
+      let s = contracts(150, 1)
+      let base = driveShape(s, preset, NoTurnBudget)
+      check base.outcome.summary.startsWith("error dependency-unavailable")
+      for budget in [ResolverTurnWork, 1_000, 64, 1]:
+        checkpoint "under " & $budget
+        let r = driveShape(s, preset, budget)
+        check r.outcome.summary == base.outcome.summary
+        check r.counters == base.counters
+        check r.work == base.work
+        check r.steps == base.steps + r.turns
+        check r.largestStep <= LargestStep
+    finally:
+      contractHashShiftForTests = 0
+
   test "[IMPL-DECISION G477] the operation bound: a shape reads its records and their entries; at that count it resolves as without a bound, one below it ends package-unavailable, the same under every turn budget, with no limit named":
     # dense(n): n records and n(n-1)/2 dependency entries; chain(n): n records, n - 1 entries.
     check driveShape(dense(10), preset).counters.entries == 10 + 45
