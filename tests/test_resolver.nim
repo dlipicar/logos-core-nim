@@ -1964,3 +1964,318 @@ suite "pkg.resolver: the resolver gives the frozen oracle's results (G454)":
         let want = described(oracleResolve(input, s.rootOf, k), k)
         let got = described(resolve(input, s.rootOf, c), c)
         check got == want
+
+# The resumable run (Tier 5 step 5-3c-2; DECISIONS G455) --------------------------------
+
+proc runBy(
+    u: Universe,
+    root: RootReference,
+    lim: ResolverLimits,
+    budget: int64,
+    work, turns, releaseTurns: var int64,
+): seq[string] =
+  ## [G455] One resolution as a resumable run of `budget` work units a turn, each need
+  ## answered when the run asks for it, as the driver does, then released turn by turn:
+  ## what `resolveBy` reports.
+  u.log.setLen(0)
+  u.checked.setLen(0)
+  let input = ResolverInput(
+    installed: u.installed,
+    catalog: u.catalog,
+    limits: lim,
+    trust: u.trust,
+    inspect: u.inspector,
+    retained: u.retained,
+  )
+  let run = startRun(input, root, budget)
+  turns = 0
+  while true:
+    var s = run.resume()
+    case s.kind
+    of suNeedSource:
+      run.supply(s.source, input.inspect(s.source, input.trust))
+    of suNeedRetained:
+      run.supplyRetained(s.record, input.retained(input.installed[s.record]))
+    of suTurn:
+      inc turns
+    of suDone:
+      work = run.work
+      result = described(s.outcome, run.counters)
+      break
+  releaseTurns = 1
+  while not run.release():
+    inc releaseTurns
+  result.add("inspected " & u.log.join(" "))
+  result.add("checked " & u.checked.join(" "))
+
+suite "pkg.resolver: the resumable run (G455)":
+  const Budgets = [1'i64, 2, 3, 17, 1_000, NoTurnBudget]
+
+  test "[IMPL-DECISION G455] seeded catalogs, under turn budgets of 1, 2, 3, 17 and 1,000 work units and none: the oracle's results, and one work total":
+    # The same retrievals in the same order as the oracle's synchronous run, whatever the
+    # budget; the work total and the turns are the same each time for one budget.
+    var rng = initRand(0x5_3C_2)
+    var seen: set[Feature]
+    var sliced, releasedInTurns = 0
+    for round in 0 ..< 2_000:
+      let g = rng.generated(seen)
+      checkpoint "round " & $round
+      let want = g.u.resolveBy(g.root, g.limits, oracle = true)
+      var total = -1'i64
+      var most = 0'i64
+      for budget in Budgets:
+        checkpoint "budget " & $budget
+        var work, turns, releaseTurns: int64
+        check g.u.runBy(g.root, g.limits, budget, work, turns, releaseTurns) == want
+        if total < 0:
+          total = work
+          most = turns
+        check work == total
+        check turns <= most
+        if budget == NoTurnBudget:
+          check turns == 0
+          check releaseTurns == 1
+        if budget == 1:
+          if work > 0:
+            check turns > 0
+            inc sliced
+          if releaseTurns > 1:
+            inc releasedInTurns
+        if budget == 17:
+          var work2, turns2, releaseTurns2: int64
+          check g.u.runBy(g.root, g.limits, budget, work2, turns2, releaseTurns2) == want
+          check work2 == work
+          check turns2 == turns
+          check releaseTurns2 == releaseTurns
+    check sliced > 1_000
+    check releasedInTurns > 1_000
+
+  test "[IMPL-DECISION G455] a run is resumed only until its outcome; what it holds is released after it, or instead of it":
+    let u = Universe()
+    u.add("a", "1.0.0", ["b ^1.0.0"])
+    u.add("b", "1.0.0")
+    let input = ResolverInput(
+      catalog: u.catalog,
+      limits: MaxResolverLimits,
+      trust: u.trust,
+      inspect: u.inspector,
+      retained: u.retained,
+    )
+    let root = RootReference(package: Opt.some("a"))
+    # Given up after its first need: no later answer reaches it.
+    let given = startRun(input, root, 1)
+    var first = given.resume()
+    while first.kind == suTurn: # the setup's turns
+      first = given.resume()
+    check first.kind == suNeedSource
+    var releases = 1
+    while not given.release():
+      inc releases
+    check releases > 1
+    given.supply(first.source, input.inspect(first.source, input.trust))
+    check given.supplied == 0
+    # Driven to its outcome: the same as the synchronous run's.
+    let run = startRun(input, root, 1)
+    var outcome: Result[Resolution, PackageError]
+    while true:
+      var s = run.resume()
+      case s.kind
+      of suNeedSource:
+        run.supply(s.source, input.inspect(s.source, input.trust))
+      of suNeedRetained:
+        run.supplyRetained(s.record, input.retained(input.installed[s.record]))
+      of suTurn:
+        discard
+      of suDone:
+        outcome = s.outcome
+        break
+    check outcome.get.packages.mapIt($it.identity) == @["a@1.0.0", "b@1.0.0"]
+    check resolve(input, root).get.packages.mapIt($it.identity) ==
+      @["a@1.0.0", "b@1.0.0"]
+    while not run.release():
+      discard
+
+# The operation bound (Tier 5 step 5-3c; DECISIONS G477) ---------------------------------
+
+proc boundedBy(
+    u: Universe,
+    root: RootReference,
+    lim: ResolverLimits,
+    bound: Opt[int],
+    budget = NoTurnBudget,
+    counters: var ResolverCounters,
+): seq[string] =
+  ## [G477] One resolution as a run under the operation bound `bound`: what `resolveBy`
+  ## reports, and the run's counters.
+  u.log.setLen(0)
+  u.checked.setLen(0)
+  let input = ResolverInput(
+    installed: u.installed,
+    catalog: u.catalog,
+    limits: lim,
+    trust: u.trust,
+    inspect: u.inspector,
+    retained: u.retained,
+    operationEntries: bound,
+  )
+  let run = startRun(input, root, budget)
+  while true:
+    var s = run.resume()
+    case s.kind
+    of suNeedSource:
+      run.supply(s.source, input.inspect(s.source, input.trust))
+    of suNeedRetained:
+      run.supplyRetained(s.record, input.retained(input.installed[s.record]))
+    of suTurn:
+      discard
+    of suDone:
+      counters = run.counters
+      result = described(s.outcome, run.counters)
+      break
+  while not run.release():
+    discard
+  result.add("inspected " & u.log.join(" "))
+  result.add("checked " & u.checked.join(" "))
+
+func isPrefixOf(a, b: seq[string]): bool =
+  a.len <= b.len and a == b[0 ..< a.len]
+
+suite "pkg.resolver: the operation bound (G477)":
+  test "[IMPL-DECISION G477] one walk gives a record's input units: the record, each dependency entry and the contracts it lists, each provided contract":
+    let x = Inspection(
+      kind: ikEligible,
+      identity: ident("a@1.0.0"),
+      commitment: commitOf("a@1.0.0"),
+      dependencies: @[dep("bb ^1.0.0 +x +y"), dep("c =2.0.0")],
+      provides: @[contract("p")],
+    )
+    var walked: seq[InputUnit]
+    for u in x.inputUnits:
+      walked.add(u)
+    let expected: seq[InputUnit] = @[
+      (iuRecord, 6),
+      (iuDependency, 7),
+      (iuDependencyContract, encodedSize(contract("x"))),
+      (iuDependencyContract, encodedSize(contract("y"))),
+      (iuDependency, 6),
+      (iuProvided, encodedSize(contract("p"))),
+    ]
+    check walked == expected
+    check x.inputCount == 6
+    check Inspection(kind: ikUnavailable, reason: "gone").inputCount == 1
+    let u = Universe()
+    u.install("c", "2.0.0", deps = ["d ^1.0.0 +x"], provides = ["y", "z"])
+    walked.setLen(0)
+    for w in u.installed[0].inputUnits:
+      walked.add(w)
+    check walked.mapIt(it.kind) ==
+      @[iuRecord, iuDependency, iuDependencyContract, iuProvided, iuProvided]
+    check u.installed[0].inputCount == 5
+
+  test "[IMPL-DECISION G477] the inputs read: each record once, with its dependency entries, the contracts they list and its provided contracts; an installed one counted before its retained bytes are asked for; a count at the bound goes on, one over it stops":
+    let u = Universe()
+    u.add("a", "1.0.0", ["b ^1.0.0", "c ^1.0.0 +y"], provides = ["x"]) # 1 + 2 + 1 + 1
+    u.add("b", "1.1.0", outcome = ikIneligible) # 1
+    u.add("b", "1.0.0") # 1
+    u.install("c", "1.0.0", provides = ["y", "z"]) # 1 + 0 + 2
+    let root = RootReference(package: Opt.some("a"))
+    let lim = limits()
+    var c: ResolverCounters
+    let want = u.boundedBy(root, lim, Opt.none(int), counters = c)
+    check want[0] == "root a@1.0.0 unchanged=false"
+    check c.entries == 10
+    check c.bound == ""
+    check want[^2] == "inspected a@1.0.0#0 b@1.1.0#0 b@1.0.0#0"
+    check want[^1] == "checked c@1.0.0"
+    # The same count whatever the budget: an evaluation that waits for the retained bytes
+    # is made again, and the record is counted once.
+    for budget in [1'i64, 3, NoTurnBudget]:
+      checkpoint "budget " & $budget
+      check u.boundedBy(root, lim, Opt.none(int), budget, c) == want
+      check c.entries == 10
+      # At the bound: the count equals it, and nothing stops.
+      check u.boundedBy(root, lim, Opt.some(10), budget, c) == want
+      check c.bound == ""
+      # Each stop is at the record whose inputs take the count over the bound, which is
+      # read and no more: one over the bound at 9, further over below.
+      for (bound, inspected, checked) in [
+        (9, "a@1.0.0#0 b@1.1.0#0 b@1.0.0#0", ""),
+        (6, "a@1.0.0#0 b@1.1.0#0 b@1.0.0#0", ""),
+        (5, "a@1.0.0#0 b@1.1.0#0", ""),
+        (4, "a@1.0.0#0", ""),
+        (1, "a@1.0.0#0", ""),
+      ]:
+        checkpoint "bound " & $bound
+        let got = u.boundedBy(root, lim, Opt.some(bound), budget, c)
+        check got[0] ==
+          "error package-unavailable: the operation reads more package records and entries than this deployment allows"
+        check $bound notin got[0]
+        check got[^2] == "inspected " & inspected
+        check got[^1] == "checked " & checked
+        check c.bound == "operation_entries"
+        check c.limit == ""
+        check c.entries > bound
+
+  test "[IMPL-DECISION G477] a source root is counted once, when its inspection is supplied":
+    let u = Universe()
+    u.add("a", "1.0.0", ["b ^1.0.0"]) # 1 + 1
+    u.add("b", "1.0.0") # 1
+    let root = RootReference(source: Opt.some(source("a", "1.0.0")))
+    var c: ResolverCounters
+    let want = u.boundedBy(root, limits(), Opt.none(int), counters = c)
+    check want[0] == "root a@1.0.0 unchanged=false"
+    check c.entries == 3
+    check u.boundedBy(root, limits(), Opt.some(3), counters = c) == want
+    check u.boundedBy(root, limits(), Opt.some(2), counters = c)[0].startsWith(
+      "error package-unavailable"
+    )
+    check c.bound == "operation_entries"
+
+  test "[IMPL-DECISION G477] seeded catalogs: each record's count is its walk's; at the inputs a run reads, the bound changes nothing; below them, the run ends package-unavailable after a prefix of the same retrievals, its counters no further than the unbounded run's":
+    var rng = initRand(0x5_3C_2_B0)
+    var seen: set[Feature]
+    var stopped = 0
+    for round in 0 ..< 1_000:
+      let g = rng.generated(seen)
+      checkpoint "round " & $round
+      # The count by lengths is the walk's.
+      for x in g.u.outcomes.values:
+        var n = 0
+        for _ in x.inputUnits:
+          inc n
+        check x.inputCount == n
+      for p in g.u.installed:
+        var n = 0
+        for _ in p.inputUnits:
+          inc n
+        check p.inputCount == n
+      var k: ResolverCounters
+      let want = g.u.boundedBy(g.root, g.limits, Opt.none(int), counters = k)
+      check want == g.u.resolveBy(g.root, g.limits, oracle = true)
+      check k.bound == ""
+      if k.entries == 0:
+        continue
+      var c: ResolverCounters
+      for budget in [1'i64, NoTurnBudget]:
+        checkpoint "budget " & $budget
+        check g.u.boundedBy(g.root, g.limits, Opt.some(k.entries), budget, c) == want
+        check c == k
+      if k.entries == 1:
+        continue
+      for bound in [k.entries - 1, rng.rand(1 .. k.entries - 1)]:
+        checkpoint "bound " & $bound
+        let got = g.u.boundedBy(g.root, g.limits, Opt.some(bound), counters = c)
+        check got[0].startsWith("error package-unavailable: the operation reads more")
+        check c.bound == "operation_entries"
+        check c.limit == ""
+        check c.entries > bound
+        check c.entries <= k.entries
+        check c.names <= k.names
+        check c.depth <= k.depth
+        check c.attempts <= k.attempts
+        check got[^2].splitWhitespace.isPrefixOf(want[^2].splitWhitespace)
+        check got[^1].splitWhitespace.isPrefixOf(want[^1].splitWhitespace)
+        inc stopped
+        # A budget of one unit stops at the same place.
+        check g.u.boundedBy(g.root, g.limits, Opt.some(bound), 1, c) == got
+    check stopped > 500

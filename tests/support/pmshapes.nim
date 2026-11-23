@@ -1,7 +1,8 @@
 ## The resolver measurement's catalog shapes (Tier 5 step 5-3b-2; planning's rulings of
 ## 2026-11-22, M1 to M6 and 7.1 to 7.2; DECISIONS G399, G443), resolved through the Package
-## Manager's driver (`pm/driver.nim`) one step at a time, each step one whole resolver run, as the
-## engine runs it on the module thread. Every inspection is answered from a table, so no archive is
+## Manager's driver (`pm/driver.nim`) one step at a time, as the engine runs it on the module
+## thread: since 5-3c-2 (G455) a step resumes the run until it needs an inspection, spends its
+## turn or ends, and the run is then released a turn at a time. Every inspection is answered from a table, so no archive is
 ## signed or read. `tools/pmbench.nim` times them; `test_pm_driver` asserts their counts at small
 ## sizes, never a time (M6).
 ##
@@ -199,9 +200,18 @@ proc lift*(n, v: int): Shape =
 type BenchRun* = object
   outcome*: Result[Resolution, PackageError]
   counters*: ResolverCounters
-  steps*: int ## resolver runs: the root's and one after each inspection
+  steps*: int
+    ## driver steps: one ending at each inspection, one at each spent turn
+    ## ([G455]) and the last
+  turns*: int ## the steps that ended with the turn spent
+  work*: int64 ## the work units the run counted
   longest*, total*: Duration ## wall time
   longestCpu*, totalCpu*: float ## the process's CPU time, in seconds
+  setup*: Duration ## [G455] making the run (`initDriver`), before its first turn
+  setupCpu*: float
+  releases*: int ## [G455] the turns that released the run after its outcome
+  longestRelease*, releaseTotal*: Duration ## their wall time
+  longestReleaseCpu*, releaseTotalCpu*: float
 
 func defaultParameter*(shape: string): int =
   ## `k` for `wide`, `v` for `hub` and `lift`, `L` for `layered`.
@@ -228,10 +238,21 @@ proc shapeOf*(name: string, size, parameter: int): Opt[Shape] =
   else:
     Opt.none(Shape)
 
-proc driveShape*(s: Shape, limits: ResolverLimits): BenchRun =
+proc driveShape*(
+    s: Shape,
+    limits: ResolverLimits,
+    budget = ResolverTurnWork,
+    operationEntries = Opt.none(int),
+): BenchRun =
   ## Runs the driver to its outcome, answering every inspection from the table at once.
+  ## `budget` is the work of one turn ([G455]); `operationEntries` the operation bound
+  ## ([G477]).
   var t: TrustInput
-  let d = initDriver(s.catalog, t, limits, s.rootOf)
+  let made = getMonoTime()
+  let made0 = cpuTime()
+  let d = initDriver(s.catalog, t, limits, s.rootOf, budget, operationEntries)
+  result.setupCpu = cpuTime() - made0
+  result.setup = getMonoTime() - made
   while true:
     let start = getMonoTime()
     let cpu0 = cpuTime()
@@ -253,10 +274,32 @@ proc driveShape*(s: Shape, limits: ResolverLimits): BenchRun =
           st.source.encoded, Inspection(kind: ikUnavailable, reason: "no such source")
         ),
       )
+    of dsRetained:
+      d.supplyRetained(st.record, Result[void, string].ok())
+    of dsTurn:
+      discard
     of dsDone:
       result.outcome = st.outcome
       break
   result.counters = d.counters
+  result.turns = d.turns
+  result.work = d.work
+  # [G455] Then the run is released, a turn at a time, as the engine does after its reply.
+  while true:
+    let start = getMonoTime()
+    let cpu0 = cpuTime()
+    let freed = d.release()
+    let cpu = cpuTime() - cpu0
+    let took = getMonoTime() - start
+    inc result.releases
+    result.releaseTotal += took
+    result.releaseTotalCpu += cpu
+    if took > result.longestRelease:
+      result.longestRelease = took
+    if cpu > result.longestReleaseCpu:
+      result.longestReleaseCpu = cpu
+    if freed:
+      break
 
 func mostConsidered*(c: ResolverCounters): int =
   ## The candidates charged to the name charged most.

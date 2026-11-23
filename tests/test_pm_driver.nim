@@ -260,9 +260,11 @@ proc scene(
     entries: openArray[(CatalogEntry, seq[byte])],
     trust = orgTrust,
     resolverLimits = MaxResolverLimits,
+    turnWork = ResolverTurnWork,
 ): Scene =
   ## The engine with `entries` as its kept, matching catalog and each archive
-  ## (an empty one is absent) served under the entry's locator.
+  ## (an empty one is absent) served under the entry's locator. `turnWork` is
+  ## the work of one resolution turn (G455).
   var cat: seq[CatalogEntry]
   for (e, archive) in entries:
     cat.add(e)
@@ -270,8 +272,13 @@ proc scene(
       result.objects[e.source.objectLocator] = archive
   let doc = catalogBytes(cat)
   result.objects[bytesOf("catalog")] = doc
-  result.w =
-    newWorld(doc, kept = keptFor(doc), trust = trust, resolverLimits = resolverLimits)
+  result.w = newWorld(
+    doc,
+    kept = keptFor(doc),
+    trust = trust,
+    resolverLimits = resolverLimits,
+    turnWork = turnWork,
+  )
   result.w.emit(result.w.e.start())
   result.w.bringUp()
   result.w.serve(result.objects, result.calls)
@@ -422,6 +429,140 @@ suite "engine resolution over signed archives (G405)":
       b.get.packages.mapIt(($it.identity, it.commitment))
     check withP.calls.allIt(it.locator != bytesOf("lib.provenance"))
     check withP.statted == plain.statted
+
+# Turns (Tier 5 step 5-3c-2; DECISIONS G455) -----------------------------------------------
+
+proc answerCall(s: var Scene) =
+  ## Answers the oldest call the engine made, from the scene's objects.
+  let c = s.w.take({cmStat, cmRead})
+  s.calls.add(c)
+  let data = s.objects.getOrDefault(c.locator, @[])
+  let a =
+    if c.locator notin s.objects:
+      failureOf(fcUnavailable)
+    elif c.kind == cmStat:
+      sized(uint64(data.len))
+    else:
+      dataOf(data[int(c.offset) ..< int(c.offset) + int(c.length)])
+  s.w.handle(answered(c.call, a))
+
+proc untilTurn(s: var Scene, request: uint64) =
+  ## Answers calls until `request` has a turn due.
+  while request notin s.w.continues:
+    doAssert s.w.has({cmStat, cmRead}), "no call to answer"
+    s.answerCall()
+
+proc replyTo(s: Scene, request: uint64): Result[Resolution, PackageError] =
+  for c in s.w.replies:
+    if c.request == request:
+      return c.outcome
+  doAssert false, "no reply to " & $request
+
+suite "engine turns (G455)":
+  # A turn budget of one work unit: every operation spans many turns, each a later event.
+  # `lib` is listed at 40 more versions that `app`'s requirement rejects, never retrieved:
+  # each is tested in a turn of its own.
+  var entries = @[(entryOf("app", "1.0.0"), app100), (entryOf("lib", "1.2.0"), lib120)]
+  for i in 0 ..< 40:
+    entries.add((entryOf("lib", "2.0." & $i), newSeq[byte]()))
+
+  test "[IMPL-DECISION G455] a spent turn continues in a later one; two operations take turns one after the other, with the outcomes of unsliced runs":
+    var whole = scene(entries)
+    let want = whole.resolveIn(root("app")).summary
+    check want.startsWith("app@1.0.0")
+    var s = scene(entries, turnWork = 1)
+    s.w.emit(s.w.e.resolve(1, root("app")))
+    s.w.emit(s.w.e.resolve(2, root("app")))
+    var order: seq[uint64]
+    while true:
+      # An operation has one continue issued at a time.
+      for op in [1'u64, 2]:
+        check s.w.continues.countIt(it == op) <= 1
+      if s.w.has({cmStat, cmRead}):
+        s.answerCall()
+      elif s.w.continues.len > 0:
+        if s.w.continues[0] != ReleaseOperation:
+          order.add(s.w.continues[0])
+        discard s.w.turn()
+      else:
+        break
+    check s.w.replies.len == 2
+    check s.replyTo(1).summary == want
+    check s.replyTo(2).summary == want
+    var alternated = 0
+    for i in 2 ..< order.len:
+      if order[i] == order[i - 2] and order[i] != order[i - 1]:
+        inc alternated
+    checkpoint $order.len & " turns, " & $alternated & " alternations"
+    check order.countIt(it == 1) > 40
+    check order.countIt(it == 2) > 40
+    check alternated > 40
+    check s.w.e.releasingRuns == 0
+
+  test "[IMPL-DECISION G455] [IMPL-DECISION G405] stop during a sliced operation answers it package-unavailable, and no turn follows (G437)":
+    var s = scene(entries, turnWork = 1)
+    s.w.emit(s.w.e.resolve(1, root("app")))
+    s.untilTurn(1)
+    check s.w.turn()
+    check 1'u64 in s.w.continues
+    check s.w.replies.len == 0
+    s.w.emit(s.w.e.stop())
+    check s.w.replies.len == 1
+    check s.replyTo(1).isErr
+    check s.replyTo(1).error.code == pecPackageUnavailable
+    check s.w.e.pendingRequests == 0
+    check s.w.e.releasingRuns == 0
+    let issued = s.w.queue.len
+    while s.w.turn():
+      discard
+    check s.w.replies.len == 1
+    check s.w.queue.len == issued
+    check s.w.e.resolve(2, root("app")).len == 0
+    check s.w.e.stop().len == 0
+
+  test "[IMPL-DECISION G455] a cancelled operation takes no more turns and is not answered; its queued retrieval is dropped, a late continue is ignored, and its run is released (F3)":
+    var s = scene(entries, turnWork = 1)
+    s.w.emit(s.w.e.resolve(1, root("app")))
+    s.w.emit(s.w.e.resolve(2, root("lib", "1.2.0")))
+    # Each run's setup takes turns before its first retrieval.
+    while s.w.e.queued("main") < 2:
+      doAssert s.w.turn(), "a turn is due"
+    # The second retrieval waits behind the first: cancelled, it is dropped.
+    s.w.emit(s.w.e.cancel(2))
+    check s.w.e.queued("main") == 1
+    s.untilTurn(1)
+    s.w.emit(s.w.e.cancel(1))
+    check 1'u64 in s.w.continues
+    check s.w.e.pendingRequests == 0
+    check s.w.e.releasingRuns == 2
+    check s.w.e.cancel(1).len == 0
+    let made = s.calls.len
+    s.w.serve(s.objects, s.calls)
+    check s.w.replies.len == 0
+    check s.calls.len == made # `lib` is never retrieved
+    check s.w.e.releasingRuns == 0
+    check s.w.continues.len == 0
+
+  test "[IMPL-DECISION G455] a finished operation's run is released turn by turn after its answer; no request takes the releases' id":
+    var s = scene(entries, turnWork = 1)
+    s.w.emit(s.w.e.resolve(1, root("app")))
+    var releases = 0
+    while s.w.has({cmStat, cmRead}) or s.w.continues.len > 0:
+      if s.w.has({cmStat, cmRead}):
+        s.answerCall()
+        continue
+      if s.w.continues[0] == ReleaseOperation:
+        check s.w.replies.len == 1 # answered before any of its release
+        check s.w.e.releasingRuns == 1
+        inc releases
+      discard s.w.turn()
+    check s.replyTo(1).isOk
+    check releases > 1
+    check s.w.e.releasingRuns == 0
+    s.w.emit(s.w.e.resolve(ReleaseOperation, root("app")))
+    check s.w.replies.len == 2
+    check s.replyTo(ReleaseOperation).error.code == pecInvalidRequest
+    check s.w.continues.len == 0
 
 # The measurement's shapes, by their counts -----------------------------------------
 
@@ -633,3 +774,66 @@ suite "the resolver measurement's shapes, by their counts (ruling M6; G443)":
         attempts = depthLimit + 2,
         steps = depthLimit + 3,
       )
+
+  test "[IMPL-DECISION G455] each shape gives one outcome, the same counters and work, and the same retrievals under every turn budget; a small one slices it into turns":
+    for (name, s, lim) in [
+      ("chain", chain(depthLimit + 1), preset),
+      ("dense", dense(depthLimit + 1), preset),
+      ("layered", layered(depthLimit + 1, depthLimit), preset),
+      ("wide", wide(50, 4), limitsWith(attempts = MaxResolverLimits.attempts)),
+      ("wide at its limit", wide(50, 6), limitsWith(attempts = 20)),
+      ("hub", hub(30, 4), preset),
+      ("hub at its limit", hub(4, 6), limitsWith(candidates = 4)),
+      ("lift", lift(30, 4), preset),
+      ("lift past the depth", lift(depthLimit, 2), preset),
+    ]:
+      let base = driveShape(s, lim, NoTurnBudget)
+      check base.turns == 0
+      var most = high(int)
+      for budget in [ResolverTurnWork, 1_000, 64, 17, 1]:
+        checkpoint name & " under " & $budget
+        let r = driveShape(s, lim, budget)
+        check r.outcome.summary == base.outcome.summary
+        check r.counters == base.counters
+        check r.work == base.work
+        check r.steps == base.steps + r.turns
+        # A smaller budget never takes fewer turns.
+        check r.turns >= (if most == high(int): 0 else: most)
+        most = r.turns
+        if budget == 1:
+          check r.turns > 0
+      # A budget of one unit ends a turn at each count: one unit, or a step counted as
+      # several (a list's growth, a setup entry's bytes; chain: 522 turns for 1,231 units).
+      check most >= int(base.work div 4)
+
+  test "[IMPL-DECISION G477] the operation bound: a shape reads its records and their entries; at that count it resolves as without a bound, one below it ends package-unavailable, the same under every turn budget, with no limit named":
+    # dense(n): n records and n(n-1)/2 dependency entries; chain(n): n records, n - 1 entries.
+    check driveShape(dense(10), preset).counters.entries == 10 + 45
+    check driveShape(chain(10), preset).counters.entries == 10 + 9
+    for (name, s, lim) in [
+      ("chain past the depth", chain(depthLimit + 1), preset),
+      ("dense", dense(depthLimit + 1), preset),
+      ("layered", layered(depthLimit + 1, depthLimit), preset),
+      ("wide", wide(50, 4), limitsWith(attempts = MaxResolverLimits.attempts)),
+      ("hub", hub(30, 4), preset),
+      ("lift", lift(30, 4), preset),
+    ]:
+      let base = driveShape(s, lim, NoTurnBudget)
+      let e = base.counters.entries
+      check base.counters.bound == ""
+      var first: BenchRun
+      for budget in [NoTurnBudget, 64, 1]:
+        checkpoint name & " under " & $budget
+        let at = driveShape(s, lim, budget, Opt.some(e))
+        check at.outcome.summary == base.outcome.summary
+        check at.counters == base.counters
+        let below = driveShape(s, lim, budget, Opt.some(e - 1))
+        check below.outcome.summary == "error package-unavailable"
+        check below.counters.bound == "operation_entries"
+        check below.counters.limit == ""
+        check below.counters.entries == e
+        if budget == NoTurnBudget:
+          first = below
+        else:
+          check below.counters == first.counters
+          check below.work == first.work

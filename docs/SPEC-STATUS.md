@@ -605,6 +605,33 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
 
   No unit changes status; PKG §11's stay claimed on the same tests, which the oracle suite strengthens.
 
+- 2026-11-22, Tier 5 step 5-3c-2 (I122; G455), the resumable run and slicing:
+  - `package/resolver.nim` runs the search as a resumable run (closure iterators): a turn ends where the run needs
+    an inspection or an installed record's retained-bytes answer (5-5's suspension point), or once
+    `ResolverTurnWork` (32,768) units of work are spent; its state is then freed a turn at a time. The synchronous
+    `resolve` drives it with no budget. The resolver's setup over the catalog is the run's first turns: done at once
+    it held the thread for about 0.4 s at the catalog's 65,536 entries. A list's growth counts as work, and a
+    maximum-size manifest's dependency list is built once and copied nowhere. None of it changes a result.
+  - `pm/driver.nim` holds the run for the operation's life and no longer reruns it (G405 amended). `pm/engine.nim`
+    issues `cmContinue` for a spent turn, frees finished and cancelled runs by continues of their own, cancels an
+    operation its caller gave up, and answers the running ones at `stop`. `pm/shell.nim` runs each continue from a
+    `callSoon` of its own, so I/O and timers go between two turns (F2).
+  - The operation bound's resolver half (G477): `ResolverInput.operationEntries` counts the inputs one root
+    operation reads (each record once, with its dependency entries, the contracts they list and its provided
+    contracts: one walk, `inputUnits`, beside `Inspection`), and the read that takes the count over it ends the
+    operation with `package-unavailable` (PM l.1308-1309), the four limits untouched. The synchronous API runs with
+    none; 5-5-3 adds the protected key `operation_entries` and weighs its cache over the same walk. No unit changes
+    status.
+  - Not yet within the turn bound: records whose dependency entries list contracts (G455's exception; one entry of
+    18,000 held the thread 5.2 s in one turn). 5-3c-3 is the fix, before 5-6a.
+  - `test_resolver` drives 2,000 seeded catalogs through the run under six turn budgets against the oracle;
+    `test_pm_driver` gains the engine's turns (alternation, stop, cancel, release) and each shape under every
+    budget; `test_pm_hosted` a sliced operation with a second operation and a readiness event between its turns.
+    `pmtest_module` takes turns of one work unit. CONFORMANCE "The resumable run" and DEPLOYMENT §12 give the
+    costs. G443's gate is amended to before 5-5-3.
+
+  No unit changes status.
+
 - 2026-11-23, Tier 5 step N-5 (I126), the blockchain module's contract v2 (G469-G476, G479, G481, I130, I131,
   I133; D20, G97, G419, G422 and G340 amended): v2 extends v1, frozen at N-5.1's first commit, with the library's
   reads, typed (blocks, transactions, the wallet, Blend, PoW, the deployment), the events `new_block_event` and
