@@ -130,6 +130,17 @@ proc gzipCompress*(data: openArray[byte]): Result[seq[byte], string] =
   output.addLe32(uint32(data.len and 0xffff_ffff))
   ok(output)
 
+func crc32Of(data: openArray[byte]): uint32 =
+  ## [IMPL-DECISION I125] CRC-32 in pieces of at most 1 GiB: zlib's `crc32` takes a `cuint`
+  ## length, so one call over 4 GiB or more would cover only the length modulo 2^32.
+  var crc = Z_CRC32_INIT
+  var at = 0
+  while at < data.len:
+    let n = min(data.len - at, 1 shl 30)
+    crc = crc32(crc, cast[ptr uint8](unsafeAddr data[at]), cuint(n))
+    at += n
+  uint32(crc)
+
 proc gunzip*(data: openArray[byte], limit: int64): Result[seq[byte], string] =
   ## [SPEC PM §7.1] [IMPL-DECISION G41] Exactly one gzip member with no file
   ## name, modification time zero and OS byte 255, inflating to at most `limit`
@@ -193,7 +204,7 @@ proc gunzip*(data: openArray[byte], limit: int64): Result[seq[byte], string] =
   let trailer = pos + consumed
   if trailer + 8 > data.len:
     return err("the gzip trailer is truncated")
-  if le32(data, trailer) != uint32(crc32(output)):
+  if le32(data, trailer) != crc32Of(output):
     return err("the gzip CRC-32 does not match")
   if le32(data, trailer + 4) != uint32(output.len and 0xffff_ffff):
     return err("the gzip size does not match")
@@ -424,6 +435,9 @@ proc readTar(tar: openArray[byte], limits: LgxLimits): Result[seq[LgxEntry], str
     if kind == lekFile:
       e.data = @(tar.toOpenArray(pos, pos + n - 1))
     let padded = (n + BlockSize - 1) div BlockSize * BlockSize
+    if pos + padded > tar.len:
+      # [IMPL-DECISION I125] a tar that ends inside an entry's padding
+      return err("an entry's data is truncated: " & path)
     for i in pos + n ..< pos + padded:
       if tar[i] != 0:
         return err("non-zero padding after " & path)
