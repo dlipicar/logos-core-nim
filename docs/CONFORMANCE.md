@@ -1126,11 +1126,12 @@ every inspection answered at once, each in its own process:
 - a turn is one step, the time one handler holds the module thread;
 - the steps are the turns that end with the work spent ("Turns"), one for each inspection, and the
   outcome;
-- the figures are CPU time, orc with `-d:release`, on the Linux machine above (framework.lan, x86_64)
-  at a load of 1 to 5, with the queue lock held and nothing else queued. The Mac is not given: it was
-  shared at a load of 50 to 100 while 5-3c-3 was measured, and 5-3c-2's Mac figures, taken at a load
-  of 30 to 80, are in this file's history. One run's longest turn still varies by up to half between
-  runs (the wide shape at the preset: 5.0 to 8.4 ms over four runs of the same build);
+- the figures are CPU time, orc with `-d:release`, on the Linux machine above (framework.lan, x86_64),
+  on 5-3c-3 merged with master `a27379f`, so with `CborValue` acyclic (G478), at a load under 1, with
+  the queue lock held and nothing else queued. The Mac is not given: it was shared at a load of 50 to
+  100 while 5-3c-3 was measured, and 5-3c-2's Mac figures, taken at a load of 30 to 80, are in this
+  file's history. One run's longest turn still varies by up to half between runs (the wide shape at the
+  preset: 5.0 to 8.4 ms over five runs, four of them on 5-3c-3's branch);
 - work is the run's count of units (G454), the same on every machine and under any budget. It is
   higher than 5-3c-2's: since 5-3c-3 it also counts each frame's requirements, walked once for the
   contracts and pins they ask, a requirement's version text as it is copied, and each record's
@@ -1140,12 +1141,12 @@ every inspection answered at once, each in its own process:
 
 | Shape | Ended by | Steps | Turns | Longest turn | Total | Work |
 |---|---|---|---|---|---|---|
-| chain, 33 names | resolved | 34 | 0 | 0.07 ms | 0.46 ms | 1,420 |
-| dense, 32 names | resolved | 33 | 0 | 0.12 ms | 0.98 ms | 9,614 |
-| layered, 256 names in 32 layers | resolved | 258 | 1 | 1.79 ms | 18.9 ms | 586,428 |
-| hub, 30 names, 256 versions of the last | no closure | 288 | 0 | 0.26 ms | 9.18 ms | 219,271 |
-| lift, 30 names, 256 versions of `y` | resolved | 288 | 0 | 0.26 ms | 5.04 ms | 141,629 |
-| wide, w = 80,000 | `assignment_attempts` | 71 | 40 | 8.37 ms | 58.2 ms | 1,736,843 |
+| chain, 33 names | resolved | 34 | 0 | 0.07 ms | 0.43 ms | 1,420 |
+| dense, 32 names | resolved | 33 | 0 | 0.12 ms | 0.99 ms | 9,614 |
+| layered, 256 names in 32 layers | resolved | 258 | 1 | 2.15 ms | 23.3 ms | 586,428 |
+| hub, 30 names, 256 versions of the last | no closure | 288 | 0 | 0.26 ms | 10.2 ms | 219,271 |
+| lift, 30 names, 256 versions of `y` | resolved | 288 | 0 | 0.26 ms | 4.94 ms | 141,629 |
+| wide, w = 80,000 | `assignment_attempts` | 71 | 40 | 5.11 ms | 40.9 ms | 1,736,843 |
 
 **At the maxima** (4,096 / 4,095 / 4,096 / 1,048,576), with `assignment_attempts` lowered where a row
 says. The last row is a catalog at its bound of 65,536 entries (`package_manager.limits`), most of
@@ -1153,102 +1154,107 @@ them one name's versions:
 
 | Shape | Ended by | Turns | Longest turn | Total | Release: turns, longest | Work | Peak MiB |
 |---|---|---|---|---|---|---|---|
-| dense, 256 names | resolved | 2 | 1.68 ms | 21.9 ms | 6, 0.58 ms | 604,974 | 34 |
-| dense, 1,024 names | resolved | 57 | 2.15 ms | 266 ms | 81, 0.73 ms | 9,655,370 | 425 |
-| dense, 2,048 names | resolved | 235 | 4.57 ms | 1.11 s | 320, 1.08 ms | 38,602,134 | 1,691 |
-| dense, 4,096 names | resolved | 941 | 3.38 ms | 4.19 s | 1,272, 1.51 ms | 154,366,234 | 6,566 |
-| chain, 2,048 names | resolved | 1 | 2.43 ms | 24.7 ms | 2, 1.54 ms | 85,988 | 14 |
-| chain, 4,095 names | resolved | 2 | 2.61 ms | 23.6 ms | 3, 1.09 ms | 171,964 | 24 |
-| hub, 255 names, 4 versions | no closure | 7 | 0.77 ms | 20.7 ms | 2, 0.62 ms | 778,060 | 30 |
-| lift, 255 names, 4 versions | resolved | 2 | 2.28 ms | 32.7 ms | 6, 0.68 ms | 699,247 | 34 |
-| layered, 1,024 names in 64 layers | resolved | 55 | 2.17 ms | 258 ms | 77, 0.70 ms | 9,494,840 | 419 |
-| layered, 4,096 names in 64 layers | resolved | 1,256 | 3.29 ms | 4.11 s | 1,063, 1.62 ms | 151,657,929 | 6,487 |
-| wide, w = 80,000, 1,000 attempts | `assignment_attempts` | 40 | 8.09 ms | 52.9 ms | 11, 1.34 ms | 1,735,755 | 129 |
-| wide, w = 80,000, 100,000 attempts | `assignment_attempts` | 172 | 8.23 ms | 208 ms | 11, 2.21 ms | 6,190,998 | 129 |
-| lift, 30 names, 65,500 versions of `y` (a catalog of 65,532 entries) | `candidates_per_name` | 34 | 4.29 ms | 59.6 ms | 7, 3.49 ms | 3,314,182 | 99 |
+| dense, 256 names | resolved | 2 | 2.01 ms | 23.4 ms | 6, 0.59 ms | 604,974 | 34 |
+| dense, 1,024 names | resolved | 57 | 2.17 ms | 271 ms | 81, 0.73 ms | 9,655,370 | 425 |
+| dense, 2,048 names | resolved | 235 | 2.22 ms | 1.07 s | 320, 1.06 ms | 38,602,134 | 1,693 |
+| dense, 4,096 names | resolved | 941 | 3.43 ms | 4.25 s | 1,272, 1.53 ms | 154,366,234 | 6,554 |
+| chain, 2,048 names | resolved | 1 | 1.09 ms | 11.3 ms | 2, 0.59 ms | 85,988 | 14 |
+| chain, 4,095 names | resolved | 2 | 2.63 ms | 22.2 ms | 3, 1.07 ms | 171,964 | 24 |
+| hub, 255 names, 4 versions | no closure | 7 | 0.68 ms | 17.6 ms | 2, 0.59 ms | 778,060 | 30 |
+| lift, 255 names, 4 versions | resolved | 2 | 2.06 ms | 18.4 ms | 6, 0.61 ms | 699,247 | 34 |
+| layered, 1,024 names in 64 layers | resolved | 55 | 2.21 ms | 267 ms | 77, 0.71 ms | 9,494,840 | 420 |
+| layered, 4,096 names in 64 layers | resolved | 1,256 | 3.66 ms | 4.16 s | 1,063, 1.61 ms | 151,657,929 | 6,486 |
+| wide, w = 80,000, 1,000 attempts | `assignment_attempts` | 40 | 5.07 ms | 39.7 ms | 11, 1.40 ms | 1,735,755 | 129 |
+| wide, w = 80,000, 100,000 attempts | `assignment_attempts` | 172 | 5.22 ms | 199 ms | 11, 1.59 ms | 6,190,998 | 129 |
+| lift, 30 names, 65,500 versions of `y` (a catalog of 65,532 entries) | `candidates_per_name` | 34 | 6.24 ms | 63.7 ms | 7, 3.53 ms | 3,314,182 | 99 |
 
 **The turn budget:** the plan's 65,536 units against 32,768, for the shapes whose longest turn the
 budget decides:
 
 | Shape | Turns at 32,768 / 65,536 | Longest turn at 32,768 / 65,536 | Longest release turn at 32,768 / 65,536 |
 |---|---|---|---|
-| dense, 4,096 names | 941 / 469 | 3.38 ms / 5.60 ms | 1.51 ms / 2.55 ms |
-| layered, 4,096 names in 64 layers | 1,256 / 624 | 3.29 ms / 6.44 ms | 1.62 ms / 2.00 ms |
-| dense, 1,024 names | 57 / 27 | 2.15 ms / 4.22 ms | 0.73 ms / 1.22 ms |
-| dense, 2,048 names | 235 / 116 | 4.57 ms / 4.06 ms | 1.08 ms / 1.85 ms |
-| wide, w = 80,000 | 40 / 22 | 8.37 ms / 8.63 ms | 3.09 ms / 5.56 ms |
-| wide, w = 80,000, 100,000 attempts | 172 / 86 | 8.23 ms / 5.05 ms | 2.21 ms / 2.79 ms |
-| lift, 30 names, 65,500 versions of `y` (a catalog of 65,532 entries) | 34 / 17 | 4.29 ms / 5.18 ms | 3.49 ms / 5.43 ms |
+| dense, 4,096 names | 941 / 469 | 3.43 ms / 5.51 ms | 1.53 ms / 2.79 ms |
+| layered, 4,096 names in 64 layers | 1,256 / 624 | 3.66 ms / 4.87 ms | 1.61 ms / 2.01 ms |
+| dense, 1,024 names | 57 / 27 | 2.17 ms / 5.97 ms | 0.73 ms / 1.27 ms |
+| dense, 2,048 names | 235 / 116 | 2.22 ms / 4.91 ms | 1.06 ms / 1.83 ms |
+| wide, w = 80,000 | 40 / 22 | 5.11 ms / 5.04 ms | 1.41 ms / 3.17 ms |
+| wide, w = 80,000, 100,000 attempts | 172 / 86 | 5.22 ms / 5.07 ms | 1.59 ms / 2.73 ms |
+| lift, 30 names, 65,500 versions of `y` (a catalog of 65,532 entries) | 34 / 17 | 6.24 ms / 4.92 ms | 3.53 ms / 6.01 ms |
 
 **Contracts** (5-3c-3), at the preset and 32,768 units, each listed contract a commitment's encoding of
 221 bytes (`tests/support/pmshapes.nim`). `contracts c k`: k manifests of two dependency entries listing
 c contracts each, on names whose records provide none, so nothing completes. `provider p l`: a record
 providing p contracts, numbered out of order so they are sorted, and a later bind looking l of them up.
 `versioned c v`: v versions each listing c contracts that nothing provides, each bound and given up.
-"As is" is this tree; "G478" is with `CborValue` acyclic (sdk-acyclic, merged before 5-3c-3). The work
-and the turns are the same in both:
+Without G478 the work and the turns are the same; its other figures are under the table:
 
-| Shape | Contracts listed | Turns | Largest step | Work | Longest turn, as is / G478 | Total, as is / G478 | Peak MiB, as is / G478 | ns per unit, G478 |
+| Shape | Contracts listed | Turns | Largest step | Work | Longest turn | Total | Peak MiB | ns per unit |
 |---|---|---|---|---|---|---|---|---|
-| contracts 18,000, 1 manifest | 36,000 | 250 | 256 | 8,241,382 | 7.37 ms / 0.26 ms | 55.6 ms / 41.3 ms | 55 / 47 | 5.0 |
-| contracts 8,000, 4 manifests | 64,000 | 443 | 256 | 14,614,068 | 9.38 ms / 0.39 ms | 97.0 ms / 73.5 ms | 93 / 78 | 5.0 |
-| contracts 18,000, 8 manifests | 288,000 | 1,998 | 256 | 65,819,050 | 36.5 ms / 0.41 ms | 444 ms / 338 ms | 406 / 341 | 5.1 |
-| contracts 18,000, 32 manifests | 1,152,000 | 7,989 | 257 | 263,218,973 | 118 ms / 0.55 ms | 1.71 s / 1.45 s | 1,633 / 1,347 | 5.5 |
-| provider 20,000, 1 looked up | 1 | 150 | 1,251 | 4,932,920 | 3.02 ms / 0.41 ms | 36.0 ms / 39.5 ms | 34 / 29 | 8.0 |
-| provider 20,000, 20,000 looked up | 20,000 | 295 | 1,251 | 9,698,750 | 7.95 ms / 0.27 ms | 63.8 ms / 45.7 ms | 56 / 46 | 4.7 |
-| versioned 8,000, 8 versions | 64,000 | 441 | 256 | 14,611,173 | 6.82 ms / 0.22 ms | 94.4 ms / 72.2 ms | 94 / 79 | 4.9 |
+| contracts 18,000, 1 manifest | 36,000 | 250 | 256 | 8,241,382 | 0.26 ms | 41.2 ms | 47 | 5.0 |
+| contracts 8,000, 4 manifests | 64,000 | 443 | 256 | 14,614,068 | 0.52 ms | 75.9 ms | 78 | 5.2 |
+| contracts 18,000, 8 manifests | 288,000 | 1,998 | 256 | 65,819,050 | 0.46 ms | 356 ms | 341 | 5.4 |
+| contracts 18,000, 32 manifests | 1,152,000 | 7,989 | 257 | 263,218,973 | 0.54 ms | 1.44 s | 1,346 | 5.5 |
+| provider 20,000, 1 looked up | 1 | 150 | 1,251 | 4,932,920 | 0.56 ms | 49.2 ms | 29 | 10.0 |
+| provider 20,000, 20,000 looked up | 20,000 | 295 | 1,251 | 9,698,750 | 0.26 ms | 45.2 ms | 46 | 4.7 |
+| versioned 8,000, 8 versions | 64,000 | 441 | 256 | 14,611,173 | 0.22 ms | 70.4 ms | 78 | 4.8 |
 
 What the figures say:
 - **Nothing is rerun.** Through the driver at the preset each total is one run's: 256 names in 32
-  layers take 18.9 ms instead of 2.56 s, and the wide shape 58 ms instead of 2.28 s.
+  layers take 23.3 ms instead of 2.56 s, and the wide shape 41 ms instead of 2.28 s.
 - **One turn holds the thread for a few milliseconds.** At 32,768 units the longest turn of every
-  shape, at the preset and at the maxima, is under 9 ms; with G478, every contract shape's is under
-  0.6 ms. The longest is the wide shape, whose root, the build of one candidate from a maximum-size
-  manifest of about 80,000 entries in one go, takes about 3 ms on the Mac (G455); its other turns do
-  nearly the same work, and its longest turn varies from 5.0 to 8.4 ms between runs.
+  shape, at the preset and at the maxima, is under 7 ms here and was under 9 ms in every run of 5-3c-3's
+  bench; every contract shape's is under 0.6 ms. The longest are the wide shape's, whose root, the
+  build of one candidate from a maximum-size manifest of about 80,000 entries in one go, takes about
+  3 ms on the Mac (G455) and whose other turns do nearly the same work, and the catalog of 65,532
+  entries'. Each varies by up to half between runs (the wide shape 5.0 to 8.4 ms, the catalog 4.3 to
+  6.2 ms).
 - **What keeps turns even** is that work counts what takes time (G455): each list's growth, a
   candidate's manifest entries, a name first numbered in a bind (with its bytes, as the setup counts
   it), each level of a heap operation and, since 5-3c-3, each contract numbered (a unit and its encoded
   bytes), each probe of the intern table and each step of a contract lookup. Counted as one unit each,
   the wide shape's 80,000 new names and a heap holding them made turns of 10 to 16 ms at the same
-  budget. A unit costs about 17 to 50 ns in every plain shape whose steps the budget ends (dense 4,096:
-  154 million units in 4.2 s), and 4.7 to 8 ns in the contract shapes, whose bytes overcount (safe). The
-  chain shapes' time per unit is 130 to 290 ns, as in 5-3c-2: their time is their steps, one for each of
-  up to 4,095 inspections at about 42 units each, and a step's fixed cost (its resume, and the bench's
-  clock reads around it) is a few µs.
+  budget. A unit costs about 17 to 40 ns in every plain shape whose steps the budget ends (dense 4,096:
+  154 million units in 4.25 s), and 4.7 to 10 ns in the contract shapes, whose bytes overcount (safe).
+  The chain shapes' time per unit is well above that, about 130 ns, as in 5-3c-2: their time is their
+  steps, one for each of up to 4,095 inspections at about 42 units each, and a step's fixed cost (its
+  resume, and the bench's clock reads around it) is a few µs.
 - **Contracts are within the bound** (5-3c-3, G455). Before it, one dependency entry listing 18,000
   contracts on a name with a record held the thread for 5.2 s in one turn on the Mac, and its work read
   80. Now the most work counted between two turn checks is 257 units in the contract shapes and 1,251 in
   the provider shape (`largestStep`). `test_pm_driver` asserts it under 2,048 for each contract shape,
   and under a test hook that makes every contract's hash collide (2,200 contracts, 5.7 million more
   units, largest step 256).
-- **Without G478, ORC's cycle collector held the thread** in the contract shapes: the longest turns of 3
-  to 118 ms, on resumes that counted no more work than their neighbors, in the code that dropped the
-  last reference to a `CborValue` (DECISIONS G478). With it, every longest turn is under 0.6 ms, the
-  totals are 15 to 28% lower (but provider with 1 lookup, within its noise) and the peaks 15 to 18%
-  lower.
+- **Without G478, ORC's cycle collector held the thread** in the contract shapes: on 5-3c-3's branch
+  before G478 (the same machine, at a load of about 4), the longest turns were 3 to 118 ms, on resumes
+  that counted no more work than their neighbors, in the code that dropped the last reference to a
+  `CborValue` (DECISIONS G478). Longest turn, total and peak MiB in the table's order: 7.37 ms, 55.6 ms,
+  55; 9.38 ms, 97.0 ms, 93; 36.5 ms, 444 ms, 406; 118 ms, 1.71 s, 1,633; 3.02 ms, 36.0 ms, 34; 7.95 ms,
+  63.8 ms, 56; 6.82 ms, 94.4 ms, 94. With it, the totals are 16 to 29% lower and the peaks 14 to 18%
+  lower. Provider with 1 lookup is the exception in the table only: its total varies from 23 to 49 ms
+  between runs of this tree (six runs), and over five rounds alternating with the branch its median
+  is 23.5 ms against 28.6 without G478.
 - **What the turn test cannot see.** `largestStep` catches work counted in one lump, not work counted
   not at all, which was the contract defect (80 units for 5 s). The bench is the check for that, at
   every change to `resolver.nim`: a shape whose steps the budget ends and whose time per unit is well
-  above the plain shapes' (17 to 50 ns), or one with a long turn of little work, does work it does not
+  above the plain shapes' (17 to 40 ns), or one with a long turn of little work, does work it does not
   count. It is not a suite gate: CI asserts counts, never time.
-- **The shapes without contracts against 5-3c-2** (3b2d6a0, the two builds alternating, three rounds):
-  dense 4,096, layered 4,096 in 64 layers and dense 1,024 within 3%; chain 4,095 about 23 ms against
-  20; lift 30 with 65,500 versions of `y` 59 ms against 54 (8%); the preset's shapes within their
-  noise; the longest turns unchanged.
-- **The budget:** at 65,536 the longest turns are up to twice as long (dense 4,096: 5.6 ms; layered
-  4,096 in 64 layers: 6.4 ms) for half the turns, and the totals are the same. 32,768 keeps most turns
-  at 1 to 3 ms, which leaves room for a slower machine.
-- **A turn bounds the hold, not the resolution.** Dense 4,096 still takes 4.2 s of the thread in all,
+- **The shapes without contracts against 5-3c-2** (3b2d6a0, the two builds alternating, three rounds,
+  both without G478): dense 4,096, layered 4,096 in 64 layers and dense 1,024 within 3%; chain 4,095
+  about 23 ms against 20; lift 30 with 65,500 versions of `y` 59 ms against 54 (8%); the preset's
+  shapes within their noise; the longest turns unchanged.
+- **The budget:** at 65,536 the longest turns are up to about three times as long (dense 1,024: 6.0 ms
+  against 2.2; dense 4,096: 5.5 ms against 3.4) for half the turns, and the totals are within 3% (the
+  catalog's within 10%). 32,768 keeps most turns at 1 to 3 ms, which leaves room for a slower machine.
+- **A turn bounds the hold, not the resolution.** Dense 4,096 still takes 4.25 s of the thread in all,
   in 941 turns. The wide shape at the maximum `assignment_attempts` (1,048,576) took 1.8 s on the Mac
   in 1,344 turns, the longest 5.1 ms (5-3c-2).
 - **The setup** (the names numbered, each name's versions and each identity's records put in order)
-  is the run's first turns (G455): the catalog of 65,532 entries has no turn over 4.3 ms. What is left
+  is the run's first turns (G455): the catalog of 65,532 entries has no turn over 6.3 ms. What is left
   before the first turn is the driver's copy of the catalog, 2.6 ms at 65,532 entries and under 1 ms at
   4,096.
 - **The release** frees what a run holds, a turn at a time: at dense 4,096, 1,272 turns, the longest
-  1.5 ms, and 0.25 s in all. Freed at once, that state held the thread for seconds.
-- **Memory:** 6.4 to 6.6 GiB at 4,096 dense or layered names, 129 MiB for the wide shape and 99 MiB
+  1.5 ms, and 0.26 s in all. Freed at once, that state held the thread for seconds.
+- **Memory:** 6.3 to 6.4 GiB at 4,096 dense or layered names, 129 MiB for the wide shape and 99 MiB
   for the catalog of 65,532 entries. A listed contract is a 4-byte number in the run, each distinct
   one's encoding kept once (G477's figures below).
 - **CI asserts counts:** `test_pm_driver` gives each shape, the contract shapes among them, the same
