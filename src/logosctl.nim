@@ -41,6 +41,7 @@
 
 import std/[json, os, parseopt, sets, strutils, sysrand, tables]
 import results
+import logos_sdk/base/entrymarks
 import ./logos_core/daemon/version
 
 proc say(text: string) =
@@ -957,7 +958,7 @@ fields); --provider names an export of that listener."""
   var cancelPipe = [cint(-1), cint(-1)]
   var signals = 0
 
-  proc onSignal(sig: cint) {.noconv.} =
+  proc onSignal(sig: cint) {.noconv, lcnOwnRuntime: "this program's signal handler".} =
     ## The first SIGINT or SIGTERM cancels the command (the launcher half-closes
     ## and waits for `done`); a second ends the shell at once.
     inc signals

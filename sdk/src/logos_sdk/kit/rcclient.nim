@@ -11,10 +11,16 @@
 ## - `prepare` makes an asynchronous call (`prepare_call`); `submit`, `cancel`
 ##   and `release` act on it. `readCompletion` turns a completion into a code
 ##   and a copy of the response in shared memory, and releases the response
-##   owner; it allocates nothing the garbage collector owns that outlives it,
-##   so it may run on the Runtime's thread that delivers the completion.
+##   owner. It allocates (a string on every failure, a shared block on every
+##   success), so the completion that calls it must have registered its thread
+##   first: under orc a thread that never did faults on its first allocation
+##   (DECISIONS G339, G464). That holds whatever the collector keeps
+##   afterwards: refc's "nothing GC'd outlives it" is not enough.
 ## - `subscribe` and `unsubscribe` take a module's event handler. Typed
 ##   subscriptions with end reports are `kit/routes.nim`'s.
+## - The completion and the handler are `Entered` values (`entered(p)` of a
+##   procedure marked `{.lcnCallback.}`): one that does not register first
+##   does not compile (DECISIONS G464).
 ##
 ## The binding is never used after the module's `_MODULE_destroy` returns, and
 ## `release` of an asynchronous call is never made from that call's own
@@ -24,10 +30,11 @@
 
 import results
 import ../abi/[checks, types]
+import ../base/entry
 import ../iface/outcome
 import ./rc_types
 
-export results, types, outcome, rc_types
+export results, types, outcome, rc_types, entry
 
 type
   RcFailure* = object ## A refused or failed call: its code and message.
@@ -93,7 +100,7 @@ proc prepareBytes*(
     rc: ptr LogosRuntimeControlBinding,
     bare: string,
     params: openArray[byte],
-    complete: LogosAsyncCompleteFn,
+    complete: Entered[LogosAsyncCompleteFn],
     userData: pointer,
     outCall: var LogosAsyncCall,
     timeoutMs: uint64 = 0,
@@ -113,7 +120,7 @@ proc prepareBytes*(
   var callbacks = LogosAsyncCallbacks(
     abiVersion: AsyncCallAbiVersion,
     structSize: csize_t(sizeof(LogosAsyncCallbacks)),
-    complete: complete,
+    complete: complete.fn,
     userData: userData,
   )
   let p =
@@ -147,7 +154,7 @@ proc prepare*[Req](
     rc: ptr LogosRuntimeControlBinding,
     bare: string,
     req: Req,
-    complete: LogosAsyncCompleteFn,
+    complete: Entered[LogosAsyncCompleteFn],
     userData: pointer,
     outCall: var LogosAsyncCall,
     timeoutMs: uint64 = 0,
@@ -207,13 +214,13 @@ proc decodeShared*[Resp](b: SharedBytes, resp: typedesc[Resp]): Result[Resp, str
 proc subscribe*(
     rc: ptr LogosRuntimeControlBinding,
     event: string,
-    handler: LogosEventHandler,
+    handler: Entered[LogosEventHandler],
     userData: pointer,
 ): Result[LogosSubscriptionId, RcFailure] =
   ## [SPEC INTERFACE l.3868; G178] The handler runs on a Runtime thread, one
   ## delivery at a time per subscription.
   var id: LogosSubscriptionId = 0
-  readStatus(rc.vtable.subscribe(rc, cstring(event), handler, userData, addr id)).isOkOr:
+  readStatus(rc.vtable.subscribe(rc, cstring(event), handler.fn, userData, addr id)).isOkOr:
     return err(failureOf(error))
   ok(id)
 

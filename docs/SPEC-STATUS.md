@@ -146,6 +146,7 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-13 | TF-43 (G310); the units still deferred | the member set of E1; E2's relabels | open (E1, E2, E3) |
 | N-2 | marked methods through the CLI | local targets only (INTERFACE l.368-369, l.373): a marked request from files or stdin, a marked response to stdout, every copy erased; non-local targets refused | decided 2026-11-17 (owner); built in N-2d (G349, I102) |
 | N-3 | the blockchain module's placements: NP-14, a module cannot declare the placements it supports (G421) | `hosted_dynamic` with placement `process` only, one node per process, stated in `docs/DEPLOYMENT.md` §26 and the module's README; nothing refuses another placement | decided 2026-11-21 (planning's ruling on the library's threads); built in N-3.3 (I118); NP-14 open |
+| N-5 | blockchain's v2 D6 row: a supported machine whose slowest proof is over 5 s (G475) | (i): no preparation method; destroy waits for a running spend; the stop figure 10 s | decided 2026-11-22 (owner, Q4 (i) on desktops and servers, Linux and macOS); built in N-5.2 (I126); provisional until the mobile exploration at the end of the work, where a phone over 5 s brings (ii) as v3 extending v2 |
 
 Unanswered upstream and bearing on Tier 5: NP-12 to NP-14 (NP-11 is settled by text: PM l.964, l.1172, and
 NP-15 by PM l.1096-1101 at 6cac8335),
@@ -585,6 +586,20 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   - No unit changes status. The claimed set is unchanged, unit for unit (`tools/restructure/claim_split.py
     --compare`, 3572 units). Per package at the branch point: IFC core 143, SDK 665; RUN core 767, SDK 124; CFG
     core 119, SDK 7. Merged with master (5-7a's claims), RUN core is 816.
+
+- 2026-11-23, Tier 5 step N-5 (I126), the blockchain module's contract v2 (G469-G476, G479, G481, I130, I131,
+  I133; D20, G97, G419, G422 and G340 amended): v2 extends v1, frozen at N-5.1's first commit, with the library's
+  reads, typed (blocks, transactions, the wallet, Blend, PoW, the deployment), the events `new_block_event` and
+  `lib_event`, the spends with a caller-chosen request id and a synced record each (`spend_status`), and the key
+  methods (a copy renamed over the keystore, for the next start), served by seven glue workers with delayed
+  Responses. v2 and the configuration schema froze at the library clone's `a834055da`. The module calls the
+  library's stock start (the owner's (b)): its HTTP API on `127.0.0.1` and `SystemSig`'s hold on SIGINT, which
+  `docs/DEPLOYMENT.md` §26 already stated; §26 gains the new state (the spend records, the key methods' files),
+  mining as configuration and destroy's wait for a running spend. `docs/DAEMON.md`'s Grants example moves to v2's
+  root, with v1's rule beside it. The open-items table gains the v2 D6 row, provisional until the mobile
+  exploration. No row of the item table changes, and no inspection item is made untrue: CAP-0075 to CAP-0082 still
+  hold (one permission, host-ambient), and rows 8b, 9 and 21 hold for the node's state, keystore and spend
+  records. No unit changes status.
 
 - 2026-11-23, Tier 5 step N-4 (I119; G425-G432, G480; G91, G97, G99, G100, G136 and G147 amended), storage_module,
   sub-parts N-4.1 to N-4.5. The Storage node is a `hosted_dynamic` module in `logos_module/` on storage's

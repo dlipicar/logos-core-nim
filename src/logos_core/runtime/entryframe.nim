@@ -114,7 +114,9 @@ template barrier*(body: untyped) =
   body
   pop(fence)
 
-proc currentOp*(state: pointer): ptr LogosInvocationContext {.cdecl.} =
+proc currentOp*(
+    state: pointer
+): ptr LogosInvocationContext {.cdecl, lcnNoNimHeap: "reads this thread's frame list".} =
   ## [SPEC INTERFACE §2.9.3, l.2166-2170] The context of the innermost provider
   ## entry active on this thread for the instance `state` belongs to, so a
   ## nested entry into another instance hides nothing; none outside one, and

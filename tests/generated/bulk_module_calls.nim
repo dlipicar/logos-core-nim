@@ -149,5 +149,5 @@ template exportBulkModuleCalls*() =
     kitEnter()
     callInvoke0(p0, p1, p2, p3)
 
-  proc bulkModuleCallsClear0(p1: ptr LogosResponseOwner, p3: ptr uint32) {.exportc: "lcn_clear_bulk_Send", dynlib, cdecl, gcsafe, raises: [].} =
+  proc bulkModuleCallsClear0(p1: ptr LogosResponseOwner, p3: ptr uint32) {.exportc: "lcn_clear_bulk_Send", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear0(p1, p3)

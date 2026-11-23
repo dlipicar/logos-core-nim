@@ -12,7 +12,7 @@
 {.push raises: [].}
 
 import results
-import logos_sdk/base/[testhooks, wipe]
+import logos_sdk/base/[entrymarks, testhooks, wipe]
 import ./[boring, params, signing]
 
 export results, signing
@@ -90,7 +90,10 @@ proc cbSign(
     alg: uint16,
     inp: ptr uint8,
     inLen: csize_t,
-): enum_ssl_private_key_result_t {.cdecl.} =
+): enum_ssl_private_key_result_t {.
+    cdecl,
+    lcnOwnRuntime: "BoringSSL calls it inside the engine's own call, on that thread"
+.} =
   ## BoringSSL asks for a CertificateVerify signature: record the input and
   ## suspend the handshake until `answerSignature`.
   let e = engineOf(ssl)
@@ -104,7 +107,10 @@ proc cbSign(
 
 proc cbComplete(
     ssl: ptr SSL, outp: ptr uint8, outLen: ptr csize_t, maxOut: csize_t
-): enum_ssl_private_key_result_t {.cdecl.} =
+): enum_ssl_private_key_result_t {.
+    cdecl,
+    lcnOwnRuntime: "BoringSSL calls it inside the engine's own call, on that thread"
+.} =
   let e = engineOf(ssl)
   if e == nil:
     return ssl_private_key_failure
@@ -138,7 +144,12 @@ proc peerChain(ssl: ptr SSL): seq[seq[byte]] =
     let b = cast[ptr CRYPTO_BUFFER](OPENSSL_sk_value(sk, csize_t(i)))
     result.add(copyBytes(CRYPTO_BUFFER_data(b), int(CRYPTO_BUFFER_len(b))))
 
-proc cbVerify(ssl: ptr SSL, alert: ptr uint8): enum_ssl_verify_result_t {.cdecl.} =
+proc cbVerify(
+    ssl: ptr SSL, alert: ptr uint8
+): enum_ssl_verify_result_t {.
+    cdecl,
+    lcnOwnRuntime: "BoringSSL calls it inside the engine's own call, on that thread"
+.} =
   ## [SPEC TRANSPORT §8.4.1] l.1240-1241: the peer's credential is checked
   ## before the handshake completes, so before any Transport Hello.
   let e = engineOf(ssl)
@@ -155,7 +166,12 @@ proc cbVerify(ssl: ptr SSL, alert: ptr uint8): enum_ssl_verify_result_t {.cdecl.
     alert[] = AlertBadCertificate
     ssl_verify_invalid
 
-proc cbNewSession(ssl: ptr SSL, sess: ptr SSL_SESSION): cint {.cdecl.} =
+proc cbNewSession(
+    ssl: ptr SSL, sess: ptr SSL_SESSION
+): cint {.
+    cdecl,
+    lcnOwnRuntime: "BoringSSL calls it inside the engine's own call, on that thread"
+.} =
   ## Counts sessions offered for resumption; none is kept (T l.1296).
   let e = engineOf(ssl)
   if e != nil:

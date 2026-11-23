@@ -48,7 +48,7 @@ template exportLogosctl*(T: typedesc) =
       destroyModule(instance)
     GC_unref(instance)
 
-  proc logosctlKitName(): cstring {.exportc: "logos_logosctl_MODULE_name", dynlib, cdecl, gcsafe, raises: [].} =
+  proc logosctlKitName(): cstring {.exportc: "logos_logosctl_MODULE_name", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "a static string".} =
     system.cstring(moduleName)
 
   proc logosctlKitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: "logos_logosctl_MODULE_init", dynlib, cdecl, gcsafe, raises: [].} =

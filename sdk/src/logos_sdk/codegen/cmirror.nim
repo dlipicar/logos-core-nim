@@ -43,6 +43,15 @@ import ../commitment
 import ../iface/[accept, cmap, names]
 import ./[nimrt, sdkroot]
 
+const
+  # [DECISIONS G467] The generated entries that use no Nim heap, so register no
+  # thread, carry their exemption, which `lcn-gen lint-callbacks` reads.
+  NameNoHeap* = "lcnNoNimHeap: \"a static string\""
+  SurfaceNoHeap* = "lcnNoNimHeap: \"static bytes\""
+  AsyncApiNoHeap* = "lcnNoNimHeap: \"a static descriptor\""
+  ClearNoHeap* =
+    "lcnNoNimHeap: \"clears the owner through its own release, zeroes the outputs\""
+
 type
   MDoc = object
     model: SchemaModel
@@ -1615,8 +1624,8 @@ proc callMirrors*(
         "\", dynlib, cdecl, gcsafe, raises: [].} =\n" & "    kitEnter()\n" &
         "    callInvoke" & $k & "(" & all.join(", ") & ")\n\n" & "  proc " & prefix &
         "Clear" & $k & "(" & clearParams.join(", ") & ") {.exportc: \"lcn_clear_" &
-        m.component & "\", dynlib, cdecl, gcsafe, raises: [].} =\n" & "    callClear" &
-        $k & "(" & clearNames.join(", ") & ")"
+        m.component & "\", dynlib, cdecl, gcsafe, raises: [], " & ClearNoHeap & ".} =\n" &
+        "    callClear" & $k & "(" & clearNames.join(", ") & ")"
     )
   (res.types, res.procs, res.layout) = ?g.finish(callProcs, prefix & "Layout")
   ok(res)

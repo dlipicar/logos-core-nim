@@ -98,5 +98,5 @@ template exportMetricsProviderCalls*() =
     kitEnter()
     callInvoke0(p0, p1, p2)
 
-  proc metricsProviderCallsClear0(p1: ptr LogosResponseOwner, p2: ptr uint64) {.exportc: "lcn_clear_metrics_provider_Snapshot", dynlib, cdecl, gcsafe, raises: [].} =
+  proc metricsProviderCallsClear0(p1: ptr LogosResponseOwner, p2: ptr uint64) {.exportc: "lcn_clear_metrics_provider_Snapshot", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear0(p1, p2)
