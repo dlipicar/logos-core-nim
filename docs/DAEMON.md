@@ -1453,14 +1453,19 @@ Runtime's message; it guesses no reason. Every process of logosd's user can use 
 these grants, as with the logosctl instance (§7): grant it what the session's user may call.
 
 **Example: a payload module** (`blockchain_module`; [DEPLOYMENT.md](DEPLOYMENT.md) §26; DECISIONS
-G424). It calls no other module, and `report_failure` needs no grant, so two rules on its contract,
-named by v1's root, are all it needs. The first is the rule above for `lcn_call`, with
-`subscribe-event` added (and `access.methods` naming `node_info`, `cryptarchia_info` and
-`network_info` where the rule narrows them), so `logosctl call`, `describe` and `subscribe` reach it.
-The second allows the `blockchain_module` instance its own `publish-event`; without it every
-`chain_progress_event` is skipped (Streams). Its permission settings must hold the profile's
-minimum: `permissions.initial` names it with `logos-core-nim.host-ambient` and the empty constraints.
-With no entry, or one without host-ambient, its start is refused `NOT_AUTHORISED`
+G424, G469, G476). It calls no other module, and `report_failure` needs no grant. Its module record
+names contract v2's root as `primary_contract` and v1's under `extends` (G393); without v1's the start
+ends `initialization-failed`. Three rules are all it needs. The first two are the rule above for
+`lcn_call`, with `subscribe-event` added, once on v2's root and once on v1's: the Runtime describes a
+provider only if each of its contracts may be discovered, so without v1's rule every call is
+`NOT_AUTHORISED`. With them `logosctl call`, `describe` and `subscribe` reach it. A rule that narrows
+`access.methods` names the methods of the module's policy classes the session's user may call (the
+module's `policy-classes.json`); its `spend` and `keys` classes are for local subjects only. The third
+allows the `blockchain_module` instance its own `publish-event` on v2's root; without it every
+`chain_progress_event`, `new_block_event` and `lib_event` is skipped (Streams). Its permission
+settings must hold the profile's minimum: `permissions.initial` names it with
+`logos-core-nim.host-ambient` and the empty constraints. With no entry, or one without host-ambient, its
+start is refused `NOT_AUTHORISED`
 (`authority-denied`; DECISIONS G110; [PERMISSIONS.md](PERMISSIONS.md), "Admission and the snapshot").
 
 ### Streams (G349)

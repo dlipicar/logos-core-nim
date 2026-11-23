@@ -684,7 +684,8 @@ gives the same answers. Nothing here changes a row of the item table.
 
 ### blockchain_module
 
-The Logos blockchain node as a module (DECISIONS G419–G424; the library's `logos_module/README.md`).
+The Logos blockchain node as a module (DECISIONS G419–G424; contract v2, frozen, G469–G476, G479 and G481; the
+library's `logos_module/README.md`).
 
 - **Placement** (DECISIONS G421): `hosted_dynamic` with placement `process` only, one node per
   process. The library's threads outlive `_MODULE_destroy`, so a host must never unload the library and
@@ -714,7 +715,8 @@ The Logos blockchain node as a module (DECISIONS G419–G424; the library's `log
   chain's deployment is built in, or a read-only file the configuration names, with an optional SHA-256
   that init checks (DECISIONS G441). Its circuits are compiled in, and it logs to standard error, which
   its Module Host inherits (§23). It runs one tokio worker per CPU; `TOKIO_WORKER_THREADS` in
-  `runtime.module_host_env` sets fewer. On Linux its prover
+  `runtime.module_host_env` sets fewer. Mining and auto-claim are configuration (`pow`), applied at
+  start: turning mining on or off is a new value and a restart (DECISIONS G474). On Linux its prover
   (rapidsnark, as the circuits' prebuilt archive ships it) also logs each proof, about 1.4 KB of phase
   names, to `MyLogFile.log` in the working directory. While the node runs, the module's process works
   in its state directory's `prover/`, and the module empties that file in place past 1 MiB (DECISIONS
@@ -722,15 +724,26 @@ The Logos blockchain node as a module (DECISIONS G419–G424; the library's `log
   hold `logos-core-nim.host-ambient` (§7; [DAEMON.md](DAEMON.md), "Grants"); with it, its host has the
   access of logosd's user (§8, 8b).
 - **State** (§9): its state directory `state/modules/<assignment>/` holds `keystore.yaml` (0600: the
-  node's keys, which the library makes at the first start, or placed before it; never rewritten),
-  `node/` (the library's database), `run/` (the configuration rendered for the library, rewritten at
-  each start, no secret) and `prover/` (the process's working directory; on Linux, the prover's log). The keystore is the node's identity and the key to its funds, protected by its
-  mode only (§19). A `state_transfers` entry with `copy` clones it: two instances then hold one identity
-  and spend the same funds. `move` hands it over.
+  node's keys, which the library makes at the first start, or placed before it; rewritten only by the
+  key methods, through a synced copy, `keystore.yaml.tmp`, renamed over it, DECISIONS G473),
+  `key-import` (a key the operator placed, until `add_placed_key` takes it), `spends.cbor` (0600: the
+  spend records, kept at least ten minutes each, 1024 at most, rewritten through `spends.cbor.tmp`;
+  DECISIONS G472), `node/` (the library's database), `run/` (the configuration rendered for the library,
+  rewritten at each start, no secret) and `prover/` (the process's working directory; on Linux, the
+  prover's log). The keystore is the node's identity and the key to its funds, protected by its
+  mode only (§19). Each key method leaves the old keystore's blocks free but not erased, and the
+  overwrite of `key-import` is best effort: an operator who needs more puts the state directory on an
+  encrypted volume. A `state_transfers` entry with `copy` clones it: two instances then hold one identity
+  and spend the same funds. `move` hands it over. The key methods change the keystore the node reads at
+  its next start, never the running node; they and the spends are local only (the `keys` and `spend`
+  classes, `remote: never`, DECISIONS G476).
 - **Stop figure** (DECISIONS G423): `_MODULE_init` starts the node and `_MODULE_destroy` stops it,
   joins its work before returning and awaits no posted callback. Measured unprepared destroys: 1.2 ms on
   macOS and 1.3 ms on Linux for an idle node, 0.5 to 670 ms under logosd in a Module Host. A library call
-  in flight holds destroy until it returns. The default `runtime.stop_deadline_ms` (10000) holds. A
+  in flight holds destroy until it returns. Destroy starts no new spend, records the queued ones
+  cancelled, and waits for the running one and the spend records' writes (DECISIONS G471); the slowest
+  spend measured took 425 ms (G475), and a spend cut by a kill reads `interrupted`, its outcome
+  unknown until the chain is read (G472). The default `runtime.stop_deadline_ms` (10000) holds. A
   daemon-config that runs the node sets `runtime.shutdown_grace_ms` to 20000, the node's figure (§13);
   the node profile (Tier 5 step N-6a) will. An inner node that stops by itself makes
   every method answer `unavailable` (`node-stopped`) and reports one failure: the instance is `error`
