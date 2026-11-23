@@ -227,7 +227,7 @@ deferred past the re-pin.
 12. Platforms, build, CI and tooling
 13. Implementation defaults chosen without a separate question
 14. Index
-15. Revisions and implementation choices since work started (R1–R7, I1–I133)
+15. Revisions and implementation choices since work started (R1–R8, I1–I133)
 
 ---
 
