@@ -251,17 +251,19 @@ proc initEngine*(
     keptBytes: Opt[seq[byte]],
     keys: KeySource,
     platform = hostPlatform(),
-    lgxLimits = DefaultLgxLimits,
     pathRules = hostPathRules(),
     turnWork = ResolverTurnWork,
 ): (Engine, seq[Command]) =
   ## The engine at `_init`, before any I/O: the catalog state from the kept
   ## file (`keptBytes`), and the log lines that start produced. The resolver
   ## limits are the input's (G399, planning's ruling of 2026-11-22): no caller
-  ## can pass values the input does not hold. `turnWork` is the work of one
-  ## resolution turn (G455): `ResolverTurnWork`, a constant; the tests give
-  ## others, which change no outcome.
+  ## can pass values the input does not hold. So are the operation bound
+  ## (`operation_entries`, G477) and the LGX limits, G75's table scaled to
+  ## `archive_bytes` (G453). `turnWork` is the work of one resolution turn
+  ## (G455): `ResolverTurnWork`, a constant; the tests give others, which change
+  ## no outcome.
   doAssert turnWork > 0, "a turn spends some work"
+  let lgxLimits = scaledLimits(DefaultLgxLimits, input.limits.archiveBytes)
   var e = Engine(
     input: input,
     keys: keys,
@@ -696,6 +698,13 @@ proc advanceRequest(e: var Engine, request: uint64, cmds: var seq[Command]) =
           "a root operation stopped at the resolver limit " & tripped & " (" &
             $e.limitValue(tripped) & ")"
         )
+      if d.counters.bound.len > 0:
+        # [G477] So does the operation bound, with its value: the caller sees only
+        # `package-unavailable` (PM l.1308-1309, l.1514).
+        cmds.log(
+          "a root operation stopped at the operation bound " & d.counters.bound & " (" &
+            $e.input.limits.operationEntries & ")"
+        )
       cmds.add(Command(kind: cmReply, request: request, outcome: move s.outcome))
       e.retire(d, cmds)
       return
@@ -800,7 +809,12 @@ proc resolve*(e: var Engine, request: uint64, root: RootReference): seq[Command]
     )
     return
   e.requests[request] = initDriver(
-    e.catalog.inUse.get.entries, e.input.trust, e.input.resolverLimits, root, e.turnWork
+    e.catalog.inUse.get.entries,
+    e.input.trust,
+    e.input.resolverLimits,
+    root,
+    e.turnWork,
+    Opt.some(e.input.limits.operationEntries),
   )
   e.advanceRequest(request, result)
 

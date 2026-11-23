@@ -149,6 +149,25 @@ const DefaultLgxLimits* = LgxLimits(
   documents: 64 shl 20,
 ) ## [IMPL-DECISION G75] Seed values until real packages are measured.
 
+func scaledLimits*(table: LgxLimits, compressed: int64): LgxLimits =
+  ## [IMPL-DECISION G453, G75's note; the owner's Q3 (d)] `table` for a compressed bound lowered
+  ## to `compressed`: the decompressed and extracted bounds keep the table's proportion to its
+  ## compressed one, never above the table's own; one entry is at most the decompressed bound;
+  ## the entry count and the documents' total are the table's. At the table's compressed bound
+  ## it is the table.
+  doAssert compressed >= 1 and compressed <= table.compressed,
+    "the compressed bound is lowered from the table's"
+
+  func scaled(v: int64): int64 =
+    # At most 4 GiB × 1 GiB, within int64.
+    min(v, v * compressed div table.compressed)
+
+  result = table
+  result.compressed = compressed
+  result.decompressed = scaled(table.decompressed)
+  result.extracted = scaled(table.extracted)
+  result.entry = min(table.entry, result.decompressed)
+
 func fileSource*(path: string): LgxSource =
   LgxSource(kind: lsFile, path: path)
 

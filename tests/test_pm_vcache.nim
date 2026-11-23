@@ -7,7 +7,8 @@
 
 import std/strutils
 import unittest2
-import ../src/logos_core/package/[errors, resolver]
+import logos_sdk/cbor
+import ../src/logos_core/package/[errors, manifest, records, resolver, signing]
 import ../src/logos_core/pm/vcache
 import ./support/[lgxbuild, pmfixture]
 
@@ -231,3 +232,140 @@ suite "configuration declarations at inspection (PKG-0060, G451)":
     check c.inspect(plain, base).eligible
     check c.inspect(example1, base).eligible
     check c.len == 4
+
+# The byte bound (step 5-5-3, G447) ------------------------------------------------------
+
+proc bigManifest(target: int): CborValue =
+  ## A package whose inspection's estimate is exactly `target`: plain dependencies, their names
+  ## padded so the walk's bytes add up.
+  let record = RecordUnitBytes + "logos.big".len + "1.0.0".len
+  let per = DependencyUnitBytes + "logos.d00000".len + "1.0.0".len
+  let n = (target - record) div per
+  var pad = target - record - n * per
+  var names = newSeq[string](n)
+  for i in 0 ..< n:
+    names[i] = "logos.d" & align($i, 5, '0')
+  var i = n - 1
+  while pad > 0:
+    let k = min(pad, 100)
+    names[i].add('x'.repeat(k))
+    pad -= k
+    dec i
+  var deps: seq[(string, string)]
+  for name in names:
+    deps.add((name, "1.0.0"))
+  dataManifest("logos.big", "1.0.0", deps)
+
+let
+  atBound = packed(bigManifest(MaxCachedInspectionBytes), "org", orgKey)
+  overBound = packed(bigManifest(MaxCachedInspectionBytes + 1), "org", orgKey)
+  bigTrust = trustInputOf([("org", orgPub, @["logos.big"])])
+
+proc contract(i: int): CborValue =
+  ## A commitment decoded from its bytes, as the module thread holds one.
+  var root = newSeq[byte](32)
+  for k in 0 ..< 4:
+    root[k] = byte((i shr (8 * k)) and 0xff)
+  decodeCbor(encodeCbor(commitmentValue(root))).get
+
+proc shaped(deps, perDep, provided, salt: int): Inspection =
+  result = Inspection(
+    kind: ikEligible,
+    identity: PackageIdentity(package: "logos.shape", version: "1.0." & $salt),
+  )
+  result.commitment.commitmentModel = "logos.commitment-model.2026-10"
+  result.commitment.hashProfile = "logos.hash-profile.2026-08.choice-index"
+  result.commitment.hashSuite = "logos.hash-suite.blake3-256"
+  for d in 0 ..< deps:
+    var dep = PackageDependency(
+      package: "logos.d" & align($d, 9, '0'), kind: rkCompatible, version: "1.0.0"
+    )
+    for c in 0 ..< perDep:
+      dep.contracts.add(contract(salt * 7919 + d * 131 + c))
+    result.dependencies.add(dep)
+  for c in 0 ..< provided:
+    result.provides.add(contract(salt * 104_729 + c))
+
+proc retained(deps, perDep, provided, copies: int): int =
+  ## The heap's growth per inspection over `copies` built one by one.
+  GC_fullCollect()
+  var held = newSeq[Inspection](copies)
+  let before = getOccupiedMem()
+  for i in 0 ..< copies:
+    held[i] = shaped(deps, perDep, provided, i + 1)
+  GC_fullCollect()
+  result = (getOccupiedMem() - before) div copies
+  check held.len == copies
+
+suite "verification cache: the byte bound (G447)":
+  test "[G447] an inspection at 256 KiB by the estimate is cached; one byte over is answered and not":
+    var c = cacheOf()
+    let at = c.inspect(atBound, bigTrust)
+    check at.eligible
+    check at.estimatedBytes == MaxCachedInspectionBytes
+    check c.len == 1
+    check c.counters.uncached == 0
+    let over = c.inspect(overBound, bigTrust)
+    check over.eligible
+    check over.estimatedBytes == MaxCachedInspectionBytes + 1
+    check c.len == 1
+    check c.counters.uncached == 1
+    # The next reach opens the archive again; the cached one is a hit.
+    check c.inspect(overBound, bigTrust).eligible
+    check c.counters.opened == 3
+    check c.counters.uncached == 2
+    check c.inspect(atBound, bigTrust).eligible
+    check c.counters.hits == 1
+    check c.counters.opened == 3
+
+  test "[G447] the estimate is fixed by rule: the same number in every build":
+    var x = shaped(2, 0, 1, 1)
+    x.dependencies[0].contracts.add(contract(9))
+    # The record: 2,048 and its identity text; each entry 192 and its name and version; each
+    # contract 1,024 and its 190 encoded bytes.
+    check encodedSize(x.provides[0]) == 190
+    check x.estimatedBytes ==
+      2048 + "logos.shape1.0.1".len + 2 * (192 + "logos.d000000000".len + 5) +
+      2 * (1024 + 190)
+    check x.estimatedBytes == 4918
+
+  test "[G447] the estimate is at least what an inspection holds, for three shapes":
+    when defined(asan) or defined(tsan) or defined(msan) or defined(useMalloc):
+      skip() # the sanitizers' allocator is not Nim's: no occupied-memory figure
+    else:
+      for (name, deps, perDep, provided) in [
+        ("plain dependencies", 1000, 0, 0),
+        ("dependencies that list contracts", 100, 10, 0),
+        ("many provided contracts", 0, 0, 1000),
+      ]:
+        let held = retained(deps, perDep, provided, 40)
+        let estimate = shaped(deps, perDep, provided, 1).estimatedBytes
+        checkpoint name & ": holds " & $held & " B, estimated " & $estimate & " B"
+        check estimate >= held
+
+  test "[G447] a record's constant covers its cache entry and table slot":
+    when defined(asan) or defined(tsan) or defined(msan) or defined(useMalloc):
+      skip()
+    else:
+      var c = initVerificationCache(4096, linuxHost, pathRules = PathRules())
+      GC_fullCollect()
+      let before = getOccupiedMem()
+      for i in 0 ..< 4096:
+        var d: Blake3Digest
+        for k in 0 ..< 4:
+          d[k] = byte((i shr (8 * k)) and 0xff)
+        discard c.admit(
+          d,
+          Opened(
+            inspection: shaped(0, 0, 0, i + 1),
+            profile: signingProfile(),
+            kid: bytesOf("org"),
+            variant: "linux-x86_64",
+          ),
+        )
+      GC_fullCollect()
+      let each = (getOccupiedMem() - before) div 4096
+      let estimate = shaped(0, 0, 0, 4096).estimatedBytes
+      checkpoint "each entry holds " & $each & " B, estimated " & $estimate & " B"
+      check c.len == 4096
+      check estimate >= each

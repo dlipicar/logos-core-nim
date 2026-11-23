@@ -42,15 +42,29 @@ const
     ## defaults (120 s direct, 180 s private), and above its 120 s network phase for
     ## the wait after `not-ready`: the deadline catches a provider that broke its
     ## own bound; availability comes from `unavailable`.
+  MaxOperationEntries* = 1 shl 24
+    ## [IMPL; G477] `limits.operation_entries`' maximum: 2 × the densest shape at the resolver
+    ## limits' maxima (5-3c's figures, CONFORMANCE "The operation bound")
+  DefaultOperationEntries* = 262_144
+    ## [IMPL; G477, G75] 8 × the densest shape at logosd's preset; about 460 MiB of resolver
+    ## state at 1.8 KiB a unit, the worst measured
+  MaxOperationDeadlineMs* = 86_400_000'u32 ## [IMPL; G449] one day, as `read_deadline_ms`
+  DefaultOperationDeadlineMs* = 3_600_000'u32
+    ## [IMPL; G449] one hour, 12 × `read_deadline_ms`' default: reasoned, not measured
 
 type
   PmLimits* = object
-    archiveBytes*: int64 ## one archive, held in memory while it is inspected
+    archiveBytes*: int64
+      ## one archive, spooled and read in pieces; the LGX bounds follow it (G453)
     catalogBytes*: int ## the catalog document
     catalogEntries*: int
     cacheEntries*: int ## the verification cache (G403)
     readDeadlineMs*: uint32
       ## one call, and the wait for `ready` after `not-ready` (G402)
+    operationEntries*: int
+      ## [G477] the inputs one root operation reads (`ResolverInput.operationEntries`)
+    operationDeadlineMs*: uint32
+      ## [G449] one root operation's time from taking its slot (5-5-4's check)
 
   PmBinding* = object
     name*: string ## what an LGX source's `storage` names (PM l.854-857)
@@ -82,6 +96,8 @@ func defaultLimits*(): PmLimits =
     catalogEntries: MaxCatalogEntries,
     cacheEntries: DefaultCacheEntries,
     readDeadlineMs: DefaultReadDeadlineMs,
+    operationEntries: DefaultOperationEntries,
+    operationDeadlineMs: DefaultOperationDeadlineMs,
   )
 
 func bounded(field: string, v: uint64, high: uint64): Result[uint64, string] =
@@ -111,6 +127,20 @@ func limitsOf(l: Opt[LcnPmLimits]): Result[PmLimits, string] =
     r.readDeadlineMs = uint32(
       ?bounded(
         "read_deadline_ms", uint64(x.read_deadline_ms.get), uint64(MaxReadDeadlineMs)
+      )
+    )
+  if x.operation_entries.isSome:
+    r.operationEntries = int(
+      ?bounded(
+        "operation_entries", uint64(x.operation_entries.get), MaxOperationEntries
+      )
+    )
+  if x.operation_deadline_ms.isSome:
+    r.operationDeadlineMs = uint32(
+      ?bounded(
+        "operation_deadline_ms",
+        uint64(x.operation_deadline_ms.get),
+        uint64(MaxOperationDeadlineMs),
       )
     )
   ok(r)
@@ -219,6 +249,8 @@ func toValue*(i: PmInput): LcnPmInput =
         catalog_entries: Opt.some(uint32(i.limits.catalogEntries)),
         cache_entries: Opt.some(uint16(i.limits.cacheEntries)),
         read_deadline_ms: Opt.some(i.limits.readDeadlineMs),
+        operation_entries: Opt.some(uint32(i.limits.operationEntries)),
+        operation_deadline_ms: Opt.some(i.limits.operationDeadlineMs),
       )
     ),
   )
