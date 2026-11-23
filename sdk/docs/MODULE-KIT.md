@@ -359,6 +359,12 @@ pass the names of any packages you take from a develop link, written in the suit
 read from the environment. The same suite checks that `nimbledeps/bin/lcn-gen` resolves into the
 directory `nimble.paths` names for `logos_sdk`: the link follows the last install, not the lock.
 
+**A suite that builds core itself.** An install gives your module the SDK's dependencies and no
+others. A suite that also compiles core's own sources from a core checkout, such as one that builds
+and runs logosd, needs core's dependencies too: logosd's configuration reaches the Package Manager's
+LGX reader, which imports zlib. Add each package core's `nimble.paths` names that yours does not,
+and keep your own copy of any both name (the blockchain module's `tests/config.nims`; DECISIONS I134).
+
 **The generated-code check.** A module repository that commits its generated files compares them with a
 fresh generation by the installed SDK's `lcn-gen`, which Nimble builds at install with the module
 repository's compiler. With local dependencies that is `nimbledeps/bin/lcn-gen`. `lcn-gen --version`

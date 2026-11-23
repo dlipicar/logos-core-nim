@@ -659,6 +659,13 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   Its contract and configuration schema freeze at N-4.5's merge (G480). No unit changes status: the module's hosted
   case adds evidence for RUN-0815, claimed since step 4b-3.2.
 
+- 2026-11-23, Tier 5 step N-5.4 (I134; I124's item for N-3), the blockchain module on the foreign-thread entry rule:
+  `report_failure` through `RouteSet.prepareRc` (G464), the procedures its workers and subscriptions post marked
+  `{.lcnModuleThread.}` (G465), and the library clone's flake check `blockchain-module-lint-callbacks` (G467;
+  0 findings), merged at the clone's `407dfb768`. In package mode a module suite that builds core's daemon needs
+  core's own dependencies, which `sdk/docs/MODULE-KIT.md` §9 now says. v2's contract and root are unchanged. No
+  unit changes status.
+
 ## Tiers at f4f83471 (the original plan)
 
 | Tier | Area | Verdict |
