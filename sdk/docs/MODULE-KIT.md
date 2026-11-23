@@ -3,8 +3,8 @@
 `lcn-gen kit` turns a module's contract into a Nim module, its *kit*. The kit exports the C symbols a
 Runtime loads (INTERFACE §2.6) and calls the handlers you write in Nim. This guide covers generating a
 kit, writing handlers, the thread-confined mode and its `async` handlers, publishing events, calling
-other modules, and building the library. The decisions behind it are DECISIONS G335–G342 and I71; the
-kit's output is PROVISIONAL (App A.3, A.4) until the spec owner settles it.
+other modules, building the library, and requiring the SDK from a module repository. The decisions behind
+it are DECISIONS G335–G342, I71 and G433–G436; the kit's output is PROVISIONAL (App A.3, A.4) until the spec owner settles it.
 
 The example below is a whole module. `sdk/tests/test_module_kit_guide.nim` takes its files and command
 lines from this document, generates the kit, builds the library and calls it, so the example is kept
@@ -106,6 +106,10 @@ This accepts the contract (INTERFACE §1.1, §5.3) and writes into `generated/`:
 | `counter_module_types.nim` | the contract's Nim types, with their CBOR encoders and checked decoders |
 | `counter_module_kit.nim` | the exported symbols, over your handlers; `export<Module>(T)` |
 | `counter_module_kit.exports`, `.map` | the library's export list for macOS ld and GNU ld (§8) |
+
+Where a contract allows any value, the types hold a `CborValue` (`logos_sdk/cbor`). It is a tree: build
+it bottom up, sharing a subtree if you like, but never make a value contain itself. One that does is
+never freed, under orc or refc (core's DECISIONS G478).
 
 Regenerate whenever the contract changes; never edit the output. Other forms:
 
@@ -241,6 +245,9 @@ The same file serves plain and confined modules.
   user, timeoutMs)` returns a prepared call that completes `onDone`; a nonzero `timeoutMs` is its
   deadline (TIMEOUT). In confined mode, `await invokeAsync(route, request, timeoutMs)` gives the
   outcome as a future, on the module thread.
+- **Runtime Control calls.** `prepareRc(set, "get_self", request, <Response>, onDone, user,
+  timeoutMs)` prepares a Runtime Control method's call through the set's binding the same way: the set
+  holds it, and `onDone` gets the decoded response where a route's completion would run (G464).
 - **Events.** `subscribe(route, <Event>, onEvent, onEnd, onInvalid, user)` delivers each event decoded
   and checked; one that does not decode goes to `onInvalid`. A subscription the Runtime ends reaches
   `onEnd` with NOT_AUTHORISED (an authority withdrew it) or MODULE_ERROR, after the events already
@@ -307,6 +314,119 @@ build the test libraries with each set. Two more, `kit-toolchains-storage-2d81a7
 `kit-toolchains-delivery-0de7b335`, build them against each library's own chronos (the main line
 after 4.4.0) and the stew, bearssl or httputils it locks, beside a host on 4.4.1 (G439).
 
-**Getting the SDK.** Until the SDK is a nimble package of its own (the repository split's packaging
-step), put this repository's `sdk/src` on the Nim path (`--path:`, or a `nimble.paths` entry), with
-the packages `logos_core.nimble` locks. A module repository will then `requires` the SDK instead.
+**A library's own switches stay with it.** Nim reads the `config.nims` and `nim.cfg` files above the
+source it compiles, so a module library's own configuration applies when its repository builds it, and
+never when another repository builds against it. A repository that builds a kit against
+logos-storage-nim gets none of storage's switches: its build line carries the ones the library needs.
+The `kit-toolchains` checks pass storage's and delivery's sets for that reason.
+
+## 9. Requiring the SDK
+
+The SDK is the nimble package `logos_sdk` (`sdk/logos_sdk.nimble`, DECISIONS G433): the modules this
+guide imports, the kit, `lcn-gen`, the contracts it ships and the test helpers under
+`logos_sdk/testing`. A module repository requires it by name and one minor version (G434):
+
+```nim module.nimble
+requires "logos_sdk >= 0.1.0 & < 0.2.0"
+```
+
+Until the repository split's extraction the SDK has no address of its own, so it is not required by
+URL, and none of our packages is ever required by commit or by `file://`. Nimble meets the requirement
+in one of two ways.
+
+- **An install** into the module repository's Nimble directory, from a committed tree in a copy with no
+  `origin`. From a checkout with an origin, Nimble locks the repository's root, and a fresh setup then
+  installs `logos_core` in the SDK's place. The order is install, lock (which reads the network), setup;
+  `setup` before the first lock fails:
+
+  ```sh install
+  git clone CORE_CHECKOUT SDK_COPY && git -C SDK_COPY remote remove origin
+  cd SDK_COPY/sdk && nimble --useSystemNim -y --nimbleDir:MODULE/nimbledeps install
+  cd MODULE && nimble --useSystemNim -y lock && nimble --useSystemNim setup -l
+  ```
+
+  A fresh clone of the module repository, CI's included, installs the SDK the same way before its
+  `nimble setup`.
+- **A develop link** (`nimble develop -a:CORE_CHECKOUT/sdk`), while you change the SDK itself. It builds
+  and sets up, but `nimble lock` refuses it, so switch to an install whenever the lock has to change.
+
+**One SDK revision per Nimble directory.** The SDK's version stays `0.1.0` while it changes, so two
+installs with different content can share it. When they meet in one Nimble directory, `setup` and
+`lock` take whichever the filesystem lists first, and `setup` keeps it even over a lock that names the
+other's checksum, without a word; `bin/lcn-gen` links the one installed last. Nimble checks no lock
+checksum for any package (Nimble 0.26.2; core's DECISIONS G436). So install each SDK revision into a
+fresh Nimble directory, record the core commit it came from, and have a suite check that every
+directory `nimble.paths` names, `logos_sdk`'s among them, ends in the checksum the lock records for
+it. That is a check for mismatches, not against tampering: an install edited in place keeps its name
+and passes. `logos_sdk/testing/lockcheck`'s `installMismatches` does that from the project's root;
+pass the names of any packages you take from a develop link, written in the suite itself rather than
+read from the environment. The same suite checks that `nimbledeps/bin/lcn-gen` resolves into the
+directory `nimble.paths` names for `logos_sdk`: the link follows the last install, not the lock.
+
+**The generated-code check.** A module repository that commits its generated files compares them with a
+fresh generation by the installed SDK's `lcn-gen`, which Nimble builds at install with the module
+repository's compiler. With local dependencies that is `nimbledeps/bin/lcn-gen`. `lcn-gen --version`
+prints the SDK's version, and the check compares it with the lock's `logos_sdk` entry. Until the
+extraction every SDK revision is `0.1.0`, so the version cannot tell two revisions apart; the
+`nimble.paths` test above does.
+
+**The installed files.** The SDK's contracts are under its install, for `lcn-gen calls` (§6):
+`$(nimble path logos_sdk)/logos_sdk/contracts/lcn_storage_fetch.cddl`.
+
+**Where Nimble keeps its caches.** Nimble 0.26 keeps `pkgcache/`, its download cache, and `buildtemp/`
+under the configured Nimble directory, `~/.nimble` by default, in local-dependencies mode too.
+`--nimbleDir` moves `pkgcache/` and not `buildtemp/`. A run can reuse an earlier run's clones without a
+git call, so a check that must fetch nothing looks there too, or runs with `HOME`, `XDG_CONFIG_HOME` and
+`XDG_CACHE_HOME` pointed at a fresh directory outside every checkout (G436).
+
+## 10. Code that runs on a thread your library never started
+
+Each library carries its own Nim runtime (§7). A thread that another runtime or C code started is
+foreign to it. Under orc, the first allocation on such a thread faults until the thread registers
+(DECISIONS I77 (7)). Under refc, the collector has no stack bottom for it. Once a thread has run the
+library's code it stays registered, so a missing registration shows only on a thread the library
+never saw, such as a Runtime worker's first delivery to you. It never shows in a sanitizer build:
+`useMalloc` has no per-thread region.
+
+- **The kit's exported entries** register themselves: each starts with `kitEnter()`.
+- **A procedure you hand to a binding** (an event handler, an end report, a completion) is marked
+  `{.lcnCallback.}` (G464). The mark gives it the C calling convention and makes registration its
+  first statement. The SDK's helpers that take such a procedure (`rcclient`'s `prepare`,
+  `prepareBytes` and `subscribe`, a confined kit's `post`) take an `Entered[F]`, which only `entered(p)`
+  of a marked procedure makes. An unmarked one does not compile:
+
+  ```nim
+  proc onSelf(user: pointer, status: LogosResult, response: ptr UncheckedArray[uint8],
+              len: csize_t, owner: LogosResponseOwner) {.lcnCallback.} =
+    let (code, copy) = readCompletion(status, response, len, owner)
+    ...
+  discard rc.prepare("get_self", LogosNSRuntimeControlGetSelfRequest(), entered(onSelf), nil, call)
+  ```
+
+- **Prefer the typed helpers** of §6, which hand the binding none of your procedures:
+  `prepareInvoke`, `subscribe` and `prepareRc`. Their `onDone` and handlers are ordinary Nim
+  procedures.
+- **A procedure a confined kit's module thread runs** (one you `post`) is marked
+  `{.lcnModuleThread.}` (G465). It registers in the same way. In the SDK's test builds it also aborts
+  with its name when something calls it directly instead of posting it.
+- **Exemptions** (G467). A C-callable procedure that uses no Nim heap (a static getter, a release that
+  frees C memory) is marked `{.lcnNoNimHeap: "why".}`. One that only your library's own runtime calls
+  is marked `{.lcnOwnRuntime: "why".}`.
+- **The lint.** `lcn-gen lint-callbacks PATH...` checks every C-callable procedure in the `.nim` files
+  under each path. Each must be marked, exempt with a reason, or start with `kitEnter()` or
+  `bindingEnter()`. `--self-test` runs the lint's own fixtures first. Run it over your sources in CI,
+  as this repository's `lint-callbacks` flake check does over `sdk/src`, `src` and `tests/kit`.
+- **Testing it.** `logos_sdk/testing/freshthread` (POSIX) runs one call on a new C thread that no Nim
+  runtime started, and tells you whether the call registered that thread (G466).
+  - `freshEvent`, `freshRouteEnd`, `freshSubscriptionEnd`, `freshCompletion` and `freshRelease`
+    deliver as a binding does; `onFreshThread` runs anything else.
+  - The procedure must be compiled into the test program, since the probe is that program's.
+  - Run an unmarked procedure, which faults, in a child process, with `defaultSignals()` first.
+  - In this repository's test builds, the Runtime's and the Module Host's workers also hand the
+    first delivery to each callback to a new thread. Events on a direct route are not moved: the
+    spec has them run on the publishing thread (INTERFACE l.1918-1920). To test your subscriber on
+    one, publish from `onFreshThread`, with the subscriber built as a library of its own (as
+    `test_hosted_routes`' C-15 does).
+- **Under refc the probe is the only detector.** A missing registration faults under refc only if a
+  collection runs on that thread, so a green refc run proves nothing about it, and neither does a
+  sanitizer run. Under orc without `useMalloc` the fault is certain.

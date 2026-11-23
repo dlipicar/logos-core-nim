@@ -15,7 +15,9 @@
 ##
 ## - `opened`: `<code> <route>` of `openRoute`, then `sub <code>`;
 ## - `read`: `<code> <label>` of the typed read;
-## - `heard`: each typed delivery's value, with the thread's id;
+## - `heard`: each typed delivery's value, with the thread's id and `entered`
+##   or `unentered`: whether that thread registered with this library's
+##   runtime (the probe, DECISIONS G466);
 ## - `closed`: `<code>` of the set's `close`, at destroy or at the failed init.
 
 {.push raises: [].}
@@ -24,6 +26,7 @@ import std/[os, strutils, typedthreads]
 import logos_sdk/testing/generated/beacon_module_kit
 import logos_sdk/testing/generated/meter_module_calls
 import logos_sdk/kit/routes
+from logos_sdk/base/entry import threadEntered
 
 type
   Shared = object ## Plain data in shared memory: handlers run on any thread (refc).
@@ -57,7 +60,8 @@ proc codeOf[T](r: Result[T, InvocationFailure]): int =
 
 proc onHeard(ev: MeterChangedEvent, user: pointer) {.nimcall, gcsafe, raises: [].} =
   {.cast(gcsafe).}:
-    cast[ptr Shared](user).note("heard", $ev.value & " " & $getThreadId())
+    let probe = if threadEntered(): " entered" else: " unentered"
+    cast[ptr Shared](user).note("heard", $ev.value & " " & $getThreadId() & probe)
 
 proc unhex(s: string): Result[seq[byte], string] =
   try:

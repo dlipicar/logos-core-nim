@@ -411,14 +411,20 @@ proc keepPrivate(fd: cint) =
       notStarted("fd " & $fd & " cannot be held")
     discard fcntl(fd, F_SETFD, FD_CLOEXEC)
 
+from std/cmdline import commandLineParams
+from logos_sdk/base/parentwatch import bindToParent, parentArg
+
 proc runHost*() {.noreturn.} =
   ## The whole program.
   discard signal(SIGPIPE, SIG_IGN)
-  when defined(linux):
-    let parent = getppid()
-    discard prctl(PrSetPdeathsig, culong(SIGKILL))
-    if getppid() != parent:
-      exitnow(ExitCarrierLost) # [IMPL] the daemon ended before the signal was set
+  # [G264, amended 2026-11-21] The parent watch first, then the parent the
+  # Runtime named compared with this process's: a Runtime that ended before
+  # the watch was set is noticed here.
+  let parent = parentArg(commandLineParams()).valueOr:
+    notStarted("no --parent=<pid> argument")
+  let bound = bindToParent(parent)
+  if bound.isErr:
+    carrierLost(bound.error)
   keepPrivate(ListenerFd)
   keepPrivate(LockFd)
   let fd = carrierFd()

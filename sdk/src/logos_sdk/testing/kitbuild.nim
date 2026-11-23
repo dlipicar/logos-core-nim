@@ -20,8 +20,13 @@
 ## library and to stdout; the variant directory's name says which (`-strict`),
 ## so a strict and a lenient library never share a path. This helper is for
 ## test suites only and never builds a release library.
+##
+## [DECISIONS G435] A kit source whose tree sets no search paths (an SDK fixture
+## in an installed package, say) is compiled with the host's own package search
+## paths (`hostPathArgs`), so it finds the packages the host was built with. A
+## source whose tree sets them is built as that tree says.
 
-import std/[os, osproc, strutils]
+import std/[compilesettings, os, osproc, strutils]
 when defined(posix):
   import std/posix
 import ./testdirs
@@ -53,6 +58,85 @@ const
     (when kitSanitizer.len > 0: "-" & kitSanitizer else: "") &
     (when kitAudit: "-wipeaudit" else: "")
   nimExe = getCurrentCompilerExe()
+  hostLib = querySetting(libPath)
+  hostSearchPaths = querySettingSeq(searchPaths)
+    ## The host's search paths, in its order, its compiler's own library
+    ## directories included.
+
+func setsPaths(config: string): bool =
+  ## Whether configuration text sets search paths: a `path`, `p` or
+  ## `nimblePath` switch, in NimScript or `.cfg` form, or an included
+  ## `nimble.paths`. Nim's switch names ignore case and underscores, and a
+  ## `.cfg` file also takes one dash, so each line is compared without them.
+  if "nimble.paths" in config:
+    return true
+  for raw in config.splitLines:
+    let line = raw.strip
+    if line.startsWith("#"):
+      continue
+    let squeezed = line.multiReplace((" ", ""), ("_", "")).toLowerAscii
+    for key in ["path", "p", "nimblepath"]:
+      for dashes in ["--", "-", ""]:
+        if squeezed.startsWith(dashes & key & ":") or
+            squeezed.startsWith(dashes & key & "="):
+          return true
+      if ("switch(\"" & key & "\",") in squeezed:
+        return true
+  false
+
+proc pathsConfig*(source: string): string =
+  ## The configuration file Nim reads for `source` that sets search paths, the
+  ## nearest first, or "" when none does. Nim reads `config.nims` and `nim.cfg`
+  ## in the source's directory and in each above it, and the project's own
+  ## `<name>.nimcfg`, `<name>.nim.cfg` and `<name>.nims` (compiler/nimconf.nim).
+  ## An installed SDK's `testing/config.nims` only defines `lcnTestHooks`, so
+  ## it does not count.
+  let dir = source.absolutePath.parentDir
+  let stem = source.splitFile.name
+  var files =
+    @[dir / (stem & ".nimcfg"), dir / (stem & ".nim.cfg"), dir / (stem & ".nims")]
+  for up in parentDirs(dir):
+    files.add([up / "config.nims", up / "nim.cfg"])
+  for file in files:
+    if fileExists(file):
+      let text =
+        try:
+          readFile(file)
+        except IOError:
+          ""
+      if setsPaths(text):
+        return file
+  ""
+
+proc treeSetsPaths*(source: string): bool =
+  ## Whether a configuration file Nim reads for `source` sets search paths
+  ## (`pathsConfig`).
+  pathsConfig(source).len > 0
+
+proc hostPathArgs*(source: string): seq[string] =
+  ## [DECISIONS G435] `--path:` switches that give `source` the host's search
+  ## paths when no configuration file of its tree sets any (`treeSetsPaths`),
+  ## and none otherwise, so an in-tree build keeps its tree's paths and their
+  ## order. Back to front: Nim puts each command-line path first, and skips a
+  ## path it already has, so the library's list is the host's, in the host's
+  ## order. Under `LCN_KIT_NIM` the host compiler's own library directories are
+  ## left out: the compiler that builds the library adds its own. Core's
+  ## `childbuild` uses it for programs built from an installed package.
+  if treeSetsPaths(source):
+    return
+  let otherCompiler = getEnv("LCN_KIT_NIM").len > 0
+  for i in countdown(hostSearchPaths.high, 0):
+    if not (otherCompiler and hostSearchPaths[i].startsWith(hostLib)):
+      result.add("--path:" & hostSearchPaths[i])
+
+proc withheldPathsNote*(source: string): string =
+  ## For a failed build's message: the configuration file that made
+  ## `hostPathArgs` pass none of the host's search paths, or "".
+  let config = pathsConfig(source)
+  if config.len > 0:
+    result =
+      "\n[DECISIONS G435] The host's search paths were not passed: " & config &
+      " sets search paths for " & source & ", so the build takes its paths from there."
 
 type KitTree* = object
   ## Where a suite's kit libraries come from [IMPL]: the kit source directories and the
@@ -62,12 +146,13 @@ type KitTree* = object
   build*: string
 
 proc kitTreeOf*(suite: string): KitTree =
-  ## The tree of the suite at the absolute path `suite`: its own directories, then the shared ones.
+  ## The tree of the suite at the absolute path `suite`: its own directories, then the SDK's
+  ## fixtures, and the build directory under the working directory, the suite's repository.
   let tests = suite.parentDir
   KitTree(
-    sources: @[tests / "kit", repoDir / fixtureDir],
-    generated: @[tests / "generated", repoDir / generatedDir],
-    build: repoDir / "build" / "kit-dylib",
+    sources: @[tests / "kit", fixtureDir],
+    generated: @[tests / "generated", generatedDir],
+    build: absolutePath("build" / "kit-dylib"),
   )
 
 template kitTree*(): KitTree =
@@ -159,6 +244,7 @@ proc buildKitLibraryIn*(
   doAssert strictDestroy or reason.strip.len > 0,
     name & ": building a kit library without strict destroy takes a reason"
   let (compiler, _) = kitCompiler()
+  let src = locate(tree.sources, source)
   let dir = tree.build / (kitVariantOf(mm) & (if strictDestroy: "-strict" else: ""))
   createDir(dir)
   if not strictDestroy:
@@ -199,6 +285,7 @@ proc buildKitLibraryIn*(
   if strictDestroy:
     args.add("-d:lcnKitStrictDestroy")
   args.add(kitSwitches()[0])
+  args.add(hostPathArgs(src))
   if exports.len > 0:
     args.add(tree.exportListFlags(exports))
   args.add(
@@ -207,7 +294,7 @@ proc buildKitLibraryIn*(
       "--nimMainPrefix:lib" & name,
       "--nimcache:" & dir / ("nimcache-" & name),
       "-o:" & output,
-      locate(tree.sources, source),
+      src,
     ]
   )
   when defined(posix):
@@ -220,7 +307,7 @@ proc buildKitLibraryIn*(
     if code == 0:
       moveFile(output, result)
     discard posix.close(lock) # releases the lock
-  doAssert code == 0, "building " & source & " failed:\n" & log
+  doAssert code == 0, "building " & source & " failed:\n" & log & withheldPathsNote(src)
 
 template buildKitLibrary*(
     source, name: string, mm = kitMm, exports = "", strictDestroy = true, reason = ""

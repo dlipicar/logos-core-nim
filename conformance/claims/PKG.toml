@@ -116,12 +116,12 @@ default = "deferred:tier-5"
 # §4.3: PKG-0112 (no freshness from a signature alone) is claimed through "§4.3" by step
 # 5-3b-1, with the catalog's sequence (DECISIONS G401, G404).
 # §4.3: key separation across package signing, provenance (§4.5), call evidence (CA
-# §9.1) and TLS. The package-signing keys (lcn-pkg keygen) and the call-evidence key
-# (tools/evidence_keygen.nim, logosd's daemon/evkey.nim; G149, G301) exist and are made
-# apart. The TLS key comes with remote Runtimes (owner decision B2: its own offline
-# command, Tier 5 step 5-7a) and a provenance key with step 5-11 if it is kept; the
-# unit is claimed once the TLS key exists (corrected by step 5-0).
-"PKG-0435" = "deferred:tier-5"
+# §9.1) and TLS. The package-signing keys (lcn-pkg keygen), the call-evidence key
+# (tools/evidence_keygen.nim, logosd's daemon/evkey.nim; G149, G301) and, from step
+# 5-7a-1, the TLS key (logosctl remote credential, daemon/credential.nim; owner decision
+# B2, G409) are each made by their own command, of their own algorithm, in their own
+# file, and each loader refuses the others' files. A provenance key, if step 5-11 keeps
+# one, comes under the same rule.
 # §4.3: the signer record is derived (signerRecord) but retained with installed
 # state, reported by inspections and carried by handoffs only with installation.
 "PKG-0436" = "deferred:tier-5"

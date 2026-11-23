@@ -47,7 +47,7 @@ template exportIdleModule*(T: typedesc) =
       destroyModule(instance)
     GC_unref(instance)
 
-  proc idleModuleKitName(): cstring {.exportc: "logos_idle_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [].} =
+  proc idleModuleKitName(): cstring {.exportc: "logos_idle_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "a static string".} =
     system.cstring(moduleName)
 
   proc idleModuleKitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: "logos_idle_module_MODULE_init", dynlib, cdecl, gcsafe, raises: [].} =

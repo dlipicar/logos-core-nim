@@ -19,6 +19,11 @@
 ##   replay the result (R l.3072-3080). A replayed route record has no
 ##   invocation (R l.3080): `renewRoute` it, then `materialize` it.
 ## - `renewRoute` and `closeRoute` act on a route by its identifier.
+## - `prepareRc(set, method, request, <Response>, onDone, …)` prepares one
+##   Runtime Control method's asynchronous call, typed as a route's
+##   `prepareInvoke` is: the set holds it, and `onDone` runs where a route's
+##   completion would (DECISIONS G464). No completion procedure of the
+##   module's own reaches the binding.
 ## - `subscribe(set, eventId, <Event>, onEvent, …)` subscribes to one Runtime
 ##   Control event (l.3868), typed as a route's events are, with `onEnd` for a
 ##   subscription the binding ended (l.1476-1483). The binding's
@@ -371,6 +376,33 @@ proc closeRoute*(
   call(s.rc, "close_route", req, LogosNSRuntimeControlCloseRouteResponse).mapErr(
     toFailure
   )
+
+# Runtime Control calls --------------------------------------------------------------------
+
+proc prepareRc*[Req, R](
+    s: RouteSet,
+    bare: string,
+    req: Req,
+    T: typedesc[R],
+    onDone: CallDone[R],
+    user: pointer = nil,
+    timeoutMs: uint64 = 0,
+    marked = false,
+): Result[PreparedCall, InvocationFailure] =
+  ## [DECISIONS G339, G464] A Runtime Control method's asynchronous call by its
+  ## bare name, such as `get_self` (INTERFACE §2.9.1; RUNTIME §9.3), prepared
+  ## through the set's binding (`consumert.prepareRc`): `req` is encoded, and
+  ## the completion is decoded as `R` and handed to `onDone`, on the kit's
+  ## module thread for a confined kit. A nonzero `timeoutMs` is its deadline.
+  ## The set holds the call: `submit` it, and release it with `s.release(c)`
+  ## or `close`, never from `onDone` (INTERFACE l.2043).
+  mixin encode
+  ?s.admit()
+  let params = encode(req).valueOr:
+    return err(failure(ecInvalidParams, "the request has no encoding: " & error))
+  let c = ?prepareRc(s.events, bare, params, T, onDone, user, timeoutMs, marked)
+  s.adopt(c)
+  ok(c)
 
 # Runtime Control subscriptions ------------------------------------------------------------
 

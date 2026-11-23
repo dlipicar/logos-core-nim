@@ -14,7 +14,7 @@ from chronos import finished, value
 import logos_sdk/codegen/[callrt, confinedcalls, consumert]
 from logos_sdk/codegen/confinedrt import
   packGate, unpackGate, gateNext, GateMaxGen, GateMaxSlots, failSignalClose,
-  failedSignalFd, failInitAt
+  failedSignalFd, failInitAt, liveDeferredTasks
 import logos_sdk/testing/kitruntime
 import logos_sdk/testing/fixtures/ledger_impl
 import
@@ -512,19 +512,31 @@ var
   fakeCallbacks: LogosAsyncCallbacks
   fakeState: byte
   fakeReleased: Atomic[bool]
+  fakeReleases: Atomic[int] ## the route handle's `release` calls
+  fakeLateOps: Atomic[int] ## route operations once its `release` ran
   fakeUnsubscribes: Atomic[int]
   fakeUnsubscribesInside: Atomic[int] ## made from inside a delivery
   fakeCompleteInSubmit: Atomic[bool]
+  fakeCallLive: Atomic[bool] ## the latest prepared call is not released
+  fakeLateCallUses: Atomic[int] ## `submit` or `cancel` of a released call
+  fakeSubmits: Atomic[int]
+  fakeReadyAtSubmit: Atomic[int] ## submits whose call had its callback and user state
   fakeCallReleases: Atomic[int]
   fakeCancels: Atomic[int]
   fakeCancelCompletes: Atomic[bool] ## `cancel` completes the call CANCELLED
   fakeTimeout: Atomic[int] ## the latest prepared call's deadline, 0 for none
   fakePrepares: Atomic[int] ## calls prepared
+  fakeNullOnEntry: Atomic[int] ## prepares whose output call was null on entry
   deliveries: Atomic[int] ## events `deliver` handed to a subscription
   ownerReleases: Atomic[int]
   ownerReleaseThread: Atomic[uint64]
   delivering {.threadvar.}: bool
 initLock(fakeLock)
+
+proc routeOp() =
+  ## Every route operation but `release` notes whether the handle was released.
+  if fakeReleased.load:
+    fakeLateOps += 1
 
 proc fakeCallOp(
     route: ptr LogosRouteHandle,
@@ -534,12 +546,13 @@ proc fakeCallOp(
     outResponse: ptr ptr UncheckedArray[uint8],
     outResponseLen: ptr csize_t,
 ): LogosResult {.cdecl, gcsafe, raises: [].} =
+  routeOp()
   LogosResult(code: CErrorCode(ord(ecModule)))
 
 proc fakeReleaseResponseOp(
     route: ptr LogosRouteHandle, r: ptr UncheckedArray[uint8], n: csize_t
 ) {.cdecl, gcsafe, raises: [].} =
-  discard
+  routeOp()
 
 proc fakeSubscribeOp(
     route: ptr LogosRouteHandle,
@@ -548,6 +561,7 @@ proc fakeSubscribeOp(
     userData: pointer,
     outId: ptr LogosSubscriptionId,
 ): LogosResult {.cdecl, gcsafe, raises: [].} =
+  routeOp()
   {.cast(gcsafe).}:
     withLock fakeLock:
       for f in fakeSubs.mitems:
@@ -561,6 +575,7 @@ proc fakeSubscribeOp(
 proc fakeUnsubscribeOp(
     route: ptr LogosRouteHandle, id: LogosSubscriptionId
 ): LogosResult {.cdecl, gcsafe, raises: [].} =
+  routeOp()
   fakeUnsubscribes += 1
   if delivering:
     fakeUnsubscribesInside += 1
@@ -573,6 +588,7 @@ proc fakeUnsubscribeOp(
   LogosResult(code: CErrorCode(ord(ecInvalidParams)))
 
 proc fakeReleaseOp(route: ptr LogosRouteHandle) {.cdecl, gcsafe, raises: [].} =
+  fakeReleases += 1
   fakeReleased.store(true)
 
 proc ownerRelease(state: pointer) {.cdecl, gcsafe, raises: [].} =
@@ -595,11 +611,20 @@ proc completeFake(label: string) {.gcsafe.} =
   )
 
 proc fakeSubmitOp(call: ptr LogosAsyncCall) {.cdecl, gcsafe, raises: [].} =
+  fakeSubmits += 1
+  if not fakeCallLive.load:
+    fakeLateCallUses += 1
+  {.cast(gcsafe).}:
+    let cb = fakeCallbacks
+  if cb.complete != nil and cb.userData != nil:
+    fakeReadyAtSubmit += 1
   if fakeCompleteInSubmit.load:
     completeFake("inline")
 
 proc fakeCancelOp(call: ptr LogosAsyncCall) {.cdecl, gcsafe, raises: [].} =
   fakeCancels += 1
+  if not fakeCallLive.load:
+    fakeLateCallUses += 1
   if fakeCancelCompletes.load:
     {.cast(gcsafe).}:
       let cb = fakeCallbacks
@@ -613,6 +638,7 @@ proc fakeCancelOp(call: ptr LogosAsyncCall) {.cdecl, gcsafe, raises: [].} =
 
 proc fakeCallReleaseOp(call: ptr LogosAsyncCall) {.cdecl, gcsafe, raises: [].} =
   fakeCallReleases += 1
+  fakeCallLive.store(false)
 
 var fakeCallVtable = LogosAsyncCallVtable(
   abiVersion: AsyncCallAbiVersion,
@@ -631,9 +657,13 @@ proc fakePrepareOp(
     callbacks: ptr LogosAsyncCallbacks,
     outCall: ptr LogosAsyncCall,
 ): LogosResult {.cdecl, gcsafe, raises: [].} =
+  routeOp()
+  if outCall.vtable == nil and outCall.state == nil:
+    fakeNullOnEntry += 1
   {.cast(gcsafe).}:
     fakeCallbacks = callbacks[]
     outCall[] = LogosAsyncCall(vtable: addr fakeCallVtable, state: addr fakeState)
+  fakeCallLive.store(true)
   fakePrepares += 1
   fakeTimeout.store(
     if options.hasTimeout:
@@ -646,6 +676,7 @@ proc fakePrepareOp(
 proc fakeObserveEndOp(
     route: ptr LogosRouteHandle, handler: LogosRouteEndHandler, userData: pointer
 ): LogosResult {.cdecl, gcsafe, raises: [].} =
+  routeOp()
   {.cast(gcsafe).}:
     fakeEnd = handler
     fakeEndUser = userData
@@ -654,6 +685,7 @@ proc fakeObserveEndOp(
 proc fakeObserveSubEndOp(
     route: ptr LogosRouteHandle, handler: LogosSubscriptionEndHandler, userData: pointer
 ): LogosResult {.cdecl, gcsafe, raises: [].} =
+  routeOp()
   {.cast(gcsafe).}:
     fakeSubEnd = handler
     fakeSubEndUser = userData
@@ -679,14 +711,21 @@ proc resetFake() =
   fakeEnd = nil
   fakeSubEnd = nil
   fakeReleased.store(false)
+  fakeReleases.store(0)
+  fakeLateOps.store(0)
   fakeUnsubscribes.store(0)
   fakeUnsubscribesInside.store(0)
   fakeCompleteInSubmit.store(false)
+  fakeCallLive.store(false)
+  fakeLateCallUses.store(0)
+  fakeSubmits.store(0)
+  fakeReadyAtSubmit.store(0)
   fakeCallReleases.store(0)
   fakeCancels.store(0)
   fakeCancelCompletes.store(false)
   fakeTimeout.store(0)
   fakePrepares.store(0)
+  fakeNullOnEntry.store(0)
   deliveries.store(0)
   ownerReleases.store(0)
   routeToWrap = LogosRouteHandle(vtable: addr fakeVtable, state: addr fakeState)
@@ -1254,17 +1293,19 @@ suite "confined kit: consumer helpers on the module thread (DECISIONS G339)":
     resetRuntime()
     resetFake()
 
-  test "[IMPL-DECISION G339] handlers, end reports and completions run on the module thread, never in the delivery":
+  test "[IMPL-DECISION G339] [IFC-0516] [IFC-0518] [IFC-0671] [IFC-0717] [IFC-0736] handlers, end reports and completions run on the module thread, never in the delivery; the handle is released once and not used after":
     let ctx = openLedger()
-    check probe(ctx, 10)[1].note == "subscribed"
+    check probe(ctx, 10)[1].note == "subscribed" # the generated typed subscribe
     deliver(1)
     deliver(2)
     deliver(3)
-    check ctx.report.startsWith("seen=1,2,3 ")
+    check ctx.report.startsWith("seen=1,2,3 ") # each delivery decoded to its event
     endSubscription(ecModule)
     check " end=MODULE_ERROR " in ctx.report
     check probe(ctx, 11)[1].note == "ok" # after the binding ended it (l.1482)
     check probe(ctx, 13, 4)[1].note == "submitted"
+    check fakePrepares.load == 1
+    check fakeNullOnEntry.load == 1 # its output call was null on entry
     completeFake("ch4")
     check ownerReleases.load == 1
     check ownerReleaseThread.load == here() # cleared where it was delivered (l.2052)
@@ -1274,8 +1315,14 @@ suite "confined kit: consumer helpers on the module thread (DECISIONS G339)":
     check probe(ctx, 15)[1].note == "ok"
     check probe(ctx, 12)[1].note == "ok"
     check fakeReleased.load
+    check fakeReleases.load == 1
+    # The module's next call has no handle: refused before any route operation.
+    check probe(ctx, 13, 5)[1].note == $ecInvalidParams
+    check fakePrepares.load == 1
     check ctx.report.endsWith(" off=0")
     ledgerDestroy(ctx)
+    check fakeReleases.load == 1
+    check fakeLateOps.load == 0
 
   test "[IMPL-DECISION G339] P1: a delivery that finds the bound reached ends its subscription from inside the delivery; the queued events come first, then onEnd(MODULE_ERROR)":
     shared = openLedger()
@@ -1328,24 +1375,41 @@ suite "confined kit: consumer helpers on the module thread (DECISIONS G339)":
     check ctx.report.startsWith("seen= ")
     ledgerDestroy(ctx)
 
-  test "[IMPL-DECISION G339] a completion inside submit is queued, not run inline; a call released before it ran never completes":
+  test "[IMPL-DECISION G339] [IFC-0724] [IFC-0735] [IFC-0736] a completion inside submit is queued, not run inline, and reaches its handler with its user state; a call released before it ran never completes, its owner still cleared":
     let ctx = openLedger()
     check probe(ctx, 10)[1].note == "subscribed"
     fakeCompleteInSubmit.store(true)
     check probe(ctx, 17, 2)[1].note == "none ok"
-    check ownerReleases.load == 1
+    check fakeReadyAtSubmit.load == 1 # its callback and user state, before submit
+    check ownerReleases.load == 1 # the result discarded, its owner cleared
     check fakeCallReleases.load == 1
     check " done= " in ctx.report
+    check fakeSubmits.load == 1 and fakeCancels.load == 0
+    check fakeLateCallUses.load == 0 # neither submitted nor cancelled once released
+    # Not released: the completion made inside submit reaches onDone, whose
+    # user state is the instance.
+    check probe(ctx, 13, 3)[1].note == "submitted"
+    check fakeReadyAtSubmit.load == 2
+    check " done=ok:inline " in ctx.report
+    check ownerReleases.load == 2
+    check probe(ctx, 15)[1].note == "ok"
+    check fakeCallReleases.load == 2
+    check ctx.report.endsWith(" off=0")
     ledgerDestroy(ctx)
+    check fakeSubmits.load == 2 and fakeCancels.load == 0
+    check fakeLateCallUses.load == 0
 
-  test "[IMPL-DECISION G339] destroy releases a handle with an outstanding call and a live subscription":
+  test "[IMPL-DECISION G339] [IFC-0516] [IFC-0518] destroy releases a handle with an outstanding call and a live subscription, once, and uses neither after":
     let ctx = openLedger()
     check probe(ctx, 10)[1].note == "subscribed"
     check probe(ctx, 13, 1)[1].note == "submitted"
     deliver(1)
     ledgerDestroy(ctx)
     check fakeReleased.load
+    check fakeReleases.load == 1
+    check fakeLateOps.load == 0
     check fakeCallReleases.load == 1
+    check fakeLateCallUses.load == 0
 
 suite "confined kit: the deferred provider (DECISIONS G338)":
   setup:
@@ -1566,6 +1630,7 @@ suite "confined kit: the deferred provider (DECISIONS G338)":
     let ctx = openLedger()
     let fi =
       prepareFake(0, "wait", request(LedgerWaitRequest(channel: 1, millis: 20_000)))
+    let tasksBefore = liveDeferredTasks.load
     submit(ctx, fi)
     discard probe(ctx, 1) # its handler is asleep
     let freedBefore = freed.load
@@ -1574,6 +1639,9 @@ suite "confined kit: the deferred provider (DECISIONS G338)":
     check epochTime() - started < 10.0
     check fi.exactlyOnce
     check fi.status.error.code == ecNotReady
+    # [DECISIONS G338] Its task ended before the module thread did: nothing
+    # abandoned, in every build.
+    check liveDeferredTasks.load == tasksBefore
     when defined(gcOrc):
       # Destroy cancelled the handler and it unwound: the instance and the
       # handler's task are freed once the module thread ends.
@@ -1589,6 +1657,7 @@ suite "confined kit: the deferred provider (DECISIONS G338)":
       let ctx = openLedger()
       let fi =
         prepareFake(0, "wait", request(LedgerWaitRequest(channel: 11, millis: 20_000)))
+      let tasksBefore = liveDeferredTasks.load
       submit(ctx, fi)
       discard probe(ctx, 1) # its handler is asleep
       let freedBefore = freed.load
@@ -1598,6 +1667,8 @@ suite "confined kit: the deferred provider (DECISIONS G338)":
       check took >= 1.5 and took < 10.0
       check fi.exactlyOnce
       check fi.status.error.code == ecNotReady
+      # [DECISIONS G338] Its task, abandoned, stays counted.
+      check liveDeferredTasks.load == tasksBefore + 1
       when defined(gcOrc):
         # The abandoned frames still hold the instance.
         check freed.load == freedBefore
@@ -1717,6 +1788,7 @@ suite "confined kit: what runs while destroyModule runs (DECISIONS G437)":
     let ctx = openLedger()
     check probe(ctx, 10)[1].note == "subscribed"
     let fi = prepareFake(0, "wait", request(LedgerWaitRequest(channel: 12, value: 3)))
+    let tasksBefore = liveDeferredTasks.load
     submit(ctx, fi)
     discard probe(ctx, 1) # its handler awaits its call, prepared and submitted
     check fakePrepares.load == 1
@@ -1733,6 +1805,9 @@ suite "confined kit: what runs while destroyModule runs (DECISIONS G437)":
     check fakeCancels.load == 0 # `noCancel`: its call was never cancelled
     check fi.exactlyOnce
     check fi.status.error.code == ecNotReady
+    # [DECISIONS G437] Its task ended inside destroyModule, not only its
+    # handler: nothing abandoned, in every build (CI run 44991040073).
+    check liveDeferredTasks.load == tasksBefore
     when defined(gcOrc):
       check freed.load == freedBefore + 1 # its frames ended: nothing abandoned
     clearFake(fi)

@@ -47,7 +47,7 @@ import std/atomics
 import results
 import ../cbor
 import ../abi/types
-import ../base/wipe
+import ../base/[entrymarks, wipe]
 
 export results, cbor, types
 
@@ -100,7 +100,9 @@ proc alloc*(a: var CallArena, size: int): Result[pointer, string] =
   discard liveBlocks.fetchAdd(1)
   ok(cast[pointer](cast[uint](p) + BlockHeader))
 
-proc releaseBlocks(state: pointer) {.cdecl, gcsafe, raises: [].} =
+proc releaseBlocks(
+    state: pointer
+) {.cdecl, gcsafe, raises: [], lcnNoNimHeap: "the C allocator only".} =
   ## [SPEC INTERFACE §2.7.1] The owner's release: the C allocator only, so any
   ## thread may call it, and distinct owners concurrently. Each block is
   ## zeroed first: it may hold a marked response.

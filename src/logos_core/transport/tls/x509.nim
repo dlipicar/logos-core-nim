@@ -6,7 +6,7 @@
 {.push raises: [].}
 
 import results
-import ./[boring, credential]
+import ./p256
 
 export results
 
@@ -65,5 +65,43 @@ proc readCertificate*(der: openArray[byte]): Result[CertInfo, string] =
       spki: spki,
     )
   )
+
+proc directAnchorProblems*(der: openArray[byte]): seq[string] =
+  ## [G324; TRANSPORT l.1244-1248; Tier 5 step 5-7a-1, G408] Why `der` cannot
+  ## be a direct anchor of this implementation, which accepts only an anchor
+  ## that is the peer's own certificate: a P-256 key; self-issued and signed
+  ## by that key; not a CA; Key Usage, if present, permitting digital
+  ## signatures; Extended Key Usage, if present, naming both `serverAuth` and
+  ## `clientAuth`, since a Runtime is a TLS server and a TLS client; no
+  ## critical extension that validation would not process. Empty when it can.
+  let x = parseCertificate(der).valueOr:
+    return @[error]
+  defer:
+    X509_free(x)
+  var problems: seq[string]
+  let flags = X509_get_extension_flags(x)
+  if (flags and EXFLAG_INVALID.uint32) != 0:
+    return @["its extensions do not parse"]
+  let key = X509_get0_pubkey(x)
+  if not isP256(key):
+    problems.add("its key is not a P-256 key")
+  if X509_NAME_cmp(X509_get_subject_name(x), X509_get_issuer_name(x)) != 0 or key == nil or
+      X509_verify(x, key) != 1:
+    problems.add("it is not self-signed")
+    discard sslErrors()
+  if (flags and EXFLAG_CA.uint32) != 0:
+    problems.add("it is a CA certificate, not an end-entity one")
+  if (flags and EXFLAG_KUSAGE.uint32) != 0 and
+      (X509_get_key_usage(x) and KuDigitalSignature) == 0:
+    problems.add("its Key Usage does not permit digital signatures")
+  if (flags and EXFLAG_XKUSAGE.uint32) != 0:
+    let eku = X509_get_extended_key_usage(x)
+    if (eku and XKU_SSL_SERVER.uint32) == 0:
+      problems.add("its Extended Key Usage lacks serverAuth, so it cannot serve")
+    if (eku and XKU_SSL_CLIENT.uint32) == 0:
+      problems.add("its Extended Key Usage lacks clientAuth, so it cannot connect")
+  if (flags and EXFLAG_CRITICAL.uint32) != 0:
+    problems.add("it has a critical extension that validation does not process")
+  problems
 
 {.pop.}

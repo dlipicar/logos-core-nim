@@ -29,9 +29,12 @@ lcn.as_record = {
   ? subject: lcn.as_facts,
 }
 
-; module is absent when the facts could not be read: the instance id alone
+; module is absent when the facts could not be read: the instance id alone.
+; runtime: a forwarded consumer's Runtime (G415), whose facts are its instance
+; id and Runtime alone; absent for a local instance.
 lcn.as_facts = {
   instance: tstr .size (1..128),
+  ? runtime: tstr .size (1..128),
   ? module: tstr .size (1..64),
   ? signer: bstr .size 48,
   ? package: tstr .size (1..128),

@@ -41,6 +41,7 @@
 
 import std/[json, os, parseopt, sets, strutils, sysrand, tables]
 import results
+import logos_sdk/base/entrymarks
 import ./logos_core/daemon/version
 
 proc say(text: string) =
@@ -64,8 +65,8 @@ when defined(posix):
   import logos_sdk/kit/[rc_arms, rc_types], ./logos_core/runtime/stateadmin
   import
     ./logos_core/daemon/[
-      compose, ctlwire, evexport, evkey, evstore, render, session, sessioninit,
-      trustfile,
+      compose, credential, ctlwire, evexport, evkey, evstore, remoteexposure,
+      remotetrust, render, session, sessioninit, signsvc, trustfile,
     ]
   import ./logos_core/cli/[cli_types, launcher]
   from logos_sdk/codegen/nimrt import wipeTyped
@@ -113,6 +114,19 @@ offline (the session's files; writers hold its lock):
   trust development on|off
   trust reestablish --revision N
   trust evidence-keys ls|rotate
+  remote trust init
+  remote trust show
+  remote trust reestablish --revision N
+  remote trust anchor add CERT [--id HEX]
+  remote trust anchor remove --id HEX
+  remote trust enroll add @RECORD
+  remote trust enroll revoke RUNTIME [--profile tls-tcp|quic]
+  remote trust import @PEER
+  remote credential new [--days N]
+  remote credential show
+  remote credential rotate [--days N]
+  remote exposure list
+  remote exposure reset (--listener ADDR [--provider ID] | --all)
   audit evidence ls
   audit evidence export --seq N [--out FILE]
   state list
@@ -121,7 +135,20 @@ offline (the session's files; writers hold its lock):
   version
 
 KID is text, or hex: and hex digits, as lcn-pkg sign --kid takes it; HEX is the
-public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too)."""
+public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).
+remote trust: CERT is a DER certificate file, the anchor's id its BLAKE3-256
+unless --id names one; @RECORD is one logos.runtime_enrollment
+remote_runtime_enrollment and @PEER a logos-core-nim.remote-peer.v1 file, each
+.cbor or .diag. Every change applies at the next start of logosd.
+remote credential: this Runtime's TLS key and self-signed certificate (valid
+--days, default 3650), and peer.cbor, the anchor and enrollment each peer
+imports; rotate writes the next one, taken up at the next start of logosd
+with remote.enabled (a cutover).
+remote exposure: the listener and export fields Runtime Control turned off,
+which stay off across restarts until the configuration entry changes, Runtime
+Control enables them, or reset removes them (at the next start). ADDR is the
+address as list prints it, quoted (\"tls-tcp HOST:PORT\" and its optional
+fields); --provider names an export of that listener."""
     DefaultTimeoutMs = 65_000
     ExitOk = 0
     ExitUsage = 1
@@ -131,7 +158,7 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
     MaxFileArgs = 14 ## [G344] 16 descriptors, stdout and stderr included
     NoValue = [
       "json", "text", "wait", "development", "remove", "print-template", "help",
-      "version", "yes",
+      "version", "yes", "all",
     ]
 
   type
@@ -931,7 +958,7 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
   var cancelPipe = [cint(-1), cint(-1)]
   var signals = 0
 
-  proc onSignal(sig: cint) {.noconv.} =
+  proc onSignal(sig: cint) {.noconv, lcnOwnRuntime: "this program's signal handler".} =
     ## The first SIGINT or SIGTERM cancels the command (the launcher half-closes
     ## and waits for `done`); a second ends the shell at once.
     inc signals
@@ -1670,6 +1697,549 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
     else:
       err(usage("unknown trust command " & sub))
 
+  # Remote trust (G408) -----------------------------------------------------------------
+
+  func lowerHex(b: openArray[byte]): string =
+    anchorName(b)
+
+  proc recordJson(r: Enrollment): JsonNode =
+    let k = keyOf(r)
+    result = %*{
+      "runtime": k.runtime,
+      "profile": k.profile,
+      "revision": revisionOf(r),
+      "status": (if r.active: "active" else: "revoked"),
+    }
+    if r.active:
+      result["anchor"] = %lowerHex(r.arm_Active.trust_anchor)
+      var keys = newJArray()
+      for key in keysOf(r):
+        keys.add(%lowerHex(key))
+      result["keys"] = keys
+
+  proc recordRow(r: Enrollment, note = ""): seq[string] =
+    let k = keyOf(r)
+    @[
+      k.runtime,
+      k.profile,
+      $revisionOf(r),
+      (if r.active: "active" else: "revoked") & note,
+      (if r.active: lowerHex(r.arm_Active.trust_anchor) else: ""),
+      (if r.active: $keysOf(r).len else: ""),
+    ]
+
+  proc linesJson(xs: openArray[string]): JsonNode =
+    result = newJArray()
+    for x in xs:
+      result.add(%x)
+
+  proc reportText(report, conflicts: openArray[string]): string =
+    ## [G324 extended] The loader report, as logosd logs it at its start.
+    for x in conflicts:
+      result.add("\nremote-trust-report: " & x)
+    for x in report:
+      result.add("\nremote-trust-report: " & x)
+
+  func profileArg(p: string): string =
+    ## `tls-tcp` and `quic` stand for the profiles' full names.
+    if p.startsWith("logos.remote."):
+      p
+    else:
+      "logos.remote." & p
+
+  proc remoteWritten(
+      s: Session,
+      command: string,
+      ch: RemoteChange,
+      what: string,
+      extra: JsonNode,
+      after = "",
+  ): Done =
+    ## [G408] A writer's answer: the revision written, or unchanged, and the
+    ## loader report of the input it leaves.
+    let rev = $ch.state.file.revision
+    var j = %*{
+      "revision": ch.state.file.revision,
+      "changed": ch.changed,
+      "report": linesJson(ch.report),
+      "conflicts": linesJson(ch.conflicts),
+    }
+    for k, v in extra.pairs:
+      j[k] = v
+    var text =
+      if ch.changed:
+        "remote trust revision " & rev & ": " & what & "; " & AppliesAtNextStart & after
+      else:
+        "unchanged at remote trust revision " & rev & ": nothing was written"
+    text.add(reportText(ch.report, ch.conflicts))
+    s.offline(command, j, text)
+
+  proc remoteCurrent(s: Session): Result[RemoteTrustState, Fail] =
+    let t = readRemoteTrust(s).valueOr:
+      return err(fail(ExitUsage, error))
+    if t.isNone:
+      return err(
+        fail(
+          ExitUsage, "there is no " & RemoteTrustFile & "; remote trust init makes one"
+        )
+      )
+    ok(t.get)
+
+  proc remoteCommit(
+      s: Session, cur: RemoteTrustState, next: Result[LcnRemoteTrust, string]
+  ): Result[RemoteChange, Fail] =
+    let f = next.valueOr:
+      return err(fail(ExitUsage, error))
+    commitRemoteTrust(s, cur, f).mapErr(
+      proc(e: string): Fail =
+        fail(ExitUsage, e)
+    )
+
+  proc readDer(path: string): Result[seq[byte], Fail] =
+    let bytes = readBounded(path, MaxRemoteTrustBytes).valueOr:
+      return err(fail(ExitUsage, path & ": " & error))
+    if bytes.isNone:
+      return err(fail(ExitUsage, path & ": no such file"))
+    ok(bytes.get)
+
+  proc idOpt(c: Cli): Result[Opt[seq[byte]], Fail] =
+    let v = c.opt("id")
+    if v.isNone:
+      return ok(Opt.none(seq[byte]))
+    let id = hex.fromHex(v.get).valueOr:
+      return err(usage("--id takes hex digits: " & error))
+    if id.len notin 1 .. 128:
+      return err(usage("--id is 1 to 128 bytes"))
+    ok(Opt.some(id))
+
+  proc cmdRemoteTrust(c: Cli, s: Session): Result[Done, Fail] =
+    let sub = ?c.arg(2, "a remote trust command")
+    case sub
+    of "init":
+      var lock = ?locked(s)
+      defer:
+        lock.release()
+      let t = initRemoteTrust(s).valueOr:
+        return err(fail(ExitUsage, error))
+      ok(
+        s.offline(
+          "remote trust init",
+          %*{"revision": t.file.revision},
+          "remote trust revision " & $t.file.revision &
+            ": an empty remote trust input and its mark; logosd reads them only with " &
+            "remote.enabled, and " & AppliesAtNextStart,
+        )
+      )
+    of "show":
+      let t = readRemoteTrust(s).valueOr:
+        return err(fail(ExitUsage, error))
+      let mark = readRemoteMark(s).valueOr:
+        return err(fail(ExitUsage, error))
+      var j = %*{"file": t.isSome}
+      var rows: seq[seq[string]]
+      if mark.isSome:
+        j["mark"] =
+          %*{"revision": mark.get.revision, "digest": lowerHex(mark.get.digest)}
+      if t.isNone:
+        rows.add(@["file", "none (remote trust init makes one)"])
+        rows.add(@["mark", (if mark.isSome: $mark.get.revision else: "none")])
+        return ok(s.offline("remote trust show", j, table(["FIELD", "VALUE"], rows)))
+      let f = t.get.file
+      j["revision"] = %f.revision
+      j["digest"] = %lowerHex(t.get.digest)
+      # [G408] Decoded without the rules, so a refused input shows, with the
+      # reason logosd's start would give.
+      let v = validateRemoteTrust(f, mark)
+      let (continuity, refusal) =
+        if v.isErr:
+          ("refused", Opt.some(v.error))
+        elif mark.isNone:
+          ("refused", Opt.some(RemoteNotEstablished))
+        elif v.get.advance:
+          ("accepted at the next start (a higher revision)", Opt.none(string))
+        else:
+          ("accepted (the revision in use)", Opt.none(string))
+      j["continuity"] = %continuity
+      if refusal.isSome:
+        j["refusal"] = %refusal.get
+      var anchors = newJArray()
+      var anchorRows: seq[seq[string]]
+      for a in f.anchors:
+        let problems = directAnchorProblems(a.certificate)
+        anchors.add(
+          %*{
+            "id": lowerHex(a.id),
+            "certificate_bytes": a.certificate.len,
+            "problems": linesJson(problems),
+          }
+        )
+        anchorRows.add(
+          @[
+            lowerHex(a.id),
+            $a.certificate.len,
+            (if problems.len == 0: "direct anchor"
+            else: problems.join("; ")),
+          ]
+        )
+      j["anchors"] = anchors
+      var records = newJArray()
+      var recordRows: seq[seq[string]]
+      for r in f.enrollments:
+        records.add(recordJson(r))
+        recordRows.add(recordRow(r))
+      j["enrollments"] = records
+      rows.add(@["revision", $f.revision])
+      rows.add(@["mark", (if mark.isSome: $mark.get.revision else: "none")])
+      rows.add(@["continuity", continuity])
+      if refusal.isSome:
+        rows.add(@["refusal", refusal.get])
+      var text = table(["FIELD", "VALUE"], rows)
+      if anchorRows.len > 0:
+        text.add("\n\n" & table(["ANCHOR", "BYTES", "CHECK"], anchorRows))
+      if recordRows.len > 0:
+        text.add(
+          "\n\n" &
+            table(
+              ["RUNTIME", "PROFILE", "REVISION", "STATUS", "ANCHOR", "KEYS"], recordRows
+            )
+        )
+      if v.isOk:
+        j["report"] = linesJson(v.get.report)
+        j["conflicts"] = linesJson(v.get.conflicts)
+        text.add(reportText(v.get.report, v.get.conflicts))
+      ok(s.offline("remote trust show", j, text))
+    of "reestablish":
+      let rev = ?c.uintOpt("revision")
+      if rev.isNone:
+        return err(usage("remote trust reestablish needs --revision N"))
+      var lock = ?locked(s)
+      defer:
+        lock.release()
+      let st = reestablishRemote(s, rev.get).valueOr:
+        return err(fail(ExitUsage, error))
+      ok(
+        s.offline(
+          "remote trust reestablish",
+          %*{"revision": st.accepted.revision, "report": linesJson(st.report)},
+          "the remote trust mark records revision " & $st.accepted.revision & "; " &
+            AppliesAtNextStart & reportText(st.report, []),
+        )
+      )
+    of "anchor":
+      let op = ?c.arg(3, "add or remove")
+      case op
+      of "add":
+        let path = ?c.arg(4, "the anchor's DER certificate file")
+        let der = ?readDer(path)
+        let id = (?c.idOpt).get(anchorIdOf(der))
+        var lock = ?locked(s)
+        defer:
+          lock.release()
+        let cur = ?remoteCurrent(s)
+        let ch = ?remoteCommit(
+          s, cur, cur.file.withRemoteAnchor(LcnRemoteAnchor(id: id, certificate: der))
+        )
+        ok(
+          s.remoteWritten(
+            "remote trust anchor add",
+            ch,
+            "anchor " & lowerHex(id) & " added",
+            %*{"id": lowerHex(id)},
+          )
+        )
+      of "remove":
+        let id = (?c.idOpt).valueOr:
+          return err(usage("remote trust anchor remove needs --id HEX"))
+        var lock = ?locked(s)
+        defer:
+          lock.release()
+        let cur = ?remoteCurrent(s)
+        let ch = ?remoteCommit(s, cur, cur.file.withoutRemoteAnchor(id))
+        ok(
+          s.remoteWritten(
+            "remote trust anchor remove",
+            ch,
+            "anchor " & lowerHex(id) & " withdrawn",
+            %*{"id": lowerHex(id)},
+          )
+        )
+      else:
+        err(usage("unknown remote trust anchor command " & op))
+    of "enroll":
+      let op = ?c.arg(3, "add or revoke")
+      case op
+      of "add":
+        let spec = ?c.arg(4, "the record, @FILE")
+        let bytes = ?readValue(spec)
+        let rec = Enrollment.decode(bytes).valueOr:
+          return err(
+            fail(
+              ExitUsage, spec[1 .. ^1] & " is not a remote_runtime_enrollment: " & error
+            )
+          )
+        var lock = ?locked(s)
+        defer:
+          lock.release()
+        let cur = ?remoteCurrent(s)
+        let ch = ?remoteCommit(s, cur, cur.file.withEnrollment(rec))
+        ok(
+          s.remoteWritten(
+            "remote trust enroll add",
+            ch,
+            $keyOf(rec) & " enrolled at revision " & $revisionOf(rec),
+            %*{"record": recordJson(rec)},
+          )
+        )
+      of "revoke":
+        let runtime = ?c.arg(4, "the Runtime id")
+        let profile = profileArg(c.opt("profile").get(TlsTcpProfile))
+        var lock = ?locked(s)
+        defer:
+          lock.release()
+        let cur = ?remoteCurrent(s)
+        let ch = ?remoteCommit(s, cur, cur.file.withRevocation(runtime, profile))
+        ok(
+          s.remoteWritten(
+            "remote trust enroll revoke",
+            ch,
+            "Runtime " & runtime & " (" & profile & ") revoked",
+            %*{"runtime": runtime, "profile": profile},
+            after = "; " & RevokeCloses,
+          )
+        )
+      else:
+        err(usage("unknown remote trust enroll command " & op))
+    of "import":
+      let spec = ?c.arg(3, "the peer file, @FILE")
+      let bytes = ?readValue(spec)
+      let peer = decodePeer(bytes).valueOr:
+        return err(fail(ExitUsage, spec[1 .. ^1] & ": " & error))
+      if c.opt("node").isSome or c.opt("address").isSome:
+        return err(
+          usage("remote trust import --node comes with the lcn_call nodes (5-7a-4)")
+        )
+      var lock = ?locked(s)
+      defer:
+        lock.release()
+      let cur = ?remoteCurrent(s)
+      let ch = ?remoteCommit(s, cur, cur.file.withPeer(peer))
+      ok(
+        s.remoteWritten(
+          "remote trust import",
+          ch,
+          "anchor " & lowerHex(peer.anchor.id) & " and " & $keyOf(peer.enrollment) &
+            " at revision " & $revisionOf(peer.enrollment) & " imported",
+          %*{"id": lowerHex(peer.anchor.id), "record": recordJson(peer.enrollment)},
+        )
+      )
+    else:
+      err(usage("unknown remote trust command " & sub))
+
+  # Remote credential (G409) --------------------------------------------------------------
+
+  proc isoTime(t: int64): string =
+    try:
+      fromUnix(t).utc.format("yyyy-MM-dd'T'HH:mm:ss'Z'")
+    except CatchableError:
+      $t
+
+  proc credentialJson(i: CredentialInfo): JsonNode =
+    %*{
+      "runtime": keyOf(i.peer.enrollment).runtime,
+      "revision": i.revisionOf,
+      "certificate_sha256": lowerHex(i.certificateSha256),
+      "anchor_id": lowerHex(i.anchorId),
+      "spki": lowerHex(i.spki),
+      "certificate": lowerHex(i.certificate),
+      "not_before": isoTime(i.notBefore),
+      "not_after": isoTime(i.notAfter),
+      "peer_file": i.peerFile,
+    }
+
+  proc credentialRows(i: CredentialInfo, what: string): seq[seq[string]] =
+    @[
+      @[what, i.dir],
+      @["runtime", keyOf(i.peer.enrollment).runtime],
+      @["enrollment revision", $i.revisionOf],
+      @["certificate sha-256", lowerHex(i.certificateSha256)],
+      @["anchor id", lowerHex(i.anchorId)],
+      @["key (spki)", lowerHex(i.spki)],
+      @["valid", isoTime(i.notBefore) & " to " & isoTime(i.notAfter)],
+      @["peer file", i.peerFile],
+    ]
+
+  proc daysOpt(c: Cli): Result[int, Fail] =
+    let v = c.opt("days")
+    if v.isNone:
+      return ok(DefaultValidityDays)
+    let n =
+      try:
+        parseInt(v.get)
+      except ValueError:
+        return err(usage("--days takes a number of days"))
+    if n notin 1 .. MaxValidityDays:
+      return err(usage("--days is 1 to " & $MaxValidityDays))
+    ok(n)
+
+  proc cmdRemoteCredential(c: Cli, s: Session): Result[Done, Fail] =
+    let sub = ?c.arg(2, "new, show or rotate")
+    case sub
+    of "new", "rotate":
+      let days = ?daysOpt(c)
+      var lock = ?locked(s)
+      defer:
+        lock.release()
+      let (dc, _) = readDaemonConfig(s).valueOr:
+        return err(fail(ExitUsage, error))
+      let runtime = dc.runtime.runtime_instance_id
+      let made = (
+        if sub == "new":
+          newCredential(s, runtime, days)
+        else:
+          rotateCredential(s, runtime, days)
+      ).valueOr:
+        return err(fail(ExitUsage, error))
+      let give =
+        "give each peer " & made.peerFile &
+        " (logosctl remote trust import @peer.cbor there)"
+      let text =
+        if sub == "new":
+          "a TLS credential for Runtime " & runtime & ", enrolled at revision 1; " & give &
+            "; logosd uses it at its next start with remote.enabled"
+        else:
+          "the next TLS credential, enrolled at revision " & $made.revisionOf &
+            " with the new key alone, is in remote/" & NextCredentialName & "; " & give &
+            "; logosd takes it up at its next start with remote.enabled. A rotation " &
+            "is a cutover: connections with a peer fail until it holds the new record"
+      ok(
+        s.offline(
+          "remote credential " & sub,
+          credentialJson(made),
+          text & "\n" & table(["FIELD", "VALUE"], credentialRows(made, "credential")),
+        )
+      )
+    of "show":
+      let cur = currentCredential(s).valueOr:
+        return err(fail(ExitUsage, error))
+      let next = pendingCredential(s).valueOr:
+        return err(fail(ExitUsage, error))
+      let count = readHolderCount(s).valueOr:
+        return err(fail(ExitUsage, error))
+      var j = %*{"credential": nil, "pending": nil, "key_holder": nil}
+      var rows: seq[seq[string]]
+      if cur.isSome:
+        j["credential"] = credentialJson(cur.get)
+        rows.add(credentialRows(cur.get, "credential"))
+      else:
+        rows.add(@["credential", "none (remote credential new makes one)"])
+      if next.isSome:
+        j["pending"] = credentialJson(next.get)
+        rows.add(credentialRows(next.get, "pending rotation"))
+      if count.isSome:
+        j["key_holder"] = %*{"signed": count.get.signed, "refused": count.get.refused}
+        rows.add(
+          @[
+            "key holder",
+            $count.get.signed & " signed, " & $count.get.refused & " refused",
+          ]
+        )
+      ok(s.offline("remote credential show", j, table(["FIELD", "VALUE"], rows)))
+    else:
+      err(usage("unknown remote credential command " & sub))
+
+  proc exposureJson(e: LcnRemoteExposureEntry): JsonNode =
+    let a = addressOf(e.listener)
+    var off = newJArray()
+    for f in e.offOf:
+      off.add(%($f))
+    %*{
+      "listener": (if a.isOk: a.get.addressText else: "0x" & toHex(e.listener)),
+      "provider": (if e.provider.isSome: %e.provider.get
+      else: newJNull()),
+      "off": off,
+      "by": e.by,
+      "at_ms": e.at_ms,
+      "configuration_entry": e.config.isSome,
+    }
+
+  proc exposureRow(e: LcnRemoteExposureEntry): seq[string] =
+    let a = addressOf(e.listener)
+    @[
+      (if a.isOk: a.get.addressText else: "0x" & toHex(e.listener)),
+      e.provider.get("-"),
+      offText(e.offOf),
+      $fromUnix(int64(e.at_ms div 1000)).utc,
+      e.by,
+    ]
+
+  proc cmdRemoteExposure(c: Cli, s: Session): Result[Done, Fail] =
+    ## [G412; Q4] The durable disables, offline.
+    let sub = ?c.arg(2, "list or reset")
+    case sub
+    of "list":
+      let entries = readExposure(s).valueOr:
+        return err(fail(ExitUsage, error))
+      var a = newJArray()
+      var rows: seq[seq[string]]
+      for e in entries:
+        a.add(exposureJson(e))
+        rows.add(exposureRow(e))
+      let text =
+        if rows.len == 0:
+          "no durable disable: each record starts as the configuration has it"
+        else:
+          table(["LISTENER", "PROVIDER", "OFF", "SINCE", "BY"], rows)
+      ok(s.offline("remote exposure list", %*{"entries": a}, text))
+    of "reset":
+      let all = "all" in c.flags
+      let listener = c.opt("listener")
+      let provider = c.opt("provider")
+      if all == listener.isSome or (all and provider.isSome):
+        return err(
+          usage("remote exposure reset takes --listener ADDR [--provider ID], or --all")
+        )
+      var lock = ?locked(s)
+      defer:
+        lock.release()
+      let removed = resetExposure(s, listener.get(""), provider.get(""), all).valueOr:
+        return err(fail(ExitUsage, error))
+      if removed.len == 0 and not all:
+        return err(
+          fail(
+            ExitUsage,
+            "no durable disable of " &
+              (if provider.isSome: "the export of " & provider.get & " on "
+              else: "") & listener.get,
+          )
+        )
+      var a = newJArray()
+      var rows: seq[seq[string]]
+      for e in removed:
+        a.add(exposureJson(e))
+        rows.add(exposureRow(e))
+      let text =
+        "removed " & $removed.len & " durable disable" &
+        (if removed.len == 1: "" else: "s") & "; " & AppliesAtNextStart & (
+          if rows.len > 0:
+          "\n" & table(["LISTENER", "PROVIDER", "OFF", "SINCE", "BY"], rows)
+          else: ""
+        )
+      ok(s.offline("remote exposure reset", %*{"removed": a}, text))
+    else:
+      err(usage("unknown remote exposure command " & sub))
+
+  proc cmdRemote(c: Cli, s: Session): Result[Done, Fail] =
+    let sub = ?c.arg(1, "a remote command")
+    case sub
+    of "trust":
+      cmdRemoteTrust(c, s)
+    of "credential":
+      cmdRemoteCredential(c, s)
+    of "exposure":
+      cmdRemoteExposure(c, s)
+    else:
+      err(usage("unknown remote command " & sub))
+
   # Call evidence ------------------------------------------------------------------------
 
   proc segmentsJson(xs: seq[SegmentSummary]): (JsonNode, string) =
@@ -1966,6 +2536,8 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
         cmdInit(c, s)
       of "trust":
         cmdTrust(c, s)
+      of "remote":
+        cmdRemote(c, s)
       of "audit":
         cmdAudit(c, s)
       of "state":
@@ -1981,7 +2553,7 @@ public key's 96 hex digits, or @FILE holding them (lcn-pkg keygen's line too).""
         online(c, s)
     if r.isErr:
       let deployment =
-        if c.args[0] in ["init", "trust", "audit", "state"]:
+        if c.args[0] in ["init", "trust", "remote", "audit", "state"]:
           offlineDeployment(s)
         else:
           "unknown"

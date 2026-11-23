@@ -196,12 +196,12 @@ template exportSensorModuleCalls*() =
     kitEnter()
     callInvoke0(p0, p1, p2)
 
-  proc sensorModuleCallsClear0(p1: ptr LogosResponseOwner) {.exportc: "lcn_clear_sensor_NS_control_Configure", dynlib, cdecl, gcsafe, raises: [].} =
+  proc sensorModuleCallsClear0(p1: ptr LogosResponseOwner) {.exportc: "lcn_clear_sensor_NS_control_Configure", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear0(p1)
 
   proc sensorModuleCallsInvoke1(p0: ptr LogosRouteHandle, p1: ptr LogosResponseOwner, p2: ptr uint64): LogosResult {.exportc: "lcn_invoke_metrics_provider_Snapshot", dynlib, cdecl, gcsafe, raises: [].} =
     kitEnter()
     callInvoke1(p0, p1, p2)
 
-  proc sensorModuleCallsClear1(p1: ptr LogosResponseOwner, p2: ptr uint64) {.exportc: "lcn_clear_metrics_provider_Snapshot", dynlib, cdecl, gcsafe, raises: [].} =
+  proc sensorModuleCallsClear1(p1: ptr LogosResponseOwner, p2: ptr uint64) {.exportc: "lcn_clear_metrics_provider_Snapshot", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "clears the owner through its own release, zeroes the outputs".} =
     callClear1(p1, p2)
