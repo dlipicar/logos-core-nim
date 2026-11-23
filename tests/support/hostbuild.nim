@@ -82,7 +82,7 @@ proc buildEmbedMain*(library: string): string =
     "-Wextra",
     "-Werror",
     "-pedantic",
-    "-I" & root / generatedDir,
+    "-I" & generatedDir,
     "-o",
     result,
     root / "tests" / "host" / "embed_main.c",

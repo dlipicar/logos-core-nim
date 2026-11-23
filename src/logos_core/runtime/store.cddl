@@ -46,9 +46,14 @@ lcn.rs_failure = {
   ? reason: tstr .size (1..512),
 }
 
+; [G413] runtime: the Runtime of a forwarded consumer, a module instance of
+; another Runtime whose request established the intent over remote Runtime
+; Control (RUNTIME l.3407); absent for a local instance. Present only with such
+; an origin, so a store without one is unchanged; a build before 5-7a-2
+; refuses a store that has one.
 lcn.rs_origin =
   { kind: "host" } /
-  { kind: "instance", instance: tstr .size (1..128) }
+  { kind: "instance", instance: tstr .size (1..128), ? runtime: tstr .size (1..128) }
 
 ; A retired host-assigned instance id, and the host-assigned state
 ; assignment it keeps reserved. Runtime-assigned names need no tombstone.
@@ -57,9 +62,11 @@ lcn.rs_retired = {
   ? state_assignment: tstr .size (1..128),
 }
 
-; one create_module key association (RUNTIME l.3627-3628)
+; one create_module key association (RUNTIME l.3627-3628); consumer_runtime:
+; a forwarded consumer's Runtime (G413), as in lcn.rs_origin
 lcn.rs_create_key = {
   consumer: tstr .size (1..128),
+  ? consumer_runtime: tstr .size (1..128),
   key: tstr .size (1..128),
   module: tstr .size (1..64),
   instance: tstr .size (1..128),

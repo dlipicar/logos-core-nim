@@ -56,8 +56,27 @@ lcn.ap_inspect = {
   ? policy_changes: true,
 }
 
-; G47 facts. Fields AND, list entries OR; {} matches any Runtime-known instance.
+; G47 facts. Fields AND, list entries OR. [G415; owner decision B5, item O1 (a)]
+; A subject that names no Runtime matches local instances only; a consumer of
+; another Runtime (a forwarded consumer, RUNTIME l.1685-1699) is matched only by
+; a subject whose runtimes names that Runtime, and only while that Runtime is
+; actively enrolled. So {} matches any local instance. runtimes holds lowercase
+; UUIDv4 Runtime ids, never this Runtime's own, and is never combined with
+; modules, signers or packages, which a forwarded consumer does not carry. In an
+; inspect rule's grants and audit, a subject naming no Runtime covers the
+; records of every consumer, local and forwarded (O1's inspect choice (x)).
 lcn.ap_subject = {
+  ? runtimes: [* tstr .size (1..128)],
+  ? instances: [* tstr .size (1..128)],
+  ? modules: [* tstr .size (1..64)],
+  ? signers: [* bstr .size 48],
+  ? packages: [* tstr .size (1..128)],
+}
+
+; [G415] What provider selectors and the targets of runtime-control and
+; module-execution scopes name: this Runtime's own instances and providers
+; (RUNTIME l.1829, l.2541-2542), so no runtimes.
+lcn.ap_selector = {
   ? instances: [* tstr .size (1..128)],
   ? modules: [* tstr .size (1..64)],
   ? signers: [* bstr .size 48],
@@ -74,7 +93,7 @@ lcn.ap_provider_access = {
   kind: "provider-access",
   contract: logos.schema_commitment / "capability-authority" / "runtime-control",
   actions: [* lcn.ap_action],
-  ? providers: lcn.ap_subject,
+  ? providers: lcn.ap_selector,
   ? access: lcn.ap_access,
 }
 
@@ -92,12 +111,12 @@ lcn.ap_runtime_control = {
   kind: "runtime-control",
   ? methods: [* lcn.ap_decl],
   ? events: [* lcn.ap_decl],
-  ? targets: lcn.ap_subject,
+  ? targets: lcn.ap_selector,
 }
 
 lcn.ap_module_execution = {
   kind: "module-execution",
-  targets: lcn.ap_subject,
+  targets: lcn.ap_selector,
   actions: [* ("start" / "stop")],
   ? modes: [* ("direct" / "local-transport")],
   ? placements: [* ("process" / "sandbox" / "container")],

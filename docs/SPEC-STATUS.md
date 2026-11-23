@@ -128,14 +128,15 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-5 | the no-op install and update while the retained signer is not accepted (TF-07's second point); a D9 stop | fail with `signature-verification-failed` | decided (C6: fail); built at re-pin P7b, the update half in the resolver and the install half at resolution (G166) |
 | 5-6a | where the Package Manager runs | hosted in its own process, the engine's binding over TRANSPORT §8.1.2 | open (C1) |
 | 5-6b | package record observation | deny by default; the grant is protected deployment input | open (C4) |
-| 5-7a | the remote trust input: its own input and revision, apart from the package trust file | — | decided (C2) |
-| 5-7a | NF-06 (G81), the authority part | G81 (a) narrowed | decided (B5); compared with CA l.77-78 at 6cac8335 (re-pin P6a): the enrolled half of TXT-0359 (claimed for the half with no Runtime enrolled) and TXT-0360 (riding RUN-1125) are 5-7a's |
+| 5-7a | the remote trust input: its own input and revision, apart from the package trust file | — | decided (C2); built 2026-11-22 by 5-7a-1 (G408): `remote/trust.cbor` and its mark, `logosctl remote trust` |
+| 5-7a | NF-06 (G81), the authority part | G81 (a) narrowed | decided (B5); compared with CA l.77-78 at 6cac8335 (re-pin P6a): the enrolled half of TXT-0359 (claimed for the half with no Runtime enrolled) and TXT-0360 (riding RUN-1125) are 5-7a's; built 2026-11-22 by 5-7a-2 (G415), TXT-0359's enrolled half tested, TXT-0360 with 5-7a-4 |
 | 5-7a | NA-04 (G255); TF-30 point 1 (G194) | kept | decided (B9) |
 | 5-7a | enrollment and trust-anchor changes (G87) | offline, under the session lock, at the next start | decided (B3) |
-| 5-7a | G298 | its answers stay for a profile the build lacks; *no record is kept* is re-decided with listener records | decided (B8) |
+| 5-7a | G298 | its answers stay for a profile the build lacks; *no record is kept* is re-decided with listener records | decided (B8); re-decided 2026-11-22 by 5-7a-2 (G412): records kept, only enabling fails |
 | 5-7a, 5-7b | the remote process layout; facades | Runtime-owned TLS processes, a signing seam (logosd signs by default); a facade is a provider record, never served by logosd | decided (B1, B4) |
 | 5-7b | NL-07 (G355) | the `route_failure` spellings and the state table | decided (B6) |
 | 5-7b | NR-04 (G356) | resolve or fail | decided (B7) |
+| 5-7b | Runtime Control events to a consumer of another Runtime (G413's interim) | a Subscribe over remote Runtime Control is SubscriptionResult MODULE_ERROR; 5-7b, with reflected state, delivers them (R l.3184, in RUN-0600's paragraph) and extends the claimed RUN-0676 and RUN-0677 to such a subscriber | decided 2026-11-22 (planning) |
 | 5-8 | TF-44 (G351); a D9 stop | the plan's §6 wording | open (D2) |
 | 5-8 | how a package-backed instance comes to exist | configured entries with pins written offline (recommended) | open (D1) |
 | 5-8 | TF-04, TS-06, TP-07 | `requires` stays advisory; a pin is protected input; `create_module` carries none | open (D3) |
@@ -144,6 +145,8 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-11 | NP-13 | provenance attests the assembled archive | open (E3) |
 | 5-13 | TF-43 (G310); the units still deferred | the member set of E1; E2's relabels | open (E1, E2, E3) |
 | N-2 | marked methods through the CLI | local targets only (INTERFACE l.368-369, l.373): a marked request from files or stdin, a marked response to stdout, every copy erased; non-local targets refused | decided 2026-11-17 (owner); built in N-2d (G349, I102) |
+| N-3 | the blockchain module's placements: NP-14, a module cannot declare the placements it supports (G421) | `hosted_dynamic` with placement `process` only, one node per process, stated in `docs/DEPLOYMENT.md` §26 and the module's README; nothing refuses another placement | decided 2026-11-21 (planning's ruling on the library's threads); built in N-3.3 (I118); NP-14 open |
+| N-5 | blockchain's v2 D6 row: a supported machine whose slowest proof is over 5 s (G475) | (i): no preparation method; destroy waits for a running spend; the stop figure 10 s | decided 2026-11-22 (owner, Q4 (i) on desktops and servers, Linux and macOS); built in N-5.2 (I126); provisional until the mobile exploration at the end of the work, where a phone over 5 s brings (ii) as v3 extending v2 |
 
 Unanswered upstream and bearing on Tier 5: NP-12 to NP-14 (NP-11 is settled by text: PM l.964, l.1172, and
 NP-15 by PM l.1096-1101 at 6cac8335),
@@ -511,6 +514,79 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   Claimed: PKG-0474 (the bindings' retrieval API and locator encodings: PACKAGE-MANAGER.md §4, STORAGE-FETCH §5,
   DAEMON.md §3), and PKG-0353's hosted half, under logosd. PKG 279/279.
 
+- 2026-11-22, Tier 5 step 5-7a-1 (I117; G407-G411; G264 amended; G86, G87, G194, G255 and G324 noted),
+  remote Runtimes' foundations, with no remote process yet:
+  - The Module Host binds itself to the pid its spawner names (`logos_sdk/base/parentwatch.nim`).
+  - The daemon configuration's `remote` section; with `remote.enabled` the Runtime id must be a
+    lowercase UUIDv4 (G407).
+  - The remote trust input `remote/trust.cbor` and its mark, RUNTIME's enrollment schema held unchanged,
+    G299's start table and the rules per key (two stricter than the text), the loader report,
+    `logosctl remote trust`, and the verifier's snapshot (G408). The carried 5-3a item is closed.
+  - The TLS credential and `logosctl remote credential new|show|rotate`, rotation as a cutover taken up
+    at the next start (G409).
+  - The remote control channel's CDDL, logosd's signing service, the relay to `logos_keyholder` with its
+    own checks, limit and count, and the test-only process copy (G410, G411). Handshakes signed all
+    three ways in `test_remote_tls`. logosd spawning the holder, and the remote processes, are 5-7a-2's.
+  - `libcrypto` is split from `libssl` (`transport/tls/p256.nim`), and logosd imports no libssl binding
+    (lint `daemon-no-ssl`). Its link drops libssl's objects, and its binary is checked to hold no libssl
+    code (G409: `test_logosd` on plain builds, the flake check `logosd-no-ssl` on the deployed logosd).
+  - `docs/REMOTE.md` (new), `docs/DAEMON.md` §2, §3, §6a, §6b, `docs/DEPLOYMENT.md` §2 and §5 (row 5d
+    Supported), `docs/HOST-CONFIG.md` (the host's argv).
+
+  Claimed: RUN-0493 to RUN-0500, RUN-0869, RUN-0928, RUN-0929, TRN-0217, TRN-0369 and PKG-0435 (14
+  units).
+
+- 2026-11-22, Tier 5 step 5-7a-2 (I117; G412, G413, G415; G298 re-decided; G81 and G205 amended; Q4 as
+  planning ruled), the target side of remote Runtime Control:
+  - Authority: a consumer of an actively enrolled Runtime is matched only by a subject naming that
+    Runtime (`runtimes`), and `policy: allow-all` with `remote.enabled` refuses the start (G415).
+  - Listener and export records from the configuration and Runtime Control, with their origin. A record
+    of any profile may be kept disabled; only enabling `quic`, or any profile without a remote program,
+    is G298's MODULE_ERROR (G412).
+  - Runtime Control disables last across restarts in `state/remote-exposure.cbor`; enables last for the
+    run. `logosctl remote exposure list|reset` (Q4).
+  - The `logos_remote` program's listener role, supervised by logosd from one thread, ending with logosd
+    whatever ends it. logosd spawns `logos_keyholder` (G411).
+  - Inbound Runtime Control: the Hello token rules, the forwarded consumer, the order of checks of
+    l.1835, forwarded discovery. `get_execution_permissions` and `report_failure` are NOT_AUTHORISED for
+    a forwarded consumer. `establish_route` (until 5-7a-3) and event subscriptions (until 5-7b) are
+    interim MODULE_ERROR (G413).
+  - `docs/REMOTE.md`, `DAEMON.md` §2, §6c (new), §10, `DEPLOYMENT.md` §4 and §5d, `AUTHORITY-POLICY.md`,
+    `HOST-CONFIG.md`.
+
+  Claimed: 38 RUN units (RUN-0092, RUN-0336 to RUN-0340, RUN-0342 to RUN-0344, RUN-0502, RUN-0503,
+  RUN-0508 to RUN-0510, RUN-0513, RUN-0514, RUN-0516 to RUN-0518, RUN-0595, RUN-0596, RUN-0598,
+  RUN-0613 to RUN-0618, RUN-0621, RUN-0622, RUN-0898, RUN-0984 to RUN-0989, RUN-1124), TRN-0206 and
+  TRN-0227 (40 units), and TXT-0359's enrolled half. RUN-0341 moves to 5-7a-4; RUN-0511, RUN-0512 and
+  RUN-0515 to 5-7a-3. TXT-0163 rides on RUN-1125 now, and TXT-0360 stays with it (5-7a-4).
+
+- 2026-11-22, Tier 5 step N-3 (I118), the blockchain node as a Logos Core module (G419-G424, G441; D10 revised,
+  G97 and G144 amended): a Nim confined kit module over the library's C binding, linked in as a static archive, in
+  the library's clone (`lcn/blockchain-module`). Contract v1 (three reads and `chain_progress_event`), the typed
+  configuration with no environment and no home directory, `_init` starting the node and an unprepared destroy
+  stopping it, placement `hosted_dynamic`/`process` only (NP-14 open; the open-items row). T9 runs it under logosd
+  in a Module Host with `logosctl`: a call, events, `describe`, a failure the restart policy recovers, five clean
+  stops, and a start refused without host-ambient. `docs/DEPLOYMENT.md` §26 answers for it as a payload module
+  (placement, resources, keystore, stop figure, NTP, NAT, the bootstrap period); no row of the item table changes,
+  and no inspection item is made untrue: CAP-0075 to CAP-0082 still hold (one permission, host-ambient), and rows
+  8b, 9 and 21 hold for the node's state and keystore. `docs/DAEMON.md` gains the module as the Grants example.
+  No unit changes status.
+
+- 2026-11-22, Tier 5 restructure step R9 with R10b (W2-X X0.1; R8): each claimed unit belongs to the package
+  that implements its rule, and its evidence is in that package's own tree (a tagged test there, or an item
+  in its `conformance/inspection/`). `spectrace gate`, `owners` and `deploydoc` count only the owner's tree.
+  - INTERFACE's ledger, main claims file and inspection file are under `sdk/conformance/`. Core claims the
+    Runtime's 143 IFC units in `conformance/claims/IFC.toml`, 13 of them by inspection
+    (`conformance/inspection/IFC.toml`).
+  - The SDK claims 124 RUN units and 7 CFG units in `sdk/conformance/claims/`: the Runtime Control schema and
+    header, and the kit's side of configuration delivery.
+  - The SDK's tests now carry the 11 IFC units whose only evidence was in core's suites: ten in `test_kit`,
+    `test_kit_confined` and `test_calls`, and IFC-0577 in a new audit-build suite, `sdk/tests/test_wipe_kit.nim`
+    (the ledger's marked `seal`, with no Runtime). IFC-0518's inspection item is reworded and the unit tested too.
+  - No unit changes status. The claimed set is unchanged, unit for unit (`tools/restructure/claim_split.py
+    --compare`, 3572 units). Per package at the branch point: IFC core 143, SDK 665; RUN core 767, SDK 124; CFG
+    core 119, SDK 7. Merged with master (5-7a's claims), RUN core is 816.
+
 - 2026-11-22, Tier 5 step 5-3c-1 (I122; G454), the resolver's incremental search:
   - `package/resolver.nim` keeps the search's state incrementally and gives the same results: the unresolved names
     on a heap, each bound name's depth with a trail of what each bind changed, propagation in ascending depth
@@ -528,6 +604,33 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
     in-memory reader at 1 MiB, 64 MiB and 1 GiB (`tools/pmbench.nim archive`, `inspect`).
 
   No unit changes status; PKG §11's stay claimed on the same tests, which the oracle suite strengthens.
+
+- 2026-11-23, Tier 5 step N-5 (I126), the blockchain module's contract v2 (G469-G476, G479, G481, I130, I131,
+  I133; D20, G97, G419, G422 and G340 amended): v2 extends v1, frozen at N-5.1's first commit, with the library's
+  reads, typed (blocks, transactions, the wallet, Blend, PoW, the deployment), the events `new_block_event` and
+  `lib_event`, the spends with a caller-chosen request id and a synced record each (`spend_status`), and the key
+  methods (a copy renamed over the keystore, for the next start), served by seven glue workers with delayed
+  Responses. v2 and the configuration schema froze at the library clone's `a834055da`. The module calls the
+  library's stock start (the owner's (b)): its HTTP API on `127.0.0.1` and `SystemSig`'s hold on SIGINT, which
+  `docs/DEPLOYMENT.md` §26 already stated; §26 gains the new state (the spend records, the key methods' files),
+  mining as configuration and destroy's wait for a running spend. `docs/DAEMON.md`'s Grants example moves to v2's
+  root, with v1's rule beside it. The open-items table gains the v2 D6 row, provisional until the mobile
+  exploration. No row of the item table changes, and no inspection item is made untrue: CAP-0075 to CAP-0082 still
+  hold (one permission, host-ambient), and rows 8b, 9 and 21 hold for the node's state, keystore and spend
+  records. No unit changes status.
+
+- 2026-11-23, Tier 5 step N-4 (I119; G425-G432, G480; G91, G97, G99, G100, G136 and G147 amended), storage_module,
+  sub-parts N-4.1 to N-4.5. The Storage node is a `hosted_dynamic` module in `logos_module/` on storage's
+  `logos-core-module` branch (`ca6b8687`), with storage's files as they are at `4fe02344` (G432):
+  - the module: the confined refc kit, typed configuration with the `extip` default, one start phase, `storage.stop`
+    and the strict destroy (G426, G427, G430, G431);
+  - it provides `lcn.storage_fetch` (G428), and core's `test_storage_fetch` runs it as the provider, opt in, under orc,
+    refc and orc-release;
+  - its data methods and paths (G425, G429);
+  - its lifecycle under logosd (`test_module_hosted`).
+
+  Its contract and configuration schema freeze at N-4.5's merge (G480). No unit changes status: the module's hosted
+  case adds evidence for RUN-0815, claimed since step 4b-3.2.
 
 ## Tiers at f4f83471 (the original plan)
 

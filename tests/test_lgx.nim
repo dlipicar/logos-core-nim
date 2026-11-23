@@ -552,6 +552,63 @@ suite "pkg.lgx: archive rules (PM §7.1, §8)":
     badPad[512 + entriesOf(pack())[0].data.len] = 1 # inside manifest.cbor's padding
     check opened(gz(badPad)) == "invalid-package"
 
+  test "[PKG-0269] [IMPL-DECISION I125] a tar cut at any length, or with any header byte changed, is refused and never crashes":
+    # A tar that ends inside an entry's padding: manifest.cbor's header, its 10 bytes and 5 of
+    # its padding (527 bytes). The reader indexed past the end and raised an IndexDefect.
+    let plain = gunzip(writeLgx(b("0123456789"), b("x"), @[]).get, 1 shl 30).get
+    let cut527 = readLgx(gzipCompress(plain[0 ..< 527]).get)
+    check cut527.isErr
+    check cut527.error.msg == "an entry's data is truncated: manifest.cbor"
+    # Every proper prefix of a small valid archive's tar, and of its gzip member.
+    let small = writeLgx(
+      b("0123456789"),
+      b("x"),
+      @[("linux-x86_64", @[("lib/a.so", b("abc")), ("data/b", newSeq[byte](700))])],
+    ).get
+    check readLgx(small).isOk
+    let t = gunzip(small, 1 shl 30).get
+    var accepted: seq[string]
+    for cut in 0 ..< t.len:
+      if readLgx(gzipCompress(t[0 ..< cut]).get).isOk:
+        accepted.add("tar cut at " & $cut)
+    for cut in 0 ..< small.len:
+      if readLgx(small[0 ..< cut]).isOk:
+        accepted.add("gzip cut at " & $cut)
+    check accepted.len == 0
+    checkpoint accepted.join(", ")
+    # Each byte of each header changed, with its checksum left as it was and with it set
+    # again, so the fields after the checksum are parsed too. Whatever the result, no crash.
+    proc withSum(x: var seq[byte], at: int) =
+      for i in at + 148 ..< at + 156:
+        x[i] = byte(' ')
+      var sum = 0
+      for i in at ..< at + 512:
+        sum += int(x[i])
+      let digits = toOct(sum, 6)
+      for i, c in digits:
+        x[at + 148 + i] = byte(c)
+      x[at + 154] = 0
+      x[at + 155] = byte(' ')
+
+    var headers: seq[int]
+    var pos = 0
+    while pos + 512 <= t.len and t[pos ..< pos + 512].anyIt(it != 0):
+      headers.add(pos)
+      var size = 0
+      for i in pos + 124 ..< pos + 135:
+        size = size * 8 + int(t[i] - byte('0'))
+      pos += 512 + (size + 511) div 512 * 512
+    check headers.len == 8 # the two manifest files, four directories and two files
+    for at in headers:
+      for off in 0 ..< 512:
+        for value in [t[at + off] xor 0x01, 0xff'u8, byte('7')]:
+          var x = t
+          x[at + off] = value
+          discard readLgx(gzipCompress(x).get)
+          if off notin 148 ..< 156:
+            x.withSum(at)
+            discard readLgx(gzipCompress(x).get)
+
   test "[PKG-0209] [PKG-0490] [PKG-0491] [IMPL-DECISION G41] gzip headers and members: one member, CRC32 and ISIZE checked":
     let t = tar(entriesOf(pack()))
     let z = gz(t)

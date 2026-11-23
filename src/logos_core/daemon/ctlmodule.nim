@@ -39,7 +39,7 @@
 import std/[atomics, locks, monotimes, os, times]
 import results
 import logos_sdk/abi/[checks, types]
-import logos_sdk/base/[perthread, testhooks]
+import logos_sdk/base/[entry, perthread, testhooks]
 import logos_sdk/iface/outcome
 from logos_sdk/kit/rcclient import checkBinding, `$`
 import ../runtime/bell, logos_sdk/kit/rc_types
@@ -298,7 +298,7 @@ proc onComplete(
     response: ptr UncheckedArray[uint8],
     responseLen: csize_t,
     owner: LogosResponseOwner,
-) {.cdecl, gcsafe, raises: [].} =
+) {.lcnCallback.} =
   ## [SPEC INTERFACE §2.9.1, §2.9.2] Copies the outcome into shared memory
   ## and releases the owner; nothing the collector owns outlives it, so it
   ## may run on any Runtime thread.

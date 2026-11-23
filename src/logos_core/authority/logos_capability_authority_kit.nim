@@ -7138,7 +7138,7 @@ template exportLogosCapabilityAuthority*(T: typedesc) =
       destroyModule(instance)
     GC_unref(instance)
 
-  proc logosCapabilityAuthorityKitName(): cstring {.exportc: "logos_logos_capability_authority_MODULE_name", dynlib, cdecl, gcsafe, raises: [].} =
+  proc logosCapabilityAuthorityKitName(): cstring {.exportc: "logos_logos_capability_authority_MODULE_name", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "a static string".} =
     system.cstring(moduleName)
 
   proc logosCapabilityAuthorityKitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: "logos_logos_capability_authority_MODULE_init", dynlib, cdecl, gcsafe, raises: [].} =
@@ -7153,7 +7153,7 @@ template exportLogosCapabilityAuthority*(T: typedesc) =
     let instance {.cursor.} = cast[T](p)
     routeLogosCapabilityAuthority(instance, bare, params)
 
-  proc logosCapabilityAuthorityKitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: "logos_logos_capability_authority_MODULE_call_surface", dynlib, cdecl, gcsafe, raises: [].} =
+  proc logosCapabilityAuthorityKitCallSurface(outLen: ptr csize_t): ptr uint8 {.exportc: "logos_logos_capability_authority_MODULE_call_surface", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "static bytes".} =
     if outLen != nil:
       outLen[] = csize_t(callSurfaceData.len)
     addr callSurfaceData[0]

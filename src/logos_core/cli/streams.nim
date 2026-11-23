@@ -33,7 +33,7 @@
 import std/locks
 import results
 import logos_sdk/abi/types
-from logos_sdk/codegen/kitrt import callbackEnter
+from logos_sdk/base/entry import lcnCallback
 
 when defined(posix):
   import std/posix
@@ -150,9 +150,8 @@ proc routeEnd*(
 
 proc onRcSubscriptionEnd(
     sub: LogosSubscriptionId, reason: CErrorCode, userData: pointer
-) {.cdecl, gcsafe, raises: [].} =
+) {.lcnCallback.} =
   ## [SPEC INTERFACE l.1474-1481] A binding-ended Runtime Control subscription.
-  callbackEnter()
   let h = cast[Hub](userData)
   h.noteEnd(h.rc, Opt.some(sub), reason)
 
@@ -224,10 +223,9 @@ proc onEvent(
     cborData: ptr UncheckedArray[uint8],
     cborDataLen: csize_t,
     userData: pointer,
-) {.cdecl, gcsafe, raises: [].} =
+) {.lcnCallback.} =
   ## [SPEC INTERFACE l.1412-1414] Copies the borrowed payload into the queue
   ## and wakes the writer; never waits for it.
-  callbackEnter()
   let c = cast[ptr SubCtx](userData)
   let s = c.stream
   let n = int(cborDataLen)
