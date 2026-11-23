@@ -108,6 +108,11 @@ type
       ## the selected permission profile (DECISIONS I93), built on the CA
       ## thread; nil: none, and every permission is unknown
     facts*: SharedFacts
+    enrolled*: seq[string]
+      ## [G415] the Runtimes with an active `logos.remote.tls-tcp` enrollment
+      ## in the trust snapshot of this start (RUNTIME l.1678-1683): their
+      ## forwarded consumers are known (CA l.77-78); empty without remote
+      ## transport, when every consumer is local
     clock*: Clock
     limits*: AuthorityLimits
     sink*: AuthoritySink
@@ -401,6 +406,8 @@ func union(a, b: Opt[CommitmentRequirements]): Opt[CommitmentRequirements] =
 func toAs(f: FactsSnapshot): LcnAsFacts =
   LcnAsFacts(
     instance: f.instance,
+    runtime: (if f.runtime.len > 0: Opt.some(f.runtime)
+    else: Opt.none(string)),
     module: (if f.module.len > 0: Opt.some(f.module)
     else: Opt.none(string)),
     signer: f.signer,
@@ -409,7 +416,11 @@ func toAs(f: FactsSnapshot): LcnAsFacts =
 
 func fromAs(f: LcnAsFacts): FactsSnapshot =
   FactsSnapshot(
-    instance: f.instance, module: f.module.get(""), signer: f.signer, package: f.package
+    instance: f.instance,
+    runtime: f.runtime.get(""),
+    module: f.module.get(""),
+    signer: f.signer,
+    package: f.package,
   )
 
 func toAs(r: StoredRecord): LcnAsRecord =
@@ -628,15 +639,47 @@ proc lookupAddress(ca: Ca, a: Address): FactsLookup =
   else:
     ca.view.lookup(a.module_instance_id)
 
+type Known = object
+  ## [G415] What the authority knows of an address: a local instance's facts,
+  ## or a forwarded consumer's instance id and Runtime.
+  case kind: FactsLookupKind
+  of flFound:
+    facts: FactsSnapshot
+  else:
+    discard
+
+proc known(ca: Ca, a: Address): Known =
+  ## [SPEC CA l.76-78; G415] A local address resolves by the facts table. A
+  ## consumer of another Runtime resolves only while that Runtime is actively
+  ## enrolled, without checking that the instance exists (l.77): its facts
+  ## are its instance id and Runtime. Any other address is unknown
+  ## (`invalid-request`, l.76).
+  if not ca.view.available:
+    return Known(kind: flUnavailable)
+  if a.runtime_instance_id == ca.runtimeId:
+    let f = ca.view.lookup(a.module_instance_id)
+    if f.kind == flFound:
+      return Known(kind: flFound, facts: snapshot(f.instance, f.facts))
+    return Known(kind: f.kind)
+  if a.runtime_instance_id in ca.cfg.enrolled and a.module_instance_id.len in 1 .. 128:
+    return Known(
+      kind: flFound, facts: forwarded(a.module_instance_id, a.runtime_instance_id)
+    )
+  Known(kind: flUnknown)
+
+func failure(k: Known): CaCode =
+  if k.kind == flUnavailable: CaCode.Authority_unavailable else: CaCode.Invalid_request
+
 proc subjectOf(ca: var Ca, a: Address): Opt[FactsSnapshot] =
   ## [IMPL] The subject of a record made before, or without, the consumer's
   ## facts: the facts as they read now, else the instance id alone for a local
   ## address. An instance-only snapshot matches no subject that names modules,
-  ## signers or packages, so an unread fact never widens visibility.
+  ## signers or packages, so an unread fact never widens visibility. A
+  ## forwarded consumer's is its instance id and Runtime (G415).
   ca.refreshFacts()
-  let f = ca.lookupAddress(a)
+  let f = ca.known(a)
   if f.kind == flFound:
-    Opt.some(snapshot(f.instance, f.facts))
+    Opt.some(f.facts)
   elif a.runtime_instance_id == ca.runtimeId and a.module_instance_id.len in 1 .. 128:
     # (the bounds of `lcn.as_facts.instance`: a snapshot must always encode)
     Opt.some(FactsSnapshot(instance: a.module_instance_id))
@@ -887,12 +930,12 @@ proc doEvaluate(
   if not ca.view.available or ca.sinkLost or ca.auditFailing or
       ca.unwritten >= ca.limits.maxUnwritten:
     fail(CaCode.Authority_unavailable)
-  let cf = ca.lookupAddress(req.consumer)
-  if cf.kind == flUnavailable:
-    fail(CaCode.Authority_unavailable)
-  if cf.kind == flUnknown:
-    fail(CaCode.Invalid_request)
-  let consumerFacts = snapshot(cf.instance, cf.facts)
+  # [G415] A forwarded consumer is evaluated like a local one (B5), under the
+  # rules and grants that name its Runtime (O1).
+  let cf = ca.known(req.consumer)
+  if cf.kind != flFound:
+    fail(cf.failure)
+  let consumerFacts = cf.facts
   subject = Opt.some(consumerFacts)
   # [G379] A module's scopes are checked against its own ids first, so an
   # unresolved target and another module's answer alike. The failure record
@@ -908,7 +951,7 @@ proc doEvaluate(
   if op.kind == skProvider and op.pa.actions[0].kind == PaActionKind.Publish_event:
     # [SPEC CA l.243; CAP-0288] The publisher is the consumer.
     let b = ca.view.backing(op.pa.providers.get[0].provider)
-    if b.kind != flFound or b.instance != cf.instance:
+    if b.kind != flFound or b.instance != cf.facts.instance:
       fail(CaCode.Invalid_request)
   let id = ca.newDecisionId().valueOr:
     fail(CaCode.Authority_unavailable)
@@ -1189,15 +1232,15 @@ proc doIssue(
   # SPEC CA l.789] No issue rule for the caller covers any action.
   if not ca.policy.hasIssuer(callerFacts):
     deny(DenialKind.Not_granted)
-  let tf = ca.lookupAddress(req.target)
+  # [SPEC CA l.76-78; G415] A target on an actively enrolled Runtime resolves
+  # without checking that its instance exists; on any other Runtime it does
+  # not resolve (`invalid-request`). The grant supports authority only for a
+  # consumer accepted under the forwarding rules (l.78): the Runtime asks
+  # about a forwarded consumer only once it accepted it.
+  let tf = ca.known(req.target)
   if tf.kind != flFound:
-    fail(
-      if tf.kind == flUnavailable:
-        CaCode.Authority_unavailable
-      else:
-        CaCode.Invalid_request
-    )
-  let targetFacts = snapshot(tf.instance, tf.facts)
+    fail(tf.failure)
+  let targetFacts = tf.facts
   if ca.resolveScopes(req.scopes).isErr:
     fail(CaCode.Invalid_request)
   # [G377; SPEC CA l.1423] No issue rule contains a restricted operation: it is
@@ -1272,21 +1315,14 @@ proc doIssueProtected(
   ca.refreshFacts()
   if not ca.view.available or ca.sinkLost or not ca.writable:
     return err(caError(CaCode.Authority_unavailable))
-  let tf = ca.lookupAddress(target)
+  let tf = ca.known(target)
   if tf.kind != flFound:
-    return err(
-      caError(
-        if tf.kind == flUnavailable:
-          CaCode.Authority_unavailable
-        else:
-          CaCode.Invalid_request
-      )
-    )
+    return err(caError(tf.failure))
   ?ca.resolveScopes(scopes)
   for s in scopes:
     if s.namesRestricted:
       return err(caError(CaCode.Invalid_request, "restricted"))
-  let targetFacts = snapshot(tf.instance, tf.facts)
+  let targetFacts = tf.facts
   let issuer = LogosNSCapabilityAuthorityGrantIssuer(
     kind: LogosNSCapabilityAuthorityGrantIssuerKind.Protected_policy,
     arm_Protected_policy:
@@ -1679,7 +1715,7 @@ proc addPolicyRecord(ca: var Ca, at: uint64): Result[void, string] =
 proc doReplacePolicy(ca: var Ca, bytes: seq[byte]): Result[uint64, string] =
   ## [SPEC CA l.829-848, l.884; §0.1 U4] A changed policy takes effect when
   ## this returns, after it is durable; an unchanged digest is a no-op.
-  let p = ?loadPolicy(bytes, ca.profile)
+  let p = ?loadPolicy(bytes, ca.profile, ca.runtimeId)
   if p.digest == ca.policy.digest:
     return ok(ca.revision)
   let now = ca.now
@@ -1763,7 +1799,7 @@ proc open(
   ca.sh = sh
   ca.cfg = cfg
   ca.profile = build(cfg.profile)
-  ca.policy = ?loadPolicy(cfg.policy, ca.profile)
+  ca.policy = ?loadPolicy(cfg.policy, ca.profile, cfg.runtimeId)
   let entropy = if cfg.entropy == nil: systemEntropy else: cfg.entropy
   ca.ids = ?newIdAllocator(entropy)
   if not entropy(ca.cursorKey):

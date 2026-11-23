@@ -10,7 +10,7 @@ import logos_sdk/codegen/common_types
 export nimrt, common_types
 
 const
-  primaryDocument = "; logos-core-nim.remote-carrier.v1: the private control channel between logosd\x0A; and one remote process (logos_remote, Tier 5 step 5-7a-2), and between logosd\x0A; and its key holder (logos_keyholder) (DECISIONS G410, G411; Tier 5 step\x0A; 5-7a-1). Never in a public record, a store or a configuration file. No module\x0A; payload crosses it: what it carries is control (5-7a plan \xC2\xA73.16).\x0A;\x0A; A frame is a 4-byte big-endian length, then one Logos deterministic-CBOR\x0A; lcn.rch_message (remote/carrier.nim). Its kind fixes its lane:\x0A;   lane 0, control:   snapshot, test_key (to the remote process)\x0A;   lane 1, signing:   sign (from the remote process) / signed, sign_refused\x0A;   the key holder\'s:  holder_sign (from logosd) / signed, sign_refused\x0A; Steps 5-7a-2 to 5-7a-4 add the listener, Hello, Runtime Control and session\x0A; messages. A frame that does not decode to one message, or one a side does not\x0A; expect, ends the channel, and the process with it.\x0A;\x0A; Each side numbers its own requests (id); a reply names the request it\x0A; answers. A sign request names no role: the role is the one logosd fixed for\x0A; the process (a listener process signs as a TLS server, a target process as a\x0A; client), and logosd names it to the key holder.\x0A\x0Alcn.rch_message =\x0A  lcn.rch_snapshot /\x0A  lcn.rch_test_key /\x0A  lcn.rch_sign /\x0A  lcn.rch_holder_sign /\x0A  lcn.rch_signed /\x0A  lcn.rch_sign_refused\x0A\x0A; The trust snapshot of this logosd start (owner decision B3; DECISIONS G324,\x0A; G408): the remote trust-anchor set at its revision, each anchor named by its\x0A; identifier in lowercase hex, and the current logos.remote.tls-tcp record of\x0A; each enrolled Runtime. Sent once, first, and never changed afterwards.\x0Alcn.rch_snapshot = {\x0A  kind: \"snapshot\",\x0A  revision: uint64,\x0A  anchors: [* lcn.rch_anchor],\x0A  records: [* lcn.rch_record],\x0A}\x0A\x0Alcn.rch_anchor = {\x0A  id: tstr .size (1..128),\x0A  certificate: bstr .size (1..16384),\x0A}\x0A\x0A; status active: anchor and one or two keys; revoked: no key; conflicting:\x0A; every key the conflicting records name (G324).\x0Alcn.rch_record = {\x0A  runtime_instance_id: tstr .size 36,\x0A  revision: uint64,\x0A  status: \"active\" / \"revoked\" / \"conflicting\",\x0A  ? anchor: tstr .size (1..128),\x0A  keys: [* bstr .size (1..1024)],\x0A}\x0A\x0A; remote.signing = \"process-copy\" only, which a logosd accepts only when built\x0A; with -d:logosTestSigning: the TLS key for the process to sign with itself\x0A; (owner decision B1: tests only). A process built without that define takes\x0A; this message as the channel\'s end.\x0Alcn.rch_test_key = {\x0A  kind: \"test_key\",\x0A  pkcs8: bstr .size (1..1024),\x0A}\x0A\x0A; One TLS 1.3 CertificateVerify input to sign with the Runtime\'s TLS key\x0A; (transport/tls/signing.nim checkSignInput): alg is the TLS SignatureScheme.\x0Alcn.rch_sign = {\x0A  kind: \"sign\",\x0A  id: uint64,\x0A  alg: uint16,\x0A  input: bstr .size (1..256),\x0A}\x0A\x0A; logosd to its key holder: a sign request relayed unchanged, under logosd\'s own\x0A; id, with the role logosd fixed for the process that asked.\x0Alcn.rch_holder_sign = {\x0A  kind: \"holder_sign\",\x0A  id: uint64,\x0A  role: \"client\" / \"server\",\x0A  alg: uint16,\x0A  input: bstr .size (1..256),\x0A}\x0A\x0A; A DER ECDSA signature.\x0Alcn.rch_signed = {\x0A  kind: \"signed\",\x0A  id: uint64,\x0A  signature: bstr .size (1..128),\x0A}\x0A\x0A; refused: the signer will not sign this input (checkSignInput, the rate\x0A; limit); unavailable: no signer could answer.\x0Alcn.rch_sign_refused = {\x0A  kind: \"sign_refused\",\x0A  id: uint64,\x0A  reason: \"refused\" / \"unavailable\",\x0A}\x0A"
+  primaryDocument = "; logos-core-nim.remote-carrier.v1: the private control channel between logosd\x0A; and one remote process (logos_remote, Tier 5 step 5-7a-2), and between logosd\x0A; and its key holder (logos_keyholder) (DECISIONS G410, G411; Tier 5 step\x0A; 5-7a-1). Never in a public record, a store or a configuration file. No module\x0A; payload crosses it: what it carries is control (5-7a plan \xC2\xA73.16).\x0A;\x0A; A frame is a 4-byte big-endian length, then one Logos deterministic-CBOR\x0A; lcn.rch_message (remote/carrier.nim). Its kind fixes its lane:\x0A;   lane 0, control:   snapshot, test_key, listen, hello_admit, hello_refuse,\x0A;                      rc_out, close_conn, stop (to the remote process) /\x0A;                      listening, hello_judge, rc_in, conn_closed\x0A;   lane 1, signing:   sign (from the remote process) / signed, sign_refused\x0A;   the key holder\'s:  holder_sign (from logosd) / signed, sign_refused\x0A; Steps 5-7a-3 and 5-7a-4 add the provider session and target-side messages.\x0A; A frame that does not decode to one message, or one a side does not expect,\x0A; ends the channel, and the process with it.\x0A;\x0A; Each side numbers its own requests (id); a reply names the request it\x0A; answers. A sign request names no role: the role is the one logosd fixed for\x0A; the process (a listener process signs as a TLS server, a target process as a\x0A; client), and logosd names it to the key holder.\x0A\x0Alcn.rch_message =\x0A  lcn.rch_snapshot /\x0A  lcn.rch_test_key /\x0A  lcn.rch_sign /\x0A  lcn.rch_holder_sign /\x0A  lcn.rch_signed /\x0A  lcn.rch_sign_refused /\x0A  lcn.rch_listen /\x0A  lcn.rch_listening /\x0A  lcn.rch_hello_judge /\x0A  lcn.rch_hello_admit /\x0A  lcn.rch_hello_refuse /\x0A  lcn.rch_rc_in /\x0A  lcn.rch_rc_out /\x0A  lcn.rch_close_conn /\x0A  lcn.rch_conn_closed /\x0A  lcn.rch_stop\x0A\x0A; The trust snapshot of this logosd start (owner decision B3; DECISIONS G324,\x0A; G408): the remote trust-anchor set at its revision, each anchor named by its\x0A; identifier in lowercase hex, and the current logos.remote.tls-tcp record of\x0A; each enrolled Runtime. Sent once, first, and never changed afterwards.\x0Alcn.rch_snapshot = {\x0A  kind: \"snapshot\",\x0A  revision: uint64,\x0A  anchors: [* lcn.rch_anchor],\x0A  records: [* lcn.rch_record],\x0A}\x0A\x0Alcn.rch_anchor = {\x0A  id: tstr .size (1..128),\x0A  certificate: bstr .size (1..16384),\x0A}\x0A\x0A; status active: anchor and one or two keys; revoked: no key; conflicting:\x0A; every key the conflicting records name (G324).\x0Alcn.rch_record = {\x0A  runtime_instance_id: tstr .size 36,\x0A  revision: uint64,\x0A  status: \"active\" / \"revoked\" / \"conflicting\",\x0A  ? anchor: tstr .size (1..128),\x0A  keys: [* bstr .size (1..1024)],\x0A}\x0A\x0A; remote.signing = \"process-copy\" only, which a logosd accepts only when built\x0A; with -d:logosTestSigning: the TLS key for the process to sign with itself\x0A; (owner decision B1: tests only). A process built without that define takes\x0A; this message as the channel\'s end.\x0Alcn.rch_test_key = {\x0A  kind: \"test_key\",\x0A  pkcs8: bstr .size (1..1024),\x0A}\x0A\x0A; One TLS 1.3 CertificateVerify input to sign with the Runtime\'s TLS key\x0A; (transport/tls/signing.nim checkSignInput): alg is the TLS SignatureScheme.\x0Alcn.rch_sign = {\x0A  kind: \"sign\",\x0A  id: uint64,\x0A  alg: uint16,\x0A  input: bstr .size (1..256),\x0A}\x0A\x0A; logosd to its key holder: a sign request relayed unchanged, under logosd\'s own\x0A; id, with the role logosd fixed for the process that asked.\x0Alcn.rch_holder_sign = {\x0A  kind: \"holder_sign\",\x0A  id: uint64,\x0A  role: \"client\" / \"server\",\x0A  alg: uint16,\x0A  input: bstr .size (1..256),\x0A}\x0A\x0A; A DER ECDSA signature.\x0Alcn.rch_signed = {\x0A  kind: \"signed\",\x0A  id: uint64,\x0A  signature: bstr .size (1..128),\x0A}\x0A\x0A; refused: the signer will not sign this input (checkSignInput, the rate\x0A; limit); unavailable: no signer could answer.\x0Alcn.rch_sign_refused = {\x0A  kind: \"sign_refused\",\x0A  id: uint64,\x0A  reason: \"refused\" / \"unavailable\",\x0A}\x0A\x0A; [5-7a-2; G411] logosd to a listener process, once, after the snapshot (and\x0A; the test key): what it serves. Its TCP listener is fd 4, which logosd bound;\x0A; certificate is the Runtime\'s TLS certificate (DER), whose key the process\x0A; never holds unless the test copy gave it. The limits are the TLS carrier\'s\x0A; (transport/tls/params.nim), which the process checks as its own. It answers\x0A; listening once it accepts.\x0Alcn.rch_listen = {\x0A  kind: \"listen\",\x0A  certificate: bstr .size (1..16384),\x0A  limits: lcn.rch_tls_limits,\x0A}\x0A\x0Alcn.rch_tls_limits = {\x0A  handshake_timeout_ms: uint64,\x0A  max_handshakes: uint64,\x0A  max_connections: uint64,\x0A  read_bound: uint64,\x0A  write_bound: uint64,\x0A  frame_limit: uint64,\x0A  peer_frame_limit: uint64,\x0A  close_wait_ms: uint64,\x0A}\x0A\x0Alcn.rch_listening = {\x0A  kind: \"listening\",\x0A}\x0A\x0A; [G413] A listener process to logosd: the first frame of connection id (the\x0A; process\'s own number) from the peer the TLS handshake authenticated as\x0A; runtime, under revision, its 32-byte tls-exporter binding, and the frame\'s\x0A; body. logosd answers hello_admit or hello_refuse; until then the process\x0A; reads nothing more from that connection.\x0Alcn.rch_hello_judge = {\x0A  kind: \"hello_judge\",\x0A  id: uint64,\x0A  runtime: tstr .size 36,\x0A  revision: uint64,\x0A  binding: bstr .size 32,\x0A  hello: bstr .size (0..16842752),\x0A}\x0A\x0A; response: the frame body to send (the Hello response). From then on the\x0A; process relays each frame of the connection as rc_in.\x0Alcn.rch_hello_admit = {\x0A  kind: \"hello_admit\",\x0A  id: uint64,\x0A  response: bstr .size (1..16842752),\x0A}\x0A\x0A; response: the ProtocolError frame body to send, or empty to send nothing (the\x0A; peer refused first); the process then closes the connection.\x0Alcn.rch_hello_refuse = {\x0A  kind: \"hello_refuse\",\x0A  id: uint64,\x0A  response: bstr .size (0..16842752),\x0A}\x0A\x0A; [G413] One frame of an admitted Runtime Control connection, relayed as it\x0A; came; logosd answers with zero or more rc_out frames for it, and close\x0A; when the connection must end (its listener disabled, Runtime Control off, a\x0A; framing fault).\x0Alcn.rch_rc_in = {\x0A  kind: \"rc_in\",\x0A  id: uint64,\x0A  frame: bstr .size (1..16842752),\x0A}\x0A\x0Alcn.rch_rc_out = {\x0A  kind: \"rc_out\",\x0A  id: uint64,\x0A  frame: bstr .size (1..16842752),\x0A}\x0A\x0A; logosd to the process: end connection id (no further frame is sent on it).\x0Alcn.rch_close_conn = {\x0A  kind: \"close_conn\",\x0A  id: uint64,\x0A}\x0A\x0A; The process to logosd: connection id ended.\x0Alcn.rch_conn_closed = {\x0A  kind: \"conn_closed\",\x0A  id: uint64,\x0A}\x0A\x0A; logosd to the process: stop accepting, send what is queued, and exit.\x0Alcn.rch_stop = {\x0A  kind: \"stop\",\x0A}\x0A"
   interfaceDocuments: array[0, string] = []
   supportingDocuments: array[0, string] = []
 
@@ -30,6 +30,32 @@ type
     certificate*: seq[byte]
     id*: string
 
+  LcnRchCloseConn* = object
+    id*: uint64
+    kind*: string = "close_conn"
+
+  LcnRchConnClosed* = object
+    id*: uint64
+    kind*: string = "conn_closed"
+
+  LcnRchHelloAdmit* = object
+    id*: uint64
+    kind*: string = "hello_admit"
+    response*: seq[byte]
+
+  LcnRchHelloJudge* = object
+    binding*: seq[byte]
+    hello*: seq[byte]
+    id*: uint64
+    kind*: string = "hello_judge"
+    revision*: uint64
+    runtime*: string
+
+  LcnRchHelloRefuse* = object
+    id*: uint64
+    kind*: string = "hello_refuse"
+    response*: seq[byte]
+
   LcnRchHolderSignRoleChoiceKind* {.pure.} = enum
     Client
     Server
@@ -48,18 +74,54 @@ type
     kind*: string = "holder_sign"
     role*: LcnRchHolderSignRoleChoice
 
+  LcnRchListen* = object
+    certificate*: seq[byte]
+    kind*: string = "listen"
+    limits*: LcnRchTlsLimits
+
+  LcnRchListening* = object
+    kind*: string = "listening"
+
   LcnRchMessageKind* {.pure.} = enum
+    lcn_Rch_close_conn
+    lcn_Rch_conn_closed
+    lcn_Rch_hello_admit
+    lcn_Rch_hello_judge
+    lcn_Rch_hello_refuse
     lcn_Rch_holder_sign
+    lcn_Rch_listen
+    lcn_Rch_listening
+    lcn_Rch_rc_in
+    lcn_Rch_rc_out
     lcn_Rch_sign
     lcn_Rch_sign_refused
     lcn_Rch_signed
     lcn_Rch_snapshot
+    lcn_Rch_stop
     lcn_Rch_test_key
 
   LcnRchMessage* = object
     case kind*: LcnRchMessageKind
+    of LcnRchMessageKind.lcn_Rch_close_conn:
+      arm_lcn_Rch_close_conn*: LcnRchCloseConn
+    of LcnRchMessageKind.lcn_Rch_conn_closed:
+      arm_lcn_Rch_conn_closed*: LcnRchConnClosed
+    of LcnRchMessageKind.lcn_Rch_hello_admit:
+      arm_lcn_Rch_hello_admit*: LcnRchHelloAdmit
+    of LcnRchMessageKind.lcn_Rch_hello_judge:
+      arm_lcn_Rch_hello_judge*: LcnRchHelloJudge
+    of LcnRchMessageKind.lcn_Rch_hello_refuse:
+      arm_lcn_Rch_hello_refuse*: LcnRchHelloRefuse
     of LcnRchMessageKind.lcn_Rch_holder_sign:
       arm_lcn_Rch_holder_sign*: LcnRchHolderSign
+    of LcnRchMessageKind.lcn_Rch_listen:
+      arm_lcn_Rch_listen*: LcnRchListen
+    of LcnRchMessageKind.lcn_Rch_listening:
+      arm_lcn_Rch_listening*: LcnRchListening
+    of LcnRchMessageKind.lcn_Rch_rc_in:
+      arm_lcn_Rch_rc_in*: LcnRchRcIn
+    of LcnRchMessageKind.lcn_Rch_rc_out:
+      arm_lcn_Rch_rc_out*: LcnRchRcOut
     of LcnRchMessageKind.lcn_Rch_sign:
       arm_lcn_Rch_sign*: LcnRchSign
     of LcnRchMessageKind.lcn_Rch_sign_refused:
@@ -68,8 +130,20 @@ type
       arm_lcn_Rch_signed*: LcnRchSigned
     of LcnRchMessageKind.lcn_Rch_snapshot:
       arm_lcn_Rch_snapshot*: LcnRchSnapshot
+    of LcnRchMessageKind.lcn_Rch_stop:
+      arm_lcn_Rch_stop*: LcnRchStop
     of LcnRchMessageKind.lcn_Rch_test_key:
       arm_lcn_Rch_test_key*: LcnRchTestKey
+
+  LcnRchRcIn* = object
+    frame*: seq[byte]
+    id*: uint64
+    kind*: string = "rc_in"
+
+  LcnRchRcOut* = object
+    frame*: seq[byte]
+    id*: uint64
+    kind*: string = "rc_out"
 
   LcnRchRecordStatusChoiceKind* {.pure.} = enum
     Active
@@ -125,14 +199,47 @@ type
     records*: seq[LcnRchRecord]
     revision*: uint64
 
+  LcnRchStop* = object
+    kind*: string = "stop"
+
   LcnRchTestKey* = object
     kind*: string = "test_key"
     pkcs8*: seq[byte]
+
+  LcnRchTlsLimits* = object
+    close_wait_ms*: uint64
+    frame_limit*: uint64
+    handshake_timeout_ms*: uint64
+    max_connections*: uint64
+    max_handshakes*: uint64
+    peer_frame_limit*: uint64
+    read_bound*: uint64
+    write_bound*: uint64
 
 proc toCbor*(x: LcnRchAnchor): CborValue
 proc fromChecked*(T: type LcnRchAnchor, v: CborValue): LcnRchAnchor
 proc stepEncLcnRchAnchor*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnRchAnchor*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnRchCloseConn): CborValue
+proc fromChecked*(T: type LcnRchCloseConn, v: CborValue): LcnRchCloseConn
+proc stepEncLcnRchCloseConn*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnRchCloseConn*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnRchConnClosed): CborValue
+proc fromChecked*(T: type LcnRchConnClosed, v: CborValue): LcnRchConnClosed
+proc stepEncLcnRchConnClosed*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnRchConnClosed*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnRchHelloAdmit): CborValue
+proc fromChecked*(T: type LcnRchHelloAdmit, v: CborValue): LcnRchHelloAdmit
+proc stepEncLcnRchHelloAdmit*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnRchHelloAdmit*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnRchHelloJudge): CborValue
+proc fromChecked*(T: type LcnRchHelloJudge, v: CborValue): LcnRchHelloJudge
+proc stepEncLcnRchHelloJudge*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnRchHelloJudge*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnRchHelloRefuse): CborValue
+proc fromChecked*(T: type LcnRchHelloRefuse, v: CborValue): LcnRchHelloRefuse
+proc stepEncLcnRchHelloRefuse*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnRchHelloRefuse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LcnRchHolderSign): CborValue
 proc fromChecked*(T: type LcnRchHolderSign, v: CborValue): LcnRchHolderSign
 proc toCbor*(x: LcnRchHolderSignRoleChoice): CborValue
@@ -141,10 +248,26 @@ proc stepEncLcnRchHolderSignRoleChoice*(w: var EncWork, src: pointer, dst: ptr C
 proc stepDecLcnRchHolderSignRoleChoice*(w: var DecWork, v: CborValue, dst: pointer)
 proc stepEncLcnRchHolderSign*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnRchHolderSign*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnRchListen): CborValue
+proc fromChecked*(T: type LcnRchListen, v: CborValue): LcnRchListen
+proc stepEncLcnRchListen*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnRchListen*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnRchListening): CborValue
+proc fromChecked*(T: type LcnRchListening, v: CborValue): LcnRchListening
+proc stepEncLcnRchListening*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnRchListening*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LcnRchMessage): CborValue
 proc fromChecked*(T: type LcnRchMessage, v: CborValue): LcnRchMessage
 proc stepEncLcnRchMessage*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnRchMessage*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnRchRcIn): CborValue
+proc fromChecked*(T: type LcnRchRcIn, v: CborValue): LcnRchRcIn
+proc stepEncLcnRchRcIn*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnRchRcIn*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnRchRcOut): CborValue
+proc fromChecked*(T: type LcnRchRcOut, v: CborValue): LcnRchRcOut
+proc stepEncLcnRchRcOut*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnRchRcOut*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LcnRchRecord): CborValue
 proc fromChecked*(T: type LcnRchRecord, v: CborValue): LcnRchRecord
 proc toCbor*(x: LcnRchRecordStatusChoice): CborValue
@@ -173,10 +296,18 @@ proc toCbor*(x: LcnRchSnapshot): CborValue
 proc fromChecked*(T: type LcnRchSnapshot, v: CborValue): LcnRchSnapshot
 proc stepEncLcnRchSnapshot*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnRchSnapshot*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnRchStop): CborValue
+proc fromChecked*(T: type LcnRchStop, v: CborValue): LcnRchStop
+proc stepEncLcnRchStop*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnRchStop*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LcnRchTestKey): CborValue
 proc fromChecked*(T: type LcnRchTestKey, v: CborValue): LcnRchTestKey
 proc stepEncLcnRchTestKey*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnRchTestKey*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnRchTlsLimits): CborValue
+proc fromChecked*(T: type LcnRchTlsLimits, v: CborValue): LcnRchTlsLimits
+proc stepEncLcnRchTlsLimits*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnRchTlsLimits*(w: var DecWork, v: CborValue, dst: pointer)
 
 proc stepEncLcnRchAnchor*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   let x {.used.} = cast[ptr LcnRchAnchor](src)
@@ -202,6 +333,155 @@ proc toCbor*(x: LcnRchAnchor): CborValue =
 proc fromChecked*(T: type LcnRchAnchor, v: CborValue): LcnRchAnchor =
   var r: LcnRchAnchor
   runDec(stepDecLcnRchAnchor, v, addr r)
+  r
+
+proc stepEncLcnRchCloseConn*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnRchCloseConn](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("id")
+  node.entries[k].value = cbor(uint64(x.id))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("close_conn")
+  inc k
+
+proc stepDecLcnRchCloseConn*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnRchCloseConn](dst)
+  r[] = LcnRchCloseConn()
+  r.id = uint64(v.lookup("id").get.uint)
+
+proc toCbor*(x: LcnRchCloseConn): CborValue =
+  runEnc(stepEncLcnRchCloseConn, addr x)
+
+proc fromChecked*(T: type LcnRchCloseConn, v: CborValue): LcnRchCloseConn =
+  var r: LcnRchCloseConn
+  runDec(stepDecLcnRchCloseConn, v, addr r)
+  r
+
+proc stepEncLcnRchConnClosed*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnRchConnClosed](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("id")
+  node.entries[k].value = cbor(uint64(x.id))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("conn_closed")
+  inc k
+
+proc stepDecLcnRchConnClosed*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnRchConnClosed](dst)
+  r[] = LcnRchConnClosed()
+  r.id = uint64(v.lookup("id").get.uint)
+
+proc toCbor*(x: LcnRchConnClosed): CborValue =
+  runEnc(stepEncLcnRchConnClosed, addr x)
+
+proc fromChecked*(T: type LcnRchConnClosed, v: CborValue): LcnRchConnClosed =
+  var r: LcnRchConnClosed
+  runDec(stepDecLcnRchConnClosed, v, addr r)
+  r
+
+proc stepEncLcnRchHelloAdmit*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnRchHelloAdmit](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("id")
+  node.entries[k].value = cbor(uint64(x.id))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("hello_admit")
+  inc k
+  node.entries[k].key = cbor("response")
+  node.entries[k].value = cbor(x.response)
+  inc k
+
+proc stepDecLcnRchHelloAdmit*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnRchHelloAdmit](dst)
+  r[] = LcnRchHelloAdmit()
+  r.id = uint64(v.lookup("id").get.uint)
+  r.response = v.lookup("response").get.bytes
+
+proc toCbor*(x: LcnRchHelloAdmit): CborValue =
+  runEnc(stepEncLcnRchHelloAdmit, addr x)
+
+proc fromChecked*(T: type LcnRchHelloAdmit, v: CborValue): LcnRchHelloAdmit =
+  var r: LcnRchHelloAdmit
+  runDec(stepDecLcnRchHelloAdmit, v, addr r)
+  r
+
+proc stepEncLcnRchHelloJudge*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnRchHelloJudge](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](6))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("binding")
+  node.entries[k].value = cbor(x.binding)
+  inc k
+  node.entries[k].key = cbor("hello")
+  node.entries[k].value = cbor(x.hello)
+  inc k
+  node.entries[k].key = cbor("id")
+  node.entries[k].value = cbor(uint64(x.id))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("hello_judge")
+  inc k
+  node.entries[k].key = cbor("revision")
+  node.entries[k].value = cbor(uint64(x.revision))
+  inc k
+  node.entries[k].key = cbor("runtime")
+  node.entries[k].value = cbor(x.runtime)
+  inc k
+
+proc stepDecLcnRchHelloJudge*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnRchHelloJudge](dst)
+  r[] = LcnRchHelloJudge()
+  r.binding = v.lookup("binding").get.bytes
+  r.hello = v.lookup("hello").get.bytes
+  r.id = uint64(v.lookup("id").get.uint)
+  r.revision = uint64(v.lookup("revision").get.uint)
+  r.runtime = v.lookup("runtime").get.text
+
+proc toCbor*(x: LcnRchHelloJudge): CborValue =
+  runEnc(stepEncLcnRchHelloJudge, addr x)
+
+proc fromChecked*(T: type LcnRchHelloJudge, v: CborValue): LcnRchHelloJudge =
+  var r: LcnRchHelloJudge
+  runDec(stepDecLcnRchHelloJudge, v, addr r)
+  r
+
+proc stepEncLcnRchHelloRefuse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnRchHelloRefuse](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("id")
+  node.entries[k].value = cbor(uint64(x.id))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("hello_refuse")
+  inc k
+  node.entries[k].key = cbor("response")
+  node.entries[k].value = cbor(x.response)
+  inc k
+
+proc stepDecLcnRchHelloRefuse*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnRchHelloRefuse](dst)
+  r[] = LcnRchHelloRefuse()
+  r.id = uint64(v.lookup("id").get.uint)
+  r.response = v.lookup("response").get.bytes
+
+proc toCbor*(x: LcnRchHelloRefuse): CborValue =
+  runEnc(stepEncLcnRchHelloRefuse, addr x)
+
+proc fromChecked*(T: type LcnRchHelloRefuse, v: CborValue): LcnRchHelloRefuse =
+  var r: LcnRchHelloRefuse
+  runDec(stepDecLcnRchHelloRefuse, v, addr r)
   r
 
 proc stepEncLcnRchHolderSignRoleChoice*(w: var EncWork, src: pointer, dst: ptr CborValue) =
@@ -268,11 +548,80 @@ proc fromChecked*(T: type LcnRchHolderSign, v: CborValue): LcnRchHolderSign =
   runDec(stepDecLcnRchHolderSign, v, addr r)
   r
 
+proc stepEncLcnRchListen*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnRchListen](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("certificate")
+  node.entries[k].value = cbor(x.certificate)
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("listen")
+  inc k
+  node.entries[k].key = cbor("limits")
+  w.later(stepEncLcnRchTlsLimits, addr x.limits, addr node.entries[k].value)
+  inc k
+
+proc stepDecLcnRchListen*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnRchListen](dst)
+  r[] = LcnRchListen()
+  r.certificate = v.lookup("certificate").get.bytes
+  let f2 = v.lookup("limits").get
+  w.later(stepDecLcnRchTlsLimits, f2, addr r.limits)
+
+proc toCbor*(x: LcnRchListen): CborValue =
+  runEnc(stepEncLcnRchListen, addr x)
+
+proc fromChecked*(T: type LcnRchListen, v: CborValue): LcnRchListen =
+  var r: LcnRchListen
+  runDec(stepDecLcnRchListen, v, addr r)
+  r
+
+proc stepEncLcnRchListening*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnRchListening](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("listening")
+  inc k
+
+proc stepDecLcnRchListening*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnRchListening](dst)
+  r[] = LcnRchListening()
+
+proc toCbor*(x: LcnRchListening): CborValue =
+  runEnc(stepEncLcnRchListening, addr x)
+
+proc fromChecked*(T: type LcnRchListening, v: CborValue): LcnRchListening =
+  var r: LcnRchListening
+  runDec(stepDecLcnRchListening, v, addr r)
+  r
+
 proc stepEncLcnRchMessage*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   let x {.used.} = cast[ptr LcnRchMessage](src)
   case x.kind
+  of LcnRchMessageKind.lcn_Rch_close_conn:
+    w.later(stepEncLcnRchCloseConn, addr x.arm_lcn_Rch_close_conn, addr dst[])
+  of LcnRchMessageKind.lcn_Rch_conn_closed:
+    w.later(stepEncLcnRchConnClosed, addr x.arm_lcn_Rch_conn_closed, addr dst[])
+  of LcnRchMessageKind.lcn_Rch_hello_admit:
+    w.later(stepEncLcnRchHelloAdmit, addr x.arm_lcn_Rch_hello_admit, addr dst[])
+  of LcnRchMessageKind.lcn_Rch_hello_judge:
+    w.later(stepEncLcnRchHelloJudge, addr x.arm_lcn_Rch_hello_judge, addr dst[])
+  of LcnRchMessageKind.lcn_Rch_hello_refuse:
+    w.later(stepEncLcnRchHelloRefuse, addr x.arm_lcn_Rch_hello_refuse, addr dst[])
   of LcnRchMessageKind.lcn_Rch_holder_sign:
     w.later(stepEncLcnRchHolderSign, addr x.arm_lcn_Rch_holder_sign, addr dst[])
+  of LcnRchMessageKind.lcn_Rch_listen:
+    w.later(stepEncLcnRchListen, addr x.arm_lcn_Rch_listen, addr dst[])
+  of LcnRchMessageKind.lcn_Rch_listening:
+    w.later(stepEncLcnRchListening, addr x.arm_lcn_Rch_listening, addr dst[])
+  of LcnRchMessageKind.lcn_Rch_rc_in:
+    w.later(stepEncLcnRchRcIn, addr x.arm_lcn_Rch_rc_in, addr dst[])
+  of LcnRchMessageKind.lcn_Rch_rc_out:
+    w.later(stepEncLcnRchRcOut, addr x.arm_lcn_Rch_rc_out, addr dst[])
   of LcnRchMessageKind.lcn_Rch_sign:
     w.later(stepEncLcnRchSign, addr x.arm_lcn_Rch_sign, addr dst[])
   of LcnRchMessageKind.lcn_Rch_sign_refused:
@@ -281,6 +630,8 @@ proc stepEncLcnRchMessage*(w: var EncWork, src: pointer, dst: ptr CborValue) =
     w.later(stepEncLcnRchSigned, addr x.arm_lcn_Rch_signed, addr dst[])
   of LcnRchMessageKind.lcn_Rch_snapshot:
     w.later(stepEncLcnRchSnapshot, addr x.arm_lcn_Rch_snapshot, addr dst[])
+  of LcnRchMessageKind.lcn_Rch_stop:
+    w.later(stepEncLcnRchStop, addr x.arm_lcn_Rch_stop, addr dst[])
   of LcnRchMessageKind.lcn_Rch_test_key:
     w.later(stepEncLcnRchTestKey, addr x.arm_lcn_Rch_test_key, addr dst[])
 
@@ -291,18 +642,48 @@ proc stepDecLcnRchMessage*(w: var DecWork, v: CborValue, dst: pointer) =
     r[] = LcnRchMessage(kind: LcnRchMessageKind.lcn_Rch_sign)
     w.later(stepDecLcnRchSign, v, addr r.arm_lcn_Rch_sign)
   of 1:
+    r[] = LcnRchMessage(kind: LcnRchMessageKind.lcn_Rch_stop)
+    w.later(stepDecLcnRchStop, v, addr r.arm_lcn_Rch_stop)
+  of 2:
+    r[] = LcnRchMessage(kind: LcnRchMessageKind.lcn_Rch_rc_in)
+    w.later(stepDecLcnRchRcIn, v, addr r.arm_lcn_Rch_rc_in)
+  of 3:
+    r[] = LcnRchMessage(kind: LcnRchMessageKind.lcn_Rch_listen)
+    w.later(stepDecLcnRchListen, v, addr r.arm_lcn_Rch_listen)
+  of 4:
+    r[] = LcnRchMessage(kind: LcnRchMessageKind.lcn_Rch_rc_out)
+    w.later(stepDecLcnRchRcOut, v, addr r.arm_lcn_Rch_rc_out)
+  of 5:
     r[] = LcnRchMessage(kind: LcnRchMessageKind.lcn_Rch_signed)
     w.later(stepDecLcnRchSigned, v, addr r.arm_lcn_Rch_signed)
-  of 2:
+  of 6:
     r[] = LcnRchMessage(kind: LcnRchMessageKind.lcn_Rch_snapshot)
     w.later(stepDecLcnRchSnapshot, v, addr r.arm_lcn_Rch_snapshot)
-  of 3:
+  of 7:
     r[] = LcnRchMessage(kind: LcnRchMessageKind.lcn_Rch_test_key)
     w.later(stepDecLcnRchTestKey, v, addr r.arm_lcn_Rch_test_key)
-  of 4:
+  of 8:
+    r[] = LcnRchMessage(kind: LcnRchMessageKind.lcn_Rch_listening)
+    w.later(stepDecLcnRchListening, v, addr r.arm_lcn_Rch_listening)
+  of 9:
+    r[] = LcnRchMessage(kind: LcnRchMessageKind.lcn_Rch_close_conn)
+    w.later(stepDecLcnRchCloseConn, v, addr r.arm_lcn_Rch_close_conn)
+  of 10:
+    r[] = LcnRchMessage(kind: LcnRchMessageKind.lcn_Rch_conn_closed)
+    w.later(stepDecLcnRchConnClosed, v, addr r.arm_lcn_Rch_conn_closed)
+  of 11:
+    r[] = LcnRchMessage(kind: LcnRchMessageKind.lcn_Rch_hello_admit)
+    w.later(stepDecLcnRchHelloAdmit, v, addr r.arm_lcn_Rch_hello_admit)
+  of 12:
+    r[] = LcnRchMessage(kind: LcnRchMessageKind.lcn_Rch_hello_judge)
+    w.later(stepDecLcnRchHelloJudge, v, addr r.arm_lcn_Rch_hello_judge)
+  of 13:
     r[] = LcnRchMessage(kind: LcnRchMessageKind.lcn_Rch_holder_sign)
     w.later(stepDecLcnRchHolderSign, v, addr r.arm_lcn_Rch_holder_sign)
-  of 5:
+  of 14:
+    r[] = LcnRchMessage(kind: LcnRchMessageKind.lcn_Rch_hello_refuse)
+    w.later(stepDecLcnRchHelloRefuse, v, addr r.arm_lcn_Rch_hello_refuse)
+  of 15:
     r[] = LcnRchMessage(kind: LcnRchMessageKind.lcn_Rch_sign_refused)
     w.later(stepDecLcnRchSignRefused, v, addr r.arm_lcn_Rch_sign_refused)
   else:
@@ -314,6 +695,64 @@ proc toCbor*(x: LcnRchMessage): CborValue =
 proc fromChecked*(T: type LcnRchMessage, v: CborValue): LcnRchMessage =
   var r: LcnRchMessage
   runDec(stepDecLcnRchMessage, v, addr r)
+  r
+
+proc stepEncLcnRchRcIn*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnRchRcIn](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("frame")
+  node.entries[k].value = cbor(x.frame)
+  inc k
+  node.entries[k].key = cbor("id")
+  node.entries[k].value = cbor(uint64(x.id))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("rc_in")
+  inc k
+
+proc stepDecLcnRchRcIn*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnRchRcIn](dst)
+  r[] = LcnRchRcIn()
+  r.frame = v.lookup("frame").get.bytes
+  r.id = uint64(v.lookup("id").get.uint)
+
+proc toCbor*(x: LcnRchRcIn): CborValue =
+  runEnc(stepEncLcnRchRcIn, addr x)
+
+proc fromChecked*(T: type LcnRchRcIn, v: CborValue): LcnRchRcIn =
+  var r: LcnRchRcIn
+  runDec(stepDecLcnRchRcIn, v, addr r)
+  r
+
+proc stepEncLcnRchRcOut*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnRchRcOut](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("frame")
+  node.entries[k].value = cbor(x.frame)
+  inc k
+  node.entries[k].key = cbor("id")
+  node.entries[k].value = cbor(uint64(x.id))
+  inc k
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("rc_out")
+  inc k
+
+proc stepDecLcnRchRcOut*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnRchRcOut](dst)
+  r[] = LcnRchRcOut()
+  r.frame = v.lookup("frame").get.bytes
+  r.id = uint64(v.lookup("id").get.uint)
+
+proc toCbor*(x: LcnRchRcOut): CborValue =
+  runEnc(stepEncLcnRchRcOut, addr x)
+
+proc fromChecked*(T: type LcnRchRcOut, v: CborValue): LcnRchRcOut =
+  var r: LcnRchRcOut
+  runDec(stepDecLcnRchRcOut, v, addr r)
   r
 
 proc stepEncLcnRchRecordStatusChoice*(w: var EncWork, src: pointer, dst: ptr CborValue) =
@@ -359,10 +798,10 @@ proc stepEncLcnRchRecord*(w: var EncWork, src: pointer, dst: ptr CborValue) =
     node.entries[k].value = cbor(x.anchor.get)
     inc k
   node.entries[k].key = cbor("keys")
-  let a3 = newCborArray(x.keys.len)
-  node.entries[k].value = a3
-  for i4 in 0 ..< x.keys.len:
-    a3.items[i4] = cbor(x.keys[i4])
+  let a4 = newCborArray(x.keys.len)
+  node.entries[k].value = a4
+  for i5 in 0 ..< x.keys.len:
+    a4.items[i5] = cbor(x.keys[i5])
   inc k
   node.entries[k].key = cbor("revision")
   node.entries[k].value = cbor(uint64(x.revision))
@@ -377,17 +816,17 @@ proc stepEncLcnRchRecord*(w: var EncWork, src: pointer, dst: ptr CborValue) =
 proc stepDecLcnRchRecord*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnRchRecord](dst)
   r[] = LcnRchRecord()
-  let f2 = v.lookup("anchor")
-  if f2.isSome:
-    r.anchor = Opt.some(f2.get.text)
-  let f5 = v.lookup("keys").get
-  r.keys.setLen(f5.items.len)
-  for i6 in 0 ..< f5.items.len:
-    r.keys[i6] = f5.items[i6].bytes
+  let f3 = v.lookup("anchor")
+  if f3.isSome:
+    r.anchor = Opt.some(f3.get.text)
+  let f6 = v.lookup("keys").get
+  r.keys.setLen(f6.items.len)
+  for i7 in 0 ..< f6.items.len:
+    r.keys[i7] = f6.items[i7].bytes
   r.revision = uint64(v.lookup("revision").get.uint)
   r.runtime_instance_id = v.lookup("runtime_instance_id").get.text
-  let f7 = v.lookup("status").get
-  w.later(stepDecLcnRchRecordStatusChoice, f7, addr r.status)
+  let f8 = v.lookup("status").get
+  w.later(stepDecLcnRchRecordStatusChoice, f8, addr r.status)
 
 proc toCbor*(x: LcnRchRecord): CborValue =
   runEnc(stepEncLcnRchRecord, addr x)
@@ -475,8 +914,8 @@ proc stepDecLcnRchSignRefused*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnRchSignRefused](dst)
   r[] = LcnRchSignRefused()
   r.id = uint64(v.lookup("id").get.uint)
-  let f8 = v.lookup("reason").get
-  w.later(stepDecLcnRchSignRefusedReasonChoice, f8, addr r.reason)
+  let f9 = v.lookup("reason").get
+  w.later(stepDecLcnRchSignRefusedReasonChoice, f9, addr r.reason)
 
 proc toCbor*(x: LcnRchSignRefused): CborValue =
   runEnc(stepEncLcnRchSignRefused, addr x)
@@ -521,19 +960,19 @@ proc stepEncLcnRchSnapshot*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   dst[] = node
   var k = 0
   node.entries[k].key = cbor("anchors")
-  let a9 = newCborArray(x.anchors.len)
-  node.entries[k].value = a9
-  for i10 in 0 ..< x.anchors.len:
-    w.later(stepEncLcnRchAnchor, addr x.anchors[i10], addr a9.items[i10])
+  let a10 = newCborArray(x.anchors.len)
+  node.entries[k].value = a10
+  for i11 in 0 ..< x.anchors.len:
+    w.later(stepEncLcnRchAnchor, addr x.anchors[i11], addr a10.items[i11])
   inc k
   node.entries[k].key = cbor("kind")
   node.entries[k].value = cbor("snapshot")
   inc k
   node.entries[k].key = cbor("records")
-  let a13 = newCborArray(x.records.len)
-  node.entries[k].value = a13
-  for i14 in 0 ..< x.records.len:
-    w.later(stepEncLcnRchRecord, addr x.records[i14], addr a13.items[i14])
+  let a14 = newCborArray(x.records.len)
+  node.entries[k].value = a14
+  for i15 in 0 ..< x.records.len:
+    w.later(stepEncLcnRchRecord, addr x.records[i15], addr a14.items[i15])
   inc k
   node.entries[k].key = cbor("revision")
   node.entries[k].value = cbor(uint64(x.revision))
@@ -542,14 +981,14 @@ proc stepEncLcnRchSnapshot*(w: var EncWork, src: pointer, dst: ptr CborValue) =
 proc stepDecLcnRchSnapshot*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnRchSnapshot](dst)
   r[] = LcnRchSnapshot()
-  let f11 = v.lookup("anchors").get
-  r.anchors.setLen(f11.items.len)
-  for i12 in 0 ..< f11.items.len:
-    w.later(stepDecLcnRchAnchor, f11.items[i12], addr r.anchors[i12])
-  let f15 = v.lookup("records").get
-  r.records.setLen(f15.items.len)
-  for i16 in 0 ..< f15.items.len:
-    w.later(stepDecLcnRchRecord, f15.items[i16], addr r.records[i16])
+  let f12 = v.lookup("anchors").get
+  r.anchors.setLen(f12.items.len)
+  for i13 in 0 ..< f12.items.len:
+    w.later(stepDecLcnRchAnchor, f12.items[i13], addr r.anchors[i13])
+  let f16 = v.lookup("records").get
+  r.records.setLen(f16.items.len)
+  for i17 in 0 ..< f16.items.len:
+    w.later(stepDecLcnRchRecord, f16.items[i17], addr r.records[i17])
   r.revision = uint64(v.lookup("revision").get.uint)
 
 proc toCbor*(x: LcnRchSnapshot): CborValue =
@@ -558,6 +997,27 @@ proc toCbor*(x: LcnRchSnapshot): CborValue =
 proc fromChecked*(T: type LcnRchSnapshot, v: CborValue): LcnRchSnapshot =
   var r: LcnRchSnapshot
   runDec(stepDecLcnRchSnapshot, v, addr r)
+  r
+
+proc stepEncLcnRchStop*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnRchStop](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("kind")
+  node.entries[k].value = cbor("stop")
+  inc k
+
+proc stepDecLcnRchStop*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnRchStop](dst)
+  r[] = LcnRchStop()
+
+proc toCbor*(x: LcnRchStop): CborValue =
+  runEnc(stepEncLcnRchStop, addr x)
+
+proc fromChecked*(T: type LcnRchStop, v: CborValue): LcnRchStop =
+  var r: LcnRchStop
+  runDec(stepDecLcnRchStop, v, addr r)
   r
 
 proc stepEncLcnRchTestKey*(w: var EncWork, src: pointer, dst: ptr CborValue) =
@@ -585,6 +1045,56 @@ proc fromChecked*(T: type LcnRchTestKey, v: CborValue): LcnRchTestKey =
   runDec(stepDecLcnRchTestKey, v, addr r)
   r
 
+proc stepEncLcnRchTlsLimits*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnRchTlsLimits](src)
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](8))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("close_wait_ms")
+  node.entries[k].value = cbor(uint64(x.close_wait_ms))
+  inc k
+  node.entries[k].key = cbor("frame_limit")
+  node.entries[k].value = cbor(uint64(x.frame_limit))
+  inc k
+  node.entries[k].key = cbor("handshake_timeout_ms")
+  node.entries[k].value = cbor(uint64(x.handshake_timeout_ms))
+  inc k
+  node.entries[k].key = cbor("max_connections")
+  node.entries[k].value = cbor(uint64(x.max_connections))
+  inc k
+  node.entries[k].key = cbor("max_handshakes")
+  node.entries[k].value = cbor(uint64(x.max_handshakes))
+  inc k
+  node.entries[k].key = cbor("peer_frame_limit")
+  node.entries[k].value = cbor(uint64(x.peer_frame_limit))
+  inc k
+  node.entries[k].key = cbor("read_bound")
+  node.entries[k].value = cbor(uint64(x.read_bound))
+  inc k
+  node.entries[k].key = cbor("write_bound")
+  node.entries[k].value = cbor(uint64(x.write_bound))
+  inc k
+
+proc stepDecLcnRchTlsLimits*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnRchTlsLimits](dst)
+  r[] = LcnRchTlsLimits()
+  r.close_wait_ms = uint64(v.lookup("close_wait_ms").get.uint)
+  r.frame_limit = uint64(v.lookup("frame_limit").get.uint)
+  r.handshake_timeout_ms = uint64(v.lookup("handshake_timeout_ms").get.uint)
+  r.max_connections = uint64(v.lookup("max_connections").get.uint)
+  r.max_handshakes = uint64(v.lookup("max_handshakes").get.uint)
+  r.peer_frame_limit = uint64(v.lookup("peer_frame_limit").get.uint)
+  r.read_bound = uint64(v.lookup("read_bound").get.uint)
+  r.write_bound = uint64(v.lookup("write_bound").get.uint)
+
+proc toCbor*(x: LcnRchTlsLimits): CborValue =
+  runEnc(stepEncLcnRchTlsLimits, addr x)
+
+proc fromChecked*(T: type LcnRchTlsLimits, v: CborValue): LcnRchTlsLimits =
+  var r: LcnRchTlsLimits
+  runDec(stepDecLcnRchTlsLimits, v, addr r)
+  r
+
 proc fromCbor*(T: type LcnRchAnchor, v: CborValue): Result[LcnRchAnchor, string] =
   ## A value checked against `lcn.rch_anchor`.
   ?generatedSchema().check("lcn.rch_anchor", v)
@@ -597,6 +1107,76 @@ proc encode*(x: LcnRchAnchor): Result[seq[byte], string] =
 proc decode*(T: type LcnRchAnchor, data: openArray[byte]): Result[LcnRchAnchor, string] =
   ## One deterministic-CBOR `lcn.rch_anchor` value.
   let v = ?generatedSchema().decodeChecked("lcn.rch_anchor", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnRchCloseConn, v: CborValue): Result[LcnRchCloseConn, string] =
+  ## A value checked against `lcn.rch_close_conn`.
+  ?generatedSchema().check("lcn.rch_close_conn", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnRchCloseConn): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.rch_close_conn`.
+  generatedSchema().encodeChecked("lcn.rch_close_conn", toCbor(x))
+
+proc decode*(T: type LcnRchCloseConn, data: openArray[byte]): Result[LcnRchCloseConn, string] =
+  ## One deterministic-CBOR `lcn.rch_close_conn` value.
+  let v = ?generatedSchema().decodeChecked("lcn.rch_close_conn", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnRchConnClosed, v: CborValue): Result[LcnRchConnClosed, string] =
+  ## A value checked against `lcn.rch_conn_closed`.
+  ?generatedSchema().check("lcn.rch_conn_closed", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnRchConnClosed): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.rch_conn_closed`.
+  generatedSchema().encodeChecked("lcn.rch_conn_closed", toCbor(x))
+
+proc decode*(T: type LcnRchConnClosed, data: openArray[byte]): Result[LcnRchConnClosed, string] =
+  ## One deterministic-CBOR `lcn.rch_conn_closed` value.
+  let v = ?generatedSchema().decodeChecked("lcn.rch_conn_closed", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnRchHelloAdmit, v: CborValue): Result[LcnRchHelloAdmit, string] =
+  ## A value checked against `lcn.rch_hello_admit`.
+  ?generatedSchema().check("lcn.rch_hello_admit", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnRchHelloAdmit): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.rch_hello_admit`.
+  generatedSchema().encodeChecked("lcn.rch_hello_admit", toCbor(x))
+
+proc decode*(T: type LcnRchHelloAdmit, data: openArray[byte]): Result[LcnRchHelloAdmit, string] =
+  ## One deterministic-CBOR `lcn.rch_hello_admit` value.
+  let v = ?generatedSchema().decodeChecked("lcn.rch_hello_admit", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnRchHelloJudge, v: CborValue): Result[LcnRchHelloJudge, string] =
+  ## A value checked against `lcn.rch_hello_judge`.
+  ?generatedSchema().check("lcn.rch_hello_judge", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnRchHelloJudge): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.rch_hello_judge`.
+  generatedSchema().encodeChecked("lcn.rch_hello_judge", toCbor(x))
+
+proc decode*(T: type LcnRchHelloJudge, data: openArray[byte]): Result[LcnRchHelloJudge, string] =
+  ## One deterministic-CBOR `lcn.rch_hello_judge` value.
+  let v = ?generatedSchema().decodeChecked("lcn.rch_hello_judge", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnRchHelloRefuse, v: CborValue): Result[LcnRchHelloRefuse, string] =
+  ## A value checked against `lcn.rch_hello_refuse`.
+  ?generatedSchema().check("lcn.rch_hello_refuse", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnRchHelloRefuse): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.rch_hello_refuse`.
+  generatedSchema().encodeChecked("lcn.rch_hello_refuse", toCbor(x))
+
+proc decode*(T: type LcnRchHelloRefuse, data: openArray[byte]): Result[LcnRchHelloRefuse, string] =
+  ## One deterministic-CBOR `lcn.rch_hello_refuse` value.
+  let v = ?generatedSchema().decodeChecked("lcn.rch_hello_refuse", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type LcnRchHolderSign, v: CborValue): Result[LcnRchHolderSign, string] =
@@ -613,6 +1193,34 @@ proc decode*(T: type LcnRchHolderSign, data: openArray[byte]): Result[LcnRchHold
   let v = ?generatedSchema().decodeChecked("lcn.rch_holder_sign", data)
   ok(fromChecked(T, v))
 
+proc fromCbor*(T: type LcnRchListen, v: CborValue): Result[LcnRchListen, string] =
+  ## A value checked against `lcn.rch_listen`.
+  ?generatedSchema().check("lcn.rch_listen", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnRchListen): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.rch_listen`.
+  generatedSchema().encodeChecked("lcn.rch_listen", toCbor(x))
+
+proc decode*(T: type LcnRchListen, data: openArray[byte]): Result[LcnRchListen, string] =
+  ## One deterministic-CBOR `lcn.rch_listen` value.
+  let v = ?generatedSchema().decodeChecked("lcn.rch_listen", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnRchListening, v: CborValue): Result[LcnRchListening, string] =
+  ## A value checked against `lcn.rch_listening`.
+  ?generatedSchema().check("lcn.rch_listening", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnRchListening): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.rch_listening`.
+  generatedSchema().encodeChecked("lcn.rch_listening", toCbor(x))
+
+proc decode*(T: type LcnRchListening, data: openArray[byte]): Result[LcnRchListening, string] =
+  ## One deterministic-CBOR `lcn.rch_listening` value.
+  let v = ?generatedSchema().decodeChecked("lcn.rch_listening", data)
+  ok(fromChecked(T, v))
+
 proc fromCbor*(T: type LcnRchMessage, v: CborValue): Result[LcnRchMessage, string] =
   ## A value checked against `lcn.rch_message`.
   ?generatedSchema().check("lcn.rch_message", v)
@@ -625,6 +1233,34 @@ proc encode*(x: LcnRchMessage): Result[seq[byte], string] =
 proc decode*(T: type LcnRchMessage, data: openArray[byte]): Result[LcnRchMessage, string] =
   ## One deterministic-CBOR `lcn.rch_message` value.
   let v = ?generatedSchema().decodeChecked("lcn.rch_message", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnRchRcIn, v: CborValue): Result[LcnRchRcIn, string] =
+  ## A value checked against `lcn.rch_rc_in`.
+  ?generatedSchema().check("lcn.rch_rc_in", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnRchRcIn): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.rch_rc_in`.
+  generatedSchema().encodeChecked("lcn.rch_rc_in", toCbor(x))
+
+proc decode*(T: type LcnRchRcIn, data: openArray[byte]): Result[LcnRchRcIn, string] =
+  ## One deterministic-CBOR `lcn.rch_rc_in` value.
+  let v = ?generatedSchema().decodeChecked("lcn.rch_rc_in", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnRchRcOut, v: CborValue): Result[LcnRchRcOut, string] =
+  ## A value checked against `lcn.rch_rc_out`.
+  ?generatedSchema().check("lcn.rch_rc_out", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnRchRcOut): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.rch_rc_out`.
+  generatedSchema().encodeChecked("lcn.rch_rc_out", toCbor(x))
+
+proc decode*(T: type LcnRchRcOut, data: openArray[byte]): Result[LcnRchRcOut, string] =
+  ## One deterministic-CBOR `lcn.rch_rc_out` value.
+  let v = ?generatedSchema().decodeChecked("lcn.rch_rc_out", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type LcnRchRecord, v: CborValue): Result[LcnRchRecord, string] =
@@ -697,6 +1333,20 @@ proc decode*(T: type LcnRchSnapshot, data: openArray[byte]): Result[LcnRchSnapsh
   let v = ?generatedSchema().decodeChecked("lcn.rch_snapshot", data)
   ok(fromChecked(T, v))
 
+proc fromCbor*(T: type LcnRchStop, v: CborValue): Result[LcnRchStop, string] =
+  ## A value checked against `lcn.rch_stop`.
+  ?generatedSchema().check("lcn.rch_stop", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnRchStop): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.rch_stop`.
+  generatedSchema().encodeChecked("lcn.rch_stop", toCbor(x))
+
+proc decode*(T: type LcnRchStop, data: openArray[byte]): Result[LcnRchStop, string] =
+  ## One deterministic-CBOR `lcn.rch_stop` value.
+  let v = ?generatedSchema().decodeChecked("lcn.rch_stop", data)
+  ok(fromChecked(T, v))
+
 proc fromCbor*(T: type LcnRchTestKey, v: CborValue): Result[LcnRchTestKey, string] =
   ## A value checked against `lcn.rch_test_key`.
   ?generatedSchema().check("lcn.rch_test_key", v)
@@ -709,4 +1359,18 @@ proc encode*(x: LcnRchTestKey): Result[seq[byte], string] =
 proc decode*(T: type LcnRchTestKey, data: openArray[byte]): Result[LcnRchTestKey, string] =
   ## One deterministic-CBOR `lcn.rch_test_key` value.
   let v = ?generatedSchema().decodeChecked("lcn.rch_test_key", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnRchTlsLimits, v: CborValue): Result[LcnRchTlsLimits, string] =
+  ## A value checked against `lcn.rch_tls_limits`.
+  ?generatedSchema().check("lcn.rch_tls_limits", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnRchTlsLimits): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.rch_tls_limits`.
+  generatedSchema().encodeChecked("lcn.rch_tls_limits", toCbor(x))
+
+proc decode*(T: type LcnRchTlsLimits, data: openArray[byte]): Result[LcnRchTlsLimits, string] =
+  ## One deterministic-CBOR `lcn.rch_tls_limits` value.
+  let v = ?generatedSchema().decodeChecked("lcn.rch_tls_limits", data)
   ok(fromChecked(T, v))
