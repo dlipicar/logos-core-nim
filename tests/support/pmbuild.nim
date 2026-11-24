@@ -25,6 +25,13 @@ proc pmLibrary*(): string =
   if built.len > 0:
     return built
   let given = getEnv("LCN_PM_LIBRARY")
+  # The source is in src/, which reads no tests/config.nims: the test hooks the suites
+  # use (the extraction pace, PACKAGE-MANAGER.md §9) are named here.
+  const hooks: seq[string] =
+    when defined(lcnTestHooks):
+      @["lcnTestHooks"]
+    else:
+      @[]
   built =
     if given.len > 0 and fileExists(given):
       absolutePath(given)
@@ -38,6 +45,7 @@ proc pmLibrary*(): string =
         "logos_package_manager.nim",
         "logos_package_manager",
         exports = "logos_package_manager",
+        defines = hooks,
       )
   built
 

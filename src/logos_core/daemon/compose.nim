@@ -62,6 +62,7 @@ from logos_sdk/pins import CommitmentModelId, HashProfileId, HashSuiteId
 import logos_sdk/contracts/generated/lcn_storage_fetch_root
 import ../orchestration/[settings, needs]
 import ../cli/callsettings
+from ../pm/contractset import pmContractSet
 import ./[config, remoteexposure, session, trustfile]
 
 when defined(posix):
@@ -701,10 +702,14 @@ proc standInPmArtifact(exe: string): LcnAppArtifact =
     companionLibrary(exe, PmLibrary).get("/" & "lib" / "logos-core" / PmLibrary)
   LcnAppArtifact(id: PmArtifactId, local_path: path, hash: newSeq[byte](32))
 
-func pmRecord(pm: PmSettings, artifact: LcnAppArtifact): LcnAppModule =
+func pmRecord(
+    pm: PmSettings, artifact: LcnAppArtifact, root: openArray[byte]
+): LcnAppModule =
   ## [G491] The Package Manager instance: hosted in its own process (C1), its
-  ## state assignment `package_manager.state`, no configuration (its input is
-  ## protected, G400), no `requires` or `requested_permissions`.
+  ## primary contract PM App A (`root`, so that the Runtime gives it a provider
+  ## record, RUNTIME l.2862-2871), its state assignment `package_manager.state`,
+  ## no configuration (its input is protected, G400), no `requires` or
+  ## `requested_permissions`.
   LcnAppModule(
     instance: PmInstance,
     module: PmModule,
@@ -713,6 +718,7 @@ func pmRecord(pm: PmSettings, artifact: LcnAppArtifact): LcnAppModule =
       arm_Process_hosted_dynamic:
         LcnAppImplementationARProcessHostedDynamicMap(artifact: artifact),
     ),
+    primary_contract: Opt.some(SchemaCommitment(schema_root: @root)),
     state_assignment: Opt.some(pm.state),
   )
 
@@ -861,7 +867,9 @@ proc compose*(
         "package_manager: this logosd has no Package Manager library; give " &
           "package_manager.artifact"
       )
-    modules.add(pmRecord(c.pm.get, art.get))
+    let contract = pmContractSet().valueOr:
+      return err("package_manager: the pinned Package Manager contract: " & error)
+    modules.add(pmRecord(c.pm.get, art.get, contract.primary.root))
     pmMark = Opt.some(PmInstance)
   var moduleHost = dc.runtime.module_host
   if moduleHost.isNone:

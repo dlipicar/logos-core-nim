@@ -561,8 +561,9 @@ Step 5-6a-1 (DECISIONS G490, G491, G494, G495, G500; the owner's Q2, Q7 (b), Q11
   still checks them against the contract before they leave.
 - **Who runs it** (G491). logosd composes it from its configuration's `package_manager` section
   ([DAEMON.md](DAEMON.md) §3): the reserved instance `package_manager`, `hosted_dynamic` in its own
-  Module Host, with the state assignment `package_manager.state`, and starts it after the operator's
-  start list. The library is the one installed with logosd (`lib/logos-core/`), checked against the
+  Module Host, with PM App A as its primary contract (`pm/contractset.nim`, from the pinned documents;
+  so the Runtime gives it a provider record) and the state assignment `package_manager.state`, and starts
+  it after the operator's start list. The library is the one installed with logosd (`lib/logos-core/`), checked against the
   hash logosd is built with, or `package_manager.artifact` for development. An operator cannot list,
   retire or reconfigure it (S12); `logosctl` may start, stop and recover it.
 - **The mark** (G490). The host configuration's top-level `package_manager` names the instance

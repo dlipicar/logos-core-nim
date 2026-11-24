@@ -37,6 +37,8 @@ import ./support/authfixture, logos_sdk/testing/[kitbuild, schemasuite]
 from ../src/logos_core/transport/tls/trust import TrustSnapshot, newTrustSnapshot
 import ../src/logos_core/remote/carrier_types
 from ../src/logos_core/pm/input import MaxReadDeadlineMs
+import logos_sdk/iface/accept
+import ../src/logos_core/pins as core_pins
 from ../src/logos_core/package/resolver import
   ResolverLimits, resolverLimits, `==`, MaxResolverLimits, names, depth, candidates,
   attempts
@@ -1542,6 +1544,24 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
       check rec[0].implementation.kind == LcnAppImplementationKind.Process_hosted_dynamic
       check rec[0].implementation.arm_Process_hosted_dynamic.artifact.local_path ==
         PmArtifactPath
+      # Its primary contract, so that the Runtime gives it a provider record: PM App A,
+      # computed here from the pinned documents on its own.
+      let pmRoot = acceptContractSet(
+        core_pins.PackageManagerContractDocument,
+        [],
+        [
+          core_pins.PackageManifestDocument,
+          readFile(
+            currentSourcePath().parentDir.parentDir /
+              "spec/mirrors/CFG/9.configuration-types.cddl"
+          ),
+        ],
+        AcceptOptions(system: true),
+      ).tryGet.primary.root
+      check rec[0].primary_contract.map(
+        proc(c: SchemaCommitment): seq[byte] =
+          c.schema_root
+      ) == Opt.some(@pmRoot)
     check app.package_manager == Opt.some(PmInstance)
     # Without the section, no instance gets one.
     let plain = prepareDaemon(

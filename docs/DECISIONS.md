@@ -7483,8 +7483,11 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Description:** until now the operator listed the Package Manager's instance in `modules` and named it in
   `package_manager.instance` (G399). `logosd` now makes and starts it, as it makes `lcn_call` (G343).
 - **Decision (the entry):** the reserved instance `package_manager` (in `ReservedInstances`), module
-  `logos_package_manager` (in `ReservedModules`), `hosted_dynamic`, placement `process`; its state assignment is
-  `package_manager.state`; no configuration (its input is protected, G400), no `requires` and no
+  `logos_package_manager` (in `ReservedModules`), `hosted_dynamic`, placement `process`; its `primary_contract` is
+  PM App A's root, computed from the pinned documents (`pm/contractset.nim`, which the module's own checks use too),
+  so that the Runtime gives the instance a provider record (RUNTIME l.2862-2871) and a caller's `logosctl call`
+  finds it (found by `test_logosd_pm` before the merge: without it every call answered "logos_package_manager has
+  no local provider"); its state assignment is `package_manager.state`; no configuration (its input is protected, G400), no `requires` and no
   `requested_permissions`, since it establishes its Storage routes through its own Runtime Control binding under
   S9–S11; initial permissions `host-ambient`, as every composed system instance.
 - **Decision (the artifact):** `package_manager.artifact` when given (a development or test override, as
@@ -7528,6 +7531,13 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   end, with a `logosd` built with the hash for the companion case: the start under a Capability Authority policy and
   under `allow-all`, the companion library and the override, both digest checks, `ordering` and `overrides` taking
   effect, S12, the refusals).
+- **Open (found by `test_logosd_pm`, 2026-11-23; to planning):** the instance is retained like any other, and G160's
+  reconcile compares its declaration facts, the artifact's hash among them. A `logosd` whose companion library has
+  other bytes (an upgrade), or a `package_manager.artifact` with another digest, makes every later start of that
+  session fail before anything runs: "start: INVALID_PARAMS: the configured declaration of instance package_manager
+  differs from the retained one". G160 has the host give the changed module a new instance id, and the reserved id
+  cannot move. `lcn_call` (G343), composed with the compiled hash of `liblcn_call`, has the same exposure. Until it is
+  decided, `test_logosd_pm` checks the override's digest (PKG-0514) on a session of its own.
 - **Status:** built 5-6a-1 (I140).
 
 ### G495 — What ordinary routes reach before 5-6b

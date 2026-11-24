@@ -391,6 +391,19 @@ when defined(posix):
           return true
     false
 
+  proc pmRoute(rc: ptr LogosRuntimeControlBinding): Opt[string] =
+    ## The Package Manager's ready route, as Runtime Control lists it: no call to the
+    ## module, so it is answered while the module's worker extracts.
+    let r =
+      rcCall(rc, "list_routes", encode(LogosNSRuntimeControlListRoutesRequest()).tryGet)
+    if r.code != ecOk:
+      return Opt.none(string)
+    for rt in LogosNSRuntimeControlListRoutesResponse.decode(r.response).tryGet.routes:
+      if rt.consumer.module_instance_id == "pm" and
+          rt.state.kind == LogosNSRuntimeControlRouteStateKind.Ready:
+        return Opt.some(rt.route)
+    Opt.none(string)
+
   type Setup = object
     e: Engine
     pmDir, log: string
@@ -687,38 +700,50 @@ when defined(posix):
           extracting(s.pmDir),
         Answer,
       )
-      # The mutation slot runs `big`; 16 more wait (`MaxQueuedOperations`), and the next
-      # finds the queue full.
-      var queued: seq[uint64]
-      for i in 1 .. 16:
-        queued.add(o.send(conn, "install_package", rootRequest("app", "1.0.0")))
-      let full = o.send(conn, "install_package", rootRequest("app", "1.0.0"))
-      let f = o.outcome(conn, full).failureOf
-      check f.isSome
-      if f.isSome:
-        check f.get.code == ecModule
-        check f.get.message == Opt.some("the Package Manager's mutation queue is full")
+      # The mutation slot runs `big`; 16 more wait (`MaxQueuedOperations`), and one more
+      # finds the queue full. The 17 calls are concurrent and reach the engine in no set
+      # order, so the refused one is whichever came last, not always the last sent.
+      var sent: seq[uint64]
+      for i in 1 .. 17:
+        sent.add(o.send(conn, "install_package", rootRequest("app", "1.0.0")))
+      var answered: seq[uint64]
+      check waitUntil(
+        proc(): bool =
+          discard o.pump(10)
+          answered = sent.filterIt(o.outcome(conn, it, 0).isSome)
+          answered.len > 0,
+        Answer,
+      )
+      check answered.len == 1
+      if answered.len > 0:
+        let f = o.outcome(conn, answered[0], 0).failureOf
+        check f.isSome
+        if f.isSome:
+          check f.get.code == ecModule
+          check f.get.message == Opt.some(
+            "the Package Manager's mutation queue is full"
+          )
+      let queued = sent.filterIt(it notin answered)
+      check queued.len == 16
+      # Each queued call, then the running one, cancelled by their consumer: the queued
+      # ones first, so that none starts once `big` ends.
+      proc cancelled(tag: uint64): Opt[ErrorCode] =
+        o.cancel(conn, tag)
+        o.outcome(conn, tag).failureOf.map(
+          proc(x: InvocationFailure): ErrorCode =
+            x.code
+        )
+
       for tag in queued:
-        check o.outcome(conn, tag, 0).isNone
-      # A queued call and the running one, cancelled by their consumer.
-      o.cancel(conn, queued[0])
-      check o.outcome(conn, queued[0]).failureOf.map(
-        proc(x: InvocationFailure): ErrorCode =
-          x.code
-      ) == Opt.some(ecCancelled)
-      o.cancel(conn, running)
-      check o.outcome(conn, running).failureOf.map(
-        proc(x: InvocationFailure): ErrorCode =
-          x.code
-      ) == Opt.some(ecCancelled)
+        let c = cancelled(tag)
+        check c == Opt.some(ecCancelled)
+      let c = cancelled(running)
+      check c == Opt.some(ecCancelled)
       check waitUntil(
         proc(): bool =
           s.log.linesWith("package-manager: install_package cancelled by the Runtime").len ==
-            2
+            17
       )
-      for tag in queued[1 ..^ 1]:
-        o.cancel(conn, tag)
-        check o.outcome(conn, tag).failureOf.isSome
       # The worker goes on extracting for nobody (G449's limit) until the stop.
       let stopped = s.e.stopTimed()
       check stopped < initDuration(seconds = 5)
@@ -750,7 +775,10 @@ when defined(posix):
       # it needs no file work.
       check inspected("app", "9.9.9").valueOf.codeOf == "package-unavailable"
       # A route renewal: the fake's instance is stopped and started again (G402), and the
-      # binding gets a new route. `lib`'s archive, not fetched before, comes over it.
+      # binding gets a new route, which Runtime Control lists ready. An operation that
+      # fetched over it would wait for the worker, which extracts.
+      let firstRoute = s.rc.pmRoute()
+      check firstRoute.isSome
       driver.release()
       driver = LogosRouteHandle()
       check s.e.stop("hf").isOk
@@ -763,7 +791,8 @@ when defined(posix):
       check drive(FetchFakeSetReadinessRequestReadinessChoiceKind.Ready)
       check waitUntil(
         proc(): bool =
-          inspected("lib", "1.2.0").valueOf.lookup("inspection").isSome,
+          let r = s.rc.pmRoute()
+          r.isSome and r != firstRoute,
         Answer,
       )
       checkpoint "the operation and the renewal took " & $(getMonoTime() - began)

@@ -41,6 +41,9 @@ daemon_allowlist = [
   "orchestration/settings",
   "package/trustdoc",
   "permissions",
+  # [G491, Tier 5 step 5-6a-1] PM App A from the pinned documents: the composed Package Manager
+  # instance's primary contract
+  "pm/contractset",
   "pm/input",
   # [G410, G411, Tier 5 step 5-7a-1] the remote control channel: logosd's signing service and the
   # key holder answer on it

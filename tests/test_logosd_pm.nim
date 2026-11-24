@@ -167,7 +167,8 @@ when defined(posix):
       result = newJNull()
     if r.code != 0:
       checkpoint(
-        "logosctl call " & args.join(" ") & ": exit " & $r.code & ": " & r.stderr
+        "logosctl call " & args.join(" ") & ": exit " & $r.code & ": " & r.stdout &
+          r.stderr
       )
 
   proc pm(c: Case, meth: string, args: varargs[string]): JsonNode =
@@ -483,12 +484,14 @@ when defined(posix):
       # No catalog yet: the fake is `starting`.
       check c.pm("inspect_package", "package=app", "version=1.0.0").codeOf ==
         "package-unavailable"
-      check c.pm("update_package", identityRequest("current", "app", "1.0.0")).codeOf ==
-        "package-not-installed"
       # [S10, S11] The fake becomes ready; the Package Manager acquires the catalog.
       check c.setReadiness("ready")
       check c.acquired(first, catalogLine("configured"))
       check "no readiness subscription" notin first.errText
+      # With a catalog in use (without one, any resolution is package-unavailable first),
+      # an update of a package not installed.
+      check c.pm("update_package", identityRequest("current", "app", "1.0.0")).codeOf ==
+        "package-not-installed"
       let a = c.pm("install_package", "package=app", "version=1.0.0")
       checkpoint("the install: " & $a)
       check a.installedOf == "app@1.0.0"
@@ -522,8 +525,11 @@ when defined(posix):
       check c.pm("remove_package", identityRequest("identity", "lib", "1.2.0")).codeOf ==
         "package-in-use"
       let removed = c.pm("remove_package", identityRequest("identity", "app", "1.0.0"))
+      # The status first: a failed call has no `result`, and is reported, not read.
       check removed{"status"}.getStr == "ok"
-      check removed{"result"}.kind == JObject and removed{"result"}.len == 0
+      if removed{"status"}.getStr == "ok":
+        let res = removed{"result"}
+        check res != nil and res.kind == JObject and res.len == 0
       check c.pm("remove_package", identityRequest("identity", "lib", "1.2.0")).codeOf ==
         ""
       check eventually(
@@ -716,20 +722,22 @@ when defined(posix):
       )
       let third = c.ready(exe)
       check third.stopped == 0
-      # [PKG-0514] And its own digest is checked.
-      c.editConfig(
-        proc(dc: var LcnDaemonConfig) =
-          var a = pmArtifact(pmLib)
-          a.hash = digestOfFile(fakeLib)
-          dc.package_manager.get.artifact = Opt.some(a)
-      )
-      let fourth = c.start(exe)
-      c.expectReady(fourth)
+      # [PKG-0514] And its own digest is checked, at realization. On a session of its own:
+      # here, where the instance is retained, a changed digest is a changed declaration fact,
+      # which the start refuses before anything runs (G160's reconcile; G491's open item).
+      let d = newCase()
+      var a = pmArtifact(pmLib)
+      a.hash = digestOfFile(fakeLib)
+      check d.initPm(pmConfig(pmSection(artifact = Opt.some(a)))).code == 0
+      d.stock()
+      d.anchor()
+      let fourth = d.start(exe)
+      d.expectReady(fourth)
       check eventually(
         "the integrity refusal",
         fourth,
         proc(): bool =
-          c.failureOf(PmInstance) == "loader-artifact-integrity-failed",
+          d.failureOf(PmInstance) == "loader-artifact-integrity-failed",
       )
       check fourth.stopped == 0
       check hostsGone()
