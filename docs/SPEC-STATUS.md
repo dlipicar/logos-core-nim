@@ -742,7 +742,8 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   - The worker encodes each response, and the module thread carries the bytes (G447). Their way out is a stated
     exception, a confined kit module's: a 16 MiB `{installed}` holds the module thread 99 ms under orc and 175 ms
     under refc on the Mac, about 200 ms and 390 ms on server.lan (the host's check and commitment, the SDK's
-    completion copy, the kit's second encoding), left to the core item "large-response completion".
+    completion copy, the kit's second encoding), left to the core item "large-response completion". Those are the
+    one-string case: 5-6a-1's structured record takes seconds (G497).
 
   Claimed: PKG-0080, PKG-0189, PKG-0190, PKG-0389 to PKG-0410, PKG-0436, PKG-0437, PKG-0439, PKG-0440, PKG-0470,
   PKG-0534 to PKG-0537, PKG-0608 and PKG-0609 by test; PKG-0222, PKG-0363, PKG-0441 and PKG-0493 by inspection;
@@ -786,8 +787,17 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
 
   Claimed: PKG-0003 to PKG-0008 (PKG-0005 and PKG-0006 also by inspection), PKG-0366, PKG-0367, PKG-0369 to PKG-0377,
   PKG-0379, PKG-0513, PKG-0514, PKG-0519 and PKG-0521, and the App A copies PKG-0630, PKG-0631, PKG-0633, PKG-0637,
-  PKG-0639 to PKG-0647 and PKG-0649, which leave the re-pin's deferred list. 36 units. PKG 403/403. G497's figures
-  wait for 5-3c-4.
+  PKG-0639 to PKG-0647 and PKG-0649, which leave the re-pin's deferred list. 36 units. PKG 403/403.
+  - G497's figures (measured 2026-11-24 after 5-3c-4; the owner's choice, "Merge, state the limit"):
+    - a reply's way out costs per node, in three passes: the module thread, its host's I/O thread, the receiver's
+      I/O thread;
+    - a maximal `{installed}` holds the module thread 5.4 s under orc on the Mac and 24.9 s under refc on server.lan
+      (medians);
+    - the limits are stated in DEPLOYMENT §12, "A large reply's passes": a Hello times out, the Package Manager
+      answers nothing else, a stop waits, the receiver's host stalls, `logosctl`'s default `--timeout` is missed,
+      and the write stall is close;
+    - the fix is the core item "large-response completion", held until after the pause and needed before a
+      release.
 
 ## Tiers at f4f83471 (the original plan)
 

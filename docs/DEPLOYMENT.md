@@ -499,11 +499,87 @@ test method outside them, runs any number of resolutions at once.
 | The installed-state snapshots | module thread memory | an operation | each running operation and query holds the snapshot current when it began, so with two slots and queries up to a few are alive; they share every record they have in common, so a commit adds one record's size. One snapshot at the index's bound (`MaxIndexBytes`, 64 MiB encoded; 200,000 records at the longest identities) is 188 MiB under orc and 259 MiB under refc |
 | The installed state's start | time, inside `_MODULE_init` | each start | every record read, decoded and checked against its manifest (PKG-0471): about 1 ms of CPU a record under orc on the Mac, half of it the manifest's commitment, and 1.5 ms under refc (CONFORMANCE, "The operations"). 50 s at 50,000 records under orc, so the default startup deadline (120 s, item 13) holds about 120,000 records under orc and 80,000 under refc, below the index's bound of 200,000; a larger installed state needs a larger `runtime.startup_deadline_ms` (DECISIONS G445) |
 | A module declaration being decoded | module thread | one turn | one selected module's declaration a turn: 21 ms under orc and 38 ms under refc for a 4 MiB module of 22,076 commitments |
-| A response being built | module thread memory | one call | within the 16 MiB body (PM l.824, the admission bound), one for each running call; the root's `{installed}` and an inspection's `{inspection}` are encoded on the worker. On its way out a 16 MiB body holds the module thread about 99 ms under orc and 175 ms under refc on the Mac, about 200 ms and 390 ms on server.lan, more than a turn (DECISIONS G447's exception, a confined kit module's) |
+| A response being built | module thread memory | one call | within the 16 MiB body (PM l.824, the admission bound), one for each running call; the root's `{installed}` and an inspection's `{inspection}` are encoded on the worker. On its way out a reply holds threads by its nodes, not its bytes: a maximal `{installed}` (65,536 artifacts) holds the module thread 5.4 s under orc and 10.5 s under refc on the Mac, 13.4 s and 24.9 s on server.lan (medians), then its host's I/O thread about as long ("A large reply's passes", below; DECISIONS G447's exception, G497) |
 | Retired directories | disk, the installation root | while a snapshot older than their retirement is held | a removed or replaced package's directory, each within the extracted bound, 4 GiB at the default |
 | The queues | module thread memory | while waiting | 2 × 16 decoded requests; the 17th in a slot is refused with `MODULE_ERROR` |
 | A request's wait | time | while queued | 16 × `operation_deadline_ms`, 16 h at the defaults, for a caller with no deadline of its own; in work, 16 operations each within `operation_entries` |
 | An operation | time | from taking its slot | `operation_deadline_ms`, 1 h at the default; then `package-unavailable`, unless its last commit has begun. A worker job it leaves runs to its end: at most one more extraction of the largest archive (DECISIONS G449) |
+
+
+### A large reply's passes
+
+DECISIONS G447's exception and G497; the owner's choice of 2026-11-24, "Merge, state the limit".
+
+**The cost of a reply's way out follows its nodes, not its bytes** [SPEC TRANSPORT §4.1]: every map, field, leaf
+and choice is validated and hashed as an object of its own, at both ends. A confined kit module's reply makes three
+passes, each over the whole value:
+- **the sender's module thread:** the Module Host's `checkResponse`, the schema check and the value root;
+- **the sender's host I/O thread:** the transport's commitment, computed again at `respond`;
+- **the receiver's I/O thread:** `acceptResponse`'s check and value root.
+
+Each pass holds its thread for its whole length.
+
+**Measured.** `tools/pmbench.nim reply facade`: the Package Manager's `{installed}`, checked against PACKAGE MANAGER
+App A. CPU time, best / median / max of 15 samples. The Mac is an M1 Max; server.lan is a Ryzen 5 4500U. The raw
+figures are in `tier5-plans/evidence/step5-6a-1/`.
+
+| Reply | Host | The module thread (the check) | The host's I/O thread (the commitment) |
+|---|---|---|---|
+| a maximal `{installed}`: 65,536 artifacts, 16.0 MiB, 327,703 values | the Mac, orc | 5.3 / 5.4 / 5.7 s | 4.8 / 4.8 / 4.9 s |
+| | the Mac, refc | 10.1 / 10.5 / 11.6 s | 9.2 / 9.7 / 10.0 s |
+| | server.lan, orc | 13.3 / 13.4 / 14.2 s | 12.3 / 12.3 / 12.4 s |
+| | server.lan, refc | 24.6 / 24.9 / 28.8 s | 22.6 / 23.7 / 24.5 s |
+| one module's declaration: 4 MiB, 110,412 values | the Mac, orc | 1.29 / 1.32 / 1.34 s | 1.29 / 1.31 / 1.33 s |
+| | the Mac, refc | 2.35 / 2.46 / 2.55 s | 2.64 / 2.76 / 2.91 s |
+| | server.lan, orc | 3.23 / 3.31 / 3.37 s | 3.24 / 3.31 / 3.36 s |
+| | server.lan, refc | 5.75 / 5.87 / 5.98 s | 6.43 / 6.69 / 6.93 s |
+
+- **The receiver's pass:** about the module thread's. This is estimated from the check, not measured through the
+  transport.
+- **Per value:** 12–14 µs on the Mac under orc and 21–26 µs under refc; 29–37 µs on server.lan under orc and
+  50–63 µs under refc.
+- **The one-string case:** a reply of the same bytes in a few strings is cheap. 5-5-4 measured that case with
+  pmtest's `{response: bstr}`: about 99 ms and 175 ms on the Mac, 200 ms and 390 ms on server.lan, for 16 MiB.
+  Those figures stay, named as the one-string case; the same tree reproduces them.
+
+**Limits, stated.** The fix is the core item "large-response completion": held until after the pause, and needed
+before a release.
+- **A Hello times out during a pass.**
+  - While the Package Manager's host I/O thread or the receiver's I/O thread holds, it reads nothing.
+  - A connection opened to that host then fails its Hello at `hello_timeout_ms` (10 s), with `TRANSPORT_ERROR` on
+    the caller's side.
+  - A maximal reply already passes 10 s on server.lan under orc (the host's I/O thread 12.3 s, the check 13.4 s),
+    and under refc (23.7 s and 24.9 s).
+  - On the Mac under refc it is the receiver's check that passes it (10.0–11.5 s).
+- **The Package Manager answers nothing else during a pass.**
+  - Its module thread and its host's I/O thread serve all its sessions: the CLI's routes, the system binding,
+    every other consumer, and its own retrievals from Storage.
+  - So other operations' turns, queries, handoffs and the shell's timers wait. For a maximal reply that is 5.4 s
+    to 24.9 s on the module thread, then 4.8 s to 23.7 s on the I/O thread.
+  - A Storage read whose answer arrived during the hold may be judged late against `read_deadline_ms`.
+- **A stop waits for the pass.**
+  - The cancel is seen only when the module thread returns.
+  - With the stop deadline at 10 s (§13), a stop during a maximal reply ends in `cleanup-timeout` on server.lan
+    (13.4 s under orc, 24.9 s under refc).
+- **The receiver's I/O thread stalls for its own pass, and with it every session of the receiver's host.**
+  - For `logosctl` the receiver is the `lcn_call` instance's Module Host, so every concurrent CLI call waits.
+  - That is 5.4 s on the Mac under orc, up to about 25 s on server.lan under refc (28.6 s at the worst sample).
+- **`logosctl`'s default `--timeout` (65 s) is missed by a maximal install or update on every host.**
+  - Extraction alone is about 100 s on the Mac. This is 5-5's 20,000-artifact figures scaled to 65,536, not
+    measured at that size.
+  - On server.lan under refc, the reply's way out alone is 74–82 s: the three passes, after the worker's answer.
+  - An operator installing packages of tens of thousands of files passes a larger `--timeout`. The largest
+    allowed is 3,600,000 ms.
+  - By this arithmetic, 1,800,000 ms (30 min) covers the largest legal package on both hosts with margin.
+  - On a client `TIMEOUT` the outcome is unknown (exit 2). The operation goes on under its own deadline and may
+    still commit.
+- **`write_stall_timeout_ms` (30 s) is close on server.lan under refc.**
+  - A writer whose output to a host waits through that host's pass has no byte written for that whole time. At
+    the worst samples that is the receiver's check, 28.6 s, and the host's I/O thread, 24.5 s.
+  - Any further load on such a host crosses 30 s. The writer then closes the connection, and every call in flight
+    on it ends `TRANSPORT_ERROR`.
+- **Other modules' hosts are not affected.** Each has its own loop, and their Hellos and admissions reach the
+  Runtime by the supervision thread.
 
 ### Admission pools
 
@@ -575,6 +651,8 @@ Item 13. Five deadlines, in milliseconds, each 1 to 3,600,000 where configurable
   its bound; availability comes from the provider's `unavailable`, never from the deadline
   ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) §4).
 - **A payload module's figures** (its stop time, the shutdown grace its profile sets) are in §26.
+- **Large packages and `logosctl --timeout`:** a maximal install or update passes the default 65 s on every host,
+  and its client `TIMEOUT` leaves the outcome unknown (§12, "A large reply's passes").
 
 ## 14. Upgrade and verified defaults
 
