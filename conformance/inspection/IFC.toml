@@ -5,7 +5,7 @@
 
 [[item]]
 ids = ["IFC-0043"]
-reason = "A permission for runtime, package and deployment records; no obligation follows. No such record exists in this repository yet (RUNTIME and PM are tiers 3-4), and acceptance recomputes every implemented-interface root from the supplied documents rather than reading one from a record (test [IFC-0038])."
+reason = "A permission for runtime, package and deployment records; no obligation follows. Records do carry them (a module record's `implements`, runtime/records.nim; a package manifest's, package/manifest.nim), and the Runtime takes them only as expectations: acceptance recomputes every implemented-interface root from the supplied documents and compares (runtime/engine.nim checkContracts), never reading one from a record in its place (test [IFC-0038])."
 
 # I-2.5-may (DECISIONS I88); split by package in R9, the kit's half in sdk/conformance/inspection/IFC.toml
 [[item]]

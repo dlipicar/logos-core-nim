@@ -11,6 +11,7 @@ import results
 import ./[checks, types]
 import ../base/entry
 import ../iface/outcome
+import ../base/utf8clip
 
 export outcome, entry
 
@@ -33,12 +34,7 @@ func clip*(m: string): string =
   for c in s.mitems:
     if c == '\0':
       c = ' '
-  if s.len <= MaxMessageBytes:
-    return s
-  var n = MaxMessageBytes
-  while n > 0 and (uint8(s[n]) and 0xC0'u8) == 0x80'u8:
-    dec n
-  s.setLen(n) # in place: the cut tail stays in the capacity a wipe zeroes
+  clipUtf8InPlace(s, MaxMessageBytes) # the cut tail stays in the capacity a wipe zeroes
   s
 
 proc status*(f: InvocationFailure): LogosResult =

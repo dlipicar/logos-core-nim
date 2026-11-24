@@ -1797,6 +1797,10 @@ suite "run.host-api: startup (RUNTIME §13.2, l.1640, l.3838-3940) [G191]":
   setup:
     resetOrchestrator()
 
+  teardown:
+    # A case's short work directories: kept if it failed (`shortdir`).
+    endCaseBases(testStatusIMPL == TestStatus.FAILED)
+
   test "[RUN-0309] [RUN-0023] [RUN-0784] [RUN-0724] [RUN-0746] [IMPL-DECISION G191] start realizes the orchestration instance only, with intent requested":
     let rt = registered(deployment())
     check runtimeStart(rt).ec == ecOk
@@ -1980,8 +1984,9 @@ suite "run.host-api: startup (RUNTIME §13.2, l.1640, l.3838-3940) [G191]":
       )
       # [G58 amended 2026-11-21] The endpoint base must leave `sun_path` room
       # for an endpoint, so the work directories with a rule are short.
-      let short =
-        makeShortBase("lchost", deepest = "/u/open/12345678/logos_meter_module.sock")
+      let short = makeShortBase(
+        "lchost", deepest = "/u/open/12345678/logos_meter_module.sock", perCase = true
+      )
       var c = deployment()
       c.routing = Opt.some(@[rule])
       c.runtime.work_dir = short / "c"
@@ -2011,7 +2016,6 @@ suite "run.host-api: startup (RUNTIME §13.2, l.1640, l.3838-3940) [G191]":
       check r.ec == ecModule and "the endpoint directory" in r.text
       check "writable by others" in r.text
       rt3.finish()
-      removeDir(short)
     else:
       skip()
 

@@ -21,6 +21,7 @@
 {.push raises: [].}
 
 import results
+import logos_sdk/base/utf8clip
 import ../authority/scopes
 import ./[authscopes, authz, plumbing]
 
@@ -104,12 +105,7 @@ proc admitsScope*(x: AuthzAnswer, exact: Scope, runtimeId: string): bool =
 func reasonText*(s: string): string =
   ## `logos.runtime_control.reason`: at most 512 bytes, cut at a character
   ## boundary.
-  if s.len <= 512:
-    return s
-  var n = 512
-  while n > 0 and (uint8(s[n]) and 0xC0'u8) == 0x80'u8:
-    dec n
-  s[0 ..< n]
+  clipUtf8(s, 512)
 
 func disclosedReason*(f: Failure): Opt[string] =
   ## [SPEC RUNTIME l.1901-1904; RUN-0870 to RUN-0873; IMPL] The `reason` an

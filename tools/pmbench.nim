@@ -26,14 +26,21 @@
 ## now runs it: the module thread hands each 1 MiB `read_object` answer to the worker (the fetcher's
 ## spooled mode, a job, a channel), the worker appends it to a spool file in `<dir>` with its digest,
 ## then judges the file (`vcache.judge` over `fileSource`), and the module thread receives the
-## encoded judgment and decodes it `DecodeTurnUnits` at a time before the cache admits it. Both
+## judgment and the cache admits it (5-3c-4, G482: it crosses as it is, nothing is decoded). Both
 ## sides run on one thread here, each timed apart: the module thread's longest hold and total, and
 ## the worker's total; then a hit, which spools and digests again and answers from the cache.
 ##
-## `receive <dependencies> <contracts>` (5-5-3, G447; plan §4.4's W3) times one judgment's hand-over:
-## an eligible inspection with that many dependency entries, the contracts (commitments) all listed by
-## the first, sent on a channel as the worker sends it and received as the module thread does, then
-## decoded a budget at a time. It prints the send, the receive, the turns and the longest.
+## `receive <dependencies> <contracts>` (5-5-3, G447; plan §4.4's W3; 5-3c-4, G482) times one
+## judgment's hand-over: an eligible inspection with that many dependency entries, the contracts
+## (commitments) all listed by the first, built as the worker builds it (`eligibleInspection`), sent
+## on a channel as the worker sends it and received as the module thread does, then weighed for the
+## cache (`estimatedBytes`, by lengths). It prints the build, the send, the receive and the weighing.
+## No turn decodes it (D1's turns before G482).
+##
+## `unitbytes` (5-3c-4, G482, G447's constants) measures what an inspection holds in the heap, as
+## 5-5-3 measured the cache's constants: the heap's growth over many inspections built one by one,
+## for shapes of contracts listed and provided, and prints each contract's bytes beyond its encoding.
+## Run it under orc and refc with `-d:release`.
 ##
 ## `installed <records> <dependencies>` (5-5-4, G449; plan §9's measurements; Fable's 5-5-4 check §4)
 ## builds a snapshot of that many records at the longest identities (a 128-byte name, PM §4's bound, and a
@@ -66,6 +73,17 @@
 ## body, and one module whose declaration is 4 MiB of `implements` commitments. The completion block,
 ## the host's copy, the block's release and the frame repeat their code here, which is private.
 ##
+## `reply facade` (5-6a-1, G497; plan §4.9; planning's Q16 and its conditions of 2026-11-24) times the
+## same way out through the module `logos_package_manager` as 5-6a-1 built it: on the module thread the
+## receive, the facade's answer with its one copy, from the answer's string into the pre-encoded bytes
+## (G494; `pm/facade.nim`'s `operate` and `answered`, private, repeated here as pmtest's `run` is), the
+## kit route's `takeEncoded` (a move), then the same completion. The host's `checkResponse` and the
+## transport's commitment are against PACKAGE MANAGER App A's `install_package` (`pmContractSet`), so
+## the record is checked and committed as the structured `{installed}` it is, where pmtest's
+## `{response: bstr}` was one byte string. The records carry a manifest commitment with the pinned ids,
+## which App A requires and pmtest never checked. For worst-case statements each step prints its five
+## samples with their best, median and max, and each thread the same of its per-iteration totals.
+##
 ## Through the driver (5-3c-2, G455) the run is resumed turn by turn: a step ends at each inspection
 ## and at each spent turn, so the longest step is the longest hold on the module thread. `--budget
 ## <work>` sets the work of one turn (`ResolverTurnWork` by default; 0: no turns), and the steps line
@@ -90,11 +108,12 @@
 ##   pmbench archive 64 /tmp/a64.lgx && pmbench inspect /tmp/a64.lgx
 ##   pmbench spool /tmp/a64.lgx /tmp/spool
 ##   pmbench receive 80000 0 && pmbench receive 1 22000
+##   pmbench unitbytes
 ##   pmbench installed 200000 0 && pmbench installed 10000 4
 ##   pmbench module 4096
 ##   pmbench commit 10000 /tmp/installed
 ##   pmbench start 10000 /tmp/installed
-##   pmbench reply
+##   pmbench reply && pmbench reply facade
 
 import std/[algorithm, monotimes, os, strutils, times]
 import logos_sdk/cbor
@@ -107,7 +126,8 @@ import chronos
 import logos_sdk/base/wipe
 import logos_sdk/codegen/kitrt
 import logos_sdk/iface/[accept, outcome]
-import ../src/logos_core/pm/[admission, jobs, responses]
+import ../src/logos_core/pm/[admission, contractset, jobs, responses]
+from logos_sdk/pins import CommitmentModelId, HashProfileId, HashSuiteId
 import ../src/logos_core/runtime/callcheck
 import ../src/logos_core/transport/envelope
 import ../src/logos_core/transport/io/api
@@ -125,7 +145,7 @@ proc sync(which: string, s: Shape, limits: ResolverLimits) =
   let cpu0 = cpuTime()
   let outcome =
     if which == "oracle":
-      oracleResolve(input, s.rootOf, c)
+      oracleResolve(input, s.valueInspector, s.rootOf, c)
     else:
       resolve(input, s.rootOf, c, work)
   let cpu = cpuTime() - cpu0
@@ -274,7 +294,7 @@ proc spoolOnce(
     ),
     nil,
   )
-  var module, piece, decode, work: Clock
+  var module, piece, work: Clock
   var f = initRetrieval(bytesOf("bench"), int64(size), 1000, spooled = true)
   discard f.start()
   var step = f.onAnswer(sized(uint64(size)))
@@ -314,24 +334,11 @@ proc spoolOnce(
     work.timedOn:
       opened = worker.runJob(WorkerJob(kind: wjOpen, file: 1), nil).get
       resultsCh.send(opened)
-    var d: Decoding
-    var estimate: int
     module.timedOn:
+      # [G482] Admitted on receipt: nothing is decoded.
       var got = resultsCh.recv()
-      estimate = got.opened.estimatedBytes
-      d = initDecoding(move got.opened)
-    var turns = 0
-    while true:
-      var budget = DecodeTurnUnits
-      var done = false
-      decode.timedOn:
-        done = d.decodeSome(budget)
-      inc turns
-      if done:
-        break
-    module.timedOn:
-      x = c.admit(digest.digest, d.take(), estimate)
-    echo "  ", label, " decode turns=", turns, " longest_ms=", ms(decode.longest)
+      let estimate = got.opened.inspection.estimatedBytes
+      x = c.admit(digest.digest, move got.opened, estimate)
   work.timedOn:
     discard worker.runJob(WorkerJob(kind: wjDrop, file: 1), nil)
   worker.close()
@@ -349,9 +356,9 @@ proc spoolOnce(
     " piece_longest_ms=",
     ms(piece.longest),
     " longest_ms=",
-    ms(max(piece.longest, max(module.longest, decode.longest))),
+    ms(max(piece.longest, module.longest)),
     " total_ms=",
-    ms(piece.cpu + module.cpu + decode.cpu),
+    ms(piece.cpu + module.cpu),
     " worker: total_ms=",
     ms(work.cpu)
 
@@ -368,53 +375,148 @@ proc spoolFile(path, dir: string) =
   echo "  opened=", c.counters.opened, " hits=", c.counters.hits
 
 proc receive(deps, contracts: int) =
-  ## [G447; W3] One judgment's hand-over and its decoding.
-  var w = WireOpened(kind: ikEligible)
-  w.identity = PackageIdentity(package: "logos.bench", version: "1.0.0")
+  ## [G447; W3; G482] One judgment's hand-over: built, sent, received and weighed.
+  var values: seq[PackageDependency]
   for i in 0 ..< deps:
-    w.dependencies.add(
-      WireDependency(package: "dependency-" & $i, kind: rkCompatible, version: "1.0.0")
+    values.add(
+      PackageDependency(
+        package: "dependency-" & $i, kind: rkCompatible, version: "1.0.0"
+      )
     )
   var root = newSeq[byte](32)
   for i in 0 ..< contracts:
     for k in 0 ..< 4:
       root[k] = byte((i shr (8 * k)) and 0xff)
-    w.dependencies[0].contracts.add(textOf(encodeCbor(commitmentValue(root))))
+    values[0].contracts.add(commitmentValue(root))
+  var build, send, recv, weigh: Clock
+  var x: Inspection
+  build.timedOn:
+    x = eligibleInspection(
+      PackageIdentity(package: "logos.bench", version: "1.0.0"),
+      ManifestCommitment(),
+      values,
+      [],
+    )
+  values = @[]
   var ch: Channel[WorkerResult]
   ch.open()
-  var send, recv, decode: Clock
   send.timedOn:
-    ch.send(WorkerResult(kind: wrOpened, file: 1, opened: move w))
+    ch.send(WorkerResult(kind: wrOpened, file: 1, opened: Opened(inspection: move x)))
   var r: WorkerResult
   recv.timedOn:
     r = ch.recv()
-  var d: Decoding
-  recv.timedOn:
-    d = initDecoding(move r.opened)
-  while true:
-    var budget = DecodeTurnUnits
-    var done = false
-    decode.timedOn:
-      done = d.decodeSome(budget)
-    if done:
-      break
-  let o = d.take()
-  doAssert o.inspection.dependencies.len == deps
+  var estimate: int
+  weigh.timedOn:
+    estimate = r.opened.inspection.estimatedBytes
+  doAssert r.opened.inspection.dependencies.len == deps
+  doAssert r.opened.inspection.contractCount == contracts
   ch.close()
   echo "receive dependencies=",
     deps,
     " contracts=",
     contracts,
+    " bytes=",
+    r.opened.inspection.contractData.len,
+    " build_ms=",
+    ms(build.cpu),
     " send_ms=",
     ms(send.cpu),
     " receive_ms=",
     ms(recv.cpu),
-    " turns=",
-    decode.count,
-    " longest_turn_ms=",
-    ms(decode.longest),
-    " decode_ms=",
-    ms(decode.cpu)
+    " estimate_ms=",
+    ms(weigh.cpu),
+    " estimate=",
+    estimate,
+    " turns=0"
+
+proc benchContract(i: int): CborValue =
+  ## A commitment, decoded from its bytes, as a manifest's reader holds one.
+  var root = newSeq[byte](32)
+  for k in 0 ..< 4:
+    root[k] = byte((i shr (8 * k)) and 0xff)
+  decodeCbor(encodeCbor(commitmentValue(root))).get
+
+proc unitBytes() =
+  ## [G447, G482] The heap an inspection holds, per contract beyond its encoding: the growth over
+  ## `copies` inspections built one by one, less the same shape with no contract, over the
+  ## contracts, less each one's encoded length.
+  proc shaped(deps, perDep, provided, salt: int): Inspection =
+    var values: seq[PackageDependency]
+    for d in 0 ..< deps:
+      var dep = PackageDependency(
+        package: "logos.d" & align($d, 9, '0'), kind: rkCompatible, version: "1.0.0"
+      )
+      for c in 0 ..< perDep:
+        dep.contracts.add(benchContract(salt * 7919 + d * 131 + c))
+      values.add(dep)
+    var provides: seq[CborValue]
+    for c in 0 ..< provided:
+      provides.add(benchContract(salt * 104_729 + c))
+    eligibleInspection(
+      PackageIdentity(package: "logos.shape", version: "1.0." & $salt),
+      ManifestCommitment(),
+      values,
+      provides,
+    )
+
+  proc held(deps, perDep, provided, copies: int): float {.noinline.} =
+    # Each measurement frees what it built and collects before the next starts: under refc a
+    # previous one's garbage collected during this one would count against it.
+    GC_fullCollect()
+    GC_fullCollect()
+    var all = newSeq[Inspection](copies)
+    let before = getOccupiedMem()
+    for i in 0 ..< copies:
+      all[i] = shaped(deps, perDep, provided, i + 1)
+    GC_fullCollect()
+    result = float(getOccupiedMem() - before) / float(copies)
+    doAssert all.len == copies
+    all = @[]
+    GC_fullCollect()
+    GC_fullCollect()
+
+  let enc = encodedSize(benchContract(1))
+  echo "unitbytes mm=",
+    (when defined(gcOrc): "orc" elif defined(gcRefc): "refc" else: "other"),
+    " release=",
+    defined(release),
+    " encoding=",
+    enc
+  discard held(10, 1, 10, 256) # the allocator's first growth, counted against nothing
+  # Every count of provided contracts up to 160 (a buffer's rounding to its size class or to
+  # pages weighs most on a few contracts), then larger ones; a dependency entry listing them;
+  # many entries listing one each.
+  var shapes: seq[(string, int, int, int)]
+  for n in 1 .. 160:
+    shapes.add(("provided " & $n, 0, 0, n))
+  for n in [192, 256, 384, 512, 1000, 2048, 4096, 22000]:
+    shapes.add(("provided " & $n, 0, 0, n))
+  for n in [1, 2, 3, 10, 11, 21, 22, 100, 1000, 22000]:
+    shapes.add(("listed 1 x " & $n, 1, n, 0))
+  for n in [10, 100, 1000]:
+    shapes.add(("listed " & $n & " x 1", n, 1, 0))
+  var worst = 0.0
+  var worstName = ""
+  for (name, deps, perDep, provided) in shapes:
+    let n = deps * perDep + provided
+    let copies = max(8, min(4096, 1_048_576 div (n * enc)))
+    let without = held(deps, 0, 0, copies)
+    let with = held(deps, perDep, provided, copies)
+    let beyond = (with - without) / float(n) - float(enc)
+    if beyond > worst:
+      worst = beyond
+      worstName = name
+    echo "  ",
+      name,
+      ": copies=",
+      copies,
+      " held=",
+      formatFloat(with, ffDecimal, 1),
+      " without_contracts=",
+      formatFloat(without, ffDecimal, 1),
+      " per_contract_beyond_encoding=",
+      formatFloat(beyond, ffDecimal, 1)
+  echo "  worst=", formatFloat(worst, ffDecimal, 1), " (", worstName, ")"
 
 proc longestIdentity(i: int): PackageIdentity =
   ## A name at PM §4's 128-byte bound and a version as long, distinct for each `i`.
@@ -628,18 +730,27 @@ const ReplyBase =
 proc c_calloc(n, s: csize_t): pointer {.importc: "calloc", header: "<stdlib.h>".}
 proc c_free(p: pointer) {.importc: "free", header: "<stdlib.h>".}
 
-proc replyRecord(): InstalledRecord =
-  InstalledRecord(
+proc replyRecord(facade: bool): InstalledRecord =
+  ## The record both shapes start from. For the facade it carries a manifest commitment with the
+  ## pinned ids (its roots zero, each `bstr .size 32`), which App A's `installed_package_record`
+  ## requires and pmtest's `{response: bstr}` never checked.
+  result = InstalledRecord(
     signer: PackageSigner(profile: "logos.package-signing.cose-sign1-slh-dsa-sha2-192s"),
     identity: PackageIdentity(package: "bench", version: "1.0.0"),
     source: lgxSource("main", "bench@1.0.0"),
     variant: "linux-x86_64",
   )
+  if facade:
+    result.commitment = ManifestCommitment(
+      commitmentModel: CommitmentModelId,
+      hashProfile: HashProfileId,
+      hashSuite: HashSuiteId,
+    )
 
-proc artifactsReply(target: int): InstalledRecord =
+proc artifactsReply(target: int, facade: bool): InstalledRecord =
   ## 65,536 artifacts, the most an archive holds, each path lengthened until the response's body
   ## is about `target` bytes.
-  result = replyRecord()
+  result = replyRecord(facade)
   let n = 65_536
   for i in 0 ..< n:
     result.artifacts.add(
@@ -650,9 +761,9 @@ proc artifactsReply(target: int): InstalledRecord =
   for a in result.artifacts.mitems:
     a.path.add(repeat('x', per))
 
-proc moduleReply(kib: int): InstalledRecord =
+proc moduleReply(kib: int, facade: bool): InstalledRecord =
   ## One module whose declaration holds about `kib` KiB of `implements` commitments.
-  result = replyRecord()
+  result = replyRecord(facade)
   var implements: seq[CborValue]
   var root = newSeq[byte](32)
   var total = 0
@@ -686,6 +797,21 @@ proc pmtestRun(
     copyMem(addr b[0], unsafeAddr a.encoded[0], b.len)
   ok(b)
 
+proc facadeRun(
+    f: Future[OperationAnswer]
+): Future[Result[PreEncoded, InvocationFailure]] {.async: (raises: []).} =
+  ## `src/logos_core/pm/facade.nim`'s `operate` once the shell answered, and `answered` for an
+  ## encoded answer: the one copy, into the pre-encoded bytes (G494).
+  let a =
+    try:
+      await f
+    except CatchableError:
+      return err(failure(ecModule, "bench"))
+  var b = newSeq[byte](a.encoded.len)
+  if b.len > 0:
+    copyMem(addr b[0], unsafeAddr a.encoded[0], b.len)
+  ok(preEncoded(move b))
+
 const ReplySteps = [
   "worker: the value", "worker: its encoding", "worker: the channel's send",
   "module: the channel's receive", "module: the answer to pmtest's bytes",
@@ -696,10 +822,27 @@ const ReplySteps = [
   "io: the commitment", "io: the Response's encoding", "io: the frame",
 ]
 
+const FacadeSteps = [
+  "worker: the value", "worker: its encoding", "worker: the channel's send",
+  "module: the channel's receive", "module: the facade's one copy (answered)",
+  "module: the route's takeEncoded", "module: the completion block",
+  "module: the outcome's wipe", "module: the host's copy",
+  "module: the host's checkResponse", "module: the block's release",
+  "module: respond's channel send", "io: the channel's receive", "io: decodeValue",
+  "io: the commitment", "io: the Response's encoding", "io: the frame",
+]
+
+const ReplyRuns = 5
+
 proc replyOnce(
-    r: InstalledRecord, sel: Selected, spent: var array[ReplySteps.len, float]
+    r: InstalledRecord,
+    sel: Selected,
+    facade: bool,
+    spent: var array[ReplySteps.len, float],
 ): int =
-  ## One response's way, each step's CPU time in `spent`; the body's length.
+  ## One response's way, each step's CPU time in `spent`; the body's length. `facade`: through
+  ## the Package Manager module's answer and route and App A's `install_package`; else pmtest's.
+  let meth = (if facade: "install_package" else: "install")
   var t = cpuTime()
   template lap(i: int) =
     let now = cpuTime()
@@ -726,12 +869,20 @@ proc replyOnce(
   t = cpuTime()
   let fut = newFuture[OperationAnswer]("pmbench")
   fut.complete(OperationAnswer(kind: oaEncoded, encoded: move got.reply))
-  let rf = pmtestRun(fut)
-  var pmBytes = move(rf.internalValue)
-  lap(4)
-  var outcome =
-    encodedResponse(encode(PmtestInstallResponse(response: move pmBytes.get)))
-  lap(5)
+  var outcome: Result[seq[byte], InvocationFailure]
+  if facade:
+    let rf = facadeRun(fut)
+    var pre = move(rf.internalValue)
+    lap(4)
+    doAssert pre.isOk
+    outcome = takeEncoded(pre.get)
+    lap(5)
+  else:
+    let rf = pmtestRun(fut)
+    var pmBytes = move(rf.internalValue)
+    lap(4)
+    outcome = encodedResponse(encode(PmtestInstallResponse(response: move pmBytes.get)))
+    lap(5)
   doAssert outcome.isOk
   let n = outcome.get.len
   let blk = cast[ptr UncheckedArray[uint8]](c_calloc(1, csize_t(16 + n)))
@@ -745,9 +896,10 @@ proc replyOnce(
   copyMem(addr hostBytes[0], d, n)
   lap(8)
   var trail: CallTrail
-  let checked = sel.checkResponse("install", hostBytes, trail)
+  let checked = sel.checkResponse(meth, hostBytes, trail)
   lap(9)
-  doAssert checked.isOk
+  if checked.isErr:
+    raiseAssert "the response does not check: " & $checked.error
   secureZero(blk, 16 + n)
   c_free(blk)
   lap(10)
@@ -770,7 +922,7 @@ proc replyOnce(
   let dv = decodeValue(io.outcome.result, 128)
   lap(13)
   doAssert dv.isOk
-  let commitment = sel.boundary.commitResponse("install", dv.get)
+  let commitment = sel.boundary.commitResponse(meth, dv.get)
   lap(14)
   doAssert commitment.isOk
   let body = encodeCbor(
@@ -788,41 +940,85 @@ proc replyOnce(
   lap(16)
   doAssert frame.len > n
 
-proc replyBench() =
-  ## [G447; planning's ruling of 2026-11-23] A maximal response's way out, step by step.
-  let set = acceptContractSet(PmtestContract).get
+proc spread(samples: openArray[float]): string =
+  ## [G497; planning, 2026-11-24] Best, median and max of `samples`, in ms, then each sample.
+  var s = @samples
+  s.sort()
+  let med =
+    if s.len mod 2 == 1:
+      s[s.len div 2]
+    else:
+      (s[s.len div 2 - 1] + s[s.len div 2]) / 2
+  result =
+    "best_ms=" & ms(s[0]) & " median_ms=" & ms(med) & " max_ms=" & ms(s[^1]) &
+    " runs_ms="
+  for i, x in samples:
+    result.add((if i > 0: "," else: "") & ms(x))
+
+proc replyBench(facade: bool) =
+  ## [G447; planning's ruling of 2026-11-23] A maximal response's way out, step by step; with
+  ## `facade` (G497) through the Package Manager module and App A.
+  let set =
+    if facade:
+      pmContractSet().get
+    else:
+      acceptContractSet(PmtestContract).get
   let sel = buildSelected(set, set.primary.root, 128).get
+  let names = (if facade: FacadeSteps else: ReplySteps)
   for (name, r) in [
-    ("artifacts-65536", artifactsReply(AdmissionLimit - 4096)),
-    ("module-4MiB", moduleReply(4096)),
+    ("artifacts-65536", artifactsReply(AdmissionLimit - 4096, facade)),
+    ("module-4MiB", moduleReply(4096, facade)),
   ]:
-    var best: array[ReplySteps.len, float]
-    for s in best.mitems:
-      s = Inf
+    var samples: array[ReplySteps.len, array[ReplyRuns, float]]
+    var totals: array[3, array[ReplyRuns, float]]
+      # worker, module, I/O: each iteration's sum
     var bytes = 0
-    for run in 0 ..< 5:
+    for run in 0 ..< ReplyRuns:
       var spent: array[ReplySteps.len, float]
-      bytes = replyOnce(r, sel, spent)
-      for i in 0 ..< best.len:
-        best[i] = min(best[i], spent[i])
+      bytes = replyOnce(r, sel, facade, spent)
+      for i in 0 ..< spent.len:
+        samples[i][run] = spent[i]
+        let k =
+          if names[i].startsWith("worker"):
+            0
+          elif names[i].startsWith("module"):
+            1
+          else:
+            2
+        totals[k][run] += spent[i]
     var worker, module, io: float
-    for i, s in ReplySteps:
+    for i, s in names:
+      let best = min(samples[i])
       if s.startsWith("worker"):
-        worker += best[i]
+        worker += best
       elif s.startsWith("module"):
-        module += best[i]
+        module += best
       else:
-        io += best[i]
-    echo "reply shape=", name, " body=", bytes, " admission=", AdmissionLimit
-    for i, s in ReplySteps:
-      echo "  ", alignLeft(s, 38), " cpu_ms=", ms(best[i])
+        io += best
+    echo "reply mode=",
+      (if facade: "facade" else: "pmtest"),
+      " shape=",
+      name,
+      " body=",
+      bytes,
+      " admission=",
+      AdmissionLimit
+    for i, s in names:
+      echo "  ",
+        alignLeft(s, 42), " cpu_ms=", ms(min(samples[i])), " ", spread(samples[i])
     echo "  worker_cpu_ms=",
       ms(worker), " module_cpu_ms=", ms(module), " io_cpu_ms=", ms(io)
+    echo "  worker_total ", spread(totals[0])
+    echo "  module_total ", spread(totals[1])
+    echo "  io_total ", spread(totals[2])
 
 proc main() =
   var args = commandLineParams()
   if args.len == 1 and args[0] == "reply":
-    replyBench()
+    replyBench(facade = false)
+    return
+  if args.len == 2 and args[0] == "reply" and args[1] == "facade":
+    replyBench(facade = true)
     return
   if args.len == 3 and args[0] == "installed":
     installedBench(parseInt(args[1]), parseInt(args[2]))
@@ -839,6 +1035,9 @@ proc main() =
       return
   if args.len == 3 and args[0] == "receive":
     receive(parseInt(args[1]), parseInt(args[2]))
+    return
+  if args.len == 1 and args[0] == "unitbytes":
+    unitBytes()
     return
   if args.len == 3 and args[0] == "archive":
     archive(parseInt(args[1]), args[2])
@@ -883,8 +1082,9 @@ proc main() =
     lim[i] = parseInt(rest[i])
   let limits = resolverLimits(lim[0], lim[1], lim[2], lim[3]).get
   let built = getMonoTime()
-  let s = shapeOf(shapeName, size, k).valueOr:
+  var s = shapeOf(shapeName, size, k).valueOr:
     quit("unknown shape " & shapeName, 2)
+  s.unchecked = true # [G482] each answer is held as the worker would send it, unchecked
   let buildMs = (getMonoTime() - built).inMilliseconds
   echo shapeName,
     " size=",

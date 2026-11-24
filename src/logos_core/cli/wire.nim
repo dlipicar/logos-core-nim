@@ -14,7 +14,7 @@
 import std/[monotimes, times]
 import results
 import logos_sdk/cbor
-import logos_sdk/base/wipe
+import logos_sdk/base/[utf8clip, wipe]
 from logos_sdk/codegen/nimrt import encodeChecked
 import ../transport/io/sock
 import ../daemon/ctlwire
@@ -351,12 +351,7 @@ func doneReply*(exit: int): LcnCliReply =
 
 func clip(s: string, n: int): string =
   ## At most `n` bytes, never splitting a UTF-8 sequence.
-  if s.len <= n:
-    return s
-  var e = n
-  while e > 0 and (byte(s[e]) and 0xC0) == 0x80:
-    dec e
-  s[0 ..< e]
+  clipUtf8(s, n)
 
 func refusedReply*(reason: LcnCliRefusedReasonChoiceKind, message = ""): LcnCliReply =
   LcnCliReply(

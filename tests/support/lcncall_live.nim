@@ -254,7 +254,9 @@ var
 proc newSession(shape = Shape()): Session =
   inc sessions
   let base = makeShortBase(
-    LivePrefix & $sessions, deepest = "/s/run/ep/12345678/logos_shapes_module.sock"
+    LivePrefix & $sessions,
+    deepest = "/s/run/ep/12345678/logos_shapes_module.sock",
+    perCase = true,
   )
   createDir(base / "o")
   let s = Session(dir: base / "s")
@@ -472,6 +474,9 @@ proc finish(l: var Live) =
   if not l.up:
     return
   l.up = false
+  # A shared session's directory goes back to the case that ends it, whose
+  # teardown removes it or keeps it (`shortdir`).
+  unholdShortBase(l.s.dir.parentDir)
   let began = getMonoTime()
   discard runtimeRequestShutdown(l.d.rt)
   let down = runtimeWaitForShutdown(l.d.rt)
@@ -510,6 +515,8 @@ proc share(shape = Shape(), last = false): Live =
   if not sharedLive.up:
     sharedLive = boot(newSession(shape))
     sharedShape = shape
+    # Its directory is the session's, not this case's, until `finish`.
+    holdShortBase(sharedLive.s.dir.parentDir)
   result = sharedLive
   result.shared = true
   result.last = last

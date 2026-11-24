@@ -687,6 +687,34 @@ when defined(posix):
     ## The instance's Module Host, retained: `dropHost` it.
     e.moduleHostForTests(instance)
 
+  type NoHost = object of CatchableError
+    ## [IMPL] An instance without the Module Host its case needs: raised to fail and stop
+    ## the case, whose suite's teardown still closes the engine (`leftover`). unittest2's
+    ## `require` would quit the process without it.
+
+  proc seenAs(e: Engine, instance: string): string =
+    ## The instance's state and failure, for a case's failure message.
+    let v = e.view(instance)
+    if v.isErr:
+      return "no view: " & v.error.message
+    result = "state " & $v.get.state
+    if v.get.failure.isSome:
+      result.add(
+        ", " & v.get.failure.get.classification & ": " & v.get.failure.get.reason
+      )
+
+  proc liveHostOf(e: Engine, instance: string): Host =
+    ## `hostOf` for a case that goes on to use the host. With none, as when its start
+    ## failed under load (about 120 on the Mac), the case fails naming the instance and its
+    ## state, and stops: given nil, `holdEnd`, `pidOf` and `endReached` crashed the process,
+    ## which skipped the teardown. Only where no thread of the case is running.
+    result = e.hostOf(instance)
+    if result.isNil:
+      raise newException(
+        NoHost,
+        "moduleHostForTests(" & instance & "): no Module Host; " & e.seenAs(instance),
+      )
+
   proc killHost(e: Engine, instance: string): bool =
     ## SIGKILL to the instance's host process, from outside the Runtime.
     let h = e.hostOf(instance)
@@ -801,8 +829,7 @@ when defined(posix):
       discard e.create(probe(), "p").tryGet
       check e.start("p").tryGet.state == msReady
       discard settled(dir, "events", 2)
-      let h = e.hostOf("p")
-      check h != nil
+      let h = e.liveHostOf("p")
       breakCarrier(h)
       dropHost(h)
       # The host's next frame (its acknowledgement of a delivery) breaks it.
@@ -856,6 +883,12 @@ when defined(posix):
           false
       )
       joinThread(started)
+      if held.isNil:
+        # As in `liveHostOf`: `holdEnd` of nil would crash the process. The suite's
+        # teardown releases the held ends.
+        raise newException(
+          NoHost, "moduleHostForTests(p): no spawned Module Host; " & e.seenAs("p")
+        )
       let v = e.view("p").tryGet
       check v.state == msError and v.failureOf == "startup-timeout"
       check rc.realization(e, "p") == R.Unknown
@@ -1014,7 +1047,9 @@ when defined(posix):
         of "kill":
           check e.killHost("p")
         of "carrier":
+          # [IMPL] A check, not `liveHostOf`: `th` runs until `go-apply` releases it.
           let h = e.hostOf("p")
+          check h != nil
           breakCarrier(h)
           dropHost(h)
           writeFile(dir / "go-apply", "") # the host's `applied` breaks it
@@ -1076,7 +1111,7 @@ when defined(posix):
       discard e.startClient("c")
       discard e.create(probe(), "p").tryGet
       check e.start("p").tryGet.state == msReady
-      let h = e.hostOf("p")
+      let h = e.liveHostOf("p")
       holdEnd(h, true)
       check e.setLoaderFaultsForTests(LoaderFaults(reportFailure: true)).isOk
       check e.view("p").tryGet.state == msError
@@ -1102,7 +1137,7 @@ when defined(posix):
       discard e.startClient("c")
       discard e.create(probe(), "p").tryGet
       check e.start("p").tryGet.state == msReady
-      let h = e.hostOf("p")
+      let h = e.liveHostOf("p")
       holdEnd(h, true)
       check e.setLoaderFaultsForTests(LoaderFaults(reportFailure: true)).isOk
       check e.view("p").tryGet.state == msError
@@ -1165,8 +1200,7 @@ when defined(posix):
       let e = fixtureEngine(cfg)
       discard e.create(probe(), "p").tryGet
       check e.start("p").tryGet.state == msReady
-      let h = e.hostOf("p")
-      check h != nil
+      let h = e.liveHostOf("p")
       # The Loader's release ends the host in order; only its reply is held.
       check e.setLoaderFaultsForTests(LoaderFaults(stall: {lmRelease})).isOk
       var t: Thread[(Engine, string)]
@@ -1210,10 +1244,11 @@ when defined(posix):
         proc(): bool =
           e.stalledLoaderCallsForTests() == 1
       )
+      # [IMPL] Checks, not `liveHostOf`: `t` runs until the Loader fails below.
       let h = e.hostOf("p")
       check h != nil
       check e.killHost("p")
-      check e.endReached(h)
+      check h != nil and e.endReached(h)
       dropHost(h)
       check e.setLoaderFaultsForTests(LoaderFaults(reportFailure: true)).isOk
       joinThread(t)
@@ -1242,8 +1277,7 @@ when defined(posix):
       let e = fixtureEngine(cfg)
       discard e.create(probe(), "p").tryGet
       check e.start("p").tryGet.state == msReady
-      let h = e.hostOf("p")
-      check h != nil
+      let h = e.liveHostOf("p")
       holdKill(h, true)
       check e.setLoaderFaultsForTests(LoaderFaults(reportFailure: true)).isOk
       let v = e.view("p").tryGet

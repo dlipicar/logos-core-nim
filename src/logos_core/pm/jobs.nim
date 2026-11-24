@@ -8,16 +8,17 @@
 ##   a cycle belongs to one thread's collector. `refFree` walks a type at compile
 ##   time and this module asserts it of `WorkerJob` and `WorkerResult`: no `ref`,
 ##   `ptr`, `pointer`, closure or `cstring`, at any depth.
-## - **An inspection crosses encoded** (G447, D1; planning accepted it with Fable's
-##   conditions, 2026-11-23): the
-##   resolver's `Inspection` holds its contracts as `CborValue`s, which are
-##   references, so `WireOpened` carries each as its deterministic encoding, and
-##   the module thread decodes them back (`Decoding`), at most `DecodeTurnUnits`
-##   a turn, counted as G477's walk counts them: a dependency entry and a
-##   contract are a unit each. A 4 MiB manifest holds at most about 80,000
-##   entries or about 22,000 commitments: about 24 ms to decode the commitments
-##   under orc and 40 ms under refc in all (the Mac, `-d:release`), so about 1 to
-##   2 ms a turn.
+## - **An inspection crosses as it is** (step 5-3c-4, G482): the resolver's `Inspection`
+##   holds its contracts as their deterministic encodings in one buffer and no reference
+##   (`requireRefFree`), so `Opened` crosses whole and the module thread decodes nothing
+##   of a judgment. Before G482 it crossed encoded (D1, `WireOpened`) and was decoded
+##   back in turns.
+## - **The staged record's dependencies** (G447, D1): an installed record keeps its
+##   manifest's dependencies as values, so `wjStage`'s answer carries them as an
+##   `Inspection` of them (`eligibleInspection`), and the module thread decodes them
+##   (`Decoding`), at most `DecodeTurnUnits` a turn, counted as G477's walk counts
+##   them: a dependency entry and a contract are a unit each. A 4 MiB manifest holds at
+##   most about 80,000 entries or about 22,000 commitments.
 ## - **Bytes cross as `string`s** (a chunk, a contract's encoding): refc's channel copies a
 ##   `seq[byte]` one element at a time, 3.4 ms for a 1 MiB chunk on the Mac, and a `string`
 ##   in one block. Under orc a message is moved.
@@ -50,42 +51,24 @@ import logos_sdk/cbor
 import logos_sdk/base/testhooks
 import logos_sdk/crypto/blake3
 import ../crypto/slhdsa
-import ../package/[errors, lgx, manifest, records, resolver, trustdoc]
+import ../package/[errors, lgx, manifest, records, reffree, resolver, trustdoc]
 import ./[installed, responses, spool, vcache]
 
 when defined(posix):
   import ./store
   export store
 
-export results, blake3, spool, vcache
+export results, blake3, reffree, spool, vcache
 
 testHooksMarker("pm_jobs")
 
 const DecodeTurnUnits* = 1024
-  ## [IMPL; G447] the dependency entries and contracts the module thread decodes from one
-  ## judgment in one turn: about 1 to 2 ms of contracts under orc (the Mac, `-d:release`)
+  ## [IMPL; G447] the dependency entries and contracts the module thread decodes from a
+  ## staged record's dependencies in one turn (`Decoding`), or frees from a dropped
+  ## judgment's entries (G482): about 1 to 2 ms of contracts under orc (the Mac,
+  ## `-d:release`)
 
 type
-  WireDependency* = object
-    package*: string
-    kind*: RequirementKind
-    version*: string
-    contracts*: seq[string] ## each a deterministic encoding
-
-  WireOpened* = object
-    ## [G447] `vcache.Opened` with no reference: the inspection's contracts encoded.
-    kind*: InspectionKind
-    identity*: PackageIdentity
-    commitment*: ManifestCommitment
-    dependencies*: seq[WireDependency]
-    provides*: seq[string] ## each a deterministic encoding
-    error*: PackageError ## `ikIneligible`'s
-    reason*: string ## `ikUnavailable`'s
-    profile*: string
-    kid*: seq[byte]
-    key*: PublicKey
-    variant*: string
-
   WorkerConfig* = object
     ## [G447] What the worker takes at open: fixed for the instance's start (G399).
     spoolDir*: string
@@ -171,7 +154,7 @@ type
     failure*: string
     digest*: Blake3Digest
     size*: int64
-    opened*: WireOpened
+    opened*: Opened ## [G482] crosses as it is: it holds no reference
     rid*: string ## `wrStaged`
     generation*: uint64 ## `wrStaged`: the staged generation
     sequence*: uint64 ## `wrCommitted`
@@ -179,7 +162,9 @@ type
       ## `wrStaged` of a new record: each selected module declaration's encoding, in
       ## manifest order
     artifacts*: seq[InstalledArtifact] ## `wrStaged` of a new record
-    dependencies*: seq[WireDependency] ## `wrStaged` of a new record: its manifest's
+    staged*: Inspection
+      ## `wrStaged` of a new record: its manifest's dependencies, as an inspection holds
+      ## them (`eligibleInspection`, G482), for `Decoding`
     reply*: string
       ## an encoded §15 response: `wrStaged`'s or `wrReply`'s `{installed}`, `wrOpened`'s
       ## `{inspection}` for an inspection's root candidate
@@ -206,93 +191,21 @@ type
         ## a test's: staging this package fails as a full disk would (`ENOSPC`)
 
   Decoding* = object
-    ## [G447] A `WireOpened` decoded back on the module thread, a turn at a time.
-    wire: WireOpened
-    opened: Opened
+    ## [G447, G482] A staged record's dependencies decoded to values on the module thread,
+    ## a turn at a time: an installed record keeps values.
+    staged: Inspection
+    deps: seq[PackageDependency]
     dep: int ## the dependency being decoded
-    added: bool ## it is added to the inspection
-    contract: int ## its next contract
-    provided: int ## the next provided contract
-    started: bool
+    added: bool ## it is added to `deps`
+    listed: int ## its contracts decoded
+    next: int ## the next contract in `staged`
 
-# The no-reference check ---------------------------------------------------------------
-
-proc refFreeNode(t: NimNode, depth: int): bool =
-  if depth > 48:
-    return false # only a reference makes a type this deep
-  case t.typeKind
-  of ntyBool, ntyChar, ntyString, ntyEnum, ntySet, ntyInt, ntyInt8, ntyInt16, ntyInt32,
-      ntyInt64, ntyFloat, ntyFloat32, ntyFloat64, ntyFloat128, ntyUInt, ntyUInt8,
-      ntyUInt16, ntyUInt32, ntyUInt64, ntyRange:
-    true
-  of ntySequence:
-    refFreeNode(t.getTypeImpl[1], depth + 1)
-  of ntyArray:
-    refFreeNode(t.getTypeImpl[2], depth + 1)
-  of ntyDistinct:
-    refFreeNode(t.getTypeImpl[0], depth + 1)
-  of ntyGenericInst, ntyGenericInvocation, ntyGenericBody, ntyGenericParam:
-    let impl = t.getTypeImpl
-    if impl.kind in {nnkObjectTy, nnkTupleTy, nnkBracketExpr, nnkDistinctTy}:
-      refFreeNode(impl, depth + 1)
-    else:
-      false
-  of ntyObject, ntyTuple:
-    var impl = t.getTypeImpl
-    proc fields(n: NimNode, depth: int): bool =
-      case n.kind
-      of nnkRecList, nnkTupleTy, nnkTupleConstr:
-        for c in n:
-          if not fields(c, depth):
-            return false
-        true
-      of nnkRecCase:
-        if not fields(n[0], depth):
-          return false
-        for i in 1 ..< n.len:
-          if not fields(n[i][^1], depth):
-            return false
-        true
-      of nnkIdentDefs:
-        refFreeNode(n[^2], depth + 1)
-      of nnkSym:
-        refFreeNode(n.getTypeInst, depth + 1)
-      of nnkEmpty, nnkNilLit:
-        true
-      of nnkRecWhen:
-        false
-      else:
-        refFreeNode(n, depth + 1)
-
-    case impl.kind
-    of nnkObjectTy:
-      if impl[1].kind == nnkOfInherit and not refFreeNode(impl[1][0], depth + 1):
-        return false
-      fields(impl[2], depth)
-    of nnkTupleTy, nnkTupleConstr:
-      fields(impl, depth)
-    else:
-      false
-  else:
-    # ref, ptr, pointer, proc (a closure included), cstring, var, openArray and the rest
-    false
-
-macro refFree*(T: typedesc): bool =
-  ## [G447] Whether `T` holds no `ref`, `ptr`, `pointer`, closure or `cstring` at any depth:
-  ## strings, seqs, arrays, sets, enums, numbers, objects and tuples of them only. It errs
-  ## on the safe side: a generic object other than `seq` and `array` (`Opt`, `Result`)
-  ## reads as not ref-free, so the job types spell such fields out (`abi`, `hasAbi`).
-  newLit(refFreeNode(T.getTypeInst[1], 0))
-
-template requireRefFree*(T: typedesc) =
-  ## [G447] A compile-time error unless `T` is `refFree`.
-  static:
-    doAssert refFree(T), $T & " holds a reference and may not cross threads (G447)"
+# The no-reference check (`reffree.nim`) -----------------------------------------------
 
 requireRefFree(WorkerJob)
 requireRefFree(WorkerResult)
 
-# Inspections, encoded and decoded ------------------------------------------------------
+# The staged record's dependencies, decoded ---------------------------------------------
 
 func asText(b: openArray[byte]): string =
   result = newString(b.len)
@@ -311,146 +224,57 @@ func sourceOf(bytes: string): PackageSource =
   doAssert s.isOk, "the module thread's encoding of a source"
   s.get
 
-func toWire*(d: PackageDependency): WireDependency =
-  result = WireDependency(package: d.package, kind: d.kind, version: d.version)
-  for c in d.contracts:
-    result.contracts.add(asText(encodeCbor(c)))
-
-proc toWire*(o: sink Opened): WireOpened =
-  ## [G447] The worker's side: each contract to its deterministic encoding.
-  result = WireOpened(
-    kind: o.inspection.kind,
-    profile: move o.profile,
-    kid: move o.kid,
-    key: o.key,
-    variant: move o.variant,
-  )
-  case o.inspection.kind
-  of ikEligible:
-    result.identity = o.inspection.identity
-    result.commitment = o.inspection.commitment
-    for d in o.inspection.dependencies:
-      result.dependencies.add(d.toWire)
-    for c in o.inspection.provides:
-      result.provides.add(asText(encodeCbor(c)))
-  of ikIneligible:
-    result.error = o.inspection.error
-  of ikUnavailable:
-    result.reason = o.inspection.reason
-
-func estimatedBytes*(w: WireOpened): int =
-  ## [G447; Fable's condition 6] `vcache.estimatedBytes` of the inspection `w` decodes to, by
-  ## the lengths it carries: a contract's `bytes` in the walk is its encoded size, which is its
-  ## encoding's length here, so nothing is walked or encoded. Taken before the decoding, which
-  ## consumes `w`.
-  case w.kind
-  of ikEligible:
-    result = unitBytes(iuRecord) + w.identity.package.len + w.identity.version.len
-    for d in w.dependencies:
-      result += unitBytes(iuDependency) + d.package.len + d.version.len
-      for c in d.contracts:
-        result += unitBytes(iuDependencyContract) + c.len
-    for c in w.provides:
-      result += unitBytes(iuProvided) + c.len
-  of ikIneligible:
-    result = unitBytes(iuRecord) + w.error.msg.len
-  of ikUnavailable:
-    result = unitBytes(iuRecord) + w.reason.len
-
-func units*(w: WireOpened): int =
-  ## [G477] The dependency entries and contracts `w` carries: what its decoding costs.
-  result = w.dependencies.len + w.provides.len
-  for d in w.dependencies:
-    result += d.contracts.len
-
-proc initDecoding*(w: sink WireOpened): Decoding =
-  Decoding(wire: w)
+proc initDecoding*(staged: sink Inspection): Decoding =
+  ## `staged`: an eligible inspection of the manifest's dependencies (`wrStaged`).
+  Decoding(staged: staged)
 
 proc decodeSome*(d: var Decoding, budget: var int): bool =
   ## [G447] Decodes dependency entries and contracts while `budget` lasts, one from it for
-  ## each; true once the whole judgment is decoded (`take`).
-  if not d.started:
-    d.started = true
-    d.opened = Opened(
-      profile: d.wire.profile, kid: d.wire.kid, key: d.wire.key, variant: d.wire.variant
-    )
-    case d.wire.kind
-    of ikEligible:
-      d.opened.inspection = Inspection(
-        kind: ikEligible, identity: d.wire.identity, commitment: d.wire.commitment
-      )
-    of ikIneligible:
-      d.opened.inspection = Inspection(kind: ikIneligible, error: d.wire.error)
-      return true
-    of ikUnavailable:
-      d.opened.inspection = Inspection(kind: ikUnavailable, reason: d.wire.reason)
-      return true
-  template one(bytes: string, into: untyped) =
-    # [G447; Fable's D1 condition 2] The bytes are the worker's own encoding of values the
-    # reader checked: one that does not decode is a fault in this process, not the archive's.
-    let v = decodeCbor(bytes.toOpenArrayByte(0, bytes.high))
-    if v.isErr:
-      raiseAssert "a contract in the worker's answer is not deterministic CBOR"
-    into.add(v.get)
-    dec budget
-
-  while d.dep < d.wire.dependencies.len:
+  ## each; true once every entry is decoded (`take`).
+  while d.dep < d.staged.dependencies.len:
     template w(): untyped =
-      d.wire.dependencies[d.dep]
+      d.staged.dependencies[d.dep]
 
     if not d.added:
       if budget <= 0:
         return false
-      d.opened.inspection.dependencies.add(
+      d.deps.add(
         PackageDependency(package: w.package, kind: w.kind, version: w.version)
       )
       d.added = true
       dec budget
-    while d.contract < w.contracts.len:
+    while d.listed < w.listedCount:
       if budget <= 0:
         return false
-      one(w.contracts[d.contract], d.opened.inspection.dependencies[d.dep].contracts)
-      inc d.contract
-    w.contracts.setLen(0)
-    d.contract = 0
+      # [G447; Fable's D1 condition 2] The bytes are the worker's own encoding of values the
+      # reader checked: one that does not decode is a fault in this process, not the
+      # archive's.
+      let at = d.staged.contractAt(d.next)
+      let v = decodeCbor(d.staged.contractData.toOpenArrayByte(at.a, at.b))
+      if v.isErr:
+        raiseAssert "a contract in the worker's answer is not deterministic CBOR"
+      d.deps[d.dep].contracts.add(v.get)
+      dec budget
+      inc d.listed
+      inc d.next
+    d.listed = 0
     d.added = false
     inc d.dep
-  while d.provided < d.wire.provides.len:
-    if budget <= 0:
-      return false
-    one(d.wire.provides[d.provided], d.opened.inspection.provides)
-    inc d.provided
   true
 
-proc take*(d: var Decoding): Opened =
-  ## The decoded judgment, once `decodeSome` gave true.
-  move d.opened
+proc take*(d: var Decoding): seq[PackageDependency] =
+  ## The decoded dependencies, once `decodeSome` gave true. The encodings go with it.
+  d.staged = Inspection(kind: ikUnavailable)
+  move d.deps
 
-proc releaseSome*(d: var Decoding, budget: var int): bool =
-  ## [G447; Fable's D1 condition 5] Frees a judgment dropped while it was decoded (its operation
-  ## is gone), one decoded contract or dependency entry, then one encoded one, for each unit of
-  ## `budget`, as a cancelled run's holdings are freed (G455); true once nothing is left.
-  template drop(s: untyped) =
-    while s.len > 0:
-      if budget <= 0:
-        return false
-      s.setLen(s.len - 1)
-      dec budget
-
-  if d.started and d.opened.inspection.kind == ikEligible:
-    drop(d.opened.inspection.provides)
-    while d.opened.inspection.dependencies.len > 0:
-      drop(d.opened.inspection.dependencies[^1].contracts)
-      if budget <= 0:
-        return false
-      d.opened.inspection.dependencies.setLen(d.opened.inspection.dependencies.len - 1)
-      dec budget
-  drop(d.wire.provides)
-  while d.wire.dependencies.len > 0:
-    drop(d.wire.dependencies[^1].contracts)
+proc releaseSome*(deps: var seq[InspectedDependency], budget: var int): bool =
+  ## [G447, G482; Fable's D1 condition 5] Frees a dropped judgment's dependency entries (its
+  ## operation is gone), one for each unit of `budget`, as a cancelled run's holdings are
+  ## freed (G455); true once none is left. Its encodings went at once: two blocks.
+  while deps.len > 0:
     if budget <= 0:
       return false
-    d.wire.dependencies.setLen(d.wire.dependencies.len - 1)
+    deps.setLen(deps.len - 1)
     dec budget
   true
 
@@ -561,8 +385,8 @@ when defined(posix):
     for m in record.modules:
       result.modules.add(asText(encodeCbor(m.value)))
     result.artifacts = record.artifacts
-    for d in v.manifest.dependencies:
-      result.dependencies.add(d.toWire)
+    result.staged =
+      eligibleInspection(v.manifest.identity, v.commitment, v.manifest.dependencies, [])
     if job.reply:
       result.reply = asText(encodeCbor(installedResult(record, st.get.base)))
 
@@ -736,7 +560,7 @@ proc runJob*(
           )
         o
     return Opt.some(
-      WorkerResult(kind: wrOpened, file: job.file, opened: toWire(opened), reply: reply)
+      WorkerResult(kind: wrOpened, file: job.file, opened: opened, reply: reply)
     )
   of wjDrop:
     var f: SpoolWriter

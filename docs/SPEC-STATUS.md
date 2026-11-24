@@ -742,13 +742,30 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   - The worker encodes each response, and the module thread carries the bytes (G447). Their way out is a stated
     exception, a confined kit module's: a 16 MiB `{installed}` holds the module thread 99 ms under orc and 175 ms
     under refc on the Mac, about 200 ms and 390 ms on server.lan (the host's check and commitment, the SDK's
-    completion copy, the kit's second encoding), left to the core item "large-response completion".
+    completion copy, the kit's second encoding), left to the core item "large-response completion". Those are the
+    one-string case: 5-6a-1's structured record takes seconds (G497).
 
   Claimed: PKG-0080, PKG-0189, PKG-0190, PKG-0389 to PKG-0410, PKG-0436, PKG-0437, PKG-0439, PKG-0440, PKG-0470,
   PKG-0534 to PKG-0537, PKG-0608 and PKG-0609 by test; PKG-0222, PKG-0363, PKG-0441 and PKG-0493 by inspection;
   BCP-0033 and BCP-0035. 40 PKG units and 2 BCP units. PKG-0411 is `out-of-scope`: a MAY not taken, since every
   installed-state mutation is serialized in one slot (G449). TXT-0493 to TXT-0495 and PKG-0608 and PKG-0609 leave
   the re-pin's deferred list. PKG 367/367, BCP 53/53. Areas A3 and A4's 5-5 units are all claimed.
+
+- 2026-11-23, Tier 5 step 5-3c-4 (I122; G482; G447, G455 and G477 amended), inspections carry contract encodings:
+  - `package/resolver.nim`: an eligible `Inspection` holds its contracts as their deterministic encodings, in one
+    private buffer with `int32` ends, built only by `eligibleInspection` and checked free of references
+    (`package/reffree.nim`). The numbering moves a catalog record's encodings into its walk and hashes ranges of
+    them with the same function; G477's walk reads lengths.
+  - `pm/jobs.nim` and `pm/engine.nim`: a judgment crosses as it is and is cached and supplied in the turn it
+    arrives; D1's decode is left for the staged record. `pm/vcache.nim`: the estimate by lengths, and
+    `ContractUnitBytes` 192, measured (it was 1,024).
+  - The oracle keeps the values shape as a test-side type (`tests/support/valueinspection.nim`), and every oracle
+    suite checks the builder against it. New cases in `test_resolver`, `test_pm_vcache` and `test_pm_driver`.
+  - Every resolver count is unchanged for a run that ends by itself, with three exceptions (CONFORMANCE "The
+    resumable run"); a judgment's decode turns are gone (100 for the bench's maximal judgment, 80,000 entries and 22,000
+    contracts; none now).
+
+  No unit changes status. PKG 367/367.
 
 - 2026-11-23, Tier 5 step 5-6a-1 (I140; G490, G491, G494, G495, G496, G500; G399 revised, G405 amended; the owner's
   Q2, Q7 (b), Q11), the Package Manager instance:
@@ -770,8 +787,32 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
 
   Claimed: PKG-0003 to PKG-0008 (PKG-0005 and PKG-0006 also by inspection), PKG-0366, PKG-0367, PKG-0369 to PKG-0377,
   PKG-0379, PKG-0513, PKG-0514, PKG-0519 and PKG-0521, and the App A copies PKG-0630, PKG-0631, PKG-0633, PKG-0637,
-  PKG-0639 to PKG-0647 and PKG-0649, which leave the re-pin's deferred list. 36 units. PKG 403/403. G497's figures
-  wait for 5-3c-4.
+  PKG-0639 to PKG-0647 and PKG-0649, which leave the re-pin's deferred list. 36 units. PKG 403/403.
+  - G497's figures (measured 2026-11-24 after 5-3c-4; the owner's choice, "Merge, state the limit"):
+    - a reply's way out costs per node, in three passes: the module thread, its host's I/O thread, the receiver's
+      I/O thread;
+    - a maximal `{installed}` holds the module thread 5.4 s under orc on the Mac and 24.9 s under refc on server.lan
+      (medians);
+    - the limits are stated in DEPLOYMENT §12, "A large reply's passes": a Hello times out, the Package Manager
+      answers nothing else, a stop waits, the receiver's host stalls, `logosctl`'s default `--timeout` is missed,
+      and the write stall is close;
+    - the fix is the core item "large-response completion", held until after the pause and needed before a
+      release.
+
+- 2026-11-24, Tier 5 restructure clean-up (I135; wave 2), from master d042407:
+  - The Module Host checks a Runtime Control call's outcome with the SDK's `checkOutcome` and releases the
+    buffer only when the call transferred it (INTERFACE §5.2 l.3860-3864). A bad shape is `MODULE_ERROR`.
+  - One `clipUtf8` in `logos_sdk/base/utf8clip` behind every clip helper, so a cut text that reaches a `tstr` stays
+    valid UTF-8 (the Module Host's publish-failure, call-failure and local-failure events among them).
+  - Tools: four checkers exit 2 on a missing or empty root; six walkers skip exFAT's `._` files;
+    `tools/drvcmp.sh` is committed. CI weights for the 12 checks with an analog; logosd-no-ssl keeps its group's
+    mean until a CI run builds it.
+  - X0.1's list: IFC-0043's reason; the SDK's inspection items scoped to the SDK's code (IFC-0077, 0252, 0587,
+    0679, 0953, 0966) and IFC-0602 with the reverse mapper; the `cddl` paths in CDE.toml and CMT.toml; core's
+    two registration tests that tagged IFC-0981 (they keep TXT-0085). Cites of direct delivery moved to
+    6cac8335's lines.
+
+  No unit changes status.
 
 ## Tiers at f4f83471 (the original plan)
 

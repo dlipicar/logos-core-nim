@@ -55,7 +55,7 @@ import ../cbor
 import ../pins
 import ../iface/[accept, outcome, payload]
 import ../abi/[types, checks]
-import ../base/[entry, libvisibility, perthread, wipe]
+import ../base/[entry, libvisibility, perthread, utf8clip, wipe]
 import ./[handover, nimrt]
 
 export results, outcome, types, payload, nimrt, handover, entry
@@ -162,13 +162,8 @@ func toFailure(f: AbiFailure): InvocationFailure =
   InvocationFailure(code: f.code, message: f.message, detail: f.detail)
 
 func clip(m: string): string =
-  ## At most `MaxMessageBytes` bytes, cut before a continuation byte.
-  if m.len <= MaxMessageBytes:
-    return m
-  var n = MaxMessageBytes
-  while n > 0 and (uint8(m[n]) and 0xC0'u8) == 0x80'u8:
-    dec n
-  m[0 ..< n]
+  ## At most `MaxMessageBytes` bytes, cut at a UTF-8 boundary.
+  clipUtf8(m, MaxMessageBytes)
 
 var
   resultMessage {.threadvar.}: array[MaxMessageBytes + 1, char]

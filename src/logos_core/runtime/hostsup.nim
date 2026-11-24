@@ -56,6 +56,7 @@ import std/[atomics, locks]
 import results
 import logos_sdk/abi/[checks, cstatus, types]
 import logos_sdk/base/[parentwatch, perthread, testhooks]
+import logos_sdk/base/utf8clip
 import logos_sdk/iface/[accept, surface]
 import ../transport/io/api except decodeMessage
 import ./[carrier, callside, events, hostio, subend]
@@ -226,12 +227,10 @@ type
 # Text in shared memory -----------------------------------------------------------------
 
 func clipText(s: string): FixedText =
-  fixed(
-    if s.len > TextCapacity:
-      s[0 ..< TextCapacity]
-    else:
-      s
-  )
+  ## At most `TextCapacity` bytes, cut at a UTF-8 boundary: a host's end
+  ## reason becomes its instance's failure reason, a tstr
+  ## (`lcn.rs_failure.reason`) [IMPL; DECISIONS I135].
+  fixed(clipUtf8(s, TextCapacity))
 
 proc sharedCString(s: string): cstring =
   let p = cast[cstring](allocShared0(s.len + 1))
@@ -1266,34 +1265,46 @@ when defined(posix):
       owner.release(owner.state)
     discard p.host.sendMsg(toMessage(done))
 
+  proc rcCallReply*(
+      rc: ptr LogosRuntimeControlBinding, c: LcnCarrierRcCall
+  ): LcnCarrierRcReply =
+    ## One lane-1 Runtime Control `call` through `rc`, and the host's reply.
+    ## [SPEC INTERFACE §5.2 l.3860-3864] The result and the response outputs are
+    ## checked together (`checkOutcome`): a failure needs a null buffer and a
+    ## zero length, a success a buffer with bytes, and any other combination is
+    ## MODULE_ERROR with nothing read. Only a buffer handed over with LOGOS_OK
+    ## is released (`transfersBuffer`), once, after its bytes are copied.
+    let name = textOf(c.`method`)
+    var outBuf: ptr UncheckedArray[uint8]
+    var outLen: csize_t
+    setRuntimeOwned(c.runtime_thread)
+    let res = rc.vtable.call(
+      rc,
+      cstring(name),
+      bytesPtr(c.params),
+      csize_t(c.params.len),
+      addr outBuf,
+      addr outLen,
+    )
+    setRuntimeOwned(false)
+    result = LcnCarrierRcReply(id: c.id)
+    let checked = checkOutcome(res, bufferShape(outBuf, outLen))
+    if checked.isErr:
+      result.failure = Opt.some(toCarrier(checked.error))
+      if transfersBuffer(res, outBuf):
+        rc.vtable.releaseResponse(rc, outBuf, outLen)
+      return
+    var v = newSeq[byte](int(outLen))
+    copyMem(addr v[0], outBuf, int(outLen))
+    result.value = Opt.some(v)
+    rc.vtable.releaseResponse(rc, outBuf, outLen)
+
   proc runJob(h: Host, m: LcnCarrierMessage) =
     ## One lane-1 request, through the attempt's own binding.
     type K = LcnCarrierMessageKind
     case m.kind
     of K.lcn_Carrier_rc_call:
-      let c = m.arm_lcn_Carrier_rc_call
-      let name = textOf(c.`method`)
-      var outBuf: ptr UncheckedArray[uint8]
-      var outLen: csize_t
-      setRuntimeOwned(c.runtime_thread)
-      let res = h.rc.vtable.call(
-        h.rc,
-        cstring(name),
-        bytesPtr(c.params),
-        csize_t(c.params.len),
-        addr outBuf,
-        addr outLen,
-      )
-      setRuntimeOwned(false)
-      var r = LcnCarrierRcReply(id: c.id, failure: failed(res))
-      if r.failure.isNone:
-        var v = newSeq[byte](int(outLen))
-        for i in 0 ..< v.len:
-          v[i] = outBuf[i]
-        r.value = Opt.some(v)
-      if outBuf != nil:
-        h.rc.vtable.releaseResponse(h.rc, outBuf, outLen)
-      h.reply(r)
+      h.reply(rcCallReply(h.rc, m.arm_lcn_Carrier_rc_call))
     of K.lcn_Carrier_rc_subscribe:
       let c = m.arm_lcn_Carrier_rc_subscribe
       # [SPEC INTERFACE §1.5; I106] Every byte of the host's name, before the

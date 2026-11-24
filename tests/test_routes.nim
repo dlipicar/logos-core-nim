@@ -1313,7 +1313,7 @@ suite "run.routes: route handles (INTERFACE §2.5, §5.2; RUNTIME §4.1, §7.5)"
     late.release()
     e.finish()
 
-  test "[IFC-0981] [TXT-0085] observe_subscription_end: one handler per binding and per handle, never called on registration; a terminal handle installs nothing (INTERFACE §2.5 l.1476-1484; DECISIONS I105)":
+  test "[TXT-0085] observe_subscription_end: one handler per binding and per handle, never called on registration; a terminal handle installs nothing (INTERFACE §2.5 l.1476-1484; DECISIONS I105)":
     let e = fixtureEngine(config())
     discard e.started(meter())
     let (_, rc) = e.startClient()
