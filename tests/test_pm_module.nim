@@ -89,6 +89,9 @@ suite "the Package Manager module's requests (G449, G494)":
     check op.get.root.newerThan == Opt.some(identityOf(r.current))
     check op.get.root.source.isNone
 
+# [DECISIONS G107] The hosted cases are POSIX only: a Module Host is reached over the local
+# transport, which fails closed on Windows until step 5-9 builds G329-G333. The requests
+# above run on Windows too (the `windows` job's `nimble test`).
 when defined(posix):
   import logos_sdk/crypto/blake3
   import std/random
