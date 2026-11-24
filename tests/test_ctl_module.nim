@@ -104,7 +104,8 @@ when defined(posix):
 
   proc newSession(edit: Edit = nil, development = false): Session =
     inc sessions
-    let base = makeShortBase("ctl" & $sessions, deepest = "/s/run/logosctl.sock")
+    let base =
+      makeShortBase("ctl" & $sessions, deepest = "/s/run/logosctl.sock", perCase = true)
     let s = Session(dir: base / "s")
     var dc = defaultDaemonConfig("assigned-by-init")
     dc.declarations = Opt.some(@[sensorDeclaration()])
@@ -297,6 +298,8 @@ when defined(posix):
         elif live[].unstarted:
           abandon(live[])
       live = nil
+      # The case's session directories: kept if it failed (`shortdir`).
+      endCaseBases(testStatusIMPL == TestStatus.FAILED)
 
     test "[BCP-0090] [BCP-0084] [BCP-0089] daemon-info and get_self: the logosctl instance's own address; the log line carries the peer, the request does not":
       l = boot(newSession())

@@ -51,6 +51,9 @@ when defined(posix):
         release(live[], testStatusIMPL == TestStatus.FAILED)
       live = nil
       stderr.writeLine(costLine(testName))
+      # The case's session directories, and a shared one it ended: kept if it
+      # failed (`shortdir`).
+      endCaseBases(testStatusIMPL == TestStatus.FAILED)
 
     test "[BCP-0086] [BCP-0088] L-1: the first command starts lcn_call, later ones reuse it and its route; a restarted Runtime resumes it; after module stop the next command starts it again":
       let s = newSession(Shape(providers: @[MeterInstance]))
@@ -328,25 +331,38 @@ when defined(posix):
     test "L-12: events follows a module start; an event outside the events rule is NOT_AUTHORISED (4); an unknown one is refused (1) [IMPL-DECISION G346] [IMPL-DECISION G349]":
       l = share(last = true)
       # The default set, the events rule's three. Until the subscriptions are
-      # active a start is not seen, so shapes is stopped and started until
-      # three events came, one of them about shapes: in the shared session an
-      # earlier case's change (L-9's recovered host) can be seen first.
-      l.stream(eventsOf(count = 3))
-      check within(streamEnded(), l.restart("shapes_module", ShapesInstance))
-      check endStream() == 0
-      let seen = streamLines()
-      checkpoint saidStream()
-      check seen.len == 3
+      # active a start is not seen, so shapes is stopped and started until an
+      # event about shapes came. In the shared session an earlier case's
+      # changes (L-9's recovered host) can come first, any number of them, so
+      # the stream has no count: the case cancels it once shapes' event is in,
+      # within `Patience`.
       let states = [
         "logos.runtime_control.module_state_changed_event",
         "logos.runtime_control.execution_state_changed_event",
       ]
+      template aboutShapes(e: JsonNode): bool =
+        e{"event"}.getStr in states and e{"data", "instance"}.getStr == ShapesInstance
+
+      l.stream(eventsOf())
+      let came = within(
+        streamLines().anyIt(aboutShapes(it)), l.restart("shapes_module", ShapesInstance)
+      )
+      if not came:
+        checkpoint(
+          "no module or execution state event about " & ShapesInstance & " within " &
+            $Patience & " s; the events that came: " &
+            streamLines().mapIt($it).join("; ")
+        )
+      check came
+      interrupt()
+      check endStream() == 130
+      let seen = streamLines()
+      checkpoint saidStream()
+      check streamErrors() == ""
       for e in seen:
         check e{"event"}.getStr in
           @states & @["logos.runtime_control.inventory_changed_event"]
-      check seen.anyIt(
-        it{"event"}.getStr in states and it{"data", "instance"}.getStr == ShapesInstance
-      )
+      check seen.anyIt(aboutShapes(it))
       check l.reaches(ShapesInstance, LogosNSRuntimeControlStateKind.Ready)
       # [G345 S7] route_state_changed is outside the events rule.
       let denied = l.run(eventsOf(["route_state_changed"], count = 1))

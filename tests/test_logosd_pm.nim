@@ -105,7 +105,9 @@ when defined(posix):
   proc newCase(): Case =
     inc cases
     result.dir = makeShortBase(
-      "lpm" & $cases, deepest = "/s/run/ep/12345678/logos_fetch_fake_module.sock"
+      "lpm" & $cases,
+      deepest = "/s/run/ep/12345678/logos_fetch_fake_module.sock",
+      perCase = true,
     )
     result.s = Session(dir: result.dir / "s")
 
@@ -385,6 +387,9 @@ when defined(posix):
         for pid in hostPids():
           discard kill(Pid(pid), SIGKILL)
         fail()
+      # The case's directories, its children's output files with them: kept
+      # if it failed (`shortdir`).
+      endCaseBases(testStatusIMPL == TestStatus.FAILED)
 
     test "[PKG-0353] [IMPL-DECISION G402] the Package Manager starts on the session's trust, acquires the catalog on the fake's event (S9 to S11 under capability-authority), and resolves":
       let c = newCase()
