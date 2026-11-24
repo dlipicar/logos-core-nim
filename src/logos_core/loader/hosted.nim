@@ -85,6 +85,10 @@ proc startHosted*(
   if h.systemInit():
     # [G490] The marked Package Manager: its host accepts the reserved name.
     init.system = Opt.some(true)
+  let sysEp = h.systemEndpointInit()
+  if sysEp.isSome:
+    # [G492; TRN-0330] Its system-service listener is the host's fd 6.
+    init.system_endpoint = sysEp
   when defined(lcnTestHooks):
     # [DECISIONS I92] A test armed the audit hosts (`setWipeAuditForTests`).
     let audit = wipeAuditInit()

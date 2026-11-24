@@ -136,9 +136,13 @@ from ../transport/io/api import
   ConnectFailure, PeerIdentity, SubmitResult, PublishFailure, wipe
 from ../transport/envelope import MessageKind
 from ../transport/session import PublishErrorKind
-from ../transport/ticket import MaxTicketLifetime, RouteTicket
+from ../transport/ticket import
+  MaxTicketLifetime, RouteTicket, TicketStore, issue, revoke
 from ../transport/hello import
-  acceptHello, HelloCheck, HelloFailure, HelloReason, RouteBinding, NotAuthorisedMessage
+  acceptHello, HelloCheck, HelloFailure, HelloReason, RouteBinding,
+  NotAuthorisedMessage, acceptSystemHello, SystemBinding, SystemHelloCheck,
+  SystemPurpose
+from ../pm/contractset import pmContractSet
 from ../transport/io/endpoint import checkEndpointBase
 from ../transport/io/sock import unixStream
 from ./tport import
@@ -152,7 +156,7 @@ import
     asynccall, authbinding, authscopes, bell, bindings, callside, dcache, events,
     execauth, firstfresh, forwarded, hostlock, hostsup, inventory, invoke,
     loaderbinding, observe, plumbing, rcevents, remoterecords, served, servedroots,
-    sessionauth, settings, sidetable, statexfer, store, subend, transported,
+    sessionauth, settings, sidetable, statexfer, store, subend, sysbind, transported,
   ]
 
 export plumbing
@@ -211,6 +215,9 @@ type
     hostedPath: string
       ## the path of `hostedEndpoint` as made, which its Loader record names
       ## even after shutdown stopped it serving (RUNTIME l.3846-3849)
+    systemEndpoint: EndpointId
+      ## [G492] the marked Package Manager's system-service endpoint, made
+      ## beside `hostedEndpoint`; 0: none
 
   Waiter = object
     reply: ReplyChannel
@@ -259,6 +266,9 @@ type
     services: ptr AttemptServices ## those of `realization`
     hostedEndpoint: EndpointId
       ## [G273] the endpoint its Module Host serves for `realization`; 0: none
+    systemEndpoint: EndpointId
+      ## [G492] the system-service endpoint its Module Host serves for
+      ## `realization`; 0: none
     inflight: int
       ## route calls admitted into `realization` and not yet left, deferred
       ## invocations included until they are idle (INTERFACE l.2155-2158)
@@ -409,6 +419,9 @@ type
     session: bool
       ## [I90] a served invocation of a transported route: its outcome is a
       ## Response on `conn`, never a completion callback
+    system: bool
+      ## [G492] a served invocation on a system-service session: it runs on
+      ## the binding's own worker, never refused for the shared pool
     conn: uint64
     requestId: uint64
     linkTag: uint64
@@ -637,6 +650,15 @@ type
       ## has not returned: the consumer instance it counts in (`rcHandlers`)
     pubWaits: Table[uint64, PubWait] ## [I90; E2] by `pubTag`
     nextPubTag: uint64
+    sysTickets: TicketStore[SystemBinding]
+      ## [SPEC TRANSPORT §8.1.2; G492; TRN-0331] the live system-service
+      ## tickets, a store apart from `tickets`
+    sysb: SysBinding ## [G492] the system-service binding, if any
+    nextSysBinding: uint64
+    nextHandoff: uint64
+    sysNote: string ## the realization whose binding refusal was diagnosed
+    sysRoot: Opt[Digest] ## the pinned Package Manager contract's root, once built
+    sysConns: HashSet[ConnId] ## the engine's client connections to it
     when defined(lcnTestHooks):
       connectFault: Opt[ConnectFailure]
         ## [plan §4.1] the next materialization fails with this cause
@@ -645,6 +667,13 @@ type
         ## provider never issued
       erasureMissing: set[RouteMode]
         ## [4b-3b plan §2.6] path kinds to treat as without erasure
+      sysRefuseHellos: bool ## [5-6a-2] every Hello on a system endpoint is refused
+      sysConnectFault: Opt[ConnectFailure]
+        ## [5-6a-2] the next Hello of the engine's client fails with this cause
+      sysLastTicket: seq[byte] ## [5-6a-2] the last ticket the client was given
+      sysSent: int ## [5-6a-2] the Requests the engine sent on the binding
+      sysOutcomes: Table[uint64, (CallOutcome, int)]
+        ## [5-6a-2] by handle: the outcome, and its place among those resumed
     caRoot: Opt[Digest] ## the pinned Capability Authority contract root
     profile: PermissionProfile
       ## [I93] the selected permission profile, this thread's copy; no name:
@@ -1551,7 +1580,8 @@ proc refuseQueuedCall(st: State, stalled = false) =
   ## `stalled`: the long bound's refusal, while a call worker takes no job.
   var waiting: seq[AsyncRec]
   for a in st.asyncCalls.values:
-    if a.executing and not a.terminal:
+    if a.executing and not a.terminal and not a.system:
+      # [G492] the binding's own worker is outside the shared pool
       waiting.add(a)
   waiting.sort(
     proc(x, y: AsyncRec): int =
@@ -2430,6 +2460,8 @@ proc finishAttempt(st: State, a: Attempt) =
   if a.hostedEndpoint != 0 and x.hostedEndpoint != a.hostedEndpoint:
     # [RUN-0228] An endpoint no realization took is removed.
     st.sv.stopServing(a.hostedEndpoint)
+  if a.systemEndpoint != 0 and x.systemEndpoint != a.systemEndpoint:
+    st.sv.stopServing(a.systemEndpoint) # [G492] so is its system-service endpoint
   if x.attempt == a or x.attempt.isNil:
     x.endAttempted()
   if a.request.configuration.isSome:
@@ -2965,6 +2997,10 @@ proc checkContracts(x: Inst, r: RealizationView): Result[bool, string] =
 
 proc promote(st: State, a: Attempt) {.gcsafe.}
 proc checkBinding(st: State) {.gcsafe.}
+proc checkSystemBinding(st: State) {.gcsafe.}
+proc sysAdmit(st: State, q: Request) {.gcsafe.}
+when defined(lcnTestHooks):
+  proc sysTestHook(st: State, q: Request) {.gcsafe.}
 
 proc adoptRealization(st: State, a: Attempt, r: RealizationView) =
   ## [SPEC RUNTIME §3.4, l.540-541; LOADER l.481-490] A realization made for
@@ -3025,7 +3061,27 @@ proc adoptRealization(st: State, a: Attempt, r: RealizationView) =
       a.phase = apCleanup
       st.releaseRealization(x)
       return
+  if a.systemEndpoint != 0:
+    # [G492; TRN-0185, TRN-0186] The system-service endpoint is validated as
+    # the provider's is, before `ready`, with no contract: a Hello on it is
+    # judged against the binding alone (`sysHello`). One that is not valid
+    # fails the placement as the provider's does, with no fallback.
+    st.sv.adoptHosted(a.systemEndpoint, @[]).isOkOr:
+      st.diagnose("the system-service endpoint of " & x.id & " is not valid: " & error)
+      st.failAttempt(
+        a,
+        Failure(
+          kind: fkOther, reason: "the provider's system-service endpoint is not valid"
+        ),
+      )
+      a.phase = apCleanup
+      st.releaseRealization(x)
+      return
+  # Both taken only once both are valid: `finishAttempt` stops an untaken one.
+  if a.hostedEndpoint != 0:
     x.hostedEndpoint = a.hostedEndpoint
+  if a.systemEndpoint != 0:
+    x.systemEndpoint = a.systemEndpoint
   # [SPEC RUNTIME §3.4] Every lifecycle and realization check succeeded.
   a.provides = provider
   st.promote(a)
@@ -3074,6 +3130,7 @@ proc promote(st: State, a: Attempt) {.gcsafe.} =
   # [SPEC RUNTIME l.1679-1680] A Capability Authority is bound before its
   # start is answered.
   st.checkBinding()
+  st.checkSystemBinding()
   st.finishAttempt(a)
 
 proc abandon(st: State, a: Attempt) =
@@ -4063,6 +4120,7 @@ proc pathLoss(st: State, reason: string) =
   ## is still ready, with a fresh generation and nothing carried over.
   st.loseBinding("the notification path is lost: " & reason)
   st.checkBinding()
+  st.checkSystemBinding()
 
 proc grantEnded(st: State, grant: string, expired: bool) =
   ## [SPEC CA l.884-891, l.913; CAP-0185, CAP-0170] A revoked or expired
@@ -4638,6 +4696,24 @@ proc realizeThroughLoader(st: State, a: Attempt) =
       h.setEndpoint(e.ep.listener, e.ep.path, st.runtimeId, st.shared.tport.config).isOkOr:
         st.diagnose("the endpoint of " & x.id & " cannot be handed over: " & error)
         fail("the provider's endpoint cannot be handed over")
+      if st.cfg.packageManager == Opt.some(x.id):
+        # [G492; TRANSPORT l.1063, l.1098; TRN-0182..0186] The marked Package
+        # Manager's system-service endpoint: made, validated and listening
+        # before the spawn, the host's fd 6, which it serves beside fd 4.
+        let sid = hostedSystemEndpoint(h.index)
+        let se = st.sv.openHostedSystem(
+          sid, x.id & "/" & x.current, x.id, x.providerId, x.record.module
+        ).valueOr:
+          st.diagnose(
+            "the system-service endpoint of " & x.id & " cannot be made: " & error
+          )
+          fail("the system-service endpoint cannot be made")
+        a.systemEndpoint = sid
+        h.setSystemEndpoint(se.ep.listener, se.ep.path).isOkOr:
+          st.diagnose(
+            "the system-service endpoint of " & x.id & " cannot be handed over: " & error
+          )
+          fail("the system-service endpoint cannot be handed over")
   # [G400] The instance's protected realization input, if it has one.
   let (protectedBytes, protectedLen) = st.side.protectedOf(x.id)
   st.side.putInbound(
@@ -10357,6 +10433,16 @@ proc servedSubscribe(st: State, ev: IoEvent) =
   ## activation is decided on a call worker (`activation`), which may wait for
   ## an evaluation.
   let s = st.sv.session(ev.conn)
+  if s != nil and s.system:
+    # [TRN-0344, TRN-0345] No event is in the binding's scope.
+    st.subscriptionResult(
+      ev.conn,
+      ev.subscribeId,
+      Opt.some(
+        failure(ecNotAuthorised, "no event is in the system-service binding's scope")
+      ),
+    )
+    return
   if s.isNil or s.ended or s.draining:
     let r = (if s.isNil: nil else: st.route(s.route))
     st.subscriptionResult(
@@ -10979,6 +11065,8 @@ proc handle(st: State, q: Request) {.gcsafe.} =
         # client can ask any more (its Loader is lost).
         let x = st.instances.getOrDefault(q.instance)
         q.reply.answer(Reply(id: (if x.isNil: "" else: $x.realizationStatus)))
+      elif q.reason.startsWith("sys-"):
+        st.sysTestHook(q)
       else:
         st.transportHook(q)
     else:
@@ -11096,6 +11184,8 @@ proc handle(st: State, q: Request) {.gcsafe.} =
     raiseAssert "a link call is handled before its decisions (`handle(Msg)`)"
   of rqAdmit:
     st.admit(q)
+  of rqSysAdmit:
+    st.sysAdmit(q)
   of rqObserveEnd:
     st.observeEnd(q)
   of rqSubEndAdmit:
@@ -11318,13 +11408,15 @@ proc hostEnded(st: State, h: Host, e: HostEndNote) =
   ## came first, since the instance no longer uses the host.
   h.noteEnd()
   let ep = hostedEndpoint(h.index)
+  let sep = hostedSystemEndpoint(h.index) # [G492] its system-service endpoint, if any
   var conns: seq[ConnId]
   for conn, s in st.sv.sessions:
-    if s.endpoint == ep:
+    if s.endpoint == ep or s.endpoint == sep:
       conns.add(conn)
   for conn in conns:
     st.servedClosed(conn)
   st.sv.stopServing(ep)
+  st.sv.stopServing(sep)
   var x: Inst = nil
   for y in st.instances.values:
     if y.hostOf == h:
@@ -11794,12 +11886,735 @@ proc settle(st: State) =
   ## shutdown accepted by the next. The authority and Loader bindings follow
   ## every step.
   st.checkBinding()
+  st.checkSystemBinding()
   st.checkLoader()
   if st.shuttingDown and not st.shutdownDone:
     st.shutdownStep()
     if st.shutdownComplete():
       st.finishShutdown()
   st.checkBootstrap()
+
+# The system-service binding (Tier 5 step 5-6a-2; DECISIONS G492, G493) -------------------
+
+proc sysWorkerLoop(s: ptr Shared) =
+  ## [G492] The binding's own worker: the provider side of its sessions' calls,
+  ## one at a time, outside the shared call workers, so a full pool never
+  ## refuses the handoff (G242).
+  while true:
+    var job: CallJob
+    try:
+      job = s.sysCalls.recv()
+    except Exception:
+      return
+    if job.kind != cjRun:
+      return
+    runCall(job.call)
+    s.post(Msg(kind: mkSysCallDone, target: job.call))
+
+proc sysWorkerMain(s: ptr Shared) {.thread.} =
+  markRuntimeThread()
+  sysWorkerLoop(s)
+  releasePerThread()
+
+proc dispatchSysCall(st: State, a: AsyncRec) =
+  ## [G492] To the binding's own worker, started with the first such call.
+  let s = st.shared
+  a.executing = true
+  if not s.sysSpawned:
+    try:
+      createThread(s.sysWorker, sysWorkerMain, s)
+      s.sysSpawned = true
+    except ResourceExhaustedError:
+      discard # the call waits; its session or its caller's deadline ends it
+  try:
+    s.sysCalls.send(CallJob(kind: cjRun, call: a.call))
+  except Exception:
+    discard
+
+proc sysContract(st: State): Opt[Digest] =
+  ## [G492] The pinned Package Manager contract's root, built once from the
+  ## mirrored documents (`pm/contractset`): data, never a typed constant.
+  if st.sysRoot.isNone:
+    let c = pmContractSet()
+    if c.isOk:
+      st.sysRoot = Opt.some(c.get.primary.root)
+  st.sysRoot
+
+proc systemRefusal(st: State, x: Inst): string =
+  ## [SPEC RUNTIME l.1561-1566: RUN-0313..0317; G492] A local provider backed
+  ## by the instance, `ready`, whose primary contract is the pinned Package
+  ## Manager contract, through which `get_runtime_handoff` resolves, with a
+  ## system-service endpoint that serves. Empty when bindable. The usable
+  ## path's last check is the first Hello (RUN-0318).
+  if x.realization.isNil or x.services.isNil:
+    return "it has no realization"
+  if x.providerId.len == 0:
+    return "it has no provider record"
+  let root = st.sysContract()
+  if root.isNone:
+    return "the pinned Package Manager contract cannot be built"
+  let b = x.realization
+  let primary = b.contracts.primary
+  if (x.record.primaryContract.isSome and x.record.primaryContract != root) or
+      primary.isNone or primary.get.root != root.get:
+    return "its primary contract is not the pinned Package Manager contract"
+  let sel = selectContract(b.contracts, root.get, st.ctx)
+  if sel.isNone or sel.get.methodRoot(HandoffMethod).isNone:
+    return "get_runtime_handoff does not resolve"
+  if root.get notin x.schemas:
+    return "its contract has no construction input"
+  if not x.hosted or x.systemEndpoint == 0:
+    return "it has no system-service endpoint"
+  let e = st.sv.endpoints.getOrDefault(x.systemEndpoint)
+  if e.isNil or e.state != esServing or not e.listening:
+    return "its system-service endpoint does not serve"
+  ""
+
+proc resumeHandoff(st: State, r: HandoffRequest, outcome: CallOutcome) =
+  ## Each request resumes exactly once.
+  if r.resume != nil:
+    let f = r.resume
+    r.resume = nil
+    when defined(lcnTestHooks):
+      st.sysOutcomes[r.id] = (outcome, st.sysOutcomes.len + 1)
+    f(outcome)
+
+proc sysRevoke(st: State, b: SysBinding): int =
+  ## [TRN-0191; RUN-0854] The binding's unredeemed tickets go.
+  let id = b.id
+  st.sysTickets.revoke(
+    proc(r: SystemBinding): bool {.gcsafe, raises: [].} =
+      r.binding == id
+  )
+
+proc sysFailed(st: State, b: SysBinding, why: string) =
+  ## [G492, rulings 2 and 3] A Hello of the engine's client failed: its ticket
+  ## is deleted at once, so it is refused like any unknown one if presented
+  ## later (TRANSPORT l.1113, TRN-0191); one log line with the reason the
+  ## Runtime saw; the next Hello 1 s later, doubling to 30 s, while the
+  ## binding stays valid. The instance's readiness is its own.
+  b.conn = 0
+  b.connecting = false
+  discard st.sysRevoke(b)
+  if not b.live:
+    return
+  let now = st.monoNow
+  let at = b.failed(now)
+  st.diagnose(
+    "the system-service binding of " & b.instance & ": Hello attempt " & $b.failures &
+      " failed (" & why & "); the next in " & $((at - now) div 1_000_000_000) & " s"
+  )
+
+func connectCause(ev: IoEvent): string =
+  case ev.failCause
+  of ConnectFailure.cfPeerMismatch: "the peer check failed"
+  of ConnectFailure.cfHello: "the Hello was refused or timed out"
+  of ConnectFailure.cfConnect: "a connect error"
+  of ConnectFailure.cfCapacity: "no connection capacity"
+  of ConnectFailure.cfContract: "the contract input was refused"
+  of ConnectFailure.cfUnsupported: "the path is not supported"
+  of ConnectFailure.cfShutdown: "the transport is stopping"
+
+proc sysConnectFailed(st: State, ev: IoEvent) =
+  st.sysConns.excl(ev.conn)
+  let b = st.sysb
+  if b.isNil or b.conn != ev.conn:
+    return
+  var why = connectCause(ev)
+  if ev.failMsg.len > 0:
+    why.add(": " & ev.failMsg)
+  st.sysFailed(b, why)
+
+proc sysConnect(st: State, b: SysBinding) =
+  ## [TRN-0336..0339; RUN-0318] One Hello of the engine's own client: a fresh
+  ## ticket, issued only while the binding is authorized, never reused and
+  ## never for a route (TRN-0337), expiring at most 60 s after issuance
+  ## (TRN-0336); given only to this Hello inside the engine (TRN-0338), which
+  ## the I/O thread writes after its §8.2 peer check (TRN-0339). No result,
+  ## log or record carries it (RUN-0852).
+  if not b.live or b.connecting or b.conn != 0:
+    return
+  b.retryAt = Opt.none(int64)
+  let rec = SystemBinding(
+    runtime: st.runtimeId,
+    binding: b.id,
+    realization: b.realization,
+    provider: b.provider,
+    contract: b.contract,
+    endpoint: b.path,
+    methods: @[b.methodRoot],
+    events: @[],
+    purpose: spSystemService,
+  )
+  var t = st.sysTickets.issue(rec, st.monoNow, high(int64)).valueOr:
+    st.sysFailed(b, "no ticket could be issued: " & error)
+    return
+  let conn = st.shared.tport.newConnId()
+  b.conn = conn
+  b.connecting = true
+  st.sysConns.incl(conn)
+  when defined(lcnTestHooks):
+    st.sysLastTicket = @t
+    if st.sysConnectFault.isSome:
+      # [plan §10.2, ruling 2] As if the I/O thread's peer check failed:
+      # nothing is sent, and the attempt's ticket goes at once.
+      let cause = st.sysConnectFault.get
+      st.sysConnectFault = Opt.none(ConnectFailure)
+      zeroMem(addr t[0], t.len)
+      st.sysConnectFailed(
+        IoEvent(
+          conn: conn,
+          kind: IoEventKind.evConnectFailed,
+          failCode: ecTransport,
+          failCause: cause,
+          failMsg: "injected by the test",
+        )
+      )
+      return
+  var cmd = IoCommand(
+    conn: conn,
+    kind: IoCommandKind.cmdConnect,
+    path: b.path,
+    expected: PeerIdentity(uid: st.shared.tport.euid),
+    module: b.provider,
+    ticket: t,
+    selected: ContractInput(root: b.contract, schema: b.schema, system: true),
+    firstId: 0,
+  )
+  zeroMem(addr t[0], t.len)
+  let sent = st.shared.tport.submitOwner(cmd)
+  zeroMem(addr cmd.ticket[0], cmd.ticket.len)
+  if sent != SubmitResult.sbOk:
+    st.sysConns.excl(conn)
+    st.sysFailed(b, "the transport is stopping")
+
+proc sysSendNext(st: State, b: SysBinding) =
+  ## [G492, ruling 1] One Request in flight on the session: the first parked
+  ## one still waiting is sent once the session is established. A lost
+  ## session is made again on next use while the binding stays valid [IMPL].
+  if not b.live or b.inflight != nil:
+    return
+  let now = st.monoNow
+  while b.parked.len > 0 and b.sendable and b.inflight.isNil:
+    let r = b.parked.popFirst()
+    if now >= r.deadline:
+      st.resumeHandoff(r, failedWith(ecTimeout, "the handoff request timed out"))
+      continue
+    inc b.nextTag
+    r.tag = b.nextTag
+    let sent = st.shared.tport.submitOwner(
+      IoCommand(
+        conn: b.conn,
+        kind: IoCommandKind.cmdCall,
+        tag: r.tag,
+        methodName: HandoffMethod,
+        params: r.params,
+      )
+    )
+    if sent != SubmitResult.sbOk:
+      st.resumeHandoff(r, failedWith(ecNotReady, "the transport is stopping"))
+      continue
+    b.inflight = r
+    when defined(lcnTestHooks):
+      inc st.sysSent
+  if b.parked.len > 0 and b.conn == 0 and not b.connecting and b.retryAt.isNone:
+    st.sysConnect(b)
+
+proc sysConnected(st: State, conn: ConnId) =
+  ## [RUN-0318, RUN-0319] The first Hello succeeded: the binding is ready, and
+  ## its parked requests go one at a time.
+  let b = st.sysb
+  if b.isNil or b.conn != conn or not b.connecting:
+    st.sysConns.excl(conn)
+    discard
+      st.shared.tport.submitOwner(IoCommand(conn: conn, kind: IoCommandKind.cmdClose))
+    return
+  let first = b.state == bsPending
+  b.succeeded()
+  if first:
+    st.diagnose("the system-service binding of " & b.instance & " is ready")
+  st.sysSendNext(b)
+
+proc sysResponse(st: State, conn: ConnId, tag: uint64, outcome: sink CallOutcome) =
+  ## [G492, ruling 1 step 4] The reply, checked against the method's schema and
+  ## commitment by the I/O thread as for any route: the Runtime thread decodes
+  ## nothing and resumes the request with it. A cancelled one's late Response
+  ## is discarded (TRANSPORT §3.4).
+  let b = st.sysb
+  if b.isNil or b.conn != conn or b.inflight.isNil or b.inflight.tag != tag:
+    return
+  let r = b.inflight
+  b.inflight = nil
+  st.resumeHandoff(r, outcome)
+  st.sysSendNext(b)
+
+proc sysClosed(st: State, ev: IoEvent) =
+  ## [G492, ruling 3] The engine's session ended. The binding stays valid: the
+  ## one in flight fails TRANSPORT_ERROR, and the session is made again on
+  ## next use; a Hello that then fails is handled as the first.
+  st.sysConns.excl(ev.conn)
+  let b = st.sysb
+  if b.isNil or b.conn != ev.conn:
+    return
+  if b.connecting:
+    st.sysFailed(b, "the connection closed during the Hello")
+    return
+  b.conn = 0
+  if b.inflight != nil:
+    let r = b.inflight
+    b.inflight = nil
+    st.resumeHandoff(r, failedWith(ecTransport, "the system-service session was lost"))
+  if b.live:
+    st.diagnose(
+      "the system-service binding of " & b.instance &
+        ": its session was lost; it is made again on next use"
+    )
+    st.sysSendNext(b)
+
+proc requestHandoff(
+    st: State,
+    package, version, module: string,
+    deadline: MonoTime,
+    resume: HandoffResume,
+): uint64 =
+  ## [G492; plan §4.6 steps 1-3] The engine's form, with no futures: the
+  ## request is parked and resumes once, on this thread, with the outcome:
+  ## - `NOT_READY` at once with no valid binding, or after 10 s (or its own
+  ##   deadline, if sooner) while the binding is pending (RUN-0319);
+  ## - `MODULE_ERROR` at once with one in flight and 64 parked (ruling 1);
+  ## - `TIMEOUT` at its own deadline, parked or in flight, and `CANCELLED`
+  ##   when withdrawn (`withdrawHandoff`): a parked one is never sent, the one
+  ##   in flight is cancelled on the session and the next one sent (2a).
+  ## Returns its handle. Not reachable through Runtime Control or any route.
+  inc st.nextHandoff
+  let id = st.nextHandoff
+  let r = HandoffRequest(id: id, resume: resume)
+  let b = st.sysb
+  if not b.live:
+    st.resumeHandoff(
+      r,
+      failedWith(
+        ecNotReady, "the Package Manager's system-service binding is not established"
+      ),
+    )
+    return id
+  if b.full:
+    st.resumeHandoff(
+      r, failedWith(ecModule, "the Package Manager's handoff queue is full")
+    )
+    return id
+  let now = st.monoNow
+  r.parkedAt = now
+  r.deadline = now + max((deadline - getMonoTime()).inNanoseconds, 0'i64)
+  r.params = encodeCbor(
+    cborMap(
+      (cbor("module"), cbor(module)),
+      (
+        cbor("package"),
+        cborMap((cbor("package"), cbor(package)), (cbor("version"), cbor(version))),
+      ),
+    )
+  )
+  b.parked.addLast(r)
+  st.sysSendNext(b)
+  id
+
+proc withdrawHandoff(st: State, id: uint64) =
+  ## [G492, ruling 1 point 2a] The requester gave up (5-8: an abandoned start).
+  let b = st.sysb
+  if b.isNil:
+    return
+  if b.inflight != nil and b.inflight.id == id:
+    let r = b.inflight
+    b.inflight = nil
+    discard st.shared.tport.submitOwner(
+      IoCommand(conn: b.conn, kind: IoCommandKind.cmdCancel, callTag: r.tag)
+    )
+    st.resumeHandoff(r, failedWith(ecCancelled, "the handoff request was withdrawn"))
+    st.sysSendNext(b)
+    return
+  let r = b.take(id)
+  if r != nil:
+    st.resumeHandoff(r, failedWith(ecCancelled, "the handoff request was withdrawn"))
+
+proc checkSystem(st: State) =
+  ## The binding's timers, on the engine's monotonic clock: the next Hello, the
+  ## one in flight past its deadline (Cancel, then the next), and the parked
+  ## ones whose wait ended (`waitEnd`), which are never sent.
+  let b = st.sysb
+  if not b.live:
+    return
+  let now = st.monoNow
+  if b.retryAt.isSome and now >= b.retryAt.get:
+    b.retryAt = Opt.none(int64)
+    st.sysConnect(b)
+  if b.inflight != nil and now >= b.inflight.deadline:
+    let r = b.inflight
+    b.inflight = nil
+    discard st.shared.tport.submitOwner(
+      IoCommand(conn: b.conn, kind: IoCommandKind.cmdCancel, callTag: r.tag)
+    )
+    st.resumeHandoff(r, failedWith(ecTimeout, "the handoff request timed out"))
+  var gone: seq[HandoffRequest]
+  for r in b.parked:
+    if now >= b.waitEnd(r):
+      gone.add(r)
+  for r in gone:
+    discard b.take(r.id)
+    st.resumeHandoff(
+      r,
+      if now >= r.deadline:
+        failedWith(ecTimeout, "the handoff request timed out")
+      else:
+        failedWith(
+          ecNotReady, "the Package Manager's system-service binding is not ready"
+        ),
+    )
+  st.sysSendNext(b)
+
+proc nextSystem(st: State): Opt[int64] =
+  ## The next of those, on the engine's monotonic clock.
+  let b = st.sysb
+  if not b.live:
+    return
+  var t = b.retryAt
+  template consider(ns: int64) =
+    if t.isNone or ns < t.get:
+      t = Opt.some(ns)
+
+  if b.inflight != nil:
+    consider(b.inflight.deadline)
+  for r in b.parked:
+    consider(b.waitEnd(r))
+  t
+
+proc invalidateSystem(st: State, b: SysBinding, why: string) =
+  ## [SPEC RUNTIME l.1572-1575; RUN-0854, RUN-0855; G492] In this order: the
+  ## binding is invalid; its unredeemed tickets are deleted; admission on its
+  ## sessions stops (`sysDispatch`, `sysAdmit` check it); its sessions end
+  ## under §8.1's bounded rules, a readiness end draining what was admitted;
+  ## the engine's own session closes; its parked and in-flight requests fail
+  ## NOT_READY. Nothing is tried again: a restart's realization binds anew
+  ## after its own checks (RUN-0700).
+  b.state = bsInvalid
+  b.retryAt = Opt.none(int64)
+  discard st.sysRevoke(b)
+  var sessions: seq[Session]
+  for s in st.sv.sessions.values:
+    if s.system and s.binding == b.id and not s.ended and not s.draining:
+      sessions.add(s)
+  let x = st.instances.getOrDefault(b.instance)
+  for s in sessions:
+    if st.shuttingDown:
+      st.sv.drain(s, st.shutdownDeadline)
+    elif x != nil and x.state == msStopping:
+      st.sv.drain(s, st.stopDeadlineOf(x.id))
+    else:
+      st.sv.close(s)
+  if b.conn != 0:
+    discard
+      st.shared.tport.submitOwner(IoCommand(conn: b.conn, kind: IoCommandKind.cmdClose))
+    b.conn = 0
+    b.connecting = false
+  var waiting: seq[HandoffRequest]
+  if b.inflight != nil:
+    waiting.add(b.inflight)
+    b.inflight = nil
+  while b.parked.len > 0:
+    waiting.add(b.parked.popFirst())
+  for r in waiting:
+    st.resumeHandoff(
+      r, failedWith(ecNotReady, "the Package Manager's system-service binding ended")
+    )
+  st.diagnose("the system-service binding of " & b.instance & " ended: " & why)
+
+proc checkSystemBinding(st: State) =
+  ## [SPEC RUNTIME l.1561-1575, l.3675, l.3838-3839; G492, G493] After every
+  ## step, as `checkBinding` for the Authority: the binding ends when its
+  ## instance leaves `ready`, its realization changes or shutdown begins; one
+  ## is made, `pending`, once the marked instance is `ready` and passes the
+  ## checks, and its first Hello begins. Bootstrap policy authorizes it (the
+  ## host configuration's mark, G490), never active policy [IMPL]. Startup
+  ## does not wait for it: orchestration starts the instance, so the binding
+  ## is made after orchestration is ready (l.3839; G493).
+  if st.cfg.packageManager.isNone:
+    return
+  let x = st.instances.getOrDefault(st.cfg.packageManager.get)
+  let b = st.sysb
+  if b.live and (
+    x.isNil or x.state != msReady or x.current != b.attempt or x.realization.isNil or
+    st.shuttingDown
+  ):
+    st.invalidateSystem(
+      b,
+      if x.isNil:
+        "the instance was retired"
+      elif st.shuttingDown:
+        "the Runtime is shutting down"
+      elif x.current != b.attempt:
+        "its realization was replaced"
+      else:
+        "the instance is " & $x.state,
+    )
+  if st.shuttingDown or x.isNil or x.state != msReady or
+      (st.sysb != nil and st.sysb.attempt == x.current):
+    return
+  let refused = st.systemRefusal(x)
+  if refused.len > 0:
+    if st.sysNote != x.current:
+      st.sysNote = x.current
+      st.diagnose("the system-service binding of " & x.id & " is not made: " & refused)
+    return
+  let e = st.sv.endpoints.getOrDefault(x.systemEndpoint)
+  let root = st.sysContract().get
+  let sel = selectContract(x.realization.contracts, root, st.ctx).get
+  inc st.nextSysBinding
+  let nb = SysBinding(
+    id: st.nextSysBinding,
+    responsibility: "the runtime handoff (RUNTIME l.1310)",
+    instance: x.id,
+    attempt: x.current,
+    endpoint: e.id,
+    path: e.ep.path,
+    provider: x.record.module,
+    contract: root,
+    schema: x.schemas.getOrDefault(root),
+    methodRoot: sel.methodRoot(HandoffMethod).get,
+    state: bsPending,
+  )
+  # [TRN-0349] The system-service endpoint serves the binding's contract alone.
+  e.callee.contracts = @[root]
+  st.sysb = nb
+  st.sysConnect(nb)
+
+proc sysHello(st: State, ev: IoEvent, e: ServedEndpoint) =
+  ## [SPEC TRANSPORT §8.1.2; TRN-0330..0343] A Hello the system-service
+  ## listener accepted: judged against the system ticket store alone, never
+  ## the route store (TRN-0331, TRN-0332). The stored binding must be the
+  ## current one for this session, module, contract and realization, checked
+  ## here before the atomic redemption, ordered with invalidation on this
+  ## thread (TRN-0340, TRN-0341).
+  when defined(lcnTestHooks):
+    if st.sysRefuseHellos:
+      # [plan §10.2, ruling 3] Every Hello on fd 6 is refused.
+      st.sv.refused(
+        ev.conn,
+        HelloFailure(
+          code: ecNotAuthorised, reason: HelloReason.hrState, msg: NotAuthorisedMessage
+        ),
+      )
+      return
+  let check: SystemHelloCheck = proc(
+      r: SystemBinding
+  ): Result[void, HelloFailure] {.gcsafe, raises: [].} =
+    let b = st.sysb
+    let x = st.instances.getOrDefault(e.instance)
+    let ok =
+      b.live and r.binding == b.id and r.runtime == st.runtimeId and
+      r.realization == b.realization and e.realization == b.realization and
+      e.id == b.endpoint and r.methods == @[b.methodRoot] and r.events.len == 0 and
+      x != nil and x.state == msReady and x.current == b.attempt
+    if not ok:
+      st.diagnose(
+        "a Hello with a live system-service ticket failed the Runtime's state checks"
+      )
+      return err(
+        HelloFailure(
+          code: ecNotAuthorised, reason: HelloReason.hrState, msg: NotAuthorisedMessage
+        )
+      )
+    ok()
+  let est = acceptSystemHello(
+    e.callee, st.sysTickets, ev.frame, st.monoNow, st.sv.limits, check
+  )
+  if est.isErr:
+    st.sv.refused(ev.conn, est.error)
+    return
+  discard st.sv.admittedSystem(ev.conn, e, est.get)
+
+proc sysDispatch(st: State, ev: IoEvent, s: Session) =
+  ## [TRN-0344, TRN-0345; RUN-0853] A Request on a system-service session:
+  ## the binding valid and the method in its scope, else NOT_AUTHORISED and
+  ## nothing dispatched; then admitted (`sysAdmit`) and run in the provider's
+  ## Module Host on the binding's own worker. No consumer, route or engine
+  ## authority is made (TRANSPORT l.1084).
+  let b = st.sysb
+  if s.ended or s.draining:
+    st.sv.respondFailure(ev.conn, ev.requestId, ecNotReady)
+    return
+  if not b.live or s.binding != b.id or ev.methodName != HandoffMethod or
+      ev.introspection:
+    st.sv.respondFailure(ev.conn, ev.requestId, ecNotAuthorised)
+    return
+  let blob = newBlob(
+    b.contract,
+    cast[ptr UncheckedArray[uint8]](if b.schema.len > 0:
+      unsafeAddr b.schema[0]
+    else:
+      nil),
+    b.schema.len,
+    st.shared.payloadDepth,
+  )
+  let c = newSessionCall(
+    st.shared,
+    fixed(""),
+    fixed(""),
+    fixed(""),
+    s.generation,
+    blob,
+    ev.methodName,
+    ev.params,
+    ev.conn,
+    ev.requestId,
+  )
+  c.system = true
+  let a = AsyncRec(
+    call: c, session: true, system: true, conn: ev.conn, requestId: ev.requestId
+  )
+  st.asyncCalls[c] = a
+  s.addCall(ev.requestId, c)
+  st.dispatchSysCall(a)
+
+proc sysAdmit(st: State, q: Request) =
+  ## [TRN-0344, TRN-0345; RUN-0853] The admission of a call on a
+  ## system-service session, ordered here with invalidation: the binding
+  ## valid, the method in its scope, its provider realization current and
+  ## `ready`. The caller view is the system service's (RUNTIME l.835).
+  let a = st.asyncCalls.getOrDefault(q.call)
+  let s = (if a.isNil: nil else: st.sv.session(a.conn))
+  let b = st.sysb
+  if a.isNil or s.isNil or not s.system or s.ended or not b.live or s.binding != b.id or
+      q.bare != HandoffMethod:
+    q.reply.answerError(ecNotAuthorised, "not authorised")
+    return
+  let p = st.instances.getOrDefault(b.instance)
+  if p.isNil or p.state != msReady or p.current != b.attempt or p.realization.isNil or
+      p.services.isNil or st.shuttingDown:
+    q.reply.answerError(ecNotReady, "the provider is not ready")
+    return
+  inc p.inflight
+  let ticket = newTicket()
+  ticket.id = uint64(st.nextJobId())
+  a.ticket = ticket
+  a.provider = p.id
+  if a.cancelled:
+    ticket.cancelled.store(true)
+  if a.terminal:
+    ticket.closed.store(true)
+  var host: pointer = nil
+  if p.hostOf != nil:
+    host = p.hostOf
+    retain(cast[Host](host))
+  let r = p.realization
+  q.reply.answer(
+    Reply(
+      admission: Admission(
+        host: host,
+        dispatch: r.dispatch,
+        free: r.free,
+        context: r.context,
+        access: p.services,
+        provider: p.id,
+        ticket: ticket,
+        runtimeId: st.runtimeId,
+        asyncApi: r.asyncApi,
+      )
+    )
+  )
+
+proc sysLocalFailure(st: State, ev: IoEvent) =
+  ## A command on the engine's session refused before anything was sent.
+  let b = st.sysb
+  if b.isNil or b.conn != ev.conn or b.inflight.isNil or b.inflight.tag != ev.localTag:
+    return
+  let r = b.inflight
+  b.inflight = nil
+  st.resumeHandoff(r, failedWith(ev.localCode, ev.localMsg))
+  st.sysSendNext(b)
+
+when defined(lcnTestHooks):
+  proc sysTestHook(st: State, q: Request) =
+    ## [plan §10.2] `test_system_binding`'s hooks (`systemBindingForTests` and
+    ## the others below).
+    let b = st.sysb
+    case q.reason
+    of "sys-state":
+      var r = Reply()
+      if b != nil:
+        r.id = $b.state
+        r.generation = uint64(b.failures)
+        r.name = b.path
+        r.pending = b.conn != 0 and not b.connecting
+      q.reply.answer(r)
+    of "sys-refuse":
+      st.sysRefuseHellos = q.generation != 0
+      q.reply.answer(Reply())
+    of "sys-fault":
+      st.sysConnectFault = Opt.some(ConnectFailure(q.generation))
+      q.reply.answer(Reply())
+    of "sys-ticket":
+      q.reply.answer(Reply(bytes: st.sysLastTicket))
+    of "sys-issue":
+      # A live ticket of the current binding, with the system-service purpose
+      # unless `generation` is 1, which issues one without it.
+      if not b.live:
+        q.reply.answerError(ecNotReady, "no binding")
+        return
+      let rec = SystemBinding(
+        runtime: st.runtimeId,
+        binding: b.id,
+        realization: b.realization,
+        provider: b.provider,
+        contract: b.contract,
+        endpoint: b.path,
+        methods: @[b.methodRoot],
+        purpose: (if q.generation == 1: spNone else: spSystemService),
+      )
+      let t = st.sysTickets.issue(rec, st.monoNow, high(int64)).valueOr:
+        q.reply.answerError(ecModule, error)
+        return
+      q.reply.answer(Reply(bytes: @t))
+    of "sys-handoff":
+      let reply = q.reply
+      let id = st.requestHandoff(
+        q.instance,
+        q.route,
+        q.module,
+        getMonoTime() + initDuration(milliseconds = int64(q.generation)),
+        proc(o: CallOutcome) {.closure, gcsafe, raises: [].} =
+          discard,
+      )
+      reply.answer(Reply(generation: id))
+    of "sys-outcome":
+      var r = Reply(pending: true)
+      st.sysOutcomes.withValue(q.generation, done):
+        let o = done[0]
+        r.pending = false
+        r.invalidations = uint64(done[1]) # its place among those resumed
+        if o.ok:
+          r.id = "ok"
+          r.bytes = o.result
+        else:
+          r.id = "failed"
+          r.generation = uint64(ord(o.failure.code))
+          r.name = o.failure.message.get("")
+      q.reply.answer(r)
+    of "sys-withdraw":
+      st.withdrawHandoff(q.generation)
+      q.reply.answer(Reply())
+    of "sys-close":
+      # The provider side closes every system-service session at once.
+      var gone: seq[Session]
+      for s in st.sv.sessions.values:
+        if s.system and not s.ended:
+          gone.add(s)
+      for s in gone:
+        st.sv.close(s)
+      q.reply.answer(Reply(generation: uint64(gone.len)))
+    of "sys-sent":
+      q.reply.answer(Reply(generation: uint64(st.sysSent)))
+    else:
+      q.reply.answerError(ecInvalidParams, "unknown transport hook")
 
 proc hello(st: State, ev: IoEvent) =
   ## [SPEC TRANSPORT §3.1, §8.1; plan §2.5] `SessionAuthority.hello`: the
@@ -11808,6 +12623,9 @@ proc hello(st: State, ev: IoEvent) =
   ## fail, since every route end revokes its tickets first; a failure is
   ## NOT_AUTHORISED (TRANSPORT l.1013-1014) and consumes nothing.
   let e = st.sv.endpoints.getOrDefault(ev.helloEndpoint)
+  if e != nil and e.system:
+    st.sysHello(ev, e)
+    return
   if e.isNil:
     st.sv.refused(
       ev.conn,
@@ -11881,6 +12699,9 @@ proc servedDispatch(st: State, ev: IoEvent) =
   ## [plan §2.5] One served invocation per dispatched Request, admitted and
   ## run on a call worker as a direct asynchronous call is (`asynccall.nim`).
   let s = st.sv.session(ev.conn)
+  if s != nil and s.system:
+    st.sysDispatch(ev, s)
+    return
   let r = (if s.isNil: nil else: st.route(s.route))
   if s.isNil or r.isNil or s.ended:
     st.sv.respondFailure(ev.conn, ev.requestId, ecNotReady)
@@ -11994,14 +12815,25 @@ proc ioEvent(st: State, ev: sink IoEvent) =
   of IoEventKind.evClosed:
     if isServed(ev.conn):
       st.servedClosed(ev.conn)
+    elif ev.conn in st.sysConns:
+      st.sysClosed(ev)
     else:
       st.linkClosed(ev)
   of IoEventKind.evConnected:
-    st.linkConnected(ev.conn)
+    if ev.conn in st.sysConns:
+      st.sysConnected(ev.conn)
+    else:
+      st.linkConnected(ev.conn)
   of IoEventKind.evConnectFailed:
-    st.linkConnectFailed(ev)
+    if ev.conn in st.sysConns:
+      st.sysConnectFailed(ev)
+    else:
+      st.linkConnectFailed(ev)
   of IoEventKind.evResponse:
-    st.linkResponse(ev.conn, ev.tag, move ev.outcome)
+    if ev.conn in st.sysConns:
+      st.sysResponse(ev.conn, ev.tag, move ev.outcome)
+    else:
+      st.linkResponse(ev.conn, ev.tag, move ev.outcome)
   of IoEventKind.evSubscribe:
     st.servedSubscribe(ev)
   of IoEventKind.evUnsubscribe:
@@ -12025,6 +12857,8 @@ proc ioEvent(st: State, ev: sink IoEvent) =
   of IoEventKind.evLocalFailure:
     if isServed(ev.conn):
       st.diagnose("transport: " & supplied(ev.localMsg, st.servedBy(ev.conn)))
+    elif ev.conn in st.sysConns:
+      st.sysLocalFailure(ev)
     else:
       st.linkLocalFailure(ev)
   else:
@@ -12045,6 +12879,7 @@ proc handle(st: State, m: sink Msg) =
     st.handle(m.request)
     st.op = saved
     st.checkBinding()
+    st.checkSystemBinding()
     st.checkBootstrap()
     return
   of mkBound, mkInitialized, mkDestroyed, mkJobDone, mkCompleted, mkApplied,
@@ -12052,7 +12887,7 @@ proc handle(st: State, m: sink Msg) =
     dec st.busy
     st.jobClock = getMonoTime()
   of mkCallDone, mkDiagnostic, mkAsync, mkCallJobDone, mkDeferredIdle, mkEvaluated,
-      mkRcHandled, mkIo, mkHostEnded, mkSubEndDone:
+      mkRcHandled, mkIo, mkHostEnded, mkSubEndDone, mkSysCallDone:
     discard
   case m.kind
   of mkBound:
@@ -12075,6 +12910,11 @@ proc handle(st: State, m: sink Msg) =
     dec st.callBusy
     st.callClock = getMonoTime()
     st.callMoved = st.callClock
+    let a = st.asyncCalls.getOrDefault(m.target)
+    if a != nil:
+      a.executing = false
+      st.maybeForget(a)
+  of mkSysCallDone:
     let a = st.asyncCalls.getOrDefault(m.target)
     if a != nil:
       a.executing = false
@@ -12213,6 +13053,7 @@ proc checkDeadlines(st: State) =
   st.snapshots.reclaim(now)
   st.expireRoutes()
   st.checkTransported(now)
+  st.checkSystem()
   st.checkExecutions()
   st.retrySettlements(now)
   for a in st.records:
@@ -12335,6 +13176,9 @@ proc nextDeadline(st: State): Opt[MonoTime] =
   let tr = st.nextTransported()
   if tr.isSome:
     consider(tr.get)
+  let sy = st.nextSystem()
+  if sy.isSome:
+    consider(getMonoTime() + initDuration(nanoseconds = max(sy.get - st.monoNow, 0)))
   t
 
 # Opening ------------------------------------------------------------------------
@@ -12741,6 +13585,7 @@ proc runtimeLoop(s: ptr Shared) =
     st.followPrerequisites()
     st.followRealizations()
     st.checkBinding()
+    st.checkSystemBinding()
     st.checkLoader()
     st.checkBootstrap()
     if st.done:
@@ -12766,6 +13611,11 @@ proc runtimeLoop(s: ptr Shared) =
   if s.renewSpawned:
     try:
       s.renewals.send(EvalJob(kind: ejQuit))
+    except Exception:
+      discard
+  if s.sysSpawned:
+    try:
+      s.sysCalls.send(CallJob(kind: cjQuit))
     except Exception:
       discard
   for i in 0 ..< s.rcSpawned:
@@ -12819,6 +13669,7 @@ proc freeEngine(e: Engine) =
   e.calls.close()
   e.evals.close()
   e.renewals.close()
+  e.sysCalls.close()
   e.rcJobs.close()
   e.closeSlots()
   deinitLock(e.slotLock)
@@ -12840,6 +13691,8 @@ proc joinAll(e: Engine) =
     joinThread(e.evalWorkers[i])
   if e.renewSpawned:
     joinThread(e.renewWorker)
+  if e.sysSpawned:
+    joinThread(e.sysWorker)
   for i in 0 ..< e.callSpawned:
     joinThread(e.callWorkers[i])
   for i in 0 ..< e.rcSpawned:
@@ -12911,6 +13764,7 @@ proc openEngine*(cfg: EngineConfig): Result[Engine, EngineError] =
   e.calls.open()
   e.evals.open()
   e.renewals.open()
+  e.sysCalls.open()
   e.rcJobs.open()
   e.bell = newBell()
   e.side = newSideTable()
@@ -12964,6 +13818,97 @@ when defined(lcnTestHooks):
     if r.error.isSome:
       return err(r.error.get)
     ok()
+
+  # [Tier 5 step 5-6a-2; plan §10.2] The system-service binding's hooks.
+
+  type
+    SystemBindingView* = object
+      state*: string ## "" with no binding, else `bsPending`, `bsReady` or `bsInvalid`
+      failures*: int ## its Hellos that failed
+      path*: string ## its system-service endpoint
+      established*: bool ## the engine's session to it is established
+
+    HandoffResult* = object
+      done*: bool ## the request has resumed
+      ok*: bool
+      result*: seq[byte] ## the encoded response map
+      code*: ErrorCode
+      message*: string
+      order*: int ## its place among the requests resumed, from 1
+
+  proc sysHook(e: Engine, reason: string, generation = 0'u64): Reply =
+    e.call(Request(kind: rqTransportHook, reason: reason, generation: generation))
+
+  proc systemBindingForTests*(e: Engine): SystemBindingView =
+    let r = e.sysHook("sys-state")
+    SystemBindingView(
+      state: r.id, failures: int(r.generation), path: r.name, established: r.pending
+    )
+
+  proc refuseSystemHellosForTests*(e: Engine, on: bool) =
+    ## Every Hello on a system-service endpoint is refused while `on`.
+    discard e.sysHook("sys-refuse", (if on: 1'u64 else: 0'u64))
+
+  proc failNextSystemHelloForTests*(e: Engine, cause: ConnectFailure) =
+    ## The engine client's next Hello fails with `cause` before anything is
+    ## sent, as a failed peer check would; its ticket goes as for any failure.
+    discard e.sysHook("sys-fault", uint64(ord(cause)))
+
+  proc lastSystemTicketForTests*(e: Engine): seq[byte] =
+    ## The ticket the engine's client was last given, for a test that presents
+    ## it again.
+    e.sysHook("sys-ticket").bytes
+
+  proc issueSystemTicketForTests*(
+      e: Engine, systemPurpose = true
+  ): Result[seq[byte], EngineError] =
+    ## A live ticket of the current binding; without `systemPurpose`, one whose
+    ## record states no system-service purpose.
+    let r = e.sysHook("sys-issue", (if systemPurpose: 0'u64 else: 1'u64))
+    if r.error.isSome:
+      return err(r.error.get)
+    ok(r.bytes)
+
+  proc requestHandoffForTests*(
+      e: Engine, package, version, module: string, timeoutMs: int
+  ): uint64 =
+    ## `requestHandoff` with a deadline `timeoutMs` from now; returns its handle.
+    e.call(
+      Request(
+        kind: rqTransportHook,
+        reason: "sys-handoff",
+        instance: package,
+        route: version,
+        module: module,
+        generation: uint64(max(timeoutMs, 0)),
+      )
+    ).generation
+
+  proc handoffOutcomeForTests*(e: Engine, id: uint64): HandoffResult =
+    let r = e.sysHook("sys-outcome", id)
+    if r.pending:
+      return HandoffResult()
+    if r.id == "ok":
+      return HandoffResult(
+        done: true, ok: true, result: r.bytes, order: int(r.invalidations)
+      )
+    HandoffResult(
+      done: true,
+      code: ErrorCode(int(r.generation)),
+      message: r.name,
+      order: int(r.invalidations),
+    )
+
+  proc withdrawHandoffForTests*(e: Engine, id: uint64) =
+    discard e.sysHook("sys-withdraw", id)
+
+  proc closeSystemSessionsForTests*(e: Engine): int =
+    ## The provider side closes every system-service session at once.
+    int(e.sysHook("sys-close").generation)
+
+  proc systemRequestsSentForTests*(e: Engine): int =
+    ## The handoff Requests the engine has sent on its session.
+    int(e.sysHook("sys-sent").generation)
 
   proc loseRcForTests*(
       e: Engine, instance: string, id: uint64

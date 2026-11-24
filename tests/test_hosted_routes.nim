@@ -47,7 +47,7 @@ when defined(posix):
     LogosNSRuntimeModuleProviderId, LogosNSRuntimeModuleStateAssignmentId,
     LogosNSRuntimeRouteId, LogosNSRuntimeRuntimeInstanceId
   import
-    ./support/[fakeca, modulehostbuild, shortdir],
+    ./support/[fakeca, modulehostbuild, shortdir, signals],
     logos_sdk/testing/[freshthread, kitbuild, kitruntime]
   import ./kit/bulk_impl, logos_sdk/testing/fixtures/meter_impl
   import
@@ -1427,7 +1427,7 @@ when defined(posix):
       return false
     let pid = pidOf(h)
     dropHost(h)
-    pid > 0 and posix.kill(Pid(pid), SIGKILL) == 0
+    pid > 0 and signalPid(pid, SIGKILL) == 0
 
   func endLine(tag: string, code: ErrorCode): string =
     tag & " " & $ord(code)

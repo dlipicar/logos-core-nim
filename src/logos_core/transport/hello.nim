@@ -2,6 +2,8 @@
 ## ordinary protected provider session under the `logos.route-ticket.random-256`
 ## profile, for the callee (validate, redeem, answer) and the caller (send,
 ## check the answer), and what each accepts before its part of it is done.
+## §8.1.2 (DECISIONS G492): the same exchange for a Runtime-owned
+## system-service session, against its own ticket store.
 
 {.push raises: [].}
 
@@ -71,6 +73,38 @@ type
   Established* = object
     response*: seq[byte] ## the encoded Hello response to send
     binding*: RouteBinding ## the redeemed route constraints
+
+  SystemPurpose* = enum
+    ## [SPEC TRANSPORT l.1068; TRN-0335] What a ticket of the system store is
+    ## for: stated in its record, never inferred from the store.
+    spNone ## a record no Runtime issued for a system service
+    spSystemService
+
+  SystemBinding* = object
+    ## [SPEC TRANSPORT §8.1.2 l.1067-1068; TRN-0334; DECISIONS G492] What a
+    ## Runtime-owned system-service ticket binds, instead of a module
+    ## consumer, a route and a provider-access decision.
+    runtime*: string ## the issuing Runtime
+    binding*: uint64 ## the system-service binding
+    realization*: string ## the exact local provider realization (instance/attempt)
+    provider*: string ## the provider served (the Hello's `module`)
+    contract*: Digest ## the selected contract
+    endpoint*: string ## the exact system-service endpoint
+    methods*: seq[Digest] ## the permitted methods' declaration subtree roots
+    events*: seq[Digest] ## the permitted events' (none for the Package Manager)
+    purpose*: SystemPurpose
+      ## The binding's validity is its realization's life, and its revocation
+      ## deletes its records (`TicketStore.revoke`): the record's own expiry
+      ## is the store's, at most 60 s after issuance (TRN-0336).
+
+  SystemEstablished* = object
+    response*: seq[byte] ## the encoded Hello response to send
+    binding*: SystemBinding ## the redeemed system-service binding
+
+  SystemHelloCheck* =
+    proc(b: SystemBinding): Result[void, HelloFailure] {.gcsafe, raises: [].}
+    ## [TRN-0340, TRN-0341] The owner's check that the stored binding is still
+    ## the current, authorized one for this session; run before redemption.
 
   HelloCheck* = proc(b: RouteBinding): Result[void, HelloFailure] {.gcsafe, raises: [].}
     ## [E4; DECISIONS I90] The owner's checks of the current state behind a
@@ -237,6 +271,57 @@ proc acceptHello*(
   let redeemed = tickets.redeem(h.token, now).valueOr:
     return err(failure(ecNotAuthorised, hrRedeem, NotAuthorisedMessage))
   ok(Established(response: response, binding: redeemed))
+
+proc acceptSystemHello*(
+    ep: CalleeEndpoint,
+    tickets: var TicketStore[SystemBinding],
+    frame: openArray[byte],
+    now: Nanos,
+    limits = defaultLimits(),
+    check: SystemHelloCheck = nil,
+): Result[SystemEstablished, HelloFailure] =
+  ## [SPEC TRANSPORT §8.1.2 l.1072-1077; DECISIONS G492] The system-service
+  ## acceptor's Hello: §3.1's order with the system ticket store alone
+  ## (TRN-0331, TRN-0332). Invalid, stale, expired, replayed or wrong-purpose
+  ## material is NOT_AUTHORISED and no session (TRN-0342); the remaining
+  ## checks and their precedence are §3.1's, and the response token is empty
+  ## (TRN-0343). The stored binding is validated against the session, module,
+  ## contract and current realization (`check`) before redemption (TRN-0340).
+  let first = ?readFirst(frame, limits.payloadDepth)
+  case first.message.kind
+  of mkHello:
+    discard
+  of mkProtocolError:
+    return err(peerRefused(first.message, "the caller sent ProtocolError"))
+  else:
+    return err(failure(ecInvalidParams, hrEnvelope, "the first message is not a Hello"))
+  let h = first.message.hello
+  let denied = failure(ecNotAuthorised, hrTicket, NotAuthorisedMessage)
+  let b = tickets.validate(h.token, now).valueOr:
+    return err(denied)
+  if b.purpose != spSystemService or h.module != b.provider or b.provider != ep.provider or
+      b.endpoint != ep.endpoint or b.contract notin ep.contracts or
+      ep.sourceRuntime.isSome:
+    return err(denied)
+  if not first.schemaOk or h.schema != b.contract:
+    return err(
+      failure(
+        ecVersionMismatch, hrSchema, "the Hello schema is not the binding's contract"
+      )
+    )
+  if check != nil:
+    ?check(b)
+  let response = encodeMessage(
+    Message(
+      kind: mkHello, hello: Hello(module: b.provider, token: @[], schema: b.contract)
+    ),
+    limits.payloadDepth,
+    limits.peerFrameLimit,
+  ).valueOr:
+    return err(failure(ecModule, hrSend, $error))
+  let redeemed = tickets.redeem(h.token, now).valueOr:
+    return err(failure(ecNotAuthorised, hrRedeem, NotAuthorisedMessage))
+  ok(SystemEstablished(response: response, binding: redeemed))
 
 # Caller ----------------------------------------------------------------------------
 

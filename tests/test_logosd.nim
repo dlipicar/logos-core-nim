@@ -36,7 +36,7 @@ when defined(posix):
   import
     ./support/[
       clibuild, daemonbuild, daemonproc, evfixture, modulehostbuild, nossl, shortdir,
-      slowdown,
+      signals, slowdown,
     ],
     logos_sdk/testing/[kitbuild, testdirs]
 
@@ -508,7 +508,7 @@ when defined(posix):
       if not hostsGone():
         checkpoint("Module Hosts left: " & $hostPids())
         for pid in hostPids():
-          discard kill(Pid(pid), SIGKILL)
+          discard signalPid(pid, SIGKILL)
         fail()
       # The case's directories, its children's output files with them: kept
       # if it failed (`shortdir`).
@@ -1582,7 +1582,7 @@ when defined(posix):
           result.outText
 
       let first = c.streaming("sub1")
-      check posix.kill(first.pid, SIGINT) == 0
+      check signalPid(first.pid, SIGINT) == 0
       let firstExit = waitExit(first, StopMs)
       checkpoint("sub1 exit " & $firstExit & ": " & first.outText & first.errText)
       if firstExit != 130:

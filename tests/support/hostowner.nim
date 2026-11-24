@@ -7,7 +7,7 @@ import std/[monotimes, os, posix, times]
 import results
 import ../../src/logos_core/runtime/[carrier, hostsup]
 import ../../src/logos_core/transport/io/sock
-import ./[sanitizerenv, slowdown]
+import ./[sanitizerenv, signals, slowdown]
 
 export carrier, sanitizerenv, slowdown
 
@@ -29,19 +29,20 @@ proc startHost*(
     lock = cint(-1),
     sanitizerEnv = true,
     args = Opt.none(seq[string]),
+    system = cint(-1),
 ): HostRun =
   ## `env` (`NAME=value` entries) is the host's whole environment, as the supervision's
   ## allow-list makes it. [G442] With `sanitizerEnv`, the default, this process's `SanitizerEnv`
   ## settings are added, so the host reports where the sanitizer check reads; a case turns it off
   ## only to show a host without them. `args`: the host's arguments in place of
-  ## `--parent=<this process>`.
+  ## `--parent=<this process>`. `system`: its fd 6 (G492).
   var whole = env
   if sanitizerEnv:
     whole.add(sanitizerSettings())
   var fds: array[2, cint]
   doAssert socketPair(addr fds) == 0, "no socket pair"
   # [G442] sanitizer-env: `whole` has them, added above
-  let pid = spawnProcess(program, whole, fds[1], listener, lock, args)
+  let pid = spawnProcess(program, whole, fds[1], listener, lock, args, system)
   discard fdClose(fds[1])
   doAssert pid.isOk, "the host did not start: " & pid.error
   HostRun(pid: pid.get, fd: fds[0], reader: newCarrierReader())
@@ -119,6 +120,6 @@ proc killedBy*(r: HostRun): int =
 proc stop*(r: var HostRun) =
   ## Teardown: the host's group is killed and reaped, the carrier closed.
   if not r.reaped:
-    discard kill(Pid(-r.pid), SIGKILL)
+    discard signalPidGroup(r.pid, SIGKILL)
     discard r.waitExit()
   r.closeCarrier()

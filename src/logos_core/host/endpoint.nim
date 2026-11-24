@@ -56,7 +56,7 @@ import logos_sdk/iface/[accept, outcome, surface]
 import ../transport/io/api except decodeMessage
 import ../transport/io/[loop, sock]
 import ../runtime/[carrier, entryframe, hostio, native, servedroots]
-import ./[selected, state]
+import ./[dispatchcount, selected, state]
 
 const
   MaxDispatchWorkers = 64 ## [IMPL] as the Runtime's call workers
@@ -89,6 +89,9 @@ type
     root: Digest ## the session's selected contract
     retainRequest, retainResponse: bool
     consumer: FixedText
+    system: bool
+      ## [G492; RUNTIME l.835] admitted on a system-service session: the
+      ## caller view is LOGOS_CALLER_SYSTEM_SERVICE, with no module
     requestRoot, responseRoot: Opt[PayloadCommitment]
     cancelled: Atomic[bool]
     deferred: bool
@@ -100,13 +103,14 @@ type
     next: ptr HostInv
 
   Job = object
-    inv: int ## a `ptr HostInv`; 0 ends the worker
+    inv: int ## a `ptr HostInv`; the workers end with the process
     hook: bool ## run its `request_cancel`
 
   Pool = object
     ch: Channel[Job]
     lock: Lock
-    idle, count: int
+    counts: DispatchCounts
+      ## [DECISIONS I146] every job claimed at its post, under `lock`
     threads: array[MaxDispatchWorkers, Thread[ptr Pool]]
 
   Served = object
@@ -114,6 +118,9 @@ type
     lock: Lock
     cond: Cond
     serve: ServeState
+    wanted, listened: int
+      ## [G492] the listeners `serveEndpoint` submitted, and those listening
+    system: bool ## [G492] the system-service listener (fd 6) is served too
     serveError: array[512, char]
     serveErrorLen: int
     stopped: bool ## `evStopped` came
@@ -308,18 +315,25 @@ proc callerOp(
     invocation: ptr LogosInvocationContext, outCaller: ptr LogosCallerView
 ): LogosResult {.cdecl.} =
   ## [SPEC INTERFACE §2.9.3; RUNTIME l.869-873] The route's consumer, as the
-  ## Runtime named it in its verdict.
+  ## Runtime named it in its verdict. [G492; RUNTIME l.835] On a
+  ## system-service session, the system service, with no module.
   bindingEnter()
   if invocation == nil or outCaller == nil:
     return status(ecInvalidParams, "null caller output")
   let d = cast[ptr HostInv](invocation.state)
   if not d.enter():
     return status(ecModule, "the invocation was released")
-  outCaller[] = LogosCallerView(
-    kind: CallerModule,
-    runtimeInstanceId: sv.runtimeId.utf8View,
-    moduleInstanceId: d.consumer.utf8View,
-  )
+  outCaller[] =
+    if d.system:
+      LogosCallerView(
+        kind: CallerSystemService, runtimeInstanceId: sv.runtimeId.utf8View
+      )
+    else:
+      LogosCallerView(
+        kind: CallerModule,
+        runtimeInstanceId: sv.runtimeId.utf8View,
+        moduleInstanceId: d.consumer.utf8View,
+      )
   if d.deferred:
     d.leave()
   LogosResult()
@@ -677,17 +691,15 @@ proc poolLoop(p: ptr Pool) =
       j = p.ch.recv()
     except Exception:
       return
-    if j.inv == 0:
-      return
-    withLock p.lock:
-      dec p.idle
     let d = cast[ptr HostInv](j.inv)
     if j.hook:
       d.runCancelHook() # its entry was claimed when it was queued
     else:
       d.runAdmitted()
+    # [DECISIONS I146] A job that waited with every worker busy is this
+    # worker's next; otherwise it counts as idle.
     withLock p.lock:
-      inc p.idle
+      discard p.counts.finished()
 
 proc poolMain(p: ptr Pool) {.thread.} =
   poolLoop(p)
@@ -695,16 +707,18 @@ proc poolMain(p: ptr Pool) {.thread.} =
 
 proc post(j: Job) =
   ## Work for a dispatch worker; the pool grows while every worker is busy.
+  ## [DECISIONS I146] The job is claimed here, under the lock: by an idle
+  ## worker, by a new one whose thread index the claim takes, or at the cap
+  ## as waiting for the next worker to finish. A worker that has not yet
+  ## taken the job posted before it is no longer counted idle, and two posts
+  ## never start the same thread.
   let p = addr sv.pool
-  var grow = false
+  var claim: tuple[kind: DispatchClaim, index: int]
   withLock p.lock:
-    if p.idle == 0 and p.count < MaxDispatchWorkers:
-      grow = true
-      inc p.count
-      inc p.idle
-  if grow:
+    claim = p.counts.claim(MaxDispatchWorkers)
+  if claim.kind == dcGrow:
     try:
-      createThread(p.threads[p.count - 1], poolMain, p)
+      createThread(p.threads[claim.index], poolMain, p)
     except Exception:
       carrierLost("a dispatch worker cannot start")
   try:
@@ -719,8 +733,9 @@ proc verdict(v: LcnCarrierAdmitVerdict) =
   ## dispatched Request.
   let root = digestOf(v.contract).valueOr:
     carrierLost("a verdict whose contract is not a digest")
-  if v.failure.isNone and (v.call.isNone or v.consumer.isNone):
-    carrierLost("an admission with no call or consumer")
+  if v.failure.isNone and (v.call.isNone or v.consumer.isSome == v.system.isSome):
+    # [G492] A system-service admission names no consumer.
+    carrierLost("an admission with no call, or not exactly one of consumer and system")
   var d: ptr HostInv
   var answered = false
   withLock sv.lock:
@@ -754,7 +769,10 @@ proc verdict(v: LcnCarrierAdmitVerdict) =
     return
   d.call = v.call.get
   d.root = root
-  d.consumer = fixed(v.consumer.get)
+  if v.system.isSome:
+    d.system = true
+  else:
+    d.consumer = fixed(v.consumer.get)
   d.retainRequest = v.retain_request
   d.retainResponse = v.retain_response
   post(Job(inv: cast[int](d)))
@@ -849,6 +867,13 @@ proc submitLoop() =
       continue
     if cmd.kind == IoCommandKind.cmdTerminate and cmd.termPhase != tpBegin:
       endedByTerminate(cmd.conn)
+    if cmd.kind == IoCommandKind.cmdStopServing and sv.system:
+      # [G492] The Runtime stops both of a host's listeners together: its
+      # provider instance left `ready`.
+      var also =
+        IoCommand(kind: IoCommandKind.cmdStopServing, stopEndpoint: HostSystemEndpoint)
+      while sv.loop.trySubmit(also) == sbBusy:
+        sleep(BusyStepMs)
     if cmd.kind == IoCommandKind.cmdAdmit and cmd.verdict.kind == avEstablished:
       # [G394; synthesis §3] A session on an earlier contract takes its input
       # to the loop, which accepts the set at the first and keeps it
@@ -886,7 +911,8 @@ proc loopEvent(ev: sink IoEvent, ctx: pointer) {.nimcall, gcsafe, raises: [].} =
   case ev.kind
   of IoEventKind.evListening:
     withLock sv.lock:
-      if sv.serve == ssWaiting:
+      inc sv.listened
+      if sv.serve == ssWaiting and sv.listened >= sv.wanted:
         sv.serve = ssListening
       broadcast(sv.cond)
   of IoEventKind.evServeFailed:
@@ -939,14 +965,23 @@ proc serveEndpoint*(
     transport: openArray[uint64],
     listener: cint,
     depth: int,
+    system = Opt.none(tuple[path: string, listener: cint]),
 ): Result[void, string] =
   ## Lifecycle thread, after a successful `_MODULE_init`: the loop serves
   ## `listener` from the module's primary contract; returns once it listens.
   ## [TRN-0186] A listener that did not arrive is refused here.
-  var typ, domain, listening: cint
-  if sockInfo(listener, addr typ, addr domain, addr listening) != 0 or typ != SockStream or
-      domain != AfUnix or listening == 0:
+  ## [G492; TRN-0330, TRN-0333] `system`: the marked Package Manager's
+  ## system-service listener too, from the primary contract alone; the loop
+  ## reports its Hellos as `HostSystemEndpoint`'s.
+  proc isListener(fd: cint): bool =
+    var typ, domain, listening: cint
+    sockInfo(fd, addr typ, addr domain, addr listening) == 0 and typ == SockStream and
+      domain == AfUnix and listening != 0
+
+  if not isListener(listener):
     return err("the listener is not a listening local stream socket")
+  if system.isSome and not isListener(system.get.listener):
+    return err("the system-service listener is not a listening local stream socket")
   let config = ?transportOf(transport)
   if runtimeId.len == 0 or runtimeId.len > TextCapacity:
     return err("the Runtime id is not valid")
@@ -969,6 +1004,8 @@ proc serveEndpoint*(
   sv.asyncApi = b.asyncApi
   sv.access = access
   sv.serve = ssWaiting
+  sv.wanted = (if system.isSome: 2 else: 1)
+  sv.system = system.isSome
   sv.loop = ?startTransport(config, loopEvent, nil)
   serving.store(sv, moRelease)
   var cmd = IoCommand(
@@ -980,6 +1017,18 @@ proc serveEndpoint*(
   )
   if sv.loop.trySubmit(cmd) != sbOk:
     return err("the transport loop did not take the listener")
+  if system.isSome:
+    var sys = IoCommand(
+      kind: IoCommandKind.cmdServe,
+      endpoint: HostSystemEndpoint,
+      listener: system.get.listener,
+      served: CalleeEndpoint(
+        endpoint: system.get.path, provider: module, contracts: @[served.primary.root]
+      ),
+      contract: served.primary,
+    )
+    if sv.loop.trySubmit(sys) != sbOk:
+      return err("the transport loop did not take the system-service listener")
   var failed = ""
   withLock sv.lock:
     while sv.serve == ssWaiting:
@@ -1006,6 +1055,10 @@ proc stopServing*() =
     return
   var cmd = IoCommand(kind: IoCommandKind.cmdStopServing, stopEndpoint: HostEndpoint)
   discard sv.loop.trySubmit(cmd)
+  if sv.system:
+    var sys =
+      IoCommand(kind: IoCommandKind.cmdStopServing, stopEndpoint: HostSystemEndpoint)
+    discard sv.loop.trySubmit(sys)
   withLock sv.lock:
     while sv.running > 0:
       wait(sv.cond, sv.lock)

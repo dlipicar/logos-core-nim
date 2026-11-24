@@ -10,7 +10,7 @@ import logos_sdk/codegen/common_types
 export nimrt, common_types
 
 const
-  primaryDocument = "; -- metadata --\x0A_module = \"pmtest_module\"\x0A\x0A; Input for tests/generated/pmtest_module_*: the Package Manager\'s shell\x0A; (src/logos_core/pm/shell.nim) hosted under a test name (Tier 5 step 5-3b, F5;\x0A; DECISIONS G405), kept as a probe (G496): `logos_package_manager` serves the\x0A; operations (5-6a-1), and this probe answers what the shell holds\x0A; (tests/kit/pmtest_impl.nim). Never shipped.\x0A\x0Apmtest.catalog = {\x0A  sequence: uint64,\x0A  digest: bstr .size 32,\x0A  entries: uint64,\x0A}\x0A\x0Apmtest.binding = {\x0A  name: tstr .size (1..64),\x0A  instance: tstr .size (1..128),\x0A  state: \"idle\" / \"establishing\" / \"ready\" / \"renewing\" / \"backoff\" / \"stopped\",\x0A  ? route: tstr .size (1..256),\x0A  ? readiness: \"starting\" / \"ready\" / \"offline\",\x0A  ; how many routes the shell established for the binding\x0A  established: uint64,\x0A}\x0A\x0Apmtest.status_request = {}\x0A\x0A; The catalog in use, if any; each binding\'s route and readiness; the root\x0A; operations still running.\x0Apmtest.status_response = {\x0A  ? catalog: pmtest.catalog,\x0A  bindings: [* pmtest.binding],\x0A  pending: uint64,\x0A}\x0A\x0A; One root operation for an exact version (PM \xC2\xA711): the driver\'s outcome.\x0Apmtest.resolve_request = {\x0A  name: tstr .size (1..256),\x0A  version: tstr .size (1..256),\x0A}\x0A\x0Apmtest.selected = {\x0A  package: tstr .size (1..256),\x0A  version: tstr .size (1..256),\x0A  schema_root: bstr .size 32,\x0A  installed: bool,\x0A}\x0A\x0Apmtest.counters = {\x0A  names: uint64,\x0A  depth: uint64,\x0A  attempts: uint64,\x0A}\x0A\x0Apmtest.resolve_response =\x0A  { packages: [* pmtest.selected], counters: pmtest.counters } /\x0A  { error: tstr .size (1..64), ? message: tstr .size (1..512) }\x0A\x0A; [Tier 5 step 5-5-4; G449, G496] `install_package`, the record the handoff probe reads\x0A; (5-6a-2 moves the handoff case to `logos_package_manager` over its system binding, and\x0A; this pair goes): its \xC2\xA715 response value as pm/responses.nim encodes it\x0A; (deterministic CBOR, in `response`); the invocation error MODULE_ERROR is the call\'s\x0A; own failure. The other operations are `logos_package_manager`\'s (test_pm_module).\x0Apmtest.install_request = {\x0A  package: tstr .size (1..256),\x0A  ? version: tstr .size (1..256),\x0A}\x0A\x0Apmtest.install_response = { response: bstr }\x0A\x0Apmtest.handoff_request = {\x0A  package: tstr .size (1..255),\x0A  version: tstr .size (1..255),\x0A  module: tstr .size (1..255),\x0A}\x0A\x0Apmtest.handoff_response = { response: bstr }\x0A"
+  primaryDocument = "; -- metadata --\x0A_module = \"pmtest_module\"\x0A\x0A; Input for tests/generated/pmtest_module_*: the Package Manager\'s shell\x0A; (src/logos_core/pm/shell.nim) hosted under a test name (Tier 5 step 5-3b, F5;\x0A; DECISIONS G405), kept as a probe (G496): `logos_package_manager` serves the\x0A; operations (5-6a-1) and the handoff (5-6a-2), and this probe answers what the\x0A; shell holds: `status` and `resolve` (tests/kit/pmtest_impl.nim). Never shipped.\x0A\x0Apmtest.catalog = {\x0A  sequence: uint64,\x0A  digest: bstr .size 32,\x0A  entries: uint64,\x0A}\x0A\x0Apmtest.binding = {\x0A  name: tstr .size (1..64),\x0A  instance: tstr .size (1..128),\x0A  state: \"idle\" / \"establishing\" / \"ready\" / \"renewing\" / \"backoff\" / \"stopped\",\x0A  ? route: tstr .size (1..256),\x0A  ? readiness: \"starting\" / \"ready\" / \"offline\",\x0A  ; how many routes the shell established for the binding\x0A  established: uint64,\x0A}\x0A\x0Apmtest.status_request = {}\x0A\x0A; The catalog in use, if any; each binding\'s route and readiness; the root\x0A; operations still running.\x0Apmtest.status_response = {\x0A  ? catalog: pmtest.catalog,\x0A  bindings: [* pmtest.binding],\x0A  pending: uint64,\x0A}\x0A\x0A; One root operation for an exact version (PM \xC2\xA711): the driver\'s outcome.\x0Apmtest.resolve_request = {\x0A  name: tstr .size (1..256),\x0A  version: tstr .size (1..256),\x0A}\x0A\x0Apmtest.selected = {\x0A  package: tstr .size (1..256),\x0A  version: tstr .size (1..256),\x0A  schema_root: bstr .size 32,\x0A  installed: bool,\x0A}\x0A\x0Apmtest.counters = {\x0A  names: uint64,\x0A  depth: uint64,\x0A  attempts: uint64,\x0A}\x0A\x0Apmtest.resolve_response =\x0A  { packages: [* pmtest.selected], counters: pmtest.counters } /\x0A  { error: tstr .size (1..64), ? message: tstr .size (1..512) }\x0A"
   interfaceDocuments: array[0, string] = []
   supportingDocuments: array[0, string] = []
 
@@ -77,21 +77,6 @@ type
     depth*: uint64
     names*: uint64
 
-  PmtestHandoffRequest* = object
-    module*: string
-    package*: string
-    version*: string
-
-  PmtestHandoffResponse* = object
-    response*: seq[byte]
-
-  PmtestInstallRequest* = object
-    package*: string
-    version*: Opt[string]
-
-  PmtestInstallResponse* = object
-    response*: seq[byte]
-
   PmtestResolveRequest* = object
     name*: string
     version*: string
@@ -148,22 +133,6 @@ proc toCbor*(x: PmtestCounters): CborValue
 proc fromChecked*(T: type PmtestCounters, v: CborValue): PmtestCounters
 proc stepEncPmtestCounters*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecPmtestCounters*(w: var DecWork, v: CborValue, dst: pointer)
-proc toCbor*(x: PmtestHandoffRequest): CborValue
-proc fromChecked*(T: type PmtestHandoffRequest, v: CborValue): PmtestHandoffRequest
-proc stepEncPmtestHandoffRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
-proc stepDecPmtestHandoffRequest*(w: var DecWork, v: CborValue, dst: pointer)
-proc toCbor*(x: PmtestHandoffResponse): CborValue
-proc fromChecked*(T: type PmtestHandoffResponse, v: CborValue): PmtestHandoffResponse
-proc stepEncPmtestHandoffResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
-proc stepDecPmtestHandoffResponse*(w: var DecWork, v: CborValue, dst: pointer)
-proc toCbor*(x: PmtestInstallRequest): CborValue
-proc fromChecked*(T: type PmtestInstallRequest, v: CborValue): PmtestInstallRequest
-proc stepEncPmtestInstallRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
-proc stepDecPmtestInstallRequest*(w: var DecWork, v: CborValue, dst: pointer)
-proc toCbor*(x: PmtestInstallResponse): CborValue
-proc fromChecked*(T: type PmtestInstallResponse, v: CborValue): PmtestInstallResponse
-proc stepEncPmtestInstallResponse*(w: var EncWork, src: pointer, dst: ptr CborValue)
-proc stepDecPmtestInstallResponse*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: PmtestResolveRequest): CborValue
 proc fromChecked*(T: type PmtestResolveRequest, v: CborValue): PmtestResolveRequest
 proc stepEncPmtestResolveRequest*(w: var EncWork, src: pointer, dst: ptr CborValue)
@@ -380,112 +349,6 @@ proc fromChecked*(T: type PmtestCounters, v: CborValue): PmtestCounters =
   runDec(stepDecPmtestCounters, v, addr r)
   r
 
-proc stepEncPmtestHandoffRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
-  let x {.used.} = cast[ptr PmtestHandoffRequest](src)
-  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](3))
-  dst[] = node
-  var k = 0
-  node.entries[k].key = cbor("module")
-  node.entries[k].value = cbor(x.module)
-  inc k
-  node.entries[k].key = cbor("package")
-  node.entries[k].value = cbor(x.package)
-  inc k
-  node.entries[k].key = cbor("version")
-  node.entries[k].value = cbor(x.version)
-  inc k
-
-proc stepDecPmtestHandoffRequest*(w: var DecWork, v: CborValue, dst: pointer) =
-  let r = cast[ptr PmtestHandoffRequest](dst)
-  r[] = PmtestHandoffRequest()
-  r.module = v.lookup("module").get.text
-  r.package = v.lookup("package").get.text
-  r.version = v.lookup("version").get.text
-
-proc toCbor*(x: PmtestHandoffRequest): CborValue =
-  runEnc(stepEncPmtestHandoffRequest, addr x)
-
-proc fromChecked*(T: type PmtestHandoffRequest, v: CborValue): PmtestHandoffRequest =
-  var r: PmtestHandoffRequest
-  runDec(stepDecPmtestHandoffRequest, v, addr r)
-  r
-
-proc stepEncPmtestHandoffResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
-  let x {.used.} = cast[ptr PmtestHandoffResponse](src)
-  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
-  dst[] = node
-  var k = 0
-  node.entries[k].key = cbor("response")
-  node.entries[k].value = cbor(x.response)
-  inc k
-
-proc stepDecPmtestHandoffResponse*(w: var DecWork, v: CborValue, dst: pointer) =
-  let r = cast[ptr PmtestHandoffResponse](dst)
-  r[] = PmtestHandoffResponse()
-  r.response = v.lookup("response").get.bytes
-
-proc toCbor*(x: PmtestHandoffResponse): CborValue =
-  runEnc(stepEncPmtestHandoffResponse, addr x)
-
-proc fromChecked*(T: type PmtestHandoffResponse, v: CborValue): PmtestHandoffResponse =
-  var r: PmtestHandoffResponse
-  runDec(stepDecPmtestHandoffResponse, v, addr r)
-  r
-
-proc stepEncPmtestInstallRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
-  let x {.used.} = cast[ptr PmtestInstallRequest](src)
-  var n = 1
-  if x.version.isSome:
-    inc n
-  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
-  dst[] = node
-  var k = 0
-  node.entries[k].key = cbor("package")
-  node.entries[k].value = cbor(x.package)
-  inc k
-  if x.version.isSome:
-    node.entries[k].key = cbor("version")
-    node.entries[k].value = cbor(x.version.get)
-    inc k
-
-proc stepDecPmtestInstallRequest*(w: var DecWork, v: CborValue, dst: pointer) =
-  let r = cast[ptr PmtestInstallRequest](dst)
-  r[] = PmtestInstallRequest()
-  r.package = v.lookup("package").get.text
-  let f4 = v.lookup("version")
-  if f4.isSome:
-    r.version = Opt.some(f4.get.text)
-
-proc toCbor*(x: PmtestInstallRequest): CborValue =
-  runEnc(stepEncPmtestInstallRequest, addr x)
-
-proc fromChecked*(T: type PmtestInstallRequest, v: CborValue): PmtestInstallRequest =
-  var r: PmtestInstallRequest
-  runDec(stepDecPmtestInstallRequest, v, addr r)
-  r
-
-proc stepEncPmtestInstallResponse*(w: var EncWork, src: pointer, dst: ptr CborValue) =
-  let x {.used.} = cast[ptr PmtestInstallResponse](src)
-  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](1))
-  dst[] = node
-  var k = 0
-  node.entries[k].key = cbor("response")
-  node.entries[k].value = cbor(x.response)
-  inc k
-
-proc stepDecPmtestInstallResponse*(w: var DecWork, v: CborValue, dst: pointer) =
-  let r = cast[ptr PmtestInstallResponse](dst)
-  r[] = PmtestInstallResponse()
-  r.response = v.lookup("response").get.bytes
-
-proc toCbor*(x: PmtestInstallResponse): CborValue =
-  runEnc(stepEncPmtestInstallResponse, addr x)
-
-proc fromChecked*(T: type PmtestInstallResponse, v: CborValue): PmtestInstallResponse =
-  var r: PmtestInstallResponse
-  runDec(stepDecPmtestInstallResponse, v, addr r)
-  r
-
 proc stepEncPmtestResolveRequest*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   let x {.used.} = cast[ptr PmtestResolveRequest](src)
   let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](2))
@@ -521,21 +384,21 @@ proc stepEncPmtestResolveResponseARMapCountersPackagesMap*(w: var EncWork, src: 
   w.later(stepEncPmtestCounters, addr x.counters, addr node.entries[k].value)
   inc k
   node.entries[k].key = cbor("packages")
-  let a6 = newCborArray(x.packages.len)
-  node.entries[k].value = a6
-  for i7 in 0 ..< x.packages.len:
-    w.later(stepEncPmtestSelected, addr x.packages[i7], addr a6.items[i7])
+  let a5 = newCborArray(x.packages.len)
+  node.entries[k].value = a5
+  for i6 in 0 ..< x.packages.len:
+    w.later(stepEncPmtestSelected, addr x.packages[i6], addr a5.items[i6])
   inc k
 
 proc stepDecPmtestResolveResponseARMapCountersPackagesMap*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr PmtestResolveResponseARMapCountersPackagesMap](dst)
   r[] = PmtestResolveResponseARMapCountersPackagesMap()
-  let f5 = v.lookup("counters").get
-  w.later(stepDecPmtestCounters, f5, addr r.counters)
-  let f8 = v.lookup("packages").get
-  r.packages.setLen(f8.items.len)
-  for i9 in 0 ..< f8.items.len:
-    w.later(stepDecPmtestSelected, f8.items[i9], addr r.packages[i9])
+  let f4 = v.lookup("counters").get
+  w.later(stepDecPmtestCounters, f4, addr r.counters)
+  let f7 = v.lookup("packages").get
+  r.packages.setLen(f7.items.len)
+  for i8 in 0 ..< f7.items.len:
+    w.later(stepDecPmtestSelected, f7.items[i8], addr r.packages[i8])
 
 proc toCbor*(x: PmtestResolveResponseARMapCountersPackagesMap): CborValue =
   runEnc(stepEncPmtestResolveResponseARMapCountersPackagesMap, addr x)
@@ -565,9 +428,9 @@ proc stepDecPmtestResolveResponseARMapErrorMap*(w: var DecWork, v: CborValue, ds
   let r = cast[ptr PmtestResolveResponseARMapErrorMap](dst)
   r[] = PmtestResolveResponseARMapErrorMap()
   r.error = v.lookup("error").get.text
-  let f10 = v.lookup("message")
-  if f10.isSome:
-    r.message = Opt.some(f10.get.text)
+  let f9 = v.lookup("message")
+  if f9.isSome:
+    r.message = Opt.some(f9.get.text)
 
 proc toCbor*(x: PmtestResolveResponseARMapErrorMap): CborValue =
   runEnc(stepEncPmtestResolveResponseARMapErrorMap, addr x)
@@ -665,10 +528,10 @@ proc stepEncPmtestStatusResponse*(w: var EncWork, src: pointer, dst: ptr CborVal
   dst[] = node
   var k = 0
   node.entries[k].key = cbor("bindings")
-  let a11 = newCborArray(x.bindings.len)
-  node.entries[k].value = a11
-  for i12 in 0 ..< x.bindings.len:
-    w.later(stepEncPmtestBinding, addr x.bindings[i12], addr a11.items[i12])
+  let a10 = newCborArray(x.bindings.len)
+  node.entries[k].value = a10
+  for i11 in 0 ..< x.bindings.len:
+    w.later(stepEncPmtestBinding, addr x.bindings[i11], addr a10.items[i11])
   inc k
   if x.catalog.isSome:
     node.entries[k].key = cbor("catalog")
@@ -681,14 +544,14 @@ proc stepEncPmtestStatusResponse*(w: var EncWork, src: pointer, dst: ptr CborVal
 proc stepDecPmtestStatusResponse*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr PmtestStatusResponse](dst)
   r[] = PmtestStatusResponse()
-  let f13 = v.lookup("bindings").get
-  r.bindings.setLen(f13.items.len)
-  for i14 in 0 ..< f13.items.len:
-    w.later(stepDecPmtestBinding, f13.items[i14], addr r.bindings[i14])
-  let f15 = v.lookup("catalog")
-  if f15.isSome:
+  let f12 = v.lookup("bindings").get
+  r.bindings.setLen(f12.items.len)
+  for i13 in 0 ..< f12.items.len:
+    w.later(stepDecPmtestBinding, f12.items[i13], addr r.bindings[i13])
+  let f14 = v.lookup("catalog")
+  if f14.isSome:
     r.catalog = Opt.some(default(PmtestCatalog))
-    w.later(stepDecPmtestCatalog, f15.get, addr r.catalog.get)
+    w.later(stepDecPmtestCatalog, f14.get, addr r.catalog.get)
   r.pending = uint64(v.lookup("pending").get.uint)
 
 proc toCbor*(x: PmtestStatusResponse): CborValue =
@@ -739,62 +602,6 @@ proc encode*(x: PmtestCounters): Result[seq[byte], string] =
 proc decode*(T: type PmtestCounters, data: openArray[byte]): Result[PmtestCounters, string] =
   ## One deterministic-CBOR `pmtest.counters` value.
   let v = ?generatedSchema().decodeChecked("pmtest.counters", data)
-  ok(fromChecked(T, v))
-
-proc fromCbor*(T: type PmtestHandoffRequest, v: CborValue): Result[PmtestHandoffRequest, string] =
-  ## A value checked against `pmtest.handoff_request`.
-  ?generatedSchema().check("pmtest.handoff_request", v)
-  ok(fromChecked(T, v))
-
-proc encode*(x: PmtestHandoffRequest): Result[seq[byte], string] =
-  ## Logos deterministic CBOR, checked against `pmtest.handoff_request`.
-  generatedSchema().encodeChecked("pmtest.handoff_request", toCbor(x))
-
-proc decode*(T: type PmtestHandoffRequest, data: openArray[byte]): Result[PmtestHandoffRequest, string] =
-  ## One deterministic-CBOR `pmtest.handoff_request` value.
-  let v = ?generatedSchema().decodeChecked("pmtest.handoff_request", data)
-  ok(fromChecked(T, v))
-
-proc fromCbor*(T: type PmtestHandoffResponse, v: CborValue): Result[PmtestHandoffResponse, string] =
-  ## A value checked against `pmtest.handoff_response`.
-  ?generatedSchema().check("pmtest.handoff_response", v)
-  ok(fromChecked(T, v))
-
-proc encode*(x: PmtestHandoffResponse): Result[seq[byte], string] =
-  ## Logos deterministic CBOR, checked against `pmtest.handoff_response`.
-  generatedSchema().encodeChecked("pmtest.handoff_response", toCbor(x))
-
-proc decode*(T: type PmtestHandoffResponse, data: openArray[byte]): Result[PmtestHandoffResponse, string] =
-  ## One deterministic-CBOR `pmtest.handoff_response` value.
-  let v = ?generatedSchema().decodeChecked("pmtest.handoff_response", data)
-  ok(fromChecked(T, v))
-
-proc fromCbor*(T: type PmtestInstallRequest, v: CborValue): Result[PmtestInstallRequest, string] =
-  ## A value checked against `pmtest.install_request`.
-  ?generatedSchema().check("pmtest.install_request", v)
-  ok(fromChecked(T, v))
-
-proc encode*(x: PmtestInstallRequest): Result[seq[byte], string] =
-  ## Logos deterministic CBOR, checked against `pmtest.install_request`.
-  generatedSchema().encodeChecked("pmtest.install_request", toCbor(x))
-
-proc decode*(T: type PmtestInstallRequest, data: openArray[byte]): Result[PmtestInstallRequest, string] =
-  ## One deterministic-CBOR `pmtest.install_request` value.
-  let v = ?generatedSchema().decodeChecked("pmtest.install_request", data)
-  ok(fromChecked(T, v))
-
-proc fromCbor*(T: type PmtestInstallResponse, v: CborValue): Result[PmtestInstallResponse, string] =
-  ## A value checked against `pmtest.install_response`.
-  ?generatedSchema().check("pmtest.install_response", v)
-  ok(fromChecked(T, v))
-
-proc encode*(x: PmtestInstallResponse): Result[seq[byte], string] =
-  ## Logos deterministic CBOR, checked against `pmtest.install_response`.
-  generatedSchema().encodeChecked("pmtest.install_response", toCbor(x))
-
-proc decode*(T: type PmtestInstallResponse, data: openArray[byte]): Result[PmtestInstallResponse, string] =
-  ## One deterministic-CBOR `pmtest.install_response` value.
-  let v = ?generatedSchema().decodeChecked("pmtest.install_response", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type PmtestResolveRequest, v: CborValue): Result[PmtestResolveRequest, string] =

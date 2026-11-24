@@ -42,6 +42,27 @@ type PackageManager* = ref object
   shell: Shell
   log: ShellLog
 
+when defined(lcnTestHooks):
+  import std/os
+  from chronos import sleepAsync, milliseconds
+
+  proc handoffHeld() {.async: (raises: [CancelledError]).} =
+    ## [IMPL; plan §10.2, ruling 1] `test_system_binding`'s hold: while the file named
+    ## by `LCN_TEST_HANDOFF_GATE` exists, a system-service `get_runtime_handoff` waits
+    ## before the shell answers it, and appends a line to `<file>.held` as it begins to
+    ## wait. A cancellation ends the wait. Test builds only.
+    let gate = getEnv("LCN_TEST_HANDOFF_GATE")
+    if gate.len == 0 or not fileExists(gate):
+      return
+    try:
+      let f = open(gate & ".held", fmAppend)
+      f.write("held\n")
+      f.close()
+    except CatchableError:
+      discard
+    while fileExists(gate):
+      await sleepAsync(5.milliseconds)
+
 # Answers ----------------------------------------------------------------------------------
 
 func cancelled(): InvocationFailure =
@@ -161,6 +182,8 @@ proc `get_runtime_handoff`*(
     return err(m.refuse(inv, "get_runtime_handoff", "not a reader"))
   let a =
     try:
+      when defined(lcnTestHooks):
+        await handoffHeld()
       await m.shell.handoff(identityOf(request.package), request.module)
     except CancelledError:
       m.log("package-manager: get_runtime_handoff cancelled by the Runtime")

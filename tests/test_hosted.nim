@@ -37,7 +37,7 @@ when defined(posix):
   import ../src/logos_core/loader/contract
   import logos_sdk/pins
   import
-    ./support/[coretuner, fakeca, modulehostbuild, shortdir, withoutloader],
+    ./support/[coretuner, fakeca, modulehostbuild, shortdir, signals, withoutloader],
     logos_sdk/testing/[kitbuild, kitruntime]
   import logos_sdk/testing/fixtures/meter_impl
   import logos_sdk/testing/generated/meter_module_calls
@@ -722,7 +722,7 @@ when defined(posix):
       return false
     let pid = pidOf(h)
     dropHost(h)
-    pid > 0 and posix.kill(Pid(pid), SIGKILL) == 0
+    pid > 0 and signalPid(pid, SIGKILL) == 0
 
   proc realization(
       rc: ptr LogosRuntimeControlBinding, e: Engine, instance: string

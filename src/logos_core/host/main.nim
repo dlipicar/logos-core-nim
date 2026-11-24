@@ -54,6 +54,7 @@ const
   CarrierFd = cint(3)
   ListenerFd* = cint(4)
   LockFd* = cint(5)
+  SystemFd* = cint(6) ## [G492] the system-service listener
   FirstHighFd = cint(64)
 
 type
@@ -120,6 +121,11 @@ proc initialize(life: var Lifecycle, m: LcnCarrierInit) =
     # test may believe armed. An audit build armed itself in `route`.
     if m.wipe_audit.isSome:
       carrierLost("an init with wipe_audit for a host that is no audit build")
+  if m.system_endpoint.isSome and (m.system.isNone or m.endpoint.isNone):
+    # [G492] Only the marked Package Manager's provider serves one.
+    carrierLost(
+      "an init with system_endpoint for a host that is not the marked provider"
+    )
   maxPayloadDepth = int(min(m.max_payload_depth, uint64(high(int32))))
   # [plan §2.8] A consumer's own connections use the Runtime's limits.
   setConsumerTransport(m.transport.get(@[]), maxPayloadDepth)
@@ -191,9 +197,16 @@ proc initialize(life: var Lifecycle, m: LcnCarrierInit) =
       elif m.transport.isNone or m.runtime_id.isNone:
         Result[void, string].err("the endpoint's transport limits are missing")
       else:
+        # [G492; TRN-0330] The marked Package Manager's system-service
+        # listener, fd 6, is served beside it.
+        let system =
+          if m.system_endpoint.isSome:
+            Opt.some((path: m.system_endpoint.get, listener: SystemFd))
+          else:
+            Opt.none(tuple[path: string, listener: cint])
         serveEndpoint(
           b, ctx, access.state, m.module, m.endpoint.get, m.runtime_id.get,
-          m.transport.get, ListenerFd, maxPayloadDepth,
+          m.transport.get, ListenerFd, maxPayloadDepth, system,
         )
     if served.isErr:
       suppressReports() # [M5]
@@ -430,6 +443,7 @@ proc runHost*() {.noreturn.} =
     carrierLost(bound.error)
   keepPrivate(ListenerFd)
   keepPrivate(LockFd)
+  keepPrivate(SystemFd)
   let fd = carrierFd()
   initHostShared(fd)
   initBinding()

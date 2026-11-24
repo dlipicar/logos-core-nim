@@ -6,11 +6,14 @@
    The child gets:
    - fd 0 from /dev/null; fds 1 and 2 inherited, so its diagnostics (and a
      sanitizer's reports) reach the daemon's log;
-   - fd 3 the carrier, fd 4 the transferred listener and fd 5 the restart lock,
+   - fd 3 the carrier, fd 4 the transferred listener, fd 5 the restart lock
+     and fd 6 the system endpoint's listener (step 5-6a-2; DECISIONS G492),
      each only when given (>= 0);
    - no other descriptor: POSIX_SPAWN_CLOEXEC_DEFAULT on Darwin only,
-     posix_spawn_file_actions_addclosefrom_np(6) on glibc 2.34 and later, and
-     everywhere the daemon's own close-on-exec descriptors;
+     posix_spawn_file_actions_addclosefrom_np on glibc 2.34 and later (from 7
+     for the host given fd 6, from 6 for every other, so none keeps the
+     daemon's fd 6), and everywhere the daemon's own close-on-exec
+     descriptors;
    - a process group of its own (its pid), so ending the group reaches what
      the module itself spawned;
    - an empty signal mask and the default action for SIGPIPE, SIGTERM, SIGINT
@@ -27,6 +30,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "hostspawn.h" /* the prototype hostsup.nim compiles its calls against (I147) */
+
 #if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 34))
 #define LCN_HAVE_CLOSEFROM 1
 #endif
@@ -39,18 +44,21 @@
 #define LCN_HAVE_CLOEXEC_DEFAULT 1
 #endif
 
-/* A close-on-exec copy above every fd the child is given, so dup2 onto 3, 4
-   or 5 never meets itself (a dup2 onto itself would keep close-on-exec). */
+/* A close-on-exec copy above every fd the child is given, so dup2 onto 3, 4,
+   5 or 6 never meets itself (a dup2 onto itself would keep close-on-exec). */
 static int lcn_high(int fd) {
   if (fd < 0) return -1;
   return fcntl(fd, F_DUPFD_CLOEXEC, 64);
 }
 
 int lcn_host_spawn(const char *path, char *const argv[], char *const envp[],
-                   int carrier, int listener, int lock, int *pid_out) {
-  int c = lcn_high(carrier), l = lcn_high(listener), k = lcn_high(lock);
+                   int carrier, int listener, int lock, int system,
+                   int *pid_out) {
+  int c = lcn_high(carrier), l = lcn_high(listener), k = lcn_high(lock),
+      y = lcn_high(system);
   int r = 0;
-  if (c < 0 || (listener >= 0 && l < 0) || (lock >= 0 && k < 0)) {
+  if (c < 0 || (listener >= 0 && l < 0) || (lock >= 0 && k < 0) ||
+      (system >= 0 && y < 0)) {
     r = errno ? errno : EBADF;
     goto out;
   }
@@ -85,8 +93,10 @@ int lcn_host_spawn(const char *path, char *const argv[], char *const envp[],
   if ((r = posix_spawn_file_actions_adddup2(&fa, c, 3)) != 0) goto done;
   if (l >= 0 && (r = posix_spawn_file_actions_adddup2(&fa, l, 4)) != 0) goto done;
   if (k >= 0 && (r = posix_spawn_file_actions_adddup2(&fa, k, 5)) != 0) goto done;
+  if (y >= 0 && (r = posix_spawn_file_actions_adddup2(&fa, y, 6)) != 0) goto done;
 #ifdef LCN_HAVE_CLOSEFROM
-  if ((r = posix_spawn_file_actions_addclosefrom_np(&fa, 6)) != 0) goto done;
+  if ((r = posix_spawn_file_actions_addclosefrom_np(&fa, y >= 0 ? 7 : 6)) != 0)
+    goto done;
 #endif
   pid_t pid = 0;
   r = posix_spawn(&pid, path, &fa, &at, argv, envp);
@@ -98,5 +108,6 @@ out:
   if (c >= 0) close(c);
   if (l >= 0) close(l);
   if (k >= 0) close(k);
+  if (y >= 0) close(y);
   return r == 0 ? 0 : -r;
 }

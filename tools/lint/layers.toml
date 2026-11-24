@@ -54,6 +54,9 @@ daemon_allowlist = [
   "runtime/evidence",
   "runtime/host",
   "runtime/host_config",
+  # [I147, Tier 5 step 5-6a-2] the one declaration of hostspawn.c's spawn, for the key holder's
+  # spawn (daemon/remoteside): a copy of its own fell behind G492's parameter
+  "runtime/hostsup",
   "runtime/plumbing",
   "runtime/stateadmin",
   "runtime/store",

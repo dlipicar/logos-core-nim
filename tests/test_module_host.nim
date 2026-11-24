@@ -198,8 +198,11 @@ when defined(posix):
 
   var endpoints = 0
 
-  proc providerInit(path: string, module = "meter_module"): LcnCarrierMessage =
-    ## `init` for the meter library as a provider whose endpoint is `path`.
+  proc providerInit(
+      path: string, module = "meter_module", system = Opt.none(string)
+  ): LcnCarrierMessage =
+    ## `init` for the meter library as a provider whose endpoint is `path`; with `system`,
+    ## as the marked provider whose system-service endpoint is that path (G492).
     toMessage(
       LcnCarrierInit(
         id: 1,
@@ -210,6 +213,8 @@ when defined(posix):
         endpoint: Opt.some(path),
         transport: Opt.some(transportWords(defaultTransportConfig())),
         runtime_id: Opt.some("7f3a2c1e-5b4d-4e6f-8a9b-0c1d2e3f4a5b"),
+        system: (if system.isSome: Opt.some(true) else: Opt.none(bool)),
+        system_endpoint: system,
       )
     )
 
@@ -303,6 +308,27 @@ when defined(posix):
         check f.code.kind == LcnCarrierInitFailedCodeChoiceKind.Realization_failed
         check f.phase.kind == LcnCarrierInitFailedPhaseChoiceKind.Bind
         check "listener" in f.message
+        r.closeCarrier()
+        check r.waitExit()
+      discard fdClose(pair[0])
+      discard fdClose(pair[1])
+      discard fdClose(ep.listener)
+      removeDir(ep.dir.base)
+
+    test "[TRN-0186] [IMPL-DECISION G492] H-6b the marked provider's init naming a system-service endpoint, with no listener on fd 6, or a socket there that is not listening: init_failed realization-failed, the module destroyed":
+      let ep = newEndpoint()
+      var pair: array[2, cint]
+      check socketPair(addr pair) == 0
+      for system in [cint(-1), pair[0]]:
+        # fd 4 is the endpoint's own listener: only fd 6 is wrong.
+        var r = startHost(host, listener = ep.listener, system = system)
+        defer:
+          r.stop()
+        let f =
+          r.initFailure(providerInit(ep.path, system = Opt.some(ep.path & ".sys")))
+        check f.code.kind == LcnCarrierInitFailedCodeChoiceKind.Realization_failed
+        check f.phase.kind == LcnCarrierInitFailedPhaseChoiceKind.Bind
+        check "system-service listener" in f.message
         r.closeCarrier()
         check r.waitExit()
       discard fdClose(pair[0])
@@ -410,7 +436,7 @@ when defined(posix):
         check toSeq(walkDir(dir)).len == 1 # `probe.cmd` alone: no init ran
 
   suite "host.module: spawn (plan §2.3, R4, R5)":
-    test "[IMPL] H-14 the child starts with --parent=<the Runtime's pid> as its one argument, an empty signal mask, default actions, only the allow-listed environment, /dev/null on fd 0, the lock on fd 5 and nothing above it":
+    test "[IMPL] [IMPL-DECISION G492] H-14 the child starts with --parent=<the Runtime's pid> as its one argument, an empty signal mask, default actions, only the allow-listed environment, /dev/null on fd 0, the lock on fd 5 and nothing above it, not even the daemon's own fd 6 left open and inheritable":
       # Built without Nim's own signal handlers, which would replace the
       # dispositions the spawn set before the probe could read them.
       let program = buildChild(
@@ -432,10 +458,28 @@ when defined(posix):
       var lockStat: Stat
       discard fstat(lockFd, lockStat)
       let want = deliverySettings()
+      # [G492] This process's fd 6, open and inheritable during the spawn: a host given no
+      # system endpoint must not keep it. Where the spawn closes inherited descriptors
+      # (Darwin's flag, glibc's closefrom); bionic relies on close-on-exec alone.
+      const inheritedSix = defined(macosx) or (defined(linux) and not defined(android))
+      let sixFlags = fcntl(6, F_GETFD)
+      when inheritedSix:
+        if sixFlags < 0:
+          let f = posix.open(cstring(lockPath), O_RDONLY)
+          check f >= 0 and dup2(f, 6) == 6
+          discard posix.close(f)
+        else:
+          discard fcntl(6, F_SETFD, sixFlags and not FD_CLOEXEC)
+        check fcntl(6, F_GETFD) == 0
       let s =
         newSupervisor(program, @["LCN_SPAWN_PASSED", "LCN_SPAWN_UNSET"] & @SanitizerEnv)
       let h = s.newHost(nil, nil, nil, 1024).get
       check h.spawn(lock = lockFd).isOk
+      when inheritedSix:
+        if sixFlags < 0:
+          discard posix.close(6)
+        else:
+          discard fcntl(6, F_SETFD, sixFlags)
       discard pthread_sigmask(SIG_SETMASK, old, blocked)
       discard posix.close(lockFd)
       let m = h.awaitLane0()
@@ -459,6 +503,34 @@ when defined(posix):
       check e.exited and e.status == 0
       h.dropHost()
       s.closeSupervisor()
+
+    test "[IMPL-DECISION I147] a spawn that reports success with its pid left at -1 (what a stale declaration of hostspawn.c's spawn gave) fails cleanly, the host suites' spawn and the supervisor's alike, and signals nothing; a group signal to a pid of 1 or less is refused unsent":
+      let sent = groupSignalsSent()
+      failNextSpawnPid()
+      # [G442] sanitizer-env: the hook starts no process
+      let direct = spawnProcess(host, @[], -1)
+      check direct.isErr
+      if direct.isErr:
+        check direct.error == "the spawn reported no process id"
+      let s = newSupervisor(host, @SanitizerEnv)
+      let h = s.newHost(nil, nil, nil, 1024).get
+      failNextSpawnPid()
+      let spawned = h.spawn()
+      check spawned.isErr
+      if spawned.isErr:
+        check spawned.error ==
+          "the Module Host cannot be started: the spawn reported no process id"
+      check h.pidOf() <= 0
+      h.dropHost()
+      s.closeSupervisor()
+      for leader in [cint(-1), 0, 1]:
+        check signalGroup(leader, 0) == gsRefused
+      check groupSignalsSent() == sent
+      # A real group is still signalled.
+      var r = startHost(host)
+      check signalGroup(cint(r.pid), 0) == gsSent
+      check groupSignalsSent() == sent + 1
+      r.stop()
 
   suite "host.module: sanitizer reports from a host (DECISIONS G442)":
     test "[IMPL-DECISION G442] the canary checker: a file of one stack trace moves to the canary directory once its process is reaped; anything else stays, so the check fails on it":
@@ -630,3 +702,142 @@ else:
   suite "host.module: the Module Host (POSIX only)":
     test "[IMPL] hosted placement is not supported on this platform; the host is a stub":
       skip()
+
+# [DECISIONS I146] The dispatch pool's counting, on every platform: pure, so every order of posts,
+# the workers' receives and the jobs' ends is walked, where a timed test would see only the orders
+# its host runs. `claim` and `finished` are the ones `host/endpoint.nim`'s `post` and `poolLoop`
+# call; the worker's side (nothing counted at a receive, `finished` once after each job) is this
+# model's, as `poolLoop` has it.
+import std/sets
+import ../src/logos_core/host/dispatchcount
+
+type
+  PoolModel = object
+    ## Posts into the pool's queue, the workers that take them, and the jobs' ends. `old`: the
+    ## counting before I146, which made a worker idle when started and claimed it only once it
+    ## had taken a job.
+    counts: DispatchCounts
+    old: bool
+    oldIdle, oldCount: int
+    posted, receiving, queued, running, ended: int
+
+  Walked = object
+    ok: bool ## every state kept the invariant, and every order ended with every job done
+    claims: set[DispatchClaim] ## the claim kinds some order made
+    tookWaiting, wentIdle: bool ## `finished`'s two outcomes, each seen in some order
+
+proc post(m: var PoolModel, cap: int, w: var Walked) =
+  inc m.posted
+  inc m.queued
+  if m.old:
+    if m.oldIdle == 0 and m.oldCount < cap:
+      inc m.oldCount
+      inc m.oldIdle
+      inc m.receiving
+  else:
+    let c = m.counts.claim(cap)
+    w.claims.incl c.kind
+    if c.kind == dcGrow:
+      doAssert c.index == m.counts.count - 1
+      inc m.receiving
+
+proc take(m: var PoolModel) =
+  dec m.receiving
+  dec m.queued
+  inc m.running
+  if m.old:
+    dec m.oldIdle
+
+proc finish(m: var PoolModel, w: var Walked) =
+  ## A running job ends; its worker goes back to its receive.
+  dec m.running
+  inc m.ended
+  inc m.receiving
+  if m.old:
+    inc m.oldIdle
+  elif m.counts.finished():
+    w.tookWaiting = true
+  else:
+    w.wentIdle = true
+
+func holds(m: PoolModel): bool =
+  ## [Fable §13.4] With A the workers not running a job (a new one from its claim) and Q the
+  ## jobs claimed and not yet received: A - Q = idle - waiting, and never both idle and waiting.
+  m.receiving - m.queued == m.counts.idle - m.counts.waiting and
+    not (m.counts.idle > 0 and m.counts.waiting > 0)
+
+proc walk(cap, jobs: int, ends: bool, old = false): Walked =
+  ## Every order of `jobs` posts, the workers' receives and, with `ends`, the running jobs'
+  ## ends. Done means every job running (`ends` false: each blocks for ever) or ended.
+  var w = Walked(ok: true)
+  var seen: HashSet[array[10, int]]
+  proc step(m: PoolModel) =
+    if not w.ok:
+      return
+    let key = [
+      m.posted, m.receiving, m.queued, m.running, m.ended, m.counts.idle,
+      m.counts.waiting, m.counts.count, m.oldIdle, m.oldCount,
+    ]
+    if key in seen:
+      return
+    seen.incl key
+    if not m.old and not m.holds:
+      w.ok = false
+      return
+    var moved = false
+    if m.posted < jobs:
+      var n = m
+      n.post(cap, w)
+      step(n)
+      moved = true
+    if m.receiving > 0 and m.queued > 0:
+      var n = m
+      n.take()
+      step(n)
+      moved = true
+    if ends and m.running > 0:
+      var n = m
+      n.finish(w)
+      step(n)
+      moved = true
+    if not moved and (if ends: m.ended else: m.running) != jobs:
+      w.ok = false
+
+  step(PoolModel(old: old))
+  w
+
+suite "host.module: the dispatch pool's counts (DECISIONS I146)":
+  test "[IMPL-DECISION I146] two posts before any worker has taken a job start two workers, at distinct indexes; a worker whose job ended is the next post's":
+    var c: DispatchCounts
+    let a = c.claim(64)
+    let b = c.claim(64)
+    check a.kind == dcGrow and a.index == 0
+    check b.kind == dcGrow and b.index == 1
+    check c.count == 2 and c.idle == 0
+    check not c.finished()
+    check c.idle == 1
+    check c.claim(64).kind == dcIdle
+    check c.count == 2 and c.idle == 0
+
+  test "[IMPL-DECISION I146] at the cap a job waits, and the next worker to finish takes it before it counts idle":
+    var c: DispatchCounts
+    check c.claim(2).kind == dcGrow
+    check c.claim(2).kind == dcGrow
+    check c.claim(2).kind == dcWaiting
+    check c.count == 2 and c.waiting == 1
+    check c.finished()
+    check c.waiting == 0 and c.idle == 0
+    check not c.finished()
+    check not c.finished()
+    check c.idle == 2 and c.count == 2 and c.waiting == 0
+
+  test "[IMPL-DECISION I146] in every order of four posts and the workers' receives, four blocking calls all run; the counting before I146 leaves one queued in some order":
+    check walk(cap = 64, jobs = 4, ends = false).ok
+    check walk(cap = 4, jobs = 4, ends = false).ok
+    check not walk(cap = 64, jobs = 4, ends = false, old = true).ok
+
+  test "[IMPL-DECISION I146] in every order of five posts, the workers' receives and the jobs' ends under a cap of 2, every state keeps A - Q = idle - waiting with never both idle and waiting, and every job runs and ends; the walk reaches every claim and both ends of a job":
+    let w = walk(cap = 2, jobs = 5, ends = true)
+    check w.ok
+    check w.claims == {dcIdle, dcGrow, dcWaiting}
+    check w.tookWaiting and w.wentIdle

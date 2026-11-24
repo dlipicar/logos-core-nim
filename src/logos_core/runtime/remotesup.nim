@@ -58,13 +58,8 @@ from ./hostsup import nil # compiles hostspawn.c, whose spawn this module calls
 when defined(posix):
   import std/posix
   from std/os import `/`, createDir, setFilePermissions, FilePermission, getEnv
-
-  proc lcnSpawn(
-    path: cstring,
-    argv, envp: cstringArray,
-    carrier, listener, lock: cint,
-    pid: ptr cint,
-  ): cint {.importc: "lcn_host_spawn", cdecl.}
+  # [DECISIONS I147] hostsup's declaration, the only one, and its guarded group signal.
+  from ./hostsup import lcnHostSpawn, spawnErrorText, signalGroup, GroupSignal
 
   proc flock(fd: cint, op: cint): cint {.importc, header: "<sys/file.h>".}
 
@@ -242,6 +237,14 @@ proc note(s: RemoteSupervisor, text: string) =
   if s.hooks.note != nil:
     s.hooks.note(s.hooks.noteData, "remote: " & text)
 
+when defined(posix):
+  proc killGroup(s: RemoteSupervisor, p: RemoteProc, why: string) =
+    ## [I147] SIGKILL to the process group `p`'s spawn made. A pid of 1 or
+    ## less is refused and noted instead: -1 would reach every process the
+    ## user owns.
+    if p.pid > 0 and signalGroup(p.pid, SIGKILL) == GroupSignal.gsRefused:
+      s.note("refused to signal the process group of pid " & $p.pid & " (" & why & ")")
+
 # The sign thread ---------------------------------------------------------------------
 
 proc signMain(s: RemoteSupervisor) {.thread.} =
@@ -371,20 +374,21 @@ when defined(posix):
     for i, v in env:
       envp[i] = cstring(v)
     var pid: cint = -1
-    let r = lcnSpawn(
+    let r = lcnHostSpawn(
       cstring(s.program),
       cast[cstringArray](addr argv[0]),
       cast[cstringArray](addr envp[0]),
       pair[1],
       p.listenFd,
       lockFd,
+      -1, # no system endpoint: that is a Module Host's (G492)
       addr pid,
     )
     discard posix.close(pair[1])
     discard posix.close(lockFd)
     if r != 0:
       discard posix.close(pair[0])
-      return err("cannot start " & s.program & ": " & $strerror(abs(r)))
+      return err("cannot start " & s.program & ": " & spawnErrorText(r))
     nonblocking(pair[0])
     inc nextId
     p.id = nextId
@@ -627,14 +631,12 @@ when defined(posix):
         if not ok:
           # A fault or the channel's end: the process is ended.
           p.closeCtl()
-          if p.pid > 0:
-            discard kill(Pid(-p.pid), SIGKILL)
+          s.killGroup(p, "its channel failed")
       for p in procs.values:
         if p.outq.len > 0 and p.ctl >= 0:
           if not p.flush():
             p.closeCtl()
-            if p.pid > 0:
-              discard kill(Pid(-p.pid), SIGKILL)
+            s.killGroup(p, "its channel failed")
       # Reaping, deadlines and restarts.
       let now = getMonoTime()
       var gone: seq[seq[byte]]
@@ -643,12 +645,12 @@ when defined(posix):
           var status: cint
           let r = waitpid(Pid(p.pid), status, WNOHANG)
           if r == Pid(p.pid):
-            discard kill(Pid(-p.pid), SIGKILL) # [R3] what it left in its group
+            s.killGroup(p, "what it left in its group") # [R3]
             s.ended(p, status)
           elif p.state == psStarting and now >= p.deadline:
             s.note("the listener at " & p.name & " did not listen within 10 s")
             p.reply(ecTransport, "the listener process did not listen in time")
-            discard kill(Pid(-p.pid), SIGKILL)
+            s.killGroup(p, "it did not listen in time")
             p.closeCtl()
             if p.listenFd >= 0:
               discard posix.close(p.listenFd)
@@ -656,7 +658,7 @@ when defined(posix):
             p.state = psStopping
             p.killAt = now
           elif p.state == psStopping and now >= p.killAt:
-            discard kill(Pid(-p.pid), SIGKILL)
+            s.killGroup(p, "it is stopping")
         if p.pid <= 0:
           if p.state == psStopping:
             gone.add(key)

@@ -35,13 +35,9 @@ when defined(posix):
   import ../transport/tls/p256
   import ./logging
 
-  proc lcnSpawn(
-    path: cstring,
-    argv, envp: cstringArray,
-    carrier, listener, lock: cint,
-    pid: ptr cint,
-  ): cint {.importc: "lcn_host_spawn", cdecl.}
-    ## `runtime/hostspawn.c`, compiled with the Runtime (`hostsup`)
+  # [DECISIONS I147] `runtime/hostspawn.c`'s spawn, through hostsup's declaration, the only one,
+  # and its guarded group signal.
+  from ../runtime/hostsup import lcnHostSpawn, spawnErrorText, signalGroup, GroupSignal
 
   proc flock(fd: cint, op: cint): cint {.importc, header: "<sys/file.h>".}
 
@@ -133,19 +129,20 @@ when defined(posix):
     var argv = [cstring("logos_keyholder"), cstring(session), cstring(parent), nil]
     var envp = [cstring(nil)]
     var pid: cint = -1
-    let r = lcnSpawn(
+    let r = lcnHostSpawn(
       cstring(program),
       cast[cstringArray](addr argv[0]),
       cast[cstringArray](addr envp[0]),
       pair[1],
       -1,
       -1,
+      -1, # no system endpoint (G492)
       addr pid,
     )
     discard posix.close(pair[1])
     if r != 0:
       discard posix.close(pair[0])
-      return err("cannot start " & program & ": " & $strerror(r))
+      return err("cannot start " & program & ": " & spawnErrorText(r))
     ok((pair[0], pid))
 
   proc holderGone(side: RemoteSide) =
@@ -315,7 +312,13 @@ when defined(posix):
       let until = getMonoTime() + initDuration(seconds = 2)
       while waitpid(Pid(side.holderPid), status, WNOHANG) == 0:
         if getMonoTime() >= until:
-          discard kill(Pid(-side.holderPid), SIGKILL)
+          # [I147] A pid of 1 or less is never signalled: -1 would reach every
+          # process the user owns.
+          if signalGroup(side.holderPid, SIGKILL) == GroupSignal.gsRefused:
+            logWarn(
+              "remote signing: refused to signal the process group of pid " &
+                $side.holderPid & " (the key holder)"
+            )
           discard waitpid(Pid(side.holderPid), status, 0)
           break
         sleep(20)

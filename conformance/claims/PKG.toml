@@ -122,8 +122,8 @@ default = "deferred:tier-5"
 "PKG-0620" = "claimed"
 "PKG-0624" = "claimed"
 "PKG-0628" = "claimed"
-# Copies of rules that 5-8 (the Runtime handoff), 5-6a-2 (the handoff's response) and 5-6b (the lists,
-# the watch and the events) build; deferred by name with their twins.
+# Copies of rules that 5-8 (the Runtime handoff) and 5-6b (the lists, the watch and the events) build;
+# deferred by name with their twins.
 "PKG-0626" = "deferred:tier-5"
 "PKG-0627" = "deferred:tier-5"
 "PKG-0632" = "deferred:tier-5"
@@ -132,7 +132,12 @@ default = "deferred:tier-5"
 "PKG-0636" = "deferred:tier-5"
 "PKG-0638" = "deferred:tier-5"
 "PKG-0648" = "deferred:tier-5"
-"PKG-0650" = "deferred:tier-5"
+# Step 5-6a-2, the system-service binding (DECISIONS G492, G493; I141): `get_runtime_handoff` answers the
+# Runtime's own binding, its response `{handoff}` or `{error}` (PKG-0380 and its copy PKG-0650), and
+# `package-not-installed` for an identity not installed (PKG-0388); tests/test_system_binding.nim.
+"PKG-0380" = "claimed"
+"PKG-0388" = "claimed"
+"PKG-0650" = "claimed"
 # Step 5-6a-1, the Package Manager instance (DECISIONS G490, G491, G494, G495; I140): the module
 # `logos_package_manager`, hosted under the system mark and composed by logosd. Its contract is the
 # pinned App A, so the request shapes and the operations' responses (§15) cross its boundary, and the
