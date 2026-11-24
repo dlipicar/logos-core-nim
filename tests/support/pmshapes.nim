@@ -1,7 +1,8 @@
 ## The resolver measurement's catalog shapes (Tier 5 step 5-3b-2; planning's rulings of
 ## 2026-11-22, M1 to M6 and 7.1 to 7.2; DECISIONS G399, G443), resolved through the Package
-## Manager's driver (`pm/driver.nim`) one step at a time, each step one whole resolver run, as the
-## engine runs it on the module thread. Every inspection is answered from a table, so no archive is
+## Manager's driver (`pm/driver.nim`) one step at a time, as the engine runs it on the module
+## thread: since 5-3c-2 (G455) a step resumes the run until it needs an inspection, spends its
+## turn or ends, and the run is then released a turn at a time. Every inspection is answered from a table, so no archive is
 ## signed or read. `tools/pmbench.nim` times them; `test_pm_driver` asserts their counts at small
 ## sizes, never a time (M6).
 ##
@@ -16,16 +17,37 @@
 ##   each bind of `y` checks every bound dependency for a cycle (`bindCand`; the ruling of
 ##   2026-11-22, 7.2). With `v` versions of `y` and a name after it that no candidate satisfies,
 ##   `y` is bound `v` times.
+## - `lift`: a dense core of `n` names, then `y`, sorting after it, whose `v` - 1 newer versions
+##   each require the core's first name one level deeper than the root does, and `yz ^2.0.0`, of
+##   which only 1.0.0 exists: each deepens every core name and is given up, and `y@1.0.0`, which
+##   requires nothing, completes the closure at the core's first depths. Propagation's worst case
+##   (5-3c's plan §6; G454).
+##
+## Contracts (5-3c-3; G455's contract exception), each listed contract a commitment's encoding of
+## 221 bytes, as in a manifest:
+## - `contracts`: `r` needs `k` names, each of whose manifests has two dependency entries on `z`
+##   names, each entry listing `c` contracts; each `z` name has a record that provides none, so
+##   each candidate fails its contracts and nothing completes the closure.
+## - `provider`: `q` provides `p` contracts. `r` needs `q`, listing the last of them, and `w`,
+##   which needs `q` listing the last `l`. `r`'s contract is numbered before `q`'s, so `q`'s
+##   provided numbers are out of order and sorted; `w` is bound after `q`, so its bind looks
+##   each of its `l` contracts up in what `q` provides. The closure completes.
+## - `versioned`: `r` needs `a` and `b ^2.0.0` (only 1.0.0 exists); `a` has `v` versions, each
+##   with one entry on `z` listing `c` contracts that no record provides: each version of `a` is
+##   bound and given up.
 
 import std/[monotimes, strutils, tables, times]
 import results
 import logos_sdk/pins
 import logos_sdk/base/hex
+import logos_sdk/cbor
+import logos_sdk/crypto/blake3
 import ../../src/logos_core/pins as core_pins
 import ../../src/logos_core/package/[errors, manifest, records, resolver, trust]
 import ../../src/logos_core/pm/driver
+import ./valueinspection
 
-export results, errors, resolver
+export results, errors, resolver, valueinspection
 
 proc digestOf(h: string): typeof(ManifestCommitment().schemaRoot) =
   let bytes = hex.fromHex(h).get
@@ -43,11 +65,19 @@ let commitment = ManifestCommitment(
 
 type Shape* = object
   catalog: seq[CatalogEntry]
-  answers: Table[seq[byte], Inspection]
+  answers: Table[seq[byte], ValueInspection]
+    ## [G482] values: the oracle reads them, the resolver is given them `held`
+  unchecked*: bool
+    ## the resolver's answers are not checked against the values (`held`): the bench's
   root: string
   rootVersion: string
 
-proc add(s: var Shape, name, version: string, deps: seq[PackageDependency]) =
+proc add(
+    s: var Shape,
+    name, version: string,
+    deps: seq[PackageDependency],
+    provides: seq[CborValue] = @[],
+) =
   let src =
     PackageSource(kind: skLgx, storage: "main", objectLocator: b(name & "@" & version))
   s.catalog.add(
@@ -55,12 +85,19 @@ proc add(s: var Shape, name, version: string, deps: seq[PackageDependency]) =
       identity: PackageIdentity(package: name, version: version), source: src
     )
   )
-  s.answers[src.encoded] = Inspection(
+  s.answers[src.encoded] = ValueInspection(
     kind: ikEligible,
     identity: PackageIdentity(package: name, version: version),
     commitment: commitment,
     dependencies: deps,
+    provides: provides,
   )
+
+proc contract(tag: string): CborValue =
+  ## A contract: a commitment's encoding, its value root that of `tag`.
+  var m = commitment
+  m.valueRoot = blake3(b(tag))
+  m.toCbor
 
 func needs(name: string, version = "1.0.0"): PackageDependency =
   PackageDependency(package: name, kind: rkCompatible, version: version)
@@ -152,18 +189,131 @@ proc hub*(n, v: int): Shape =
   result.root = "r"
   result.rootVersion = "1.0.0"
 
+func rootOf*(s: Shape): RootReference =
+  RootReference(package: Opt.some(s.root), version: Opt.some(s.rootVersion))
+
+proc valueInspector*(s: Shape): ValueInspector =
+  ## [G482] The shape's answers as values: the oracle's inspector.
+  let answers = s.answers
+  result = proc(
+      source: PackageSource, trust: TrustInput
+  ): ValueInspection {.gcsafe, raises: [].} =
+    answers.getOrDefault(
+      source.encoded, ValueInspection(kind: ikUnavailable, reason: "no such source")
+    )
+
+proc inputOf*(s: Shape, limits: ResolverLimits): ResolverInput =
+  ## [IMPL-DECISION G454] The shape as one synchronous resolver run's input, every inspection
+  ## answered from the table and nothing installed: what `test_resolver` compares with the frozen
+  ## oracle (given `valueInspector`) and what `tools/pmbench.nim --sync` times. [G482] The
+  ## resolver is given each answer `held`.
+  let values = s.valueInspector
+  let check = not s.unchecked
+  ResolverInput(
+    catalog: s.catalog,
+    limits: limits,
+    inspect: proc(
+        source: PackageSource, trust: TrustInput
+    ): Inspection {.gcsafe, raises: [].} =
+      held(values(source, trust), check),
+    retained: proc(p: InstalledPackage): Result[void, string] {.gcsafe, raises: [].} =
+      ok(),
+  )
+
+proc lift*(n, v: int): Shape =
+  ## [G454] See the module's header.
+  proc c(i: int): string =
+    "c" & align($i, 4, '0')
+
+  for i in 0 ..< n:
+    var deps: seq[PackageDependency]
+    for j in i + 1 ..< n:
+      deps.add(needs(c(j)))
+    result.add(c(i), "1.0.0", deps)
+  for i in countdown(v - 1, 1):
+    result.add("y", "1." & $i & ".0", @[needs(c(0)), needs("yz", "2.0.0")])
+  result.add("y", "1.0.0", @[])
+  result.add("yz", "1.0.0", @[])
+  result.add("r", "1.0.0", @[needs(c(0)), needs("y")])
+  result.root = "r"
+  result.rootVersion = "1.0.0"
+
+proc contracts*(c, k: int): Shape =
+  ## [G455] (5-3c-3) See the module's header.
+  var deps: seq[PackageDependency]
+  for i in 0 ..< k:
+    let a = "a" & align($i, 3, '0')
+    var entries: seq[PackageDependency]
+    for j in 0 ..< 2:
+      let z = "z" & align($(2 * i + j), 4, '0')
+      var d = needs(z)
+      for t in 0 ..< c:
+        d.contracts.add(contract(z & "/" & $t))
+      entries.add(d)
+      result.add(z, "1.0.0", @[])
+    result.add(a, "1.0.0", entries)
+    deps.add(needs(a))
+  result.add("r", "1.0.0", deps)
+  result.root = "r"
+  result.rootVersion = "1.0.0"
+
+proc provider*(p, l: int): Shape =
+  ## [G455] (5-3c-3) See the module's header.
+  var provided: seq[CborValue]
+  for t in 0 ..< p:
+    provided.add(contract("p/" & $t))
+  var fromRoot = needs("q")
+  fromRoot.contracts.add(contract("p/" & $(p - 1)))
+  var fromW = needs("q")
+  for t in p - l ..< p:
+    fromW.contracts.add(contract("p/" & $t))
+  result.add("q", "1.0.0", @[], provided)
+  result.add("w", "1.0.0", @[fromW])
+  result.add("r", "1.0.0", @[fromRoot, needs("w")])
+  result.root = "r"
+  result.rootVersion = "1.0.0"
+
+proc versioned*(c, v: int): Shape =
+  ## [G455] (5-3c-3) See the module's header.
+  for i in countdown(v - 1, 0):
+    var d = needs("z")
+    for t in 0 ..< c:
+      d.contracts.add(contract("v" & $i & "/" & $t))
+    result.add("a", "1." & $i & ".0", @[d])
+  result.add("z", "1.0.0", @[])
+  result.add("b", "1.0.0", @[])
+  result.add("r", "1.0.0", @[needs("a"), needs("b", "2.0.0")])
+  result.root = "r"
+  result.rootVersion = "1.0.0"
+
 type BenchRun* = object
   outcome*: Result[Resolution, PackageError]
   counters*: ResolverCounters
-  steps*: int ## resolver runs: the root's and one after each inspection
+  steps*: int
+    ## driver steps: one ending at each inspection, one at each spent turn
+    ## ([G455]) and the last
+  turns*: int ## the steps that ended with the turn spent
+  work*: int64 ## the work units the run counted
+  largestStep*: int64
+    ## [G455] (5-3c-3) the most work counted between two turn checks: what a turn can
+    ## overrun its budget by
   longest*, total*: Duration ## wall time
   longestCpu*, totalCpu*: float ## the process's CPU time, in seconds
+  setup*: Duration ## [G455] making the run (`initDriver`), before its first turn
+  setupCpu*: float
+  releases*: int ## [G455] the turns that released the run after its outcome
+  longestRelease*, releaseTotal*: Duration ## their wall time
+  longestReleaseCpu*, releaseTotalCpu*: float
 
 func defaultParameter*(shape: string): int =
-  ## `k` for `wide`, `v` for `hub`, `L` for `layered`.
+  ## `k` for `wide` and `contracts`, `v` for `hub`, `lift` and `versioned`, `L` for `layered`,
+  ## `l` for `provider`.
   case shape
   of "hub": 1
+  of "lift": 2
   of "layered": 32
+  of "contracts", "provider": 1
+  of "versioned": 8
   else: 20
 
 proc shapeOf*(name: string, size, parameter: int): Opt[Shape] =
@@ -178,18 +328,32 @@ proc shapeOf*(name: string, size, parameter: int): Opt[Shape] =
     Opt.some(hub(size, parameter))
   of "layered":
     Opt.some(layered(size, parameter))
+  of "lift":
+    Opt.some(lift(size, parameter))
+  of "contracts":
+    Opt.some(contracts(size, parameter))
+  of "provider":
+    Opt.some(provider(size, parameter))
+  of "versioned":
+    Opt.some(versioned(size, parameter))
   else:
     Opt.none(Shape)
 
-proc driveShape*(s: Shape, limits: ResolverLimits): BenchRun =
+proc driveShape*(
+    s: Shape,
+    limits: ResolverLimits,
+    budget = ResolverTurnWork,
+    operationEntries = Opt.none(int),
+): BenchRun =
   ## Runs the driver to its outcome, answering every inspection from the table at once.
+  ## `budget` is the work of one turn ([G455]); `operationEntries` the operation bound
+  ## ([G477]).
   var t: TrustInput
-  let d = initDriver(
-    s.catalog,
-    t,
-    limits,
-    RootReference(package: Opt.some(s.root), version: Opt.some(s.rootVersion)),
-  )
+  let made = getMonoTime()
+  let made0 = cpuTime()
+  let d = initDriver(s.catalog, t, limits, s.rootOf, budget, operationEntries)
+  result.setupCpu = cpuTime() - made0
+  result.setup = getMonoTime() - made
   while true:
     let start = getMonoTime()
     let cpu0 = cpuTime()
@@ -205,16 +369,44 @@ proc driveShape*(s: Shape, limits: ResolverLimits): BenchRun =
       result.longestCpu = cpu
     case st.kind
     of dsNeed:
+      # [G482] Held as the worker would send it, outside the step's time.
       d.supply(
         st.source,
-        s.answers.getOrDefault(
-          st.source.encoded, Inspection(kind: ikUnavailable, reason: "no such source")
+        held(
+          s.answers.getOrDefault(
+            st.source.encoded,
+            ValueInspection(kind: ikUnavailable, reason: "no such source"),
+          ),
+          not s.unchecked,
         ),
       )
+    of dsRetained:
+      d.supplyRetained(st.record, Result[void, string].ok())
+    of dsTurn:
+      discard
     of dsDone:
       result.outcome = st.outcome
       break
   result.counters = d.counters
+  result.turns = d.turns
+  result.work = d.work
+  result.largestStep = d.largestStep
+  # [G455] Then the run is released, a turn at a time, as the engine does after its reply.
+  while true:
+    let start = getMonoTime()
+    let cpu0 = cpuTime()
+    let freed = d.release()
+    let cpu = cpuTime() - cpu0
+    let took = getMonoTime() - start
+    inc result.releases
+    result.releaseTotal += took
+    result.releaseTotalCpu += cpu
+    if took > result.longestRelease:
+      result.longestRelease = took
+    if cpu > result.longestReleaseCpu:
+      result.longestReleaseCpu = cpu
+    if freed:
+      break
 
 func mostConsidered*(c: ResolverCounters): int =
   ## The candidates charged to the name charged most.

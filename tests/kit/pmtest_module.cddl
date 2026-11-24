@@ -55,3 +55,48 @@ pmtest.counters = {
 pmtest.resolve_response =
   { packages: [* pmtest.selected], counters: pmtest.counters } /
   { error: tstr .size (1..64), ? message: tstr .size (1..512) }
+
+; [Tier 5 step 5-5-4; G449] The operations, each answering its §15 response value as
+; pm/responses.nim encodes it (deterministic CBOR, in `response`); the invocation error
+; MODULE_ERROR is the call's own failure. `source` is an encoded
+; logos.package_manager.package_source.
+pmtest.inspect_request = {
+  ? package: tstr .size (1..256),
+  ? version: tstr .size (1..256),
+  ? source: bstr .size (1..8192),
+}
+
+pmtest.inspect_response = { response: bstr }
+
+pmtest.install_request = {
+  package: tstr .size (1..256),
+  ? version: tstr .size (1..256),
+  ? source: bstr .size (1..8192),
+}
+
+pmtest.install_response = { response: bstr }
+
+pmtest.remove_request = {
+  package: tstr .size (1..256),
+  version: tstr .size (1..256),
+}
+
+pmtest.remove_response = { response: bstr }
+
+; `update_package` with `current` = {package, version}.
+pmtest.update_request = {
+  package: tstr .size (1..256),
+  version: tstr .size (1..256),
+  ? target_version: tstr .size (1..256),
+  ? source: bstr .size (1..8192),
+}
+
+pmtest.update_response = { response: bstr }
+
+pmtest.handoff_request = {
+  package: tstr .size (1..255),
+  version: tstr .size (1..255),
+  module: tstr .size (1..255),
+}
+
+pmtest.handoff_response = { response: bstr }

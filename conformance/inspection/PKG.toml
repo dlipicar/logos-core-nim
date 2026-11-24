@@ -29,3 +29,33 @@ reason = "A permission not taken (PM l.457, PKG-0085) and a deployment duty met 
 [[item]]
 ids = ["PKG-0089"]
 reason = "A conditional duty whose condition never arises (PM l.467). The trust input cannot require revocation, a minimum accepted version or fresh external-anchor evidence: the package trust file (lcn.package_trust, src/logos_core/package/trustdoc.cddl) is closed and has no such field, and a catalog or provenance selection is refused (G398, G404; tests [PKG-0086] and [PKG-0090] in tests/test_pm_input.nim). The only active requirement is the package's own signature under the accepted anchors, checked on every use, cached or not (G403; tests [PKG-0077] in tests/test_pm_vcache.nim). docs/PACKAGE-MANAGER.md §6 states it."
+
+# pm-install-root-not-shared (step 5-5-2, DECISIONS G444, I121; the owner's Q5 (a))
+[[item]]
+ids = ["PKG-0488"]
+reason = "A conditional duty whose condition never arises (PM l.931): no installed record depends on shared artifact storage. Each record's artifacts are its own files, in its own random directory below the instance's installation root, <state_dir>/install/r/<rid>/a/ (src/logos_core/pm/store.nim; DECISIONS G444), and no setting of daemon-config or the protected input names another root or a shared store. A second store on the same root is refused by the root's lock, so the instance does not start (test [PKG-0487] in tests/test_pm_store.nim). docs/DEPLOYMENT.md §1 documents the scope. The scope is choice (a) of the owner's Q5 (plan tier5-plans/step5-5-plan.md §14 and §15), answered on 2026-11-22."
+
+# pm-resource-access (step 5-5-2, DECISIONS G444, C8 / G93, I121)
+[[item]]
+ids = ["PKG-0498"]
+reason = "A documentation requirement (PM l.1183), answered in docs/DEPLOYMENT.md §1, 'Resource access': a module reaches its packaged resources and data only through its schema-typed configuration; local_path is the Loader's installation location and no module is told of it. The Runtime handoff the Package Manager builds (src/logos_core/pm/handoff.nim, buildHandoff; DECISIONS G451) carries the implementation artifact's local_path and hash and the configuration declaration's schema and default values, and no package root, artifact id or path table (PM l.1185; tests [PKG-0340] and [PKG-0342] in tests/test_pm_records.nim). A library shipped beside a module is installed and bound to its verified bytes (test [PKG-0293] in tests/test_pm_store.nim) and is not loaded by the Loader (C8, G93)."
+
+# pm-platform-profile (step 5-5-4, DECISIONS G453, G73, I121)
+[[item]]
+ids = ["PKG-0493"]
+reason = "A documentation requirement (PM l.950), answered in docs/DEPLOYMENT.md §1, 'The target platform': the values defined (os linux, darwin, windows, android, ios; architecture x86_64, aarch64; abi gnu, musl, mingw, msvc), the targets the hosted Package Manager runs on (linux and darwin, x86_64 and aarch64, abi gnu or musl on Linux and none on Darwin) and the matching rules (each field a variant names matches a defined value byte for byte, a value with no defined rule never matches, a field it leaves out constrains nothing, and the first compatible variant in declared order is selected; G73). The target is the host the Package Manager runs on, lgx.hostPlatform, fixed for the instance and given to the worker at its start (src/logos_core/package/lgx.nim, src/logos_core/pm/jobs.nim); a package with no variant for it is incompatible-platform (test [PKG-0495] in tests/test_lgx.nim)."
+
+# pm-one-realization-profile (step 5-5-4, DECISIONS G449, I121)
+[[item]]
+ids = ["PKG-0222"]
+reason = "Only the LGX realization profile is built (tests [PKG-0189] and [PKG-0190] in tests/test_pm_install.nim: an LGX package installs, a nix source is unsupported-source), so every manifest, validation, installed-record and handoff requirement the claims cover is met through it (PM §5, §7.1, §10, §12). The installed record, its checks on load and the handoff are built once, from a verified package, whatever its source (src/logos_core/pm/installed.nim, handoff.nim; DECISIONS G445, G451); work item 5-10, if built, adds the nix profile under the same code and its own tests under [PKG-0222]."
+
+# pm-backend-mechanics (step 5-5-4, DECISIONS G403, G444, G449, I121)
+[[item]]
+ids = ["PKG-0363"]
+reason = "A MAY the Package Manager takes, internally: the verification cache (src/logos_core/pm/vcache.nim; G403, G447; test [PKG-0394] in tests/test_pm_install.nim), the installation root and its record directories (src/logos_core/pm/store.nim; G444) and deferred retirement, a removed or replaced record's directory deleted once no operation's snapshot names it (G449; test [PKG-0401] in tests/test_pm_install.nim). None of them is visible in a result."
+
+# pm-no-retained-kid (step 5-5-4, DECISIONS G166, G445, I121)
+[[item]]
+ids = ["PKG-0441"]
+reason = "No kid is retained, so none can stand in for the key identity: the installed record's and the inspection record's signer is App A's package_signer, the profile and the 48-byte public key only (spec/mirrors/PKG/app-a.contract.cddl; src/logos_core/package/signing.nim signerRecord), and every check of a retained signer compares that key under the accepted anchors (src/logos_core/package/resolver.nim, src/logos_core/pm/handoff.nim; tests [PKG-0080] and [PKG-0440] in tests/test_pm_install.nim)."

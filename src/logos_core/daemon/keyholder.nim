@@ -27,7 +27,7 @@
 import std/[atomics, os, posix, strutils]
 from std/cmdline import commandLineParams
 import results
-import logos_sdk/base/parentwatch
+import logos_sdk/base/[entrymarks, parentwatch]
 import ../remote/carrier
 import ../transport/tls/p256
 import ./[credential, session, signsvc]
@@ -39,7 +39,7 @@ const
 
 var stopFlag: Atomic[bool]
 
-proc onStop(sig: cint) {.noconv.} =
+proc onStop(sig: cint) {.noconv, lcnOwnRuntime: "this program's signal handler".} =
   stopFlag.store(true)
 
 proc say(msg: string) =

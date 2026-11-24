@@ -630,19 +630,57 @@ type RcGot = object
   hold: Atomic[bool]
   ends: Atomic[int]
   endReason: Atomic[int]
-  openInEnd, unsubInEnd: Atomic[int]
+  openInEnd, unsubInEnd, prepareInEnd: Atomic[int]
 
 proc reset(g: var RcGot) =
   for a in [addr g.count, addr g.started, addr g.ends, addr g.endReason]:
     a[].store(0)
   g.openInEnd.store(NoCode)
   g.unsubInEnd.store(NoCode)
+  g.prepareInEnd.store(NoCode)
   g.hold.store(false)
 
 var
   rcGot: RcGot
   theSet: RouteSet
   rcSub: Subscription
+
+# A typed Runtime Control call (`prepareRc`) --------------------------------------------
+
+type SelfGot = object
+  count: Atomic[int]
+  code: Atomic[int]
+  matched: Atomic[bool] ## the response names the expected instance
+  releaseOwn: Atomic[int] ## its own completion's release
+  thread: Atomic[int]
+
+var
+  selfGot: SelfGot
+  selfCall: PreparedCall
+  selfExpected: string
+
+proc reset(g: var SelfGot) =
+  g.count.store(0)
+  g.code.store(NoCode)
+  g.matched.store(false)
+  g.releaseOwn.store(NoCode)
+  g.thread.store(0)
+
+proc onSelf(
+    outcome: Result[LogosNSRuntimeControlGetSelfResponse, InvocationFailure],
+    user: pointer,
+) {.nimcall, gcsafe, raises: [].} =
+  let g = cast[ptr SelfGot](user)
+  if outcome.isOk:
+    g.code.store(0)
+    {.cast(gcsafe).}:
+      g.matched.store(outcome.get.consumer.module_instance_id == selfExpected)
+  else:
+    g.code.store(ord(outcome.error.code))
+  g.thread.store(getThreadId())
+  {.cast(gcsafe).}:
+    g.releaseOwn.store(codeOf(selfCall.release()))
+  discard g.count.fetchAdd(1)
 
 proc onExec(
     ev: LogosNSRuntimeControlExecutionStateChangedEvent, user: pointer
@@ -661,6 +699,17 @@ proc onRcEnd(
   {.cast(gcsafe).}:
     g.openInEnd.store(codeOf(theSet.openRoute(meterRoot, meterSchema)))
     g.unsubInEnd.store(codeOf(rcSub.unsubscribe()))
+    g.prepareInEnd.store(
+      codeOf(
+        theSet.prepareRc(
+          "get_self",
+          LogosNSRuntimeControlGetSelfRequest(),
+          LogosNSRuntimeControlGetSelfResponse,
+          onSelf,
+          addr selfGot,
+        )
+      )
+    )
   discard g.ends.fetchAdd(1)
 
 suite "run.consumert: routes and Runtime Control subscriptions of a module instance (RUNTIME §9.3; INTERFACE l.3868) [IMPL-DECISION G339]":
@@ -670,6 +719,40 @@ suite "run.consumert: routes and Runtime Control subscriptions of a module insta
     rcGot.reset()
     routeEnds.count.store(0)
     routeEnds.code.store(0)
+    selfGot.reset()
+
+  test "[IMPL-DECISION G464] prepareRc: a typed Runtime Control call through the set's binding completes on another thread with the decoded response; its own completion cannot release it, the set can (INTERFACE §2.9.1, l.2043; RUNTIME §9.3)":
+    let e = fixtureEngine(config(extra = @[dmeterStatic]))
+    resetDeferred()
+    let (c, rc) = e.startClient()
+    selfExpected = c.instance
+    let set = newRouteSet(rc).tryGet
+    selfCall = set.prepareRc(
+      "get_self",
+      LogosNSRuntimeControlGetSelfRequest(),
+      LogosNSRuntimeControlGetSelfResponse,
+      onSelf,
+      addr selfGot,
+    ).tryGet
+    selfCall.submit()
+    check waitUntil(
+      proc(): bool =
+        selfGot.count.load == 1
+    )
+    check selfGot.code.load == 0
+    check selfGot.matched.load
+    check selfGot.thread.load != getThreadId()
+    check selfGot.releaseOwn.load == ord(ecNotReady)
+    check set.release(selfCall).isOk
+    let none = set.prepareRc(
+      "get_self",
+      LogosNSRuntimeControlGetSelfRequest(),
+      LogosNSRuntimeControlGetSelfResponse,
+      nil,
+    )
+    check codeOf(none) == ord(ecInvalidParams)
+    check set.close().isOk
+    e.finish()
 
   test "[IMPL-DECISION G339] openRoute establishes, materializes and wraps a ready route the set holds, without its invocation; closeRoute ends it with onRouteEnd NOT_READY, and close releases it":
     let (e, rc) = start()
@@ -772,6 +855,7 @@ suite "run.consumert: routes and Runtime Control subscriptions of a module insta
     check rcGot.endReason.load == ord(ecModule)
     check rcGot.openInEnd.load == ord(ecNotReady)
     check rcGot.unsubInEnd.load == ord(ecNotReady)
+    check rcGot.prepareInEnd.load == ord(ecNotReady)
     rcGot.hold.store(false)
     check waitUntil(
       proc(): bool =

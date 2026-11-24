@@ -61,8 +61,10 @@ marked field, as the library does (G277).
     credential/            0700  the TLS credential: key.p8 0600, cert.der, peer.cbor (§6b)
     credential-next/       0700  a rotation not yet taken up (§6b)
     keyholder.count        0600  the key holder's own count (§6b; key-holder mode)
-  state/                   0700  trust-mark.cbor, remote-trust-mark.cbor, store/, modules/, evidence/
-  work/                    0700  runtime.work_dir; never emptied (restart locks)
+  state/                   0700  trust-mark.cbor, remote-trust-mark.cbor, remote-exposure.cbor (§6c),
+                                 store/, modules/, evidence/
+  work/                    0700  runtime.work_dir; never emptied (restart locks; remote/ the
+                                 listener processes' locks, §10)
   run/                     0700  recreated at each start: logosctl.sock, lcn_call.sock, ep/
 ```
 
@@ -71,7 +73,7 @@ marked field, as the library does (G277).
 - `lock` is an advisory lock (`flock`). logosd holds it for its whole life. Every offline `logosctl`
   command that writes (`init`, `daemon config set`, `trust anchor …`, `trust development`,
   `trust reestablish`, `trust evidence-keys rotate`, `remote trust …` and `remote credential …` except
-  `show`, `state purge`), and
+  `show`, `remote exposure reset`, `state purge`), and
   `state list`, which reads the
   Runtime's store under the store's own lock, takes it, and is refused while logosd runs: "another logosd
   or an offline logosctl command holds this session" (exit 1). Other offline reads take no lock.
@@ -151,6 +153,7 @@ lcn.dc_runtime = {
   ? max_payload_depth: uint16,
   ? module_host: lcn.app_path,
   ? module_host_env: [* lcn.app_env_name],
+  ? remote_program: lcn.app_path,
 }
 
 ; allow-all needs the development switch in the trust file (decision 11).
@@ -276,14 +279,19 @@ lcn.dc_test_diagnostics = {
 ; remote: the remote profile logos.remote.tls-tcp (G407-G410; REMOTE.md).
 ; enabled: logosd starts its remote side, which needs runtime_instance_id to be
 ; a lowercase UUID version 4 (RUNTIME l.2592-2593) and the remote trust input
-; (section 6a). signing: what signs the TLS handshakes with the Runtime's key;
-; absent is "logosd". key-holder needs key_holder, the logos_keyholder program,
-; and key_holder needs key-holder; "process-copy" is accepted only by a logosd
-; built with -d:logosTestSigning.
+; (section 6a), and refuses policy allow-all (G415). signing: what signs the
+; TLS handshakes with the Runtime's key; absent is "logosd". key-holder needs
+; key_holder, the logos_keyholder program, and key_holder needs key-holder;
+; "process-copy" is accepted only by a logosd built with -d:logosTestSigning.
+; listeners and exports (G412; RUNTIME §9.3.9): the deployment's remote
+; listener and provider export records, as Runtime Control holds them, only
+; with enabled; validated as Runtime Control validates them (l.3319-3321).
 lcn.dc_remote = {
   enabled: bool,
   ? signing: lcn.dc_remote_signing,
   ? key_holder: lcn.app_path,
+  ? listeners: [* lcn.rc_remote_listener_record],
+  ? exports: [* lcn.rc_provider_export_record],
 }
 
 lcn.dc_remote_signing = "logosd" / "key-holder" / "process-copy"
@@ -900,13 +908,39 @@ refusal, which fails that handshake.
   binds itself to logosd first and exits once logosd is gone (its channel ends, or its parent changes).
   It keeps its own count in `remote/keyholder.count` (two lines, `signed N` and `refused N`, carried
   across its runs, written every 60 s while it changes and at its exit), which logosd neither writes nor
-  reads. logosd starts the holder from step 5-7a-2, with the remote processes.
+  reads. logosd starts the holder at its start in key-holder mode, before any listener process.
 
 **logosd holds no TLS code** (G409). It signs through BoringSSL's libcrypto
 (`transport/tls/p256.nim`) and imports no libssl binding (lint `daemon-no-ssl`). The binding compiles
 libssl's sources into every program that imports it. logosd's link drops them by dead stripping, and
 the binary is checked to hold none of their symbols: `test_logosd` checks plain builds, and the flake
 check `logosd-no-ssl` checks the deployed logosd. The link line still names libssl's objects.
+
+## 6c. Durable remote disables
+
+A listener's `enabled` or `runtime_control_enabled`, or an export's `enabled`, turned off through
+Runtime Control stays off across restarts and crashes; an enable through Runtime Control lasts for the
+run (Q4 as planning ruled; DECISIONS G412; RUNTIME leaves it open, l.3289, l.3319-3321). The fields
+turned off are kept in `state/remote-exposure.cbor` (`daemon/remote_exposure.cddl`,
+`logos-core-nim.remote-exposure.v1`), one entry per listener address or per export (the listener
+address and the provider id), with the fields off, the consumer that turned them off and when, and the
+BLAKE3-256 digest of the configuration's entry for that key as that run started.
+
+- **A disable** turns the exposure off for the run first (new connections stop, Runtime Control
+  sessions end where Runtime Control was turned off), then writes the entry. A failed write fails the
+  call with MODULE_ERROR "disabled for this run; not recorded, so the next start applies the
+  configuration: <cause>", the exposure still off; a repeat once the write can succeed records it.
+- **An enable** removes the entry first, then turns the exposure on; a failed removal fails the call
+  and the exposure stays off.
+- **At start** each entry whose digest matches its configuration entry is applied, so the record starts
+  with those fields off, logged as `remote exposure: kept disabled: …`; any other entry (its
+  configuration entry changed or gone, or a record Runtime Control made) is dropped, logged as `remote
+  exposure: dropped, …`, and the file rewritten.
+  So changing a listener's or export's configuration entry (`daemon config set`) re-enables it.
+- **Offline:** `logosctl remote exposure list` prints the entries (a reader: no lock). `logosctl remote
+  exposure reset (--listener ADDR [--provider ID] | --all)` removes entries under the session lock,
+  applying at the next start; ADDR is the address as `list` prints it (`tls-tcp HOST:PORT` and any
+  optional field as ` name=value`).
 
 ## 7. The logosctl instance and its socket
 
@@ -1418,6 +1452,23 @@ prints the roots. Where the Runtime answers `NOT_AUTHORISED`, the launcher print
 Runtime's message; it guesses no reason. Every process of logosd's user can use `lcn_call` with all of
 these grants, as with the logosctl instance (§7): grant it what the session's user may call.
 
+**Example: a payload module** (`blockchain_module`; [DEPLOYMENT.md](DEPLOYMENT.md) §26; DECISIONS
+G424, G469, G476). It calls no other module, and `report_failure` needs no grant. Its module record
+names contract v2's root as `primary_contract` and v1's under `extends` (G393); without v1's the start
+ends `initialization-failed`. Three rules are all it needs. The first two are the rule above for
+`lcn_call`, with `subscribe-event` added, once on v2's root and once on v1's: the Runtime describes a
+provider only if each of its contracts may be discovered, so without v1's rule every call is
+`NOT_AUTHORISED`. With them `logosctl call`, `describe` and `subscribe` reach it. A rule that narrows
+`access.methods` names the methods of the module's policy classes the session's user may call (the
+module's `policy-classes.json`); its `spend` and `keys` classes are for local subjects only. The third
+allows the `blockchain_module` instance its own `publish-event` on v2's root; without it every
+`chain_progress_event`, `new_block_event` and `lib_event` is skipped (Streams). Its permission
+settings must hold the profile's minimum, `logos-core-nim.host-ambient` with the empty constraints. With
+no `permissions.initial` entry for the module, logosd writes that entry itself ("Permission settings"
+above; G294), so the entry is optional. An entry that is present but lacks host-ambient refuses the start
+`NOT_AUTHORISED` (`authority-denied`; DECISIONS G110; [PERMISSIONS.md](PERMISSIONS.md), "Admission and
+the snapshot").
+
 ### Streams (G349)
 
 - **`subscribe MODULE EVENT [--count N] [--for DURATION] [--instance I] [--contract ROOT]`**: one event
@@ -1613,11 +1664,25 @@ These are what the store does and does not protect (CA l.1364; CAP-0415):
 
 ## 10. Remote surfaces
 
-logosd has no remote transport, no listener and no provider export: nothing is reachable from another
-host (SEC l.525; R l.2769). The Runtime Control's remote methods answer as
-[HOST-CONFIG.md](HOST-CONFIG.md) says, after authorization (R l.1540): the two lists an empty page,
-`set_provider_export` INVALID_PARAMS, `set_remote_listener` MODULE_ERROR for enabling a listener and
-success for disabling one, with no record kept. `logosctl` calls none of them.
+Without `remote.enabled` nothing is reachable from another host (SEC l.525; R l.2769). With it, each
+enabled listener record (`remote.listeners`, or one Runtime Control enabled) is one `logos_remote`
+process (DECISIONS G411; [REMOTE.md](REMOTE.md)): logosd binds the address, takes the restart lock
+`work/remote/listener-<hash>.lock` and spawns the program (`runtime.remote_program`) with the socket;
+the record is enabled once the process listens. The process authenticates each peer against this
+start's trust snapshot, with logosd's certificate and signer (§6b), and relays what Runtime Control
+needs to logosd: no module payload crosses logosd. It ends with logosd however logosd ends (a SIGKILL
+included), and a lock another process holds refuses the start, naming the pid written in it.
+
+- **Runtime Control to another Runtime** (G413): a listener with `runtime_control_enabled` serves the
+  `logos_runtime_control` endpoint to enrolled Runtimes' consumers. Each call is judged by the
+  capability-authority policy for that forwarded consumer, which only a subject naming its Runtime
+  matches ([AUTHORITY-POLICY.md](AUTHORITY-POLICY.md), subjects; G415); `policy: allow-all` with
+  `remote.enabled` refuses the start.
+- **Records:** the four methods hold real records (G412): a disabled record for any valid address,
+  enabling a `quic` one or any one without `runtime.remote_program` MODULE_ERROR, a bind failure
+  TRANSPORT_ERROR. The disables they make last (§6c). `logosctl` calls none of them.
+- **Not yet:** provider sessions to another Runtime (remote routes, step 5-7a-3), and this Runtime as
+  a source (step 5-7a-4).
 
 ## 11. State protection
 

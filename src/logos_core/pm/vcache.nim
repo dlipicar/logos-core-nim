@@ -21,6 +21,22 @@
 ##   by either verifies; once the old one is removed, only the new one does.
 ## - Only an archive that verified is cached: an ineligible one is opened
 ##   again each time it is reached, so its error is always the current one.
+## - **Verified** includes PKG-0060 (step 5-5-1, G451): after `openLgx`, each
+##   selected module's configuration declaration must resolve under
+##   LOGOS-MODULE-CONFIGURATION (`handoff.checkConfigurations`), else the
+##   archive is `invalid-package`.
+## - **Where an archive is opened** (step 5-5-3, G447): the worker reads the
+##   spool file and judges it (`judge`); the module thread looks the digest up
+##   first (`lookup`) and caches the worker's answer (`admit`). `inspect` does
+##   both at once over bytes in memory, for tools and tests.
+## - **The byte bound** (step 5-5-3, G447; Fable's review of draft 3.2 §1): an
+##   inspection whose estimate (`estimatedBytes`) is over
+##   `MaxCachedInspectionBytes` answers its call and is not cached (`uncached`),
+##   so the cache holds at most `cache_entries` × 256 KiB by the estimate. The
+##   estimate is fixed by rule, over the resolver's walk (`inputUnits`, G477): a
+##   constant for each unit's kind and the bytes of its variable parts. The
+##   same archive is cached, or not, on every machine and under every memory
+##   manager. It is weighed once, when it would be inserted.
 
 {.push raises: [].}
 
@@ -28,9 +44,29 @@ import std/tables
 import results
 import logos_sdk/crypto/blake3
 import ../crypto/slhdsa
-import ../package/[lgx, manifest, records, resolver, signing, trust]
+import ../package/[errors, lgx, manifest, records, resolver, signing, trust]
+import ./handoff
 
 export results, blake3, lgx, resolver
+
+const
+  MaxCachedInspectionBytes* = 256 * 1024
+    ## [IMPL; G447] the largest inspection the cache keeps, by `estimatedBytes`
+  RecordUnitBytes* = 2048
+    ## [IMPL; G447] a record's fixed part: its entry, signer, commitment and table slot. Measured
+    ## (5-5-3, the Mac, `-d:release`): at most about 1.2 KiB under orc and 0.7 KiB under refc,
+    ## the cache's table slot at its worst load included
+  DependencyUnitBytes* = 192
+    ## [IMPL; G447] a dependency entry beyond its two strings; measured about 71 B under orc
+    ## and 127 B under refc
+  ContractUnitBytes* = 192
+    ## [IMPL; G447, G482] a contract (listed by a dependency entry, or provided) beyond its
+    ## deterministic encoding, which the inspection holds in one buffer with an `int32` end
+    ## each (5-3c-4). Measured (`tools/pmbench.nim unitbytes`, the Mac, `-d:release`) at its
+    ## worst, 22 contracts, where the 4,180-byte buffer is rounded up to two pages: 186.7 B under
+    ## orc and 188.7 B under refc; 4.7 to 8.0 B for a thousand or more, 34 B for one. 1,024
+    ## before G482, for a decoded tree of nine CBOR values. The constant moves which archives
+    ## the cache keeps, never an outcome
 
 type
   CacheEntry* = object
@@ -44,10 +80,21 @@ type
     used: uint64 ## the tick of its last use
 
   CacheCounters* = object
-    opened*: int ## archives opened (`openLgx` called)
+    opened*: int ## archives judged (the worker's `judge`, or `openLgx` in `inspect`)
     hits*: int ## answered from the cache
     dropped*: int ## entries a judgement removed
     evicted*: int ## entries the bound removed
+    uncached*: int
+      ## [G447] verified inspections over `MaxCachedInspectionBytes`: answered, not kept
+
+  Opened* = object
+    ## [G447] One archive's judgment, as `judge` gives it: the inspection and, when it
+    ## verified, what the cache keys its acceptance on.
+    inspection*: Inspection
+    profile*: string
+    kid*: seq[byte]
+    key*: PublicKey
+    variant*: string
 
   VerificationCache* = object
     capacity: int
@@ -72,6 +119,15 @@ func initVerificationCache*(
 func len*(c: VerificationCache): int =
   c.entries.len
 
+func platform*(c: VerificationCache): Platform =
+  c.platform
+
+func lgxLimits*(c: VerificationCache): LgxLimits =
+  c.limits
+
+func pathRules*(c: VerificationCache): PathRules =
+  c.pathRules
+
 func contains*(c: VerificationCache, digest: Blake3Digest): bool =
   digest in c.entries
 
@@ -95,41 +151,152 @@ proc evictOne(c: var VerificationCache) =
   c.entries.del(oldest)
   inc c.counters.evicted
 
-proc inspect*(
-    c: var VerificationCache, data: openArray[byte], trust: TrustInput
-): Inspection =
-  ## [G403] The inspection of one archive under `trust`: from the cache when an
-  ## entry for these bytes is still accepted, else by `openLgx`, caching it
-  ## when it verifies.
-  let digest = blake3(data)
-  inc c.tick
-  if digest in c.entries:
-    var e = c.entries.getOrDefault(digest)
-    if e.stillAccepted(trust):
-      inc c.counters.hits
-      e.used = c.tick
-      let answer = e.inspection
-      c.entries[digest] = move e
-      return answer
-    c.entries.del(digest)
-    inc c.counters.dropped
-  inc c.counters.opened
-  let p = openLgx(data, trust, c.platform, c.limits, c.pathRules).valueOr:
-    return Inspection(kind: ikIneligible, error: error)
-  let answer = inspection(p)
-  if c.entries.len >= c.capacity:
-    c.evictOne()
-  c.entries[digest] = CacheEntry(
+func unitBytes*(kind: InputUnitKind): int =
+  ## [G447] Each walk unit's constant.
+  case kind
+  of iuRecord: RecordUnitBytes
+  of iuDependency: DependencyUnitBytes
+  of iuDependencyContract, iuProvided: ContractUnitBytes
+
+func estimatedBytes*(x: Inspection): int =
+  ## [G447] The bytes the cache counts for `x`: over the resolver's walk (G477), each unit's
+  ## kind constant and the bytes of its variable parts. [G482] Summed by lengths: a
+  ## contract's bytes are its encoding's length, and the encodings are one buffer, so no
+  ## contract is walked. Call it once per insertion, never on a lookup.
+  case x.kind
+  of ikEligible:
+    result = unitBytes(iuRecord) + x.identity.package.len + x.identity.version.len
+    for d in x.dependencies:
+      result += unitBytes(iuDependency) + d.package.len + d.version.len
+    result += x.contractCount * ContractUnitBytes + x.contractData.len
+  of ikIneligible:
+    result = unitBytes(iuRecord) + x.error.msg.len
+  of ikUnavailable:
+    result = unitBytes(iuRecord) + x.reason.len
+
+proc judgePackage*(
+    source: LgxSource,
+    trust: TrustInput,
+    platform: Platform,
+    limits: LgxLimits,
+    pathRules: PathRules,
+    stop: LgxStop = nil,
+): (Opened, Opt[LgxPackage]) =
+  ## [G403, G447] One archive judged where its bytes are read (the worker, over a spool
+  ## file): the inspection pass (`inspectLgx`), then PKG-0060 last in G29/P7a order. A source
+  ## that cannot be read, or a stop, is `ikUnavailable`; a refused archive `ikIneligible`.
+  ## An eligible one comes with its opened package, for what the worker builds from it.
+  let p = inspectLgx(source, trust, platform, limits, pathRules, stop).valueOr:
+    if error.code == pecPackageUnavailable:
+      return (
+        Opened(inspection: Inspection(kind: ikUnavailable, reason: error.msg)),
+        Opt.none(LgxPackage),
+      )
+    return (
+      Opened(inspection: Inspection(kind: ikIneligible, error: error)),
+      Opt.none(LgxPackage),
+    )
+  # [SPEC PM §4 l.362-364 (PKG-0060); G451] Last in G29/P7a order: each selected module's
+  # configuration declaration resolves, or the archive is `invalid-package`.
+  checkConfigurations(p).isOkOr:
+    return (
+      Opened(inspection: Inspection(kind: ikIneligible, error: error)),
+      Opt.none(LgxPackage),
+    )
+  let o = Opened(
+    inspection: inspection(p),
     profile: signingProfile(),
     kid: p.verified.signer.kid,
     key: p.verified.signer.key,
-    identity: p.verified.manifest.identity,
-    commitment: p.verified.commitment,
     variant: p.variant.id,
-    inspection: answer,
+  )
+  (o, Opt.some(p))
+
+proc judge*(
+    source: LgxSource,
+    trust: TrustInput,
+    platform: Platform,
+    limits: LgxLimits,
+    pathRules: PathRules,
+    stop: LgxStop = nil,
+): Opened =
+  ## `judgePackage`'s judgment alone.
+  judgePackage(source, trust, platform, limits, pathRules, stop)[0]
+
+proc lookup*(
+    c: var VerificationCache, digest: Blake3Digest, trust: TrustInput
+): Opt[Inspection] =
+  ## [G403; PKG-0077] The cached inspection of the archive whose BLAKE3-256 is `digest`, when
+  ## its entry is still accepted under `trust`; else none, and an entry no longer accepted is
+  ## dropped. The caller then judges the archive and `admit`s the answer.
+  inc c.tick
+  if digest notin c.entries:
+    return Opt.none(Inspection)
+  var e = c.entries.getOrDefault(digest)
+  if e.stillAccepted(trust):
+    inc c.counters.hits
+    e.used = c.tick
+    let answer = e.inspection
+    c.entries[digest] = move e
+    return Opt.some(answer)
+  c.entries.del(digest)
+  inc c.counters.dropped
+  Opt.none(Inspection)
+
+func entryOf*(c: VerificationCache, digest: Blake3Digest): Opt[CacheEntry] =
+  ## The entry `lookup` just answered: its signer and variant, for an installation
+  ## (5-5-4).
+  if digest in c.entries:
+    try:
+      return Opt.some(c.entries[digest])
+    except KeyError:
+      discard
+  Opt.none(CacheEntry)
+
+proc admit*(
+    c: var VerificationCache, digest: Blake3Digest, o: sink Opened, estimate: int
+): Inspection =
+  ## [G403, G447] The judgment of the archive whose BLAKE3-256 is `digest`, answered; kept when
+  ## it verified and `estimate`, its `estimatedBytes`, is at most `MaxCachedInspectionBytes`.
+  ## The caller gives the estimate (`estimatedBytes`, by lengths; Fable's D1 condition 6). An
+  ## ineligible or unavailable archive is never kept, so its error is always the current one.
+  if o.inspection.kind == ikUnavailable:
+    return o.inspection
+  inc c.counters.opened
+  if o.inspection.kind != ikEligible:
+    return o.inspection
+  if estimate > MaxCachedInspectionBytes:
+    inc c.counters.uncached
+    return o.inspection
+  if digest notin c.entries and c.entries.len >= c.capacity:
+    # Two retrievals of the same bytes may both have missed: the later one replaces.
+    c.evictOne()
+  let answer = o.inspection
+  c.entries[digest] = CacheEntry(
+    profile: move o.profile,
+    kid: move o.kid,
+    key: o.key,
+    identity: answer.identity,
+    commitment: answer.commitment,
+    variant: move o.variant,
+    inspection: move o.inspection,
     used: c.tick,
   )
   answer
+
+proc inspect*(
+    c: var VerificationCache, data: openArray[byte], trust: TrustInput
+): Inspection =
+  ## [G403] The inspection of one archive in memory under `trust`: from the cache when an
+  ## entry for these bytes is still accepted, else judged here and admitted. The worker's
+  ## path (`judge` over a spool file, then `admit`) gives the same answers.
+  let digest = blake3(data)
+  let hit = c.lookup(digest, trust)
+  if hit.isSome:
+    return hit.get
+  let o = judge(bytesSource(@data), trust, c.platform, c.limits, c.pathRules)
+  let estimate = o.inspection.estimatedBytes
+  c.admit(digest, o, estimate)
 
 proc judge*(c: var VerificationCache, trust: TrustInput): int =
   ## Drops every entry `trust` no longer accepts, and says how many. A hit

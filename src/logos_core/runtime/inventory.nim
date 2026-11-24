@@ -1,5 +1,6 @@
 ## Step 7 (DECISIONS I86): the list snapshots of Runtime Control
-## `list_modules` and `list_routes`, their cursors and their limits (RUNTIME
+## `list_modules` and `list_routes`, and since 5-7a-2 `list_remote_listeners`
+## and `list_provider_exports` (G412), their cursors and their limits (RUNTIME
 ## §9.3 l.3372-3413). Runtime thread only.
 ##
 ## [IMPL] A snapshot is built once, after method authorization, filters and
@@ -30,6 +31,8 @@ type
   ListKind* = enum
     lkModules = "list_modules"
     lkRoutes = "list_routes"
+    lkListeners = "list_remote_listeners" ## [G412]
+    lkExports = "list_provider_exports" ## [G412]
 
   ListSnapshot* = ref object
     consumer*: string ## the consumer instance
@@ -41,6 +44,8 @@ type
     sizes*: seq[int] ## each record's encoded size
     modules*: seq[LogosNSRuntimeControlModuleRecord] ## lkModules
     routes*: seq[LogosNSRuntimeControlRouteRecord] ## lkRoutes
+    listeners*: seq[LogosNSRuntimeControlRemoteListenerRecord] ## lkListeners
+    exports*: seq[LogosNSRuntimeControlProviderExportRecord] ## lkExports
     bytes*: int ## what it is accounted for
     tokens*: Table[string, int] ## cursor -> position
     positions: Table[int, string] ## position -> its cursor

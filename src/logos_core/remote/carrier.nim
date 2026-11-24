@@ -12,7 +12,9 @@
 ## - **Lanes.** A message's `kind` fixes its lane (the schema's comment). A
 ##   sign request names no role: logosd fixed it for the process.
 ## - **No payload.** Nothing here carries a module payload: the snapshot, the
-##   sign exchange and, in tests, the key (5-7a plan §3.16).
+##   sign exchange, in tests the key, and since 5-7a-2 a listener's control:
+##   what it serves, the Hello judgments and the Runtime Control frames of its
+##   connections (5-7a plan §3.9, §3.16).
 ##
 ## Generated case objects never cross threads: as on the Module Host carrier,
 ## threads hand each other frame bytes and decode their own copy.
@@ -21,7 +23,7 @@
 
 import results
 import ../transport/framing
-import ../transport/tls/[signing, trust]
+import ../transport/tls/[params, signing, trust]
 import ./carrier_types
 
 export carrier_types, framing, signing
@@ -44,6 +46,16 @@ arm(LcnRchSign, lcn_Rch_sign, arm_lcn_Rch_sign)
 arm(LcnRchHolderSign, lcn_Rch_holder_sign, arm_lcn_Rch_holder_sign)
 arm(LcnRchSigned, lcn_Rch_signed, arm_lcn_Rch_signed)
 arm(LcnRchSignRefused, lcn_Rch_sign_refused, arm_lcn_Rch_sign_refused)
+arm(LcnRchListen, lcn_Rch_listen, arm_lcn_Rch_listen)
+arm(LcnRchListening, lcn_Rch_listening, arm_lcn_Rch_listening)
+arm(LcnRchHelloJudge, lcn_Rch_hello_judge, arm_lcn_Rch_hello_judge)
+arm(LcnRchHelloAdmit, lcn_Rch_hello_admit, arm_lcn_Rch_hello_admit)
+arm(LcnRchHelloRefuse, lcn_Rch_hello_refuse, arm_lcn_Rch_hello_refuse)
+arm(LcnRchRcIn, lcn_Rch_rc_in, arm_lcn_Rch_rc_in)
+arm(LcnRchRcOut, lcn_Rch_rc_out, arm_lcn_Rch_rc_out)
+arm(LcnRchCloseConn, lcn_Rch_close_conn, arm_lcn_Rch_close_conn)
+arm(LcnRchConnClosed, lcn_Rch_conn_closed, arm_lcn_Rch_conn_closed)
+arm(LcnRchStop, lcn_Rch_stop, arm_lcn_Rch_stop)
 
 proc frameOf*(m: LcnRchMessage): Result[seq[byte], string] =
   ## The length prefix and the encoded message.
@@ -212,5 +224,44 @@ proc snapshotOf*(m: LcnRchSnapshot): Result[TrustSnapshot, string] =
       )
     )
   newTrustSnapshot(m.revision, anchors, records)
+
+# A listener's limits -------------------------------------------------------------------
+
+func limitsOf*(c: TlsConfig): LcnRchTlsLimits =
+  LcnRchTlsLimits(
+    handshake_timeout_ms: uint64(c.handshakeTimeoutMs),
+    max_handshakes: uint64(c.maxHandshakes),
+    max_connections: uint64(c.maxConnections),
+    read_bound: uint64(c.readBound),
+    write_bound: uint64(c.writeBound),
+    frame_limit: uint64(c.frameLimit),
+    peer_frame_limit: uint64(c.peerFrameLimit),
+    close_wait_ms: uint64(c.closeWaitMs),
+  )
+
+func configOf*(l: LcnRchTlsLimits): Result[TlsConfig, string] =
+  ## The limits a listener process serves with, checked as its own
+  ## (`params.check`).
+  const Max = uint64(high(int32))
+  for v in [
+    l.handshake_timeout_ms, l.max_handshakes, l.max_connections, l.read_bound,
+    l.write_bound, l.close_wait_ms,
+  ]:
+    if v > Max:
+      return err("a TLS limit is out of range")
+  if l.frame_limit > uint64(high(uint32)) or l.peer_frame_limit > uint64(high(uint32)):
+    return err("a TLS frame limit is out of range")
+  let c = TlsConfig(
+    handshakeTimeoutMs: int(l.handshake_timeout_ms),
+    maxHandshakes: int(l.max_handshakes),
+    maxConnections: int(l.max_connections),
+    readBound: int(l.read_bound),
+    writeBound: int(l.write_bound),
+    frameLimit: uint32(l.frame_limit),
+    peerFrameLimit: uint32(l.peer_frame_limit),
+    closeWaitMs: int(l.close_wait_ms),
+  )
+  ?c.check()
+  ok(c)
 
 {.pop.}

@@ -20,7 +20,7 @@
 
 {.push raises: [], gcsafe.}
 
-import std/[locks, monotimes, times]
+import std/[locks, monotimes, sequtils, strutils, times]
 import results
 import ../runtime/native
 import ./[core, logos_capability_authority_kit]
@@ -38,6 +38,9 @@ type
     policy*: seq[byte]
     runtimeId*: string
     facts*: SharedFacts
+    enrolled*: seq[string]
+      ## [G415] the actively enrolled Runtimes of this start; empty without
+      ## remote transport
     clock*: Clock
     limits*: AuthorityLimits
     profile*: ProfileSource
@@ -47,6 +50,7 @@ type
     policy: ptr UncheckedArray[byte]
     policyLen: int
     runtimeId: cstring
+    enrolled: cstring ## the ids, each followed by a newline
     facts: SharedFacts
     clock: Clock
     limits: AuthorityLimits
@@ -66,6 +70,7 @@ proc sharedText(s: string): cstring =
 proc freeEntry(e: ptr WiringEntry) =
   deallocShared(e.stateDir)
   deallocShared(e.runtimeId)
+  deallocShared(e.enrolled)
   if e.policy != nil:
     deallocShared(e.policy)
   deallocShared(e)
@@ -82,6 +87,10 @@ proc wireAuthority*(stateDir: string, w: AuthorityWiring): Result[void, string] 
   let e = cast[ptr WiringEntry](allocShared0(sizeof(WiringEntry)))
   e.stateDir = sharedText(stateDir)
   e.runtimeId = sharedText(w.runtimeId)
+  var ids = ""
+  for id in w.enrolled:
+    ids.add(id & "\n")
+  e.enrolled = sharedText(ids)
   e.policyLen = w.policy.len
   if w.policy.len > 0:
     e.policy = cast[ptr UncheckedArray[byte]](allocShared0(w.policy.len))
@@ -129,6 +138,7 @@ proc readWiring(stateDir: string): Opt[AuthorityWiring] =
         var w = AuthorityWiring(
           runtimeId: $p.runtimeId,
           facts: p.facts,
+          enrolled: ($p.enrolled).splitLines.filterIt(it.len > 0),
           clock: p.clock,
           limits: p.limits,
           profile: p.profile,
@@ -185,6 +195,7 @@ proc initModule(
     policy: w.policy,
     runtimeId: w.runtimeId,
     facts: w.facts,
+    enrolled: w.enrolled,
     clock: w.clock,
     limits: w.limits,
     profile: w.profile,

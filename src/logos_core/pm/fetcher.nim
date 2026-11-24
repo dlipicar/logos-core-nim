@@ -22,6 +22,11 @@
 ## The bytes are untrusted until verified, by the caller: the catalog by its
 ## pinned digest, an archive by `openLgx` (PM l.389, l.397, l.443-444). The
 ## provider's `detail` is foreign text, quoted when logged (BCP l.557-558).
+##
+## **Spooled** (5-5-3; G446, G447): an archive's retrieval keeps no bytes. Each
+## `read_object` answer is taken as it arrives (`takeChunk`) and the worker
+## appends it to the archive's spool file and digests it; `skDone` then carries
+## neither bytes nor a digest. The catalog's retrieval keeps its bytes.
 
 {.push raises: [].}
 
@@ -102,20 +107,32 @@ type
     sized: bool
     offset: uint64
     retries: int
-    hasher: Blake3Hasher
+    hasher: ref Blake3Hasher
+      ## not spooled. Behind a reference: refc copies a `Retrieval` through its type
+      ## information, which holds none of the `importc` hasher's bytes, so a copied value
+      ## lost its state (upstream ISSUES 195, the second shape)
     bytes: seq[byte]
     pending: Call
     finished: bool
+    spooled: bool
+    chunk: string
+      ## spooled: the last `read_object` answer, until taken; a `string`, which refc's
+      ## channel copies in one block (`jobs.nim`)
 
 func quoted*(detail: string): string =
   ## A provider's `detail`, on one line, as foreign text.
   detail.escape
 
 proc initRetrieval*(
-    locator: openArray[byte], maxBytes: int64, deadlineMs: uint32
+    locator: openArray[byte], maxBytes: int64, deadlineMs: uint32, spooled = false
 ): Retrieval =
-  result = Retrieval(locator: @locator, maxBytes: maxBytes, deadlineMs: deadlineMs)
-  result.hasher.init()
+  ## `spooled`: each piece is handed on (`takeChunk`), none kept (G447).
+  result = Retrieval(
+    locator: @locator, maxBytes: maxBytes, deadlineMs: deadlineMs, spooled: spooled
+  )
+  if not spooled:
+    result.hasher = new Blake3Hasher
+    result.hasher[].init()
 
 func finished*(f: Retrieval): bool =
   f.finished
@@ -127,21 +144,49 @@ func pending*(f: Retrieval): Call =
 func received*(f: Retrieval): uint64 =
   f.offset
 
+func spooled*(f: Retrieval): bool =
+  f.spooled
+
+func size*(f: Retrieval): Opt[uint64] =
+  ## The object's size, once `stat_object` answered.
+  if f.sized:
+    Opt.some(f.size)
+  else:
+    Opt.none(uint64)
+
+func hasChunk*(f: Retrieval): bool =
+  f.chunk.len > 0
+
+proc takeChunk*(f: var Retrieval): string =
+  ## [G447] Spooled: the piece the last `read_object` answered, for the spool file.
+  move f.chunk
+
 proc unavailable(f: var Retrieval, reason: string): FetchStep =
   f.finished = true
   f.bytes.setLen(0)
+  if f.hasher != nil:
+    f.hasher[].wipe()
   FetchStep(kind: skUnavailable, reason: reason)
 
 proc nextRead(f: var Retrieval): FetchStep =
   if f.offset == f.size:
     f.finished = true
-    let digest = f.hasher.finish()
-    f.hasher.wipe()
+    if f.spooled:
+      return FetchStep(kind: skDone) # the worker holds the bytes and their digest
+    let digest = f.hasher[].finish()
+    f.hasher[].wipe()
     return FetchStep(kind: skDone, bytes: move f.bytes, digest: digest)
   let left = f.size - f.offset
   f.pending =
     Call(kind: ckRead, offset: f.offset, length: uint32(min(uint64(ReadStep), left)))
   FetchStep(kind: skCall, call: f.pending)
+
+proc abandon*(f: var Retrieval, reason: string): FetchStep =
+  ## Ends the retrieval as unavailable, whatever is outstanding: its spool file
+  ## could not be written (G446).
+  doAssert not f.finished
+  f.chunk.setLen(0)
+  f.unavailable(reason)
 
 proc start*(f: var Retrieval): FetchStep =
   ## Step 1: the object's size.
@@ -192,7 +237,8 @@ proc onAnswer*(f: var Retrieval, a: Answer): FetchStep =
         )
       f.size = a.size
       f.sized = true
-      f.bytes = newSeqOfCap[byte](int(a.size))
+      if not f.spooled:
+        f.bytes = newSeqOfCap[byte](int(a.size))
       return f.nextRead()
     of ckRead:
       if uint64(a.data.len) != uint64(c.length):
@@ -200,8 +246,12 @@ proc onAnswer*(f: var Retrieval, a: Answer): FetchStep =
           c.what & " answered " & $a.data.len & " bytes, not " & $c.length
         )
       f.retries = 0
-      f.hasher.update(a.data)
-      f.bytes.add(a.data)
+      if f.spooled:
+        f.chunk = newString(a.data.len)
+        copyMem(addr f.chunk[0], unsafeAddr a.data[0], a.data.len)
+      else:
+        f.hasher[].update(a.data)
+        f.bytes.add(a.data)
       f.offset += uint64(a.data.len)
       return f.nextRead()
 

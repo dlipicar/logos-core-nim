@@ -1054,9 +1054,9 @@ compared = "RUNTIME l.1835 at 6cac8335: the source Runtime of a forwarded reques
 
 [[deferred]]
 id = "TXT-0163"
-rides = "RUN-1124"
+rides = "RUN-1125"
 decision = "I108"
-reason = "A forwarded `renew_route` or `close_route` (l.1836) needs a source and a target Runtime, which 5-7a builds; the target's order is RUN-1124's."
+reason = "A forwarded `renew_route` or `close_route` (l.1836) needs a source and a target Runtime, which 5-7a builds. Step 5-7a-2 claimed the target's order (RUN-1124, DECISIONS G413) with no remote route to renew or close; the entry rides on the source's forwarding, RUN-1125, which 5-7a-4 builds after 5-7a-3's routes."
 
 [[moved]]
 id = "TXT-0161"
@@ -3981,3 +3981,33 @@ test = "tests/test_deployment.nim"
 id = "TXT-0463"
 step = "P7"
 test = "tests/test_daemon_config.nim"
+
+# Tier 5 step 5-5-2: a deferred entry that leaves with its unit (PACKAGE MANAGER §10; G445, I121) -----------------
+# PKG-0293 is claimed by 5-5-2, and TXT-0472 leaves [deferred] with it: test_pm_store's [PKG-0293] test carries
+# [TXT-0472]. Its [[deferred]] record above stays; step is the entry's step in the frozen list.
+
+[[text]]
+id = "TXT-0472"
+step = "P7"
+test = "tests/test_pm_store.nim"
+
+# Tier 5 step 5-5-4: deferred entries that leave with their unit (PACKAGE MANAGER §15; G166, G449, I121) ---------
+# PKG-0608 is claimed by 5-5-4, and TXT-0493 to TXT-0495 leave [deferred] with it: test_pm_install's [PKG-0608]
+# tests carry them (C6's catalog source for a request without one; the replacement of the named identity
+# only; one installed-state change). Their [[deferred]] records above stay; step is the entries' step in the
+# frozen list.
+
+[[text]]
+id = "TXT-0493"
+step = "P7"
+test = "tests/test_pm_install.nim"
+
+[[text]]
+id = "TXT-0494"
+step = "P7"
+test = "tests/test_pm_install.nim"
+
+[[text]]
+id = "TXT-0495"
+step = "P7"
+test = "tests/test_pm_install.nim"

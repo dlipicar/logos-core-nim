@@ -10,7 +10,7 @@ import logos_sdk/codegen/common_types
 export nimrt, common_types
 
 const
-  primaryDocument = "; The Package Manager\'s protected input (Tier 5 step 5-3b; DECISIONS G399,\x0A; G400; docs/PACKAGE-MANAGER.md \xC2\xA72). One Logos deterministic-CBOR value that\x0A; the embedding host writes (logosd\'s compose) and the hosted Package Manager\x0A; reads at initialization through the protected realization input, never\x0A; through configuration (CONFIGURATION l.58). Closed: an unknown field is\x0A; refused. The rules the schema cannot say are pm/input.nim\'s.\x0Alcn.pm_input = {\x0A  format: \"logos-core-nim.pm-input.v1\",\x0A  trust: bstr .size (1..1048576),   ; the session trust file\'s accepted bytes\x0A  storage: [* lcn.pm_binding],      ; at least one, by rule\x0A  catalog: lcn.pm_catalog_ref,\x0A  resolver_limits: lcn.pm_resolver_limits,\x0A  ? limits: lcn.pm_limits,\x0A}\x0A\x0A; One Storage binding: the name an LGX source\'s `storage` names\x0A; (PACKAGE MANAGER l.854-857), and the lcn.storage_fetch provider instance\x0A; that serves it. Names are unique, by rule.\x0Alcn.pm_binding = {\x0A  binding: tstr .size (1..128),\x0A  instance: tstr .size (1..128),\x0A}\x0A\x0A; The protected catalog (G401): the catalog document\'s binding, locator and\x0A; BLAKE3-256 digest. `storage` names one of the bindings, by rule.\x0Alcn.pm_catalog_ref = {\x0A  storage: tstr .size (1..128),\x0A  object: bstr .size (1..4096),\x0A  digest: bstr .size 32,\x0A}\x0A\x0A; The resolver limits (PACKAGE MANAGER l.1241-1254; G399 as ruled on\x0A; 2026-11-22): protected policy input, required, with all four keys; each a\x0A; positive integer no greater than its maximum (package/resolver.nim\'s\x0A; MaxResolverLimits, docs/CONFORMANCE.md). The Package Manager has no default:\x0A; the embedding host resolves them (logosd: the operator\'s values, or its\x0A; preset, docs/DAEMON.md). Not in `limits`, where an absent key is a default.\x0Alcn.pm_resolver_limits = {\x0A  partial_closure_names: uint64,\x0A  dependency_depth: uint64,\x0A  candidates_per_name: uint64,\x0A  assignment_attempts: uint64,\x0A}\x0A\x0A; The bounds, each checked by rule as written here; an absent one is its\x0A; default.\x0A; archive_bytes: 1..1073741824, default 1073741824 (1 GiB): one archive,\x0A;   held in memory while it is inspected.\x0A; catalog_bytes: 1..4194304, default 4194304 (4 MiB): the catalog document.\x0A; catalog_entries: 1..65536, default 65536.\x0A; cache_entries: 1..4096, default 256: the verification cache.\x0A; read_deadline_ms: 1..86400000, default 300000: one call, and the wait for\x0A;   `ready` after `not-ready` (G402).\x0Alcn.pm_limits = {\x0A  ? archive_bytes: uint64,\x0A  ? catalog_bytes: uint32,\x0A  ? catalog_entries: uint32,\x0A  ? cache_entries: uint16,\x0A  ? read_deadline_ms: uint32,\x0A}\x0A"
+  primaryDocument = "; The Package Manager\'s protected input (Tier 5 step 5-3b; DECISIONS G399,\x0A; G400; docs/PACKAGE-MANAGER.md \xC2\xA72). One Logos deterministic-CBOR value that\x0A; the embedding host writes (logosd\'s compose) and the hosted Package Manager\x0A; reads at initialization through the protected realization input, never\x0A; through configuration (CONFIGURATION l.58). Closed: an unknown field is\x0A; refused. The rules the schema cannot say are pm/input.nim\'s.\x0Alcn.pm_input = {\x0A  format: \"logos-core-nim.pm-input.v1\",\x0A  trust: bstr .size (1..1048576),   ; the session trust file\'s accepted bytes\x0A  storage: [* lcn.pm_binding],      ; at least one, by rule\x0A  catalog: lcn.pm_catalog_ref,\x0A  resolver_limits: lcn.pm_resolver_limits,\x0A  ? limits: lcn.pm_limits,\x0A}\x0A\x0A; One Storage binding: the name an LGX source\'s `storage` names\x0A; (PACKAGE MANAGER l.854-857), and the lcn.storage_fetch provider instance\x0A; that serves it. Names are unique, by rule.\x0Alcn.pm_binding = {\x0A  binding: tstr .size (1..128),\x0A  instance: tstr .size (1..128),\x0A}\x0A\x0A; The protected catalog (G401): the catalog document\'s binding, locator and\x0A; BLAKE3-256 digest. `storage` names one of the bindings, by rule.\x0Alcn.pm_catalog_ref = {\x0A  storage: tstr .size (1..128),\x0A  object: bstr .size (1..4096),\x0A  digest: bstr .size 32,\x0A}\x0A\x0A; The resolver limits (PACKAGE MANAGER l.1241-1254; G399 as ruled on\x0A; 2026-11-22): protected policy input, required, with all four keys; each a\x0A; positive integer no greater than its maximum (package/resolver.nim\'s\x0A; MaxResolverLimits, docs/CONFORMANCE.md). The Package Manager has no default:\x0A; the embedding host resolves them (logosd: the operator\'s values, or its\x0A; preset, docs/DAEMON.md). Not in `limits`, where an absent key is a default.\x0Alcn.pm_resolver_limits = {\x0A  partial_closure_names: uint64,\x0A  dependency_depth: uint64,\x0A  candidates_per_name: uint64,\x0A  assignment_attempts: uint64,\x0A}\x0A\x0A; The bounds, each checked by rule as written here; an absent one is its\x0A; default.\x0A; archive_bytes: 1..1073741824, default 1073741824 (1 GiB): one archive,\x0A;   spooled to disk and read in pieces; the inspection\'s other LGX bounds keep\x0A;   G75\'s proportions to it (G453).\x0A; catalog_bytes: 1..4194304, default 4194304 (4 MiB): the catalog document.\x0A; catalog_entries: 1..65536, default 65536.\x0A; cache_entries: 1..4096, default 256: the verification cache.\x0A; read_deadline_ms: 1..86400000, default 300000: one call, and the wait for\x0A;   `ready` after `not-ready` (G402).\x0A; operation_entries: 1..16777216, default 262144: the records, dependency\x0A;   entries and contracts one root operation reads (G477).\x0A; operation_deadline_ms: 1..86400000, default 3600000 (1 h): one root\x0A;   operation, from taking its slot (G449).\x0Alcn.pm_limits = {\x0A  ? archive_bytes: uint64,\x0A  ? catalog_bytes: uint32,\x0A  ? catalog_entries: uint32,\x0A  ? cache_entries: uint16,\x0A  ? read_deadline_ms: uint32,\x0A  ? operation_entries: uint32,\x0A  ? operation_deadline_ms: uint32,\x0A}\x0A"
   interfaceDocuments: array[0, string] = []
   supportingDocuments: array[0, string] = []
 
@@ -53,6 +53,8 @@ type
     cache_entries*: Opt[uint16]
     catalog_bytes*: Opt[uint32]
     catalog_entries*: Opt[uint32]
+    operation_deadline_ms*: Opt[uint32]
+    operation_entries*: Opt[uint32]
     read_deadline_ms*: Opt[uint32]
 
   LcnPmResolverLimits* = object
@@ -205,6 +207,10 @@ proc stepEncLcnPmLimits*(w: var EncWork, src: pointer, dst: ptr CborValue) =
     inc n
   if x.catalog_entries.isSome:
     inc n
+  if x.operation_deadline_ms.isSome:
+    inc n
+  if x.operation_entries.isSome:
+    inc n
   if x.read_deadline_ms.isSome:
     inc n
   let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
@@ -226,6 +232,14 @@ proc stepEncLcnPmLimits*(w: var EncWork, src: pointer, dst: ptr CborValue) =
     node.entries[k].key = cbor("catalog_entries")
     node.entries[k].value = cbor(uint64(x.catalog_entries.get))
     inc k
+  if x.operation_deadline_ms.isSome:
+    node.entries[k].key = cbor("operation_deadline_ms")
+    node.entries[k].value = cbor(uint64(x.operation_deadline_ms.get))
+    inc k
+  if x.operation_entries.isSome:
+    node.entries[k].key = cbor("operation_entries")
+    node.entries[k].value = cbor(uint64(x.operation_entries.get))
+    inc k
   if x.read_deadline_ms.isSome:
     node.entries[k].key = cbor("read_deadline_ms")
     node.entries[k].value = cbor(uint64(x.read_deadline_ms.get))
@@ -246,9 +260,15 @@ proc stepDecLcnPmLimits*(w: var DecWork, v: CborValue, dst: pointer) =
   let f11 = v.lookup("catalog_entries")
   if f11.isSome:
     r.catalog_entries = Opt.some(uint32(f11.get.uint))
-  let f12 = v.lookup("read_deadline_ms")
+  let f12 = v.lookup("operation_deadline_ms")
   if f12.isSome:
-    r.read_deadline_ms = Opt.some(uint32(f12.get.uint))
+    r.operation_deadline_ms = Opt.some(uint32(f12.get.uint))
+  let f13 = v.lookup("operation_entries")
+  if f13.isSome:
+    r.operation_entries = Opt.some(uint32(f13.get.uint))
+  let f14 = v.lookup("read_deadline_ms")
+  if f14.isSome:
+    r.read_deadline_ms = Opt.some(uint32(f14.get.uint))
 
 proc toCbor*(x: LcnPmLimits): CborValue =
   runEnc(stepEncLcnPmLimits, addr x)

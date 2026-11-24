@@ -169,7 +169,9 @@ when defined(posix):
     ## when `hosted`, `chatter-1`, which the orchestrator starts.
     inc sessions
     let base = makeShortBase(
-      "dpl" & $sessions, deepest = "/s/run/ep/12345678/logos_beacon_module.sock"
+      "dpl" & $sessions,
+      deepest = "/s/run/ep/12345678/logos_beacon_module.sock",
+      perCase = true,
     )
     let s = Session(dir: base / "s")
     var dc = defaultDaemonConfig("assigned-by-init")
@@ -376,10 +378,12 @@ when defined(posix):
       if live != nil and live[].up:
         finish(live[])
       live = nil
+      # The case's directories: kept if it failed (`shortdir`).
+      endCaseBases(testStatusIMPL == TestStatus.FAILED)
 
     test "[BCP-0043] the Module Loader, wired as logosd wires it, advertises the facts' strategies and placements and never force_release; a sandbox or container placement is unsupported-strategy before anything is read":
       let f = facts["loader"]
-      let work = makeShortBase("dplldr")
+      let work = makeShortBase("dplldr", perCase = true)
       var h = openHarness(@[], work, hosted = true).expect("the Loader")
       defer:
         h.close()
@@ -623,7 +627,7 @@ when defined(posix):
       let f = facts["cli"]
       check f["instance"].getStr == CliInstance
       check f["socket"].getStr == "run" / "lcn_call.sock"
-      let s = Session(dir: makeShortBase("dpcli") / "s")
+      let s = Session(dir: makeShortBase("dpcli", perCase = true) / "s")
       check cliSocketPath(s, "") == s.dir / f["socket"].getStr
       check f["workers"].getInt == DefaultCliWorkers
       check f["streams"].getInt == DefaultCliStreams
@@ -719,7 +723,7 @@ when defined(posix):
       # provider that is no Logos system module.
       check facts["credential_store"].getStr == "none"
       let floor = TrustFileState(file: floorTrust())
-      let s = Session(dir: makeShortBase("dplcs") / "s")
+      let s = Session(dir: makeShortBase("dplcs", perCase = true) / "s")
       let plain = prepareDaemon(s, dc.encode.get, floor).expect("init's configuration")
       check plain.composition.appConfig.modules.allIt(
         it.module != CredentialStoreModule

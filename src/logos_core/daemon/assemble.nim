@@ -28,8 +28,8 @@ from ../transport/io/sock import fitsSunPath, sunPathMax
 from ../durable import ensurePrivateDir
 import
   ./[
-    compose, credential, ctlmodule, diagdrain, evstore, logging, remotetrust, session,
-    signsvc, supervise, trustfile,
+    compose, credential, ctlmodule, diagdrain, evstore, logging, remoteexposure,
+    remoteside, remotetrust, session, signsvc, supervise, trustfile,
   ]
 
 when defined(posix):
@@ -79,8 +79,11 @@ type
       ## accepted; the remote processes take its snapshot at spawn (5-7a-2)
     signer*: SignService
       ## [G410] with `remote.enabled` and `remote.signing` "logosd": the
-      ## signing service, holding the TLS key; nil otherwise (the key holder
-      ## is spawned with the remote processes, 5-7a-2)
+      ## signing service, holding the TLS key; nil otherwise
+    remoteSide*: RemoteSide
+      ## [G410; G411] with `remote.enabled`: what answers the remote
+      ## processes' sign requests (the key holder, in that mode) and takes
+      ## their log lines; freed once the Runtime is destroyed
 
 func startError(exit: int, message: string): StartError =
   StartError(exit: exit, message: message)
@@ -212,26 +215,46 @@ proc assembleDaemon*(
   let remoteOn = raw.remote.isSome and raw.remote.get.enabled
   var seenRemote = Opt.none(seq[byte])
   if remoteOn:
+    # [plan §3.1 item 3] No remote process of an earlier run still serves.
+    checkRemoteLocks(s.workDir).isOkOr:
+      return err(startError(ExitRefused, error))
     let t = checkedRemoteTrust(s).valueOr:
       return err(startError(ExitRefused, "the remote trust input: " & error))
     seenRemote = Opt.some(t.digest)
-  let prepared = prepareDaemon(
-    s, bytes, seen, hooksBuild = opts.hooksBuild, checkKey = true, exe = opts.exe
-  ).valueOr:
-    return err(startError(ExitRefused, error))
-  let evidenceKeys = startEvidenceKeys(s, prepared.config, seen).valueOr:
-    return err(startError(ExitRefused, "the evidence keys: " & error))
   # [G299; G408] The remote input's second read, continuity and enrollment
-  # rules and snapshot, before either mark moves; it writes nothing.
+  # rules and snapshot, before either mark moves; it writes nothing. Its
+  # snapshot goes through the derived host configuration to the remote
+  # processes (5-7a-2).
   var remote = Opt.none(RemoteStart)
+  var exposure: seq[LcnRemoteExposureEntry]
   if remoteOn:
     let st = confirmRemoteTrust(s, seenRemote).valueOr:
       return err(startError(ExitRefused, "the remote trust input: " & error))
     remote = Opt.some(st)
+    # [G412; Q4] The disables Runtime Control made durable.
+    exposure = readExposure(s).valueOr:
+      return err(startError(ExitRefused, "the remote exposure file: " & error))
+  let prepared = prepareDaemon(
+    s,
+    bytes,
+    seen,
+    hooksBuild = opts.hooksBuild,
+    checkKey = true,
+    exe = opts.exe,
+    remote =
+      if remote.isSome:
+        Opt.some(RemoteSeen(snapshot: remote.get.snapshot, exposure: exposure))
+      else:
+        Opt.none(RemoteSeen),
+  ).valueOr:
+    return err(startError(ExitRefused, error))
+  let evidenceKeys = startEvidenceKeys(s, prepared.config, seen).valueOr:
+    return err(startError(ExitRefused, "the evidence keys: " & error))
   # [G409; G410] The TLS credential: a pending rotation taken up, then the key
   # loaded by the signing service. In key-holder mode logosd checks the
   # certificate and never opens the key, which the holder loads.
   var signer: SignService = nil
+  var remoteCred = Opt.none(CredentialInfo)
   if remoteOn:
     let moved = takeUpCredential(s).valueOr:
       return err(startError(ExitRefused, "the TLS credential: " & error))
@@ -247,6 +270,7 @@ proc assembleDaemon*(
         )
       )
     let cred = present.get
+    remoteCred = Opt.some(cred)
     if prepared.config.remote.signing == rsLogosd:
       signer = newSignService(cred.dir).valueOr:
         return err(startError(ExitRefused, "the TLS credential: " & error))
@@ -276,8 +300,24 @@ proc assembleDaemon*(
         " anchors, " & $r.accepted.keys.len & " enrollment keys" &
         (if r.advance: " (a higher revision: the mark moved)" else: "")
     )
+    # [G412; Q4] A retained disable whose configuration entry changed or is
+    # gone no longer applies: the file is rewritten without it.
+    let retained = prepared.composition.retained
+    for e in retained.kept:
+      logInfo("remote exposure: kept disabled: " & e.entryText)
+    if retained.dropped.len > 0:
+      writeExposure(s, retained.kept).isOkOr:
+        return err(startError(ExitRefused, "the remote exposure file: " & error))
+      for e in retained.dropped:
+        logInfo(
+          "remote exposure: dropped, its configuration entry changed or is gone: " &
+            e.entryText
+        )
     for line in r.conflicts & r.report:
       logWarn("remote-trust-report: " & line)
+  for line in prepared.policyReport:
+    # [G415] A Runtime the policy names without an active enrollment.
+    logWarn("authority-policy-report: " & line)
   let c = prepared.config
   let path = prepareRunDir(s, c.ctl.socketDir).valueOr:
     return err(startError(ExitRefused, error))
@@ -353,6 +393,27 @@ proc assembleDaemon*(
       "call-evidence store: boot " & $store.boot & ", next seq " & $store.base & " in " &
         s.evidenceDir
     )
+  # [G410; G411] The remote hooks: the certificate the listener processes
+  # serve with and the signer they ask; the key holder starts here.
+  var side: RemoteSide = nil
+  if remoteCred.isSome:
+    let made = newRemoteSide(s, c.remote, c.value.remote.get, remoteCred.get, signer)
+    var failure = ""
+    if made.isErr:
+      failure = "the remote side: " & made.error
+    else:
+      side = made.get[0]
+      let set = runtimeSetRemoteHooks(rt, made.get[1])
+      if not set.ok:
+        failure = "the remote hooks: " & set.text
+    if failure.len > 0:
+      discard runtimeDestroy(rt)
+      closeRemoteSide(side)
+      closeStore(store)
+      freeSupervisor(sv)
+      if signer != nil:
+        signer.close()
+      return err(startError(ExitStartFailed, failure))
   let started = uint64(toUnix(getTime()) * 1000 + getTime().nanosecond div 1_000_000)
   setPresentation(
     Presentation(
@@ -382,6 +443,7 @@ proc assembleDaemon*(
       startedAtMs: started,
       remote: remote,
       signer: signer,
+      remoteSide: side,
       graceMs:
         if grace.isSome:
           int(grace.get)
@@ -412,13 +474,16 @@ proc release*(d: var Daemon) =
   ## What the daemon holds besides the Runtime: the handoff, the supervisor
   ## and the call-evidence store. After a successful destroy, or at a
   ## Loader-loss exit. With the Runtime not destroyed, its sink may still be
-  ## called: the store is only stopped (written out), not freed.
+  ## called: the store is only stopped (written out), not freed, and the
+  ## remote side and the signing service are kept, for its sign thread.
   clearPresentation()
   setOrchestratorDiagnostics(nil)
-  if d.signer != nil:
-    d.signer.close()
-    d.signer = nil
   if d.rt == nil:
+    closeRemoteSide(d.remoteSide)
+    d.remoteSide = nil
+    if d.signer != nil:
+      d.signer.close()
+      d.signer = nil
     freeSupervisor(d.supervisor)
     d.supervisor = nil
     closeStore(d.store)

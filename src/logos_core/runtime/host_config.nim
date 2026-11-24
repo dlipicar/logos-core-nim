@@ -23,9 +23,15 @@ import ./host_config_types
 import ../transport/io/api
 from ../transport/io/sock import unixStream
 from ../transport/framing import MinFrameLimit
-from ../authority/policy import loadPolicy
+from ../authority/policy import loadPolicy, runtimeRefs, unenrolledReport
 from ./authscopes import AuthorityModule, caRoots
 import ../permissions
+from ../remote/carrier import snapshotOf
+import ../remote/carrier_types
+import ../transport/tls/trust
+import logos_sdk/kit/rc_types
+from ./rcaddress import mismatching
+from ./remoterecords import addressKey, isQuic
 
 export results
 
@@ -94,9 +100,28 @@ type
       ## [SPEC RUNTIME l.3411-3418; I96; G306] `state_transfers`, checked as
       ## far as the configuration alone allows; bootstrap checks the rest
       ## against the store
+    remoteProgram*: Opt[string]
+      ## [G411, G412] the `logos_remote` program; none: no remote profile is
+      ## enabled here, and enabling a listener is MODULE_ERROR
+    remote*: Opt[RemoteConfig] ## [G412] `remote`
+    policyRuntimes: seq[tuple[what, id: string]]
+      ## [G415] the Runtimes the authority policy names, with where
+    policyReport*: seq[string]
+      ## [G415] the policy's load report: each Runtime it names that is not
+      ## actively enrolled
     protectedInputs*: seq[ProtectedInput]
       ## [IMPL-DECISION G400] `protected_inputs`, in configuration order: each
       ## names a listed instance with a state assignment, at most once
+
+  RemoteConfig* = object
+    ## [G408, G412, G415; Tier 5 step 5-7a-2] `remote`, checked: the trust
+    ## snapshot as the remote processes take it, the Runtimes it actively
+    ## enrolls, and the deployment's listener and export records as Runtime
+    ## Control holds them, in configuration order.
+    snapshot*: seq[byte] ## the `lcn.rch_snapshot` body
+    enrolled*: seq[string] ## ascending
+    listeners*: seq[LogosNSRuntimeControlRemoteListenerRecord]
+    exports*: seq[LogosNSRuntimeControlProviderExportRecord]
 
   ProtectedInput* = object
     ## [IMPL-DECISION G400] One instance's protected realization input: the
@@ -373,8 +398,9 @@ proc checkAuthority(
     return err(configError("evaluation_deadline_ms must be below startup_deadline_ms"))
   # [C9] 8a's policy format, checked as the authority will load it.
   let bytes = encodeCbor(toCbor(p.policy))
-  discard loadPolicy(bytes, profile).valueOr:
+  let loaded = loadPolicy(bytes, profile, c.runtimeInstanceId).valueOr:
     return err(configError(error))
+  c.policyRuntimes = loaded.runtimeRefs
   c.authority = Opt.some(
     AuthorityPolicy(
       instance: p.authority,
@@ -648,6 +674,92 @@ proc checkModuleHost(c: var HostConfig, r: LcnAppRuntime): Result[void, ConfigEr
     return err(configError("routing: " & error))
   ok()
 
+proc asRc[A, B](x: A, _: typedesc[B]): Result[B, ConfigError] =
+  ## [G412] A configuration's copy of a Runtime Control record as the record:
+  ## the rules are the mirrored contract's, renamed (`rcRecordRules`), so the
+  ## bytes are the same.
+  let bytes = encode(x).valueOr:
+    return err(configError("remote: " & error))
+  let v = B.decode(bytes).valueOr:
+    return err(configError("remote: " & error))
+  ok(v)
+
+proc checkRemote(
+    c: var HostConfig, r: Opt[LcnAppRemote], rt: LcnAppRuntime
+): Result[void, ConfigError] =
+  ## [G408, G412, G415; SPEC RUNTIME l.2721-2738, l.3289-3322] `remote` and
+  ## `runtime.remote_program`. The snapshot is one trust snapshot as the
+  ## remote processes take it. The deployment's records are validated as
+  ## Runtime Control validates them (l.3319-3321): an address whose profile
+  ## its transport does not select (l.2704-2705), a listener given twice, an
+  ## export naming no listener here or a provider of another Runtime, or an
+  ## export given twice, is refused. Enabling a listener needs the remote
+  ## program and the `tls-tcp` profile, the one this build has (G298 as G412
+  ## re-decides it). Whether each export's provider is this Runtime's own is
+  ## checked against the state at bootstrap.
+  if rt.remote_program.isSome:
+    checkProgramFile("remote_program", rt.remote_program.get).isOkOr:
+      return err(configError(error))
+    c.remoteProgram = Opt.some(rt.remote_program.get)
+  if r.isNone:
+    return ok()
+  let x = r.get
+  let m = LcnRchMessage.decode(x.snapshot).valueOr:
+    return err(configError("remote.snapshot: " & error))
+  if m.kind != LcnRchMessageKind.lcn_Rch_snapshot:
+    return err(configError("remote.snapshot is not a trust snapshot"))
+  let t = snapshotOf(m.arm_lcn_Rch_snapshot).valueOr:
+    return err(configError("remote.snapshot: " & error))
+  var rc = RemoteConfig(snapshot: x.snapshot)
+  for id in t.runtimes:
+    let e = t.record(id)
+    if e.isSome and e.get.status == rsActive:
+      rc.enrolled.add(id)
+  var seen = initHashSet[seq[byte]]()
+  for l in x.listeners.get(@[]):
+    let v = ?asRc(l, LogosNSRuntimeControlRemoteListenerRecord)
+    let key = addressKey(v.address)
+    if v.address.mismatching:
+      return err(
+        configError(
+          "remote.listeners: an address whose profile its transport does not select"
+        )
+      )
+    if key in seen:
+      return err(configError("remote.listeners: an address is given twice"))
+    seen.incl(key)
+    if v.enabled:
+      if c.remoteProgram.isNone:
+        return err(
+          configError(
+            "remote.listeners: an enabled listener needs runtime.remote_program"
+          )
+        )
+      if v.address.isQuic:
+        return err(
+          configError(
+            "remote.listeners: remote transport is not supported by this Runtime for quic"
+          )
+        )
+    rc.listeners.add(v)
+  var exported = initHashSet[(seq[byte], string)]()
+  for e in x.exports.get(@[]):
+    let v = ?asRc(e, LogosNSRuntimeControlProviderExportRecord)
+    let key = addressKey(v.listener)
+    if key notin seen:
+      return err(configError("remote.exports: an export names no listener here"))
+    if v.provider.runtime_instance_id.isSome and c.runtimeInstanceId.len > 0 and
+        v.provider.runtime_instance_id.get != c.runtimeInstanceId:
+      return
+        err(configError("remote.exports: an export names another Runtime's provider"))
+    let pair = (key, v.provider.provider)
+    if pair in exported:
+      return err(configError("remote.exports: an export is given twice"))
+    exported.incl(pair)
+    rc.exports.add(v)
+  c.remote = Opt.some(rc)
+  ok()
+
 proc checkTransfers(
     c: var HostConfig, entries: Opt[seq[LcnAppStateTransfer]]
 ): Result[void, ConfigError] =
@@ -917,6 +1029,14 @@ proc decodeHostConfig*(
   ?checkModuleHost(c, cfg.runtime)
   ?checkTransfers(c, cfg.state_transfers)
   ?checkProtectedInputs(c, cfg.protected_inputs)
+  ?checkRemote(c, cfg.remote, cfg.runtime)
+  c.policyReport = unenrolledReport(
+    c.policyRuntimes,
+    if c.remote.isSome:
+      c.remote.get.enrolled
+    else:
+      @[],
+  )
   ok(c)
 
 proc parseHostConfig*(

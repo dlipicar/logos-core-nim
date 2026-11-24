@@ -67,7 +67,7 @@ template exportQuietModule*(T: typedesc) =
       destroyModule(instance)
     GC_unref(instance)
 
-  proc quietModuleKitName(): cstring {.exportc: "logos_quiet_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [].} =
+  proc quietModuleKitName(): cstring {.exportc: "logos_quiet_module_MODULE_name", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "a static string".} =
     system.cstring(moduleName)
 
   proc quietModuleKitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: "logos_quiet_module_MODULE_init", dynlib, cdecl, gcsafe, raises: [].} =

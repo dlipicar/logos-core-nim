@@ -12,3 +12,17 @@ default = "claimed"
 [sections]
 "References" = "informative"
 "Copyright" = "informative"
+
+
+[units]
+
+# R9 (row 35): these units are implemented by the SDK (`sdk/src/logos_sdk/`), which claims them in
+# sdk/conformance/claims/CFG.toml; tools/restructure/claim_split.tsv records where each one's
+# evidence was. Units above marked `out-of-scope:sdk` moved the same way.
+"CFG-0068" = "out-of-scope:sdk"
+"CFG-0069" = "out-of-scope:sdk"
+"CFG-0070" = "out-of-scope:sdk"
+"CFG-0071" = "out-of-scope:sdk"
+"CFG-0096" = "out-of-scope:sdk"
+"CFG-0097" = "out-of-scope:sdk"
+"CFG-0098" = "out-of-scope:sdk"

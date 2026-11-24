@@ -184,6 +184,15 @@ default roots and exit status 2):
 python3 tools/lint/firstwrite.py
 ```
 
+A C-callable procedure that runs on a thread its library's Nim runtime never started must register
+that thread first: under ORC its first allocation faults otherwise (G464-G467). The flake's
+`lint-callbacks` check rejects one that neither registers nor says why it need not; to run it by hand,
+with `lcn-gen` built:
+
+```bash
+lcn-gen lint-callbacks --self-test sdk/src src tests/kit
+```
+
 Core's programs (`lcn-pkg`, `logos-module-host`, and `logosd` and `logosctl` on POSIX hosts):
 
 ```bash

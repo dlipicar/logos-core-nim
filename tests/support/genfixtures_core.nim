@@ -61,6 +61,9 @@ const
     ),
     # [DECISIONS G405] The Package Manager's shell under a test name (Tier 5
     # step 5-3b, F5): a confined kit, since the shell runs on its module thread.
+    # [G449; Fable's 5-5-4 stop check] With the asynchronous provider API (G338),
+    # so that a Runtime's cancel reaches an operation's handler: a stop ends its
+    # calls through `request_cancel`, not at the stop deadline.
     NimFixture(
       home: coreGeneratedDir,
       module: "pmtest_module_types.nim",
@@ -72,6 +75,7 @@ const
       primary: "tests/kit/pmtest_module.cddl",
       kit: true,
       confined: true,
+      asyncApi: true,
     ),
     NimFixture(
       home: coreGeneratedDir,
@@ -99,11 +103,103 @@ const
   hostConfigPrimary* = coreSchemaDir / "runtime" / "host_config.cddl"
   policyPrimary* = coreSchemaDir / "authority" / "policy.cddl"
 
+const
+  rcMirror* = "spec/mirrors/RNT/9.3.runtime-control.cddl"
+    ## RUNTIME §9.3's Runtime Control contract, mirrored
+  runtimeTypesMirror* = "spec/mirrors/RNT/9.2.runtime-types.cddl"
+    ## RUNTIME §9.2's supporting types, mirrored
+  RcRecordRoots* = [
+    "logos.runtime_control.remote_listener_record",
+    "logos.runtime_control.provider_export_record",
+  ] ## [G412] the records a configuration holds as Runtime Control has them
+  RenamedNamespaces* =
+    [("logos.runtime_control.", "lcn.rc_"), ("logos.runtime.", "lcn.rt_")]
+    ## what each of their names becomes in a configuration document
+
+func cddlRules*(doc: string): seq[(string, string)] =
+  ## The top-level rules of a mirrored document, in order: each rule's name
+  ## and its text, from its first line to the line before the next rule, a
+  ## comment or a metadata line at the start of a line.
+  var name = ""
+  var text: seq[string]
+  template flush() =
+    if name.len > 0:
+      while text.len > 0 and text[^1].strip.len == 0:
+        text.setLen(text.len - 1)
+      result.add((name, text.join("\n")))
+    name = ""
+    text = @[]
+
+  for line in doc.splitLines:
+    if line.len > 0 and line[0] in {'a' .. 'z'} and '=' in line:
+      flush()
+      name = line.split('=')[0].strip
+      text = @[line]
+    elif line.startsWith(";") or line.startsWith("_"):
+      flush()
+    elif name.len > 0:
+      text.add(line)
+  flush()
+
+func referencedRules(text: string, namespaces: openArray[string]): seq[string] =
+  ## The names in `text` that start with one of `namespaces`.
+  var i = 0
+  while i < text.len:
+    var hit = ""
+    for ns in namespaces:
+      if text.continuesWith(ns, i) and (i == 0 or text[i - 1] notin IdentChars + {'.'}):
+        hit = ns
+        break
+    if hit.len == 0:
+      inc i
+      continue
+    var j = i + hit.len
+    while j < text.len and text[j] in IdentChars:
+      inc j
+    result.add(text[i ..< j])
+    i = j
+
+func rcRecordRules*(rc, runtimeTypes: string): string =
+  ## [IMPL-DECISION G412] RUNTIME §9.3's listener and export records, with
+  ## every rule they reach in the Runtime Control contract and in §9.2's
+  ## supporting types, as rules of a configuration document. A document holds
+  ## one namespace's rules beside `lcn`'s only by renaming (COMMITMENT §3.1),
+  ## and every name sits one segment below its namespace, so
+  ## `logos.runtime_control.x` becomes `lcn.rc_x` and `logos.runtime.x`
+  ## becomes `lcn.rt_x` (`RenamedNamespaces`). Nothing else changes: the
+  ## records are generated from the spec's text, never retyped, and encode to
+  ## the same bytes as the Runtime Control types (CBOR carries no rule name).
+  var all: seq[(string, string)]
+  for doc in [rc, runtimeTypes]:
+    all.add(cddlRules(doc))
+  var wanted = @RcRecordRoots
+  var seen: seq[string]
+  while wanted.len > 0:
+    let n = wanted.pop()
+    if n in seen:
+      continue
+    seen.add(n)
+    for (name, text) in all:
+      if name == n:
+        for r in referencedRules(text, ["logos.runtime_control.", "logos.runtime."]):
+          if r notin seen:
+            wanted.add(r)
+  var lines: seq[string]
+  for (name, text) in all:
+    if name in seen:
+      var t = text
+      for (a, b) in RenamedNamespaces:
+        t = t.replace(a, b)
+      lines.add(t)
+  lines.join("\n\n") & "\n"
+
 proc hostConfigDocument*(): string {.raises: [IOError].} =
   ## The host configuration schema, then the authority policy schema its
-  ## `capability-authority` arm holds (DECISIONS I85): one primary document,
-  ## since both use the `lcn` namespace.
-  readFile(hostConfigPrimary) & "\n" & readFile(policyPrimary)
+  ## `capability-authority` arm holds (DECISIONS I85), then the Runtime
+  ## Control records its `remote` section holds (`rcRecordRules`, G412): one
+  ## primary document in the `lcn` namespace.
+  readFile(hostConfigPrimary) & "\n" & readFile(policyPrimary) & "\n" &
+    rcRecordRules(readFile(rcMirror), readFile(runtimeTypesMirror))
 
 proc generatedHostConfigTypes*(): Result[string, string] =
   ## The host configuration format's types (`logos-core-nim.app-config.v1`,
@@ -225,6 +321,23 @@ proc generatedRemoteTrustTypes*(): Result[string, string] =
     ),
     false,
   )
+
+const
+  remoteExposureTypesPath* = "src/logos_core/daemon/remote_exposure_types.nim"
+  remoteExposurePrimary* = "src/logos_core/daemon/remote_exposure.cddl"
+
+proc generatedRemoteExposureTypes*(): Result[string, string] =
+  ## The durable remote disables (G412, Q4), for `daemon/remoteexposure.nim`.
+  try:
+    let set =
+      ?acceptContractSet(readFile(remoteExposurePrimary), [], [], AcceptOptions())
+    nimModule(
+      set,
+      NimOptions(importPrefix: SdkImportRoot, schemaAccessor: "remoteExposureSchema"),
+      false,
+    )
+  except IOError as e:
+    err(e.msg)
 
 const
   trustdocTypesPath* = "src/logos_core/package/trustdoc_types.nim"
