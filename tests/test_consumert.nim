@@ -301,22 +301,31 @@ var fakeVtable = LogosRouteVtable(
 )
 
 # [DECISIONS I142] A route that ends between `wrapRoute`'s two registrations: its
-# `observe_end` is installed and the end delivered at once, as the Runtime's binding
-# invalidation at a stop does in a Module Host, then `observe_subscription_end` is
-# refused with the route's end. The confined dispatcher keeps the end report the
-# delivery queued; the test runs it as the module thread would.
+# `observe_end` is installed, then the route ends, as the Runtime's binding invalidation
+# at a stop ends a route a Module Host's module just opened. The end is delivered from
+# inside `observe_subscription_end` (INTERFACE l.1467; never from inside `observe_end`
+# on the registering thread, l.1450), which is then refused with the route's end. A
+# confined dispatcher keeps the end report the delivery queued; the test runs it as
+# the module thread would.
 var endingReleases: Atomic[int]
 var endingQueued: ptr TaskNode
+var endingHandler: LogosRouteEndHandler
+var endingUser: pointer
 
 proc eObserveEnd(
     route: ptr LogosRouteHandle, handler: LogosRouteEndHandler, user: pointer
 ): LogosResult {.cdecl, gcsafe, raises: [].} =
-  handler(CErrorCode(ord(ecNotReady)), user)
+  {.cast(gcsafe).}:
+    endingHandler = handler
+    endingUser = user
   LogosResult()
 
 proc eObserveSubEnd(
     route: ptr LogosRouteHandle, handler: LogosSubscriptionEndHandler, user: pointer
 ): LogosResult {.cdecl, gcsafe, raises: [].} =
+  {.cast(gcsafe).}:
+    if endingHandler != nil:
+      endingHandler(CErrorCode(ord(ecNotReady)), endingUser)
   LogosResult(code: CErrorCode(ord(ecNotReady)), message: "the handle's path has ended")
 
 proc eRelease(route: ptr LogosRouteHandle) {.cdecl, gcsafe, raises: [].} =
@@ -491,6 +500,7 @@ suite "run.consumert: typed consumer helpers over a direct route (INTERFACE §2.
   test "[IMPL-DECISION I142] [IMPL-DECISION G339] a route that ends between wrapping's two registrations, under a confined dispatcher: the wrap fails with the second's reason and releases the route once; the end report already queued for the module thread runs no onRouteEnd, for a handle its caller never got, and frees it":
     endingReleases.store(0)
     endingQueued = nil
+    endingHandler = nil
     var state = 1
     let w = wrapRoute(
       LogosRouteHandle(vtable: addr endingVtable, state: addr state),
@@ -504,10 +514,29 @@ suite "run.consumert: typed consumer helpers over a direct route (INTERFACE §2.
     check endingReleases.load == 1
     check endingQueued != nil
     if endingQueued != nil:
-      # The module thread's turn: the handle's last task, which frees it.
+      # The module thread's turn, after the wrap returned: the handle's last task,
+      # which frees it.
       endingQueued.run(endingQueued, false)
     check routeEnds.count.load == 0
     check endingReleases.load == 1
+
+  test "[IMPL-DECISION I142] [IMPL-DECISION G339] a route that ends between wrapping's two registrations, with no dispatcher: onRouteEnd runs once, inline in the delivery (INTERFACE l.1467), the wrap fails with the second's reason and releases the route once":
+    endingReleases.store(0)
+    endingQueued = nil
+    endingHandler = nil
+    var state = 1
+    let w = wrapRoute(
+      LogosRouteHandle(vtable: addr endingVtable, state: addr state),
+      onRouteEnd,
+      addr routeEnds,
+    )
+    check w.isErr
+    check w.error.code == ecNotReady
+    check w.error.message == Opt.some("the handle's path has ended")
+    check routeEnds.count.load == 1
+    check routeEnds.code.load == ord(ecNotReady)
+    check endingReleases.load == 1
+    check endingQueued == nil
 
   test "[IMPL-DECISION G339] prepareInvoke: a typed completion, inline in submit; release from the call's own completion is NOT_READY, and afterwards it releases (INTERFACE §2.9.1, l.2011, l.2043)":
     let (e, rc) = start()

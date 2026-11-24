@@ -775,7 +775,9 @@ proc wrapRoute*(
   ## (l.1459), INVALID_PARAMS when a registration already exists, MODULE_ERROR
   ## when the binding has no capacity for one (l.1451). With a confined kit's
   ## `dispatcher` (`ModuleServices.dispatcher`), its callbacks run on the
-  ## kit's module thread (G339).
+  ## kit's module thread (G339). With no dispatcher, `onRouteEnd` may run
+  ## before this returns, and also when it then fails (INTERFACE l.1450,
+  ## l.1467).
   var probe = route
   checkRoute(addr probe).isOkOr:
     return err(toFailure(error, "route handle"))
@@ -806,16 +808,24 @@ proc wrapRoute*(
     # [DECISIONS I142] `observe_end` is installed: a route that ended meanwhile
     # has its end report running, or queued on `h` for the module thread (G339).
     # So `h` goes through `release`, never `fail`: it suppresses the report and
-    # waits for a running one, and the last queued task frees `h`. That task
-    # sees `closing`, so the caller's `onRouteEnd` runs for none of this
-    # handle, which the caller never received.
+    # waits for a running one, and the last queued task frees `h`. Wrapped on
+    # the module thread, as the kit does, that task runs after this returns and
+    # sees `closing`, so the caller's `onRouteEnd` runs for none of this handle,
+    # which the caller never received.
     let st = readStatus(r2)
     let f =
       if st.isErr:
         toFailure(st.error, "observe_subscription_end")
       else:
         moduleError("observe_subscription_end gave no reason")
-    discard release(h)
+    # `release` is refused only inside a handler or end callback of `h`. `h` is
+    # new, so its caller is in none; a report run inline during the second
+    # registration (no dispatcher, l.1467) has returned, and a confined one is
+    # queued, never run inline. A refusal would leak the handle and the route.
+    let released = release(h)
+    when defined(lcnTestHooks):
+      doAssert released.isOk, "wrapRoute: the new handle's release was refused"
+    discard released
     return err(f)
   ok(h)
 
