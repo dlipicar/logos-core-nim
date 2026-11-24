@@ -817,6 +817,14 @@
             python3 ${./tools/lint/firstwrite.py} src sdk/src sdk/tests tests
             touch $out
           '';
+          # [DECISIONS I147] One `importc` of each function our C sources define: a second copy
+          # of its prototype falls behind when its parameters change, and still compiles.
+          lint-cimports = s.pkgs.runCommand "lint-cimports" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
+            cd ${s.nimSources}
+            python3 ${./tools/lint/cimports.py} --self-test
+            python3 ${./tools/lint/cimports.py} src sdk/src sdk/tests tests
+            touch $out
+          '';
           # [DECISIONS G433-G436] The SDK's and core's Nimble packages: install lists, requirements,
           # the lock against the SDK's ranges, the Nimble 0.26 guard, and no hand-typed URL of our
           # repositories (tools/lint/packaging.py). The whole tree but build outputs, for that last

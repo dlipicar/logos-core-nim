@@ -29,7 +29,9 @@ when defined(posix):
   # [DECISIONS I147] hostspawn.c's spawn through hostsup's declaration, the only one: a copy here
   # fell behind G492's `system` parameter, the pid came back unset and the harness signalled pid -1.
   from ../src/logos_core/runtime/hostsup import lcnHostSpawn
-  import ./support/[daemonbuild, daemonproc, rchannel, shortdir, slowdown, tls_fixtures]
+  import
+    ./support/
+      [daemonbuild, daemonproc, rchannel, shortdir, signals, slowdown, tls_fixtures]
 
   var environ {.importc.}: cstringArray
 
@@ -84,12 +86,12 @@ when defined(posix):
 
   proc gone(pid: Pid, ms: int): bool =
     ## `pid` no longer exists within `ms`. A child of this process is reaped.
-    doAssert pid > 0, "no pid: never wait on or signal pid " & $pid # [I147]
+    requirePid(pid, "wait on")
     let until = epochTime() + float(ms) / 1000
     while true:
       var status: cint
       discard waitpid(pid, status, WNOHANG)
-      if kill(pid, 0) != 0 and errno == ESRCH:
+      if pidGone(pid):
         return true
       if epochTime() > until:
         return false
@@ -242,7 +244,7 @@ when defined(posix):
       let d = c.start()
       check c.ready(d)
       let pid = c.listenerPid
-      check pid > 0 and kill(pid, 0) == 0
+      check pid > 0 and signalPid(pid, 0) == 0
       let s = c.dial()
       check s.isOk
       if s.isOk:
@@ -310,7 +312,7 @@ when defined(posix):
       check c.ready(d)
       let pid = c.listenerPid
       require pid > 0
-      check kill(pid, SIGSTOP) == 0
+      check signalPid(pid, SIGSTOP) == 0
       killChild(d)
       check pid.gone(EndMs)
       check checkRemoteLocks(c.s.workDir).isOk
@@ -325,7 +327,7 @@ when defined(posix):
       let pid = c.listenerPid
       require pid > 0
       check stopChild(d, StopMs) == 0
-      check kill(pid, 0) != 0 and errno == ESRCH
+      check pidGone(pid)
       check checkRemoteLocks(c.s.workDir).isOk
       let d2 = c.start()
       check c.ready(d2)
@@ -343,12 +345,11 @@ when defined(posix):
     doAssert lcnHostSpawn(
       cstring(rExe), argv, environ, carrier, listener, lock, -1, addr pid
     ) == 0
-    # [I147] Never a wait or a signal on pid -1, which reaches every process the user owns.
-    doAssert pid > 0, "the spawn reported no pid"
+    requirePid(pid, "wait on") # [I147] never a wait or a signal on pid -1
     Pid(pid)
 
   proc exitOf(pid: Pid, ms: int): int =
-    doAssert pid > 0, "no pid: never wait on or signal pid " & $pid # [I147]
+    requirePid(pid, "wait on")
     let until = epochTime() + float(ms) / 1000
     while true:
       var status: cint
@@ -358,7 +359,7 @@ when defined(posix):
           return int(WEXITSTATUS(status))
         return 128 + int(WTERMSIG(status))
       if epochTime() > until:
-        discard kill(pid, SIGKILL)
+        discard signalPid(pid, SIGKILL)
         discard waitpid(pid, status, 0)
         return -1
       sleep(10)

@@ -37,7 +37,7 @@ when defined(posix):
   import
     ./support/[
       childbuild, clibuild, daemonbuild, daemonproc, modulehostbuild, pmbuild,
-      pmfixture, sanitizerenv, shortdir, slowdown,
+      pmfixture, sanitizerenv, shortdir, signals, slowdown,
     ],
     logos_sdk/testing/kitbuild
 
@@ -460,7 +460,7 @@ when defined(posix):
       if not hostsGone():
         checkpoint("Module Hosts left: " & $hostPids())
         for pid in hostPids():
-          discard kill(Pid(pid), SIGKILL)
+          discard signalPid(pid, SIGKILL)
         fail()
       # The case's directories, its children's output files with them: kept
       # if it failed (`shortdir`).
@@ -668,7 +668,7 @@ when defined(posix):
       check pmHost.len == 1
       if pmHost.len == 1:
         # The override: its host ends, and nothing starts it again.
-        check kill(Pid(pmHost[0]), SIGKILL) == 0
+        check signalPid(pmHost[0], SIGKILL) == 0
         check c.reaches(d, PmInstance, "error")
         sleep(NoRestartMs)
         check c.stateOf(PmInstance) == "error"

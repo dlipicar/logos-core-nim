@@ -6,6 +6,7 @@
 
 import std/[monotimes, os, posix, times]
 import ../../src/logos_core/transport/io/sock
+import ./signals
 
 type Peer* = object
   pid*: Pid
@@ -98,7 +99,7 @@ proc waitPeer*(p: var Peer, timeoutMs = 30_000): int =
     if r == p.pid:
       break
     if getMonoTime() > deadline:
-      discard kill(p.pid, SIGKILL)
+      discard signalPid(p.pid, SIGKILL)
       discard waitpid(p.pid, status, 0)
       p.release()
       return -1
@@ -111,7 +112,7 @@ proc waitPeer*(p: var Peer, timeoutMs = 30_000): int =
 
 proc killPeer*(p: var Peer) =
   ## SIGKILL, then reap.
-  discard kill(p.pid, SIGKILL)
+  discard signalPid(p.pid, SIGKILL)
   var status: cint
   discard waitpid(p.pid, status, 0)
   p.release()

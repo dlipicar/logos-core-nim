@@ -504,6 +504,34 @@ when defined(posix):
       h.dropHost()
       s.closeSupervisor()
 
+    test "[IMPL-DECISION I147] a spawn that reports success with its pid left at -1 (what a stale declaration of hostspawn.c's spawn gave) fails cleanly, the host suites' spawn and the supervisor's alike, and signals nothing; a group signal to a pid of 1 or less is refused unsent":
+      let sent = groupSignalsSent()
+      failNextSpawnPid()
+      # [G442] sanitizer-env: the hook starts no process
+      let direct = spawnProcess(host, @[], -1)
+      check direct.isErr
+      if direct.isErr:
+        check direct.error == "the spawn reported no process id"
+      let s = newSupervisor(host, @SanitizerEnv)
+      let h = s.newHost(nil, nil, nil, 1024).get
+      failNextSpawnPid()
+      let spawned = h.spawn()
+      check spawned.isErr
+      if spawned.isErr:
+        check spawned.error ==
+          "the Module Host cannot be started: the spawn reported no process id"
+      check h.pidOf() <= 0
+      h.dropHost()
+      s.closeSupervisor()
+      for leader in [cint(-1), 0, 1]:
+        check signalGroup(leader, 0) == gsRefused
+      check groupSignalsSent() == sent
+      # A real group is still signalled.
+      var r = startHost(host)
+      check signalGroup(cint(r.pid), 0) == gsSent
+      check groupSignalsSent() == sent + 1
+      r.stop()
+
   suite "host.module: sanitizer reports from a host (DECISIONS G442)":
     test "[IMPL-DECISION G442] the canary checker: a file of one stack trace moves to the canary directory once its process is reaped; anything else stays, so the check fails on it":
       let reports = work / "checker" / "sanitizer-reports"

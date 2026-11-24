@@ -73,18 +73,107 @@ testHooksMarker("hostsup")
 
 when defined(posix):
   {.compile: "hostspawn.c".}
-  proc lcnHostSpawn*(
+
+  const HostSpawnHeader = currentSourcePath().parentDir / "hostspawn.h"
+
+  proc cHostSpawn(
     path: cstring,
     argv, envp: cstringArray,
     carrier, listener, lock, system: cint,
     pid: ptr cint,
-  ): cint {.importc: "lcn_host_spawn", cdecl.}
-    ## [DECISIONS I147] The one declaration of `hostspawn.c`'s spawn. The
-    ## remote listener's (`remotesup`), the key holder's (`daemon/remoteside`)
-    ## and the tests' spawns all use it. Each Nim `importc` emits its own C
-    ## prototype, so a second declaration that falls behind a change of the
-    ## parameters (G492's `system`) still compiles. The call then passes the
-    ## old list, the pid comes back unset, and the caller signals pid -1.
+  ): cint {.importc: "lcn_host_spawn", header: HostSpawnHeader.}
+    ## [DECISIONS I147] The one declaration of `hostspawn.c`'s spawn. With
+    ## `header:`, Nim includes the real prototype (`hostspawn.h`) and writes
+    ## none of its own, so the C compiler checks every call against it.
+    ## Without the header, each Nim `importc` emits its own C prototype, so a
+    ## second declaration that fell behind a change of the parameters (G492's
+    ## `system`) still compiled. Its call passed the old list, the pid came
+    ## back unset, and the caller signalled pid -1. `tools/lint/cimports.py`
+    ## refuses a second `importc` of a symbol our C sources define.
+
+  const SpawnNoPid* = cint(-100_000)
+    ## [I147] What `lcnHostSpawn` returns for a spawn that reported success
+    ## with no pid above 1: below every negated errno, which the spawn's other
+    ## failures are.
+
+  when defined(lcnTestHooks):
+    var spawnNoPid: Atomic[bool]
+    var groupSignals: Atomic[int]
+
+    proc failNextSpawnPid*() =
+      ## [I147] The next `lcnHostSpawn` starts nothing and reports success
+      ## with the pid left at -1, the result a stale declaration gave.
+      spawnNoPid.store(true)
+
+    proc groupSignalsSent*(): int =
+      ## [I147] How many signals `signalGroup` has sent in this process.
+      groupSignals.load
+
+  proc lcnHostSpawn*(
+      path: cstring,
+      argv, envp: cstringArray,
+      carrier, listener, lock, system: cint,
+      pid: ptr cint,
+  ): cint =
+    ## [I147] Every host, listener and key-holder spawn: `hostspawn.c`'s,
+    ## through its one declaration. A spawn that reports success with no pid
+    ## above 1 is a failure, `SpawnNoPid`, so nothing ever waits on or
+    ## signals such a pid: waitpid(-1) reaps any child, kill(-1) reaches
+    ## every process the user owns, and kill(1) is init's.
+    var r: cint
+    when defined(lcnTestHooks):
+      if spawnNoPid.exchange(false):
+        pid[] = -1
+        r = 0
+      else:
+        r = cHostSpawn(path, argv, envp, carrier, listener, lock, system, pid)
+    else:
+      r = cHostSpawn(path, argv, envp, carrier, listener, lock, system, pid)
+    if r == 0 and pid[] <= 1:
+      pid[] = -1
+      return SpawnNoPid
+    r
+
+  proc spawnErrorText*(r: cint): string =
+    ## A failed `lcnHostSpawn`'s reason.
+    if r == SpawnNoPid:
+      "the spawn reported no process id"
+    else:
+      $strerror(abs(r))
+
+  type GroupSignal* = enum
+    gsSent ## sent
+    gsGone ## no such group (ESRCH)
+    gsFailed ## refused by the system for another reason
+    gsRefused ## not sent: the leader's pid is 1 or less
+
+  proc signalGroup*(leader: cint, sig: cint): GroupSignal =
+    ## [I147] `kill(-leader, sig)`, aimed at the process group a spawn made
+    ## (its leader's pid is the group's id). A leader of 1 or less is refused,
+    ## and nothing is sent: -0 is the caller's own group, -1 every process the
+    ## user owns, and -(-1) is init. The caller logs a refusal.
+    if leader <= 1:
+      return gsRefused
+    when defined(lcnTestHooks):
+      discard groupSignals.fetchAdd(1)
+    if kill(Pid(-leader), sig) == 0:
+      gsSent
+    elif errno == ESRCH:
+      gsGone
+    else:
+      gsFailed
+
+  proc refusedSignal(leader: cint, what: string) =
+    ## [I147] The supervision's own log line for a refused group signal: the
+    ## host supervisor has no other channel, and stderr reaches the daemon's
+    ## log.
+    try:
+      stderr.writeLine(
+        "logos-core: host supervision: refused to signal the process group of pid " &
+          $leader & " (" & what & ")"
+      )
+    except IOError:
+      discard
 
 const
   TickMs = 50 ## [IMPL; R2] the supervision tick
@@ -699,8 +788,8 @@ when defined(posix):
         withLock h.lock:
           if h.terminating and h.spawned and not h.confirmed:
             pid = h.pid
-        if pid > 0:
-          discard kill(Pid(-pid), SIGKILL)
+        if pid > 0 and signalGroup(pid, SIGKILL) == gsRefused:
+          refusedSignal(pid, "a held kill")
         h.sup.wakeUp()
 
     var dropListener: Atomic[bool]
@@ -770,7 +859,7 @@ when defined(posix):
         addr pid,
       )
       if r != 0:
-        return err($strerror(-r))
+        return err(spawnErrorText(r))
       ok(int(pid))
     else:
       err("hosted placement is not supported on this platform")
@@ -821,7 +910,7 @@ when defined(posix):
       discard fdClose(h.systemFd)
       h.systemFd = -1
     if req.rc != 0:
-      return err("the Module Host cannot be started: " & $strerror(-req.rc))
+      return err("the Module Host cannot be started: " & spawnErrorText(req.rc))
     ok()
 
   proc terminate*(h: Host, reason: string, byRuntime = false): bool {.discardable.} =
@@ -850,8 +939,8 @@ when defined(posix):
     when defined(lcnTestHooks):
       if testKillHeld(h):
         pid = -1 # `holdKill` sends it
-    if pid > 0:
-      discard kill(Pid(-pid), SIGKILL)
+    if pid > 0 and signalGroup(pid, SIGKILL) == gsRefused:
+      refusedSignal(pid, "terminate")
     h.sup.wakeUp()
 
   proc endOf(h: Host): HostEnd =
@@ -1776,12 +1865,13 @@ when defined(posix):
     withLock h.lock:
       killed = h.groupKilled
       h.groupKilled = true
-    if not killed:
-      discard kill(Pid(-pid), SIGKILL)
+    if not killed and signalGroup(pid, SIGKILL) == gsRefused:
+      refusedSignal(pid, "the reaped host's group")
     when defined(lcnTestHooks):
       if testHeld(h):
         return false
-    if kill(Pid(-pid), 0) < 0 and errno == ESRCH:
+    # [I147] A refused leader has no group to wait for: its end is confirmed.
+    if signalGroup(pid, 0) in {gsGone, gsRefused}:
       s.confirm(h, r)
       return true
     false
@@ -1822,8 +1912,8 @@ when defined(posix):
           h.pid = pid
           h.spawned = true
           late = h.terminating
-        if late:
-          discard kill(Pid(-pid), SIGKILL)
+        if late and signalGroup(pid, SIGKILL) == gsRefused:
+          refusedSignal(pid, "a host ended before its spawn")
         withLock s.lock:
           h.listed = true
           h.next = s.hosts

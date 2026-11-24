@@ -5,6 +5,7 @@
 ## test process dies) ends what is left with SIGKILL.
 
 import std/[exitprocs, monotimes, os, posix, strutils, times]
+import ./signals
 
 var environ {.importc.}: cstringArray
 
@@ -21,7 +22,7 @@ var running: seq[Pid]
 
 proc killAll*() =
   for pid in running:
-    discard kill(pid, SIGKILL)
+    discard signalPid(pid, SIGKILL)
     var status: cint
     discard waitpid(pid, status, 0)
   running = @[]
@@ -129,14 +130,14 @@ proc alive*(c: Child): bool =
 
 proc stopChild*(c: Child, timeoutMs: int): int =
   ## SIGTERM, then SIGKILL after `timeoutMs`: the exit code.
-  discard kill(c.pid, SIGTERM)
+  discard signalPid(c.pid, SIGTERM)
   result = waitExit(c, timeoutMs)
   if result < 0:
-    discard kill(c.pid, SIGKILL)
+    discard signalPid(c.pid, SIGKILL)
     result = waitExit(c, timeoutMs)
 
 proc killChild*(c: Child) =
-  discard kill(c.pid, SIGKILL)
+  discard signalPid(c.pid, SIGKILL)
   discard waitExit(c, 10_000)
 
 proc errText*(c: Child): string =

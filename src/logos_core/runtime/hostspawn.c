@@ -30,6 +30,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "hostspawn.h" /* the prototype hostsup.nim compiles its calls against (I147) */
+
 #if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 34))
 #define LCN_HAVE_CLOSEFROM 1
 #endif

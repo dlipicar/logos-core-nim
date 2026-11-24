@@ -28,6 +28,7 @@
 when defined(posix):
   const LivePrefix = "lcc" ## the short directories' prefix
   include ./support/lcncall_live
+  import ./support/signals
 
   # Cases ---------------------------------------------------------------------------------
 
@@ -320,7 +321,7 @@ when defined(posix):
       let mine = hostPids().filterIt(it notin before)
       check mine.len == 1
       if mine.len == 1:
-        check posix.kill(Pid(mine[0]), SIGKILL) == 0
+        check signalPid(mine[0], SIGKILL) == 0
         check l.reaches(CliInstance, LogosNSRuntimeControlStateKind.Error)
         let r = l.run(meterRead(7))
         checkpoint r.said

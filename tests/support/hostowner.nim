@@ -7,7 +7,7 @@ import std/[monotimes, os, posix, times]
 import results
 import ../../src/logos_core/runtime/[carrier, hostsup]
 import ../../src/logos_core/transport/io/sock
-import ./[sanitizerenv, slowdown]
+import ./[sanitizerenv, signals, slowdown]
 
 export carrier, sanitizerenv, slowdown
 
@@ -120,6 +120,6 @@ proc killedBy*(r: HostRun): int =
 proc stop*(r: var HostRun) =
   ## Teardown: the host's group is killed and reaped, the carrier closed.
   if not r.reaped:
-    discard kill(Pid(-r.pid), SIGKILL)
+    discard signalPidGroup(r.pid, SIGKILL)
     discard r.waitExit()
   r.closeCarrier()
