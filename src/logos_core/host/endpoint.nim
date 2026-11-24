@@ -56,7 +56,7 @@ import logos_sdk/iface/[accept, outcome, surface]
 import ../transport/io/api except decodeMessage
 import ../transport/io/[loop, sock]
 import ../runtime/[carrier, entryframe, hostio, native, servedroots]
-import ./[selected, state]
+import ./[dispatchcount, selected, state]
 
 const
   MaxDispatchWorkers = 64 ## [IMPL] as the Runtime's call workers
@@ -109,7 +109,8 @@ type
   Pool = object
     ch: Channel[Job]
     lock: Lock
-    idle, count: int
+    counts: DispatchCounts
+      ## [DECISIONS I146] every job claimed at its post, under `lock`
     threads: array[MaxDispatchWorkers, Thread[ptr Pool]]
 
   Served = object
@@ -692,15 +693,15 @@ proc poolLoop(p: ptr Pool) =
       return
     if j.inv == 0:
       return
-    withLock p.lock:
-      dec p.idle
     let d = cast[ptr HostInv](j.inv)
     if j.hook:
       d.runCancelHook() # its entry was claimed when it was queued
     else:
       d.runAdmitted()
+    # [DECISIONS I146] A job that waited with every worker busy is this
+    # worker's next; otherwise it counts as idle.
     withLock p.lock:
-      inc p.idle
+      discard p.counts.finished()
 
 proc poolMain(p: ptr Pool) {.thread.} =
   poolLoop(p)
@@ -708,16 +709,18 @@ proc poolMain(p: ptr Pool) {.thread.} =
 
 proc post(j: Job) =
   ## Work for a dispatch worker; the pool grows while every worker is busy.
+  ## [DECISIONS I146] The job is claimed here, under the lock: by an idle
+  ## worker, by a new one whose thread index the claim takes, or at the cap
+  ## as waiting for the next worker to finish. A worker that has not yet
+  ## taken the job posted before it is no longer counted idle, and two posts
+  ## never start the same thread.
   let p = addr sv.pool
-  var grow = false
+  var claim: tuple[kind: DispatchClaim, index: int]
   withLock p.lock:
-    if p.idle == 0 and p.count < MaxDispatchWorkers:
-      grow = true
-      inc p.count
-      inc p.idle
-  if grow:
+    claim = p.counts.claim(MaxDispatchWorkers)
+  if claim.kind == dcGrow:
     try:
-      createThread(p.threads[p.count - 1], poolMain, p)
+      createThread(p.threads[claim.index], poolMain, p)
     except Exception:
       carrierLost("a dispatch worker cannot start")
   try:

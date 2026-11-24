@@ -544,3 +544,90 @@ else:
   suite "host.module: the Module Host (POSIX only)":
     test "[IMPL] hosted placement is not supported on this platform; the host is a stub":
       skip()
+
+# [DECISIONS I146] The dispatch pool's counting, on every platform: pure, so every order of posts
+# and the workers' receives is walked, where a timed test would see only the orders its host runs.
+import ../src/logos_core/host/dispatchcount
+
+type PoolModel = object
+  ## Posts into the pool's queue and the workers that take them; a taken job blocks, as a
+  ## provider's call that waits for a file does. `old`: the counting before I146, which made a
+  ## worker idle when started and claimed it only once it had taken a job.
+  counts: DispatchCounts
+  old: bool
+  oldIdle, oldCount: int
+  posted, receiving, queued, running: int
+
+proc post(m: var PoolModel, cap: int) =
+  inc m.posted
+  inc m.queued
+  if m.old:
+    if m.oldIdle == 0 and m.oldCount < cap:
+      inc m.oldCount
+      inc m.oldIdle
+      inc m.receiving
+  else:
+    let c = m.counts.claim(cap)
+    if c.kind == dcGrow:
+      doAssert c.index == m.counts.count - 1
+      inc m.receiving
+
+proc take(m: var PoolModel) =
+  dec m.receiving
+  dec m.queued
+  inc m.running
+  if m.old:
+    dec m.oldIdle
+
+proc allRun(cap, jobs: int, old = false): bool =
+  ## Whether every order of `jobs` posts and the workers' receives ends with every job running.
+  var ok = true
+  proc walk(m: PoolModel) =
+    if not ok:
+      return
+    var moved = false
+    if m.posted < jobs:
+      var n = m
+      n.post(cap)
+      walk(n)
+      moved = true
+    if m.receiving > 0 and m.queued > 0:
+      var n = m
+      n.take()
+      walk(n)
+      moved = true
+    if not moved and m.running != jobs:
+      ok = false
+
+  walk(PoolModel(old: old))
+  ok
+
+suite "host.module: the dispatch pool's counts (DECISIONS I146)":
+  test "[IMPL-DECISION I146] two posts before any worker has taken a job start two workers, at distinct indexes; a worker whose job ended is the next post's":
+    var c: DispatchCounts
+    let a = c.claim(64)
+    let b = c.claim(64)
+    check a.kind == dcGrow and a.index == 0
+    check b.kind == dcGrow and b.index == 1
+    check c.count == 2 and c.idle == 0
+    check not c.finished()
+    check c.idle == 1
+    check c.claim(64).kind == dcIdle
+    check c.count == 2 and c.idle == 0
+
+  test "[IMPL-DECISION I146] at the cap a job waits, and the next worker to finish takes it before it counts idle":
+    var c: DispatchCounts
+    check c.claim(2).kind == dcGrow
+    check c.claim(2).kind == dcGrow
+    check c.claim(2).kind == dcWaiting
+    check c.count == 2 and c.waiting == 1
+    check c.finished()
+    check c.waiting == 0 and c.idle == 0
+    check not c.finished()
+    check not c.finished()
+    check c.idle == 2 and c.count == 2 and c.waiting == 0
+
+  test "[IMPL-DECISION I146] in every order of four posts and the workers' receives, four blocking calls all run; the counting before I146 leaves one queued in some order":
+    check allRun(cap = 64, jobs = 4)
+    check allRun(cap = 4, jobs = 4)
+    check not allRun(cap = 64, jobs = 4, old = true)

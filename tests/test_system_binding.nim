@@ -800,7 +800,7 @@ when defined(posix):
       releaseAll()
       e.finish()
 
-    test "[IMPL-DECISION G493] the binding's own worker: with every call worker of the shared pool held in a hosted provider, a handoff is still admitted and answered":
+    test "[IMPL-DECISION G493] [IMPL-DECISION I146] the binding's own worker: with every call worker of the shared pool held in a hosted provider, a handoff is still admitted and answered":
       check MaxCallWorkers + MaxNestedCallWorkers == 4
       let s = setup("worker", meter = true)
       let e = s.e
@@ -819,15 +819,13 @@ when defined(posix):
       )
       check ev.kind == evConnected
       # Channel 23 holds each call in the meter until the file `open` is there: four calls,
-      # one on each call worker. Each is sent once the one before is held: the Module Host's
-      # dispatch pool grows only when no worker counts as idle, and a worker counts as idle
-      # until it has taken the job posted before, so a call sent at once could wait in the
-      # host behind a held one (`host/endpoint.nim` `post`, a pre-existing race reported to
-      # planning).
+      # one on each call worker, sent at once. [I146] All four run in the meter's host: before
+      # its dispatch pool claimed a worker at the post, the second of two calls posted together
+      # could wait behind the first (orc-release: three of the four ran).
       var tags: seq[uint64]
-      for i in 1 .. 4:
+      for _ in 0 ..< 4:
         tags.add(o.send(conn, "read", cborMap((cbor("channel"), cbor(23'u64)))))
-        check heldAt(s.meterDir / "held", i)
+      check heldAt(s.meterDir / "held", 4)
       let r = e.answered(e.ask("app", "1.0.0"))
       check r.valueOf.codeOf == "package-not-installed"
       check heldCount(s.meterDir / "held") == 4
