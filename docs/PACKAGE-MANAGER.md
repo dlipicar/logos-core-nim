@@ -23,7 +23,7 @@ system service, which `get_runtime_handoff` serves, and 5-6b `list_packages`.
   runs on the instance's module thread under chronos (G335), holds one route per binding through its
   Runtime Control binding, and queues the engine's events, so no engine step runs inside a kit
   callback. The module `logos_package_manager` (§14) wraps it; the test module `pmtest_module` keeps
-  `status`, `resolve`, `install` and `handoff` for the suites (G496).
+  `status` and `resolve` for the suites (G496).
 - **Payloads go between module processes.** The Package Manager's Module Host establishes its own
   routes to its Storage providers through its Runtime Control binding, as any consumer does, and the
   catalog and archives travel over those routes from the provider's process to the Package Manager's.

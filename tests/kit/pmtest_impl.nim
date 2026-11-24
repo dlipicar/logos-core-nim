@@ -1,8 +1,8 @@
 ## The Package Manager's shell under a test name (Tier 5 step 5-3b, F5;
 ## DECISIONS G405, G496): `pmtest_module` (`tests/kit/pmtest_module.cddl`), a
 ## thread-confined kit module whose body is `pm/shell.nim`, kept as a probe of
-## what the shell holds. `logos_package_manager` (5-6a-1) serves the operations
-## over the same shell. Never shipped.
+## what the shell holds. `logos_package_manager` serves the operations (5-6a-1)
+## and the handoff (5-6a-2) over the same shell. Never shipped.
 ##
 ## - `status` answers the catalog in use (its sequence, digest and entry
 ##   count), each binding's route state, route id, readiness and the routes
@@ -11,12 +11,10 @@
 ## - `resolve {name, version}` answers the driver's outcome for that exact root:
 ##   the selected packages with their schema roots, and the resolver's
 ##   counters; or the error code and its message.
-## - `handoff {package, version, module}` (5-5-4) answers `get_runtime_handoff`'s
-##   response bytes, a query that takes no slot, and `install {package, version}`
-##   (G449) makes the record it reads: one operation through `shell.operate`,
-##   its answer the §15 response value, deterministic CBOR in `response`. A
-##   successful handoff needs a system-service caller of `logos_package_manager`,
-##   which 5-6a-2 brings; this pair goes then (G496).
+## - The operations and the handoff are `logos_package_manager`'s: its handoff
+##   goes to the system-service caller (5-6a-2), and its case moved from
+##   `test_pm_hosted` to `test_system_binding` with pmtest's `install` and
+##   `handoff` gone (G496).
 
 {.used.} # imported by the tests for the C symbols it exports
 import ../generated/pmtest_module_kit
@@ -151,56 +149,5 @@ proc `resolve`(
       ),
     )
   )
-
-proc run(
-    m: PmTest, op: OperationRequest
-): Future[Result[seq[byte], InvocationFailure]] {.async: (raises: []).} =
-  let a =
-    try:
-      await m.shell.operate(op)
-    except CancelledError:
-      return err(cancelled())
-  case a.kind
-  of oaResponse:
-    ok(encodeCbor(a.response))
-  of oaModuleError:
-    err(moduleError(a.reason))
-  of oaEncoded:
-    var b = newSeq[byte](a.encoded.len)
-    if b.len > 0:
-      copyMem(addr b[0], unsafeAddr a.encoded[0], b.len)
-    ok(b)
-
-proc `install`(
-    m: PmTest, request: PmtestInstallRequest, inv: Invocation
-): Future[Result[PmtestInstallResponse, InvocationFailure]] {.async: (raises: []).} =
-  let op = OperationRequest(
-    kind: opInstall,
-    root: RootReference(package: Opt.some(request.package), version: request.version),
-  )
-  let response = ?(await m.run(op))
-  ok(PmtestInstallResponse(response: response))
-
-proc `handoff`(
-    m: PmTest, request: PmtestHandoffRequest, inv: Invocation
-): Future[Result[PmtestHandoffResponse, InvocationFailure]] {.async: (raises: []).} =
-  let a =
-    try:
-      await m.shell.handoff(
-        PackageIdentity(package: request.package, version: request.version),
-        request.module,
-      )
-    except CancelledError:
-      return err(cancelled())
-  case a.kind
-  of oaResponse:
-    ok(PmtestHandoffResponse(response: encodeCbor(a.response)))
-  of oaModuleError:
-    err(moduleError(a.reason))
-  of oaEncoded:
-    var b = newSeq[byte](a.encoded.len)
-    if b.len > 0:
-      copyMem(addr b[0], unsafeAddr a.encoded[0], b.len)
-    ok(PmtestHandoffResponse(response: b))
 
 exportPmtestModule(PmTest)

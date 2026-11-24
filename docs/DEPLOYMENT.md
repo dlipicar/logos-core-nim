@@ -540,7 +540,8 @@ figures are in `tier5-plans/evidence/step5-6a-1/`.
   50–63 µs under refc.
 - **The one-string case:** a reply of the same bytes in a few strings is cheap. 5-5-4 measured that case with
   pmtest's `{response: bstr}`: about 99 ms and 175 ms on the Mac, 200 ms and 390 ms on server.lan, for 16 MiB.
-  Those figures stay, named as the one-string case; the same tree reproduces them.
+  Those figures stay as measured, named as the one-string case. pmtest's `install` went in 5-6a-2 (G496), so they
+  can no longer be rerun from `tools/pmbench.nim`.
 
 **Limits, stated.** The fix is the core item "large-response completion": held until after the pause, and needed
 before a release.

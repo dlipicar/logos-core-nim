@@ -1638,16 +1638,17 @@ files after the start (Fable's design A). A commit's new snapshot shares every u
       - `checkResponse` validates the schema twice: in `checkResult`, then in `commitResponse`'s `validate`.
         Together that is about a quarter of it.
       - The value root is computed three times on the way. The text requires the receiver's.
-  - **The one-string case.** These are 5-5-4's figures, kept (`tools/pmbench.nim reply`; the Mac at a load average
-    of 60 to 80; server.lan at 2.6 to 3.8):
+  - **The one-string case.** These are 5-5-4's figures, kept (`tools/pmbench.nim reply` as it was then; the Mac at a
+    load average of 60 to 80; server.lan at 2.6 to 3.8). pmtest's `install` went in 5-6a-2 (G496), so they can no
+    longer be rerun from the tool:
     - pmtest's `{response: bstr}` is one node however long, so its check and commitment are milliseconds;
     - a maximal one holds the module thread 98.6-99.1 ms under orc and 174.9-175.7 ms under refc on the Mac, and
       198.1-203.8 ms and 388.2-398.7 ms on server.lan;
     - a 4 MiB one holds it 24.1-24.4 ms and 43.9-44.7 ms on the Mac, and 50.9-51.3 ms and 95.1-95.5 ms on
       server.lan;
-    - on the same tree as the facade, the control (`pmbench reply`) gives them again. At 16 MiB, best / median /
-      max: 95.6 / 99.8 / 107.3 ms (orc) and 188.5 / 193.8 / 215.7 ms (refc) on the Mac; 200.2 / 208.0 / 241.5 ms
-      and 417.9 / 433.1 / 510.1 ms on server.lan.
+    - on the same tree as the facade, the control (`pmbench reply`, then pmtest's) gave them again. At 16 MiB,
+      best / median / max: 95.6 / 99.8 / 107.3 ms (orc) and 188.5 / 193.8 / 215.7 ms (refc) on the Mac;
+      200.2 / 208.0 / 241.5 ms and 417.9 / 433.1 / 510.1 ms on server.lan.
 
     Each step, timed alone as the code ran it, in ms, the Mac / server.lan:
 

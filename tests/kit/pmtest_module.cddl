@@ -4,8 +4,8 @@ _module = "pmtest_module"
 ; Input for tests/generated/pmtest_module_*: the Package Manager's shell
 ; (src/logos_core/pm/shell.nim) hosted under a test name (Tier 5 step 5-3b, F5;
 ; DECISIONS G405), kept as a probe (G496): `logos_package_manager` serves the
-; operations (5-6a-1), and this probe answers what the shell holds
-; (tests/kit/pmtest_impl.nim). Never shipped.
+; operations (5-6a-1) and the handoff (5-6a-2), and this probe answers what the
+; shell holds: `status` and `resolve` (tests/kit/pmtest_impl.nim). Never shipped.
 
 pmtest.catalog = {
   sequence: uint64,
@@ -55,23 +55,3 @@ pmtest.counters = {
 pmtest.resolve_response =
   { packages: [* pmtest.selected], counters: pmtest.counters } /
   { error: tstr .size (1..64), ? message: tstr .size (1..512) }
-
-; [Tier 5 step 5-5-4; G449, G496] `install_package`, the record the handoff probe reads
-; (5-6a-2 moves the handoff case to `logos_package_manager` over its system binding, and
-; this pair goes): its §15 response value as pm/responses.nim encodes it
-; (deterministic CBOR, in `response`); the invocation error MODULE_ERROR is the call's
-; own failure. The other operations are `logos_package_manager`'s (test_pm_module).
-pmtest.install_request = {
-  package: tstr .size (1..256),
-  ? version: tstr .size (1..256),
-}
-
-pmtest.install_response = { response: bstr }
-
-pmtest.handoff_request = {
-  package: tstr .size (1..255),
-  version: tstr .size (1..255),
-  module: tstr .size (1..255),
-}
-
-pmtest.handoff_response = { response: bstr }

@@ -39,6 +39,9 @@ createDir(work)
 
 include ./support/routefixture
 
+# [DECISIONS G107] Every case is POSIX only: a Module Host is reached over the local transport,
+# which fails closed on Windows until step 5-9 builds G329-G333. On Windows (the `windows` job's
+# `nimble test`) the suite is the one skipped case at the end.
 when defined(posix):
   import logos_sdk/crypto/blake3
   import std/posix except Time, Clock

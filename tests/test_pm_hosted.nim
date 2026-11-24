@@ -4,6 +4,9 @@
 ## test Runtime. The fake serves a catalog and signed archives from its state directory
 ## (`fetch-fake/state/<name>`, Q1 (c)); the Package Manager gets its `lcn.pm_input` as its
 ## protected realization input (G400); the test's client drives the fake and asks the probe.
+## [G496] The operations' cases are `logos_package_manager`'s (`test_pm_module`), `big`'s long
+## extraction among them, and the handoff's goes through its system-service binding
+## (`test_system_binding`).
 
 import std/[atomics, monotimes, os, sequtils, strutils, tables, times, typedthreads]
 import unittest2
@@ -153,23 +156,6 @@ when defined(posix):
         pmfixture.bytesOf("fetch-fake/state/" & it[0])
       )
 
-  # [5-5-4] The handoff case's catalog: `app` and `lib` as above, and `logos.example` (a module
-  # package with a variant for each host). [G496] The operations' own cases, `big`'s long
-  # extraction among them, are `logos_package_manager`'s (`test_pm_module`).
-  let
-    example = modulePackage(allHosts = true).packed("org", orgKey)
-    installTrust =
-      trustOf([anchorOf("org", ["app", "lib", "logos.example"], orgPub)]).trustBytes
-    installObjects = objects & @[("logos.example-1.0.0", example)]
-    installDocument = catalogBytes(
-      entries &
-        @[
-          entryOf(
-            "logos.example", "1.0.0", locator = "fetch-fake/state/logos.example-1.0.0"
-          )
-        ]
-    )
-
   proc pmInputBytes(
       trust = orgTrust, doc = document, limits = Opt.none(LcnPmLimits)
   ): seq[byte] =
@@ -316,49 +302,6 @@ when defined(posix):
   func bindingOf(s: PmtestStatusResponse): PmtestBinding =
     if s.bindings.len == 1:
       result = s.bindings[0]
-
-  # [5-5-4] The operations through the probe: each response is one CBOR value in `response`.
-  func codeOf(v: CborValue): string =
-    ## The response's `package_error` code; empty for a success.
-    let e = v.lookup("error")
-    if e.isSome:
-      let c = e.get.lookup("code")
-      if c.isSome:
-        return c.get.getText.get("")
-
-  func identityOf(v: CborValue): string =
-    ## `{installed: record}`'s identity, as `package@version`.
-    let r = v.lookup("installed")
-    if r.isSome:
-      let id = r.get.lookup("identity")
-      if id.isSome:
-        return
-          id.get.lookup("package").get(cbor("")).getText.get("") & "@" &
-          id.get.lookup("version").get(cbor("")).getText.get("")
-
-  proc answerOf(r: auto): CborValue =
-    result = cborMap()
-    check r.isOk
-    if r.isOk:
-      let v = decodeCbor(r.get.response)
-      check v.isOk
-      if v.isOk:
-        result = v.get
-
-  proc installed(name, version: string): CborValue =
-    answerOf(
-      invoke(
-        addr probe, PmtestInstallRequest(package: name, version: Opt.some(version))
-      )
-    )
-
-  proc handedOff(name, version, module: string): CborValue =
-    answerOf(
-      invoke(
-        addr probe,
-        PmtestHandoffRequest(package: name, version: version, module: module),
-      )
-    )
 
   func digestHex(b: openArray[byte]): string =
     for x in b:
@@ -572,43 +515,6 @@ when defined(posix):
       checkpoint "second operation at " & $second & ", readiness at " & $event &
         ", the sliced one ended at " & $took
       check aAnswer.load == 1
-      check status().pending == 0
-      releaseAll()
-      e.finish()
-
-    test "[IMPL-DECISION G449] [IMPL-DECISION G496] a handoff through the probe: of an installed module package, refused for a module it does not declare and for an identity not installed; kept across the instance's restart":
-      # [G496] `get_runtime_handoff` served to a system-service caller is 5-6a-2's; until
-      # then the probe asks the shell, over a record its `install` made.
-      let cfg = hosted(pmInputBytes(installTrust, installDocument))
-      cfg.stock(installDocument, installObjects)
-      let pmDir = cfg.stateDir("p")
-      let e = fixtureEngine(cfg)
-      discard e.started(fakeRecord(), "hf")
-      discard e.started(pmRecord(), "pm")
-      let (_, rc) = e.startClient("c")
-      driver = rc.open(fakeRoot, fakeSchema)
-      probe = rc.open(pmRoot, pmSchema)
-      check drive(FetchFakeSetReadinessRequestReadinessChoiceKind.Ready)
-      check acquired()
-      check installed("logos.example", "1.0.0").identityOf == "logos.example@1.0.0"
-      check toSeq(walkDir(pmDir / "install" / "r")).len == 1
-      let h = handedOff("logos.example", "1.0.0", "alpha_module")
-      check h.codeOf == ""
-      check h.lookup("handoff").isSome
-      check handedOff("logos.example", "1.0.0", "no_such_module").codeOf ==
-        "invalid-request"
-      check handedOff("app", "1.0.0", "alpha_module").codeOf == "package-not-installed"
-      # Stopped and started again: the start reads the record back from the index.
-      probe.release()
-      probe = LogosRouteHandle()
-      check e.stop("pm").isOk
-      check waitUntil(
-        proc(): bool =
-          e.view("pm").tryGet.state == msUnloaded
-      )
-      check e.start("pm").tryGet.state == msReady
-      probe = rc.open(pmRoot, pmSchema)
-      check handedOff("logos.example", "1.0.0", "alpha_module").lookup("handoff").isSome
       check status().pending == 0
       releaseAll()
       e.finish()

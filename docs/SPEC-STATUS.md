@@ -743,7 +743,8 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
     exception, a confined kit module's: a 16 MiB `{installed}` holds the module thread 99 ms under orc and 175 ms
     under refc on the Mac, about 200 ms and 390 ms on server.lan (the host's check and commitment, the SDK's
     completion copy, the kit's second encoding), left to the core item "large-response completion". Those are the
-    one-string case: 5-6a-1's structured record takes seconds (G497).
+    one-string case: 5-6a-1's structured record takes seconds (G497). pmtest's `install` went in 5-6a-2 (G496), so
+    they can no longer be rerun from `tools/pmbench.nim`.
 
   Claimed: PKG-0080, PKG-0189, PKG-0190, PKG-0389 to PKG-0410, PKG-0436, PKG-0437, PKG-0439, PKG-0440, PKG-0470,
   PKG-0534 to PKG-0537, PKG-0608 and PKG-0609 by test; PKG-0222, PKG-0363, PKG-0441 and PKG-0493 by inspection;
@@ -813,6 +814,27 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
     6cac8335's lines.
 
   No unit changes status.
+
+- 2026-11-24, Tier 5 step 5-6a-2 (I141, I146; G492, G493; G496 finished; the owner's Q3 (a), Q4 (a)), the Package
+  Manager's system-service binding:
+  - The marked instance's Module Host serves a second listener, the system-service endpoint (fd 6, its own private
+    directory). A Hello on it is judged against the system-service ticket store alone, and the session is
+    `get_runtime_handoff` alone, with no event; the provider sees the SYSTEM_SERVICE caller (G492).
+  - The Runtime's engine holds the binding (`runtime/sysbind.nim`): made when the instance is ready, its Hello
+    retried from 1 s doubling to 30 s, one Request in flight and 64 parked, each with its own end, and its own call
+    worker outside the shared pool (G493). Nothing in logosd asks for a handoff before 5-8; G493 states the
+    handoff's bound for it (the 4 MiB case, about 1.3 s on the Mac under orc to about 5.9 s on server.lan under
+    refc on `logosd`'s I/O thread; a module start waits about three times that).
+  - The Module Host's dispatch pool claims a worker at each post (I146).
+  - G496 finished: pmtest's `install` and `handoff` went, and `test_pm_hosted`'s handoff case is
+    `test_system_binding`'s. `tools/pmbench.nim reply` times the facade only, so 5-5-4's one-string figures can no
+    longer be rerun from it.
+  - Suite `test_system_binding` (12 cases); cases in `test_transport`, `test_module_host` and `test_logosd_pm`.
+
+  Claimed: TRANSPORT §8.1.2, TRN-0328 to TRN-0345 (18 units), RUN-0318, PKG-0380, PKG-0388 and the App A copy
+  PKG-0650, which leaves the re-pin's deferred list. `test_system_binding` also carries RUN-0313 to RUN-0317,
+  RUN-0319, RUN-0700, RUN-0851 to RUN-0855, TRN-0182 to TRN-0192, TRN-0194 and TRN-0349 for the binding. PKG-0559
+  stays not met (the held large-reply item).
 
 ## Tiers at f4f83471 (the original plan)
 
