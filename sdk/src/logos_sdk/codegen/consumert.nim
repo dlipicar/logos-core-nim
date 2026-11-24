@@ -761,6 +761,8 @@ proc onBindingEndCb(
 
 # Wrapping and release ----------------------------------------------------------------
 
+proc release*(h: RouteHandle): Result[void, InvocationFailure]
+
 proc wrapRoute*(
     route: LogosRouteHandle,
     onRouteEnd: RouteEndProc = nil,
@@ -801,7 +803,20 @@ proc wrapRoute*(
     return err(fail(h, r1, "observe_end"))
   let r2 = h.route.vtable.observeSubscriptionEnd(addr h.route, onSubscriptionEndCb, h)
   if r2.code != 0:
-    return err(fail(h, r2, "observe_subscription_end"))
+    # [DECISIONS I142] `observe_end` is installed: a route that ended meanwhile
+    # has its end report running, or queued on `h` for the module thread (G339).
+    # So `h` goes through `release`, never `fail`: it suppresses the report and
+    # waits for a running one, and the last queued task frees `h`. That task
+    # sees `closing`, so the caller's `onRouteEnd` runs for none of this
+    # handle, which the caller never received.
+    let st = readStatus(r2)
+    let f =
+      if st.isErr:
+        toFailure(st.error, "observe_subscription_end")
+      else:
+        moduleError("observe_subscription_end gave no reason")
+    discard release(h)
+    return err(f)
   ok(h)
 
 when defined(lcnTestHooks):
