@@ -303,6 +303,10 @@ suite "testing.lockcheck: installs against nimble.lock (DECISIONS G436) [IMPL]":
       root / "nimble.paths", pathsOf([results, chronos, chronos / "src", root / "src"])
     )
     check installMismatches(root).len == 0
+    # exFAT's AppleDouble file beside the nimble file is no second nimble file.
+    writeFile(chronos / "._chronos.nimble", "\x00\x05\x16\x07\nsrcDir = \"lib\"\n")
+    check installMismatches(root).len == 0
+    removeFile(chronos / "._chronos.nimble")
     # Its nimble file declares another srcDir: the two directories are two installs.
     writeFile(chronos / "chronos.nimble", "version = \"4.4.1\"\nsrcDir = \"lib\"\n")
     let found = installMismatches(root)

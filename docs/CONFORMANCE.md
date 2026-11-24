@@ -202,7 +202,7 @@ providers over local transport. What a consumer sees differently, and why:
 - A call still running when its provider's stop deadline passes reaches its caller as
   TRANSPORT_ERROR (TRANSPORT l.543; G260), where a direct caller waits for its result.
 - A handler runs on an event worker once its Event arrives, after the publication returned, not on
-  the publishing thread before it returns (INTERFACE l.1961 against l.1975-1977 for a direct route).
+  the publishing thread before it returns (INTERFACE l.1918 against l.1930-1932 for a direct route).
   The suites wait for deliveries; the cases about what a handler does inside the publication are
   skipped (a nested provider entry on the publishing thread, a handler that closes the destination
   of that publication, a publication still in its handler when its invocation is released).

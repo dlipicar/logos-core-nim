@@ -1715,7 +1715,7 @@ when defined(posix):
       check codeIn(c.run("release 0")) == Opt.some(ecOk)
       e.finish()
 
-    test "[IFC-0981] [TXT-0085] C-7b observe_subscription_end under a hosted consumer: one registration per binding and per handle, none called, none on a terminal handle (DECISIONS I105)":
+    test "[TXT-0085] C-7b observe_subscription_end under a hosted consumer: one registration per binding and per handle, none called, none on a terminal handle (DECISIONS I105)":
       let cfg = hosted()
       var c = cfg.serving()
       let e = fixtureEngine(cfg)

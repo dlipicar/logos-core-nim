@@ -26,8 +26,10 @@ the re-pin's frozen list (spec/repin-baseline.toml) has its evidence in spec/rep
 from __future__ import annotations
 
 import argparse
+import contextlib
 import difflib
 import hashlib
+import io
 import json
 import os
 import re
@@ -502,6 +504,10 @@ def load_toml(path: Path) -> dict:
 def cmd_mirror(args) -> int:
     root, specs = Path(args.root), Path(args.specs)
     cfg = load_toml(root / "spec" / "mirrors.toml")
+    if not cfg.get("mirror"):
+        # A root with no mirror list is no checkout (a wrong --root), not a clean one.
+        print(f"spectrace mirror: no mirror in {root / 'spec' / 'mirrors.toml'}: nothing to check")
+        return 2
     bad = 0
     for m in cfg.get("mirror", []):
         if m.get("package") not in PINS_NIM:
@@ -890,6 +896,11 @@ def owners_self_test() -> int:
         ("the other package's file inspects it", tree(out, "claimed", tested=("sdk",), inspected_in="core"), True),
     ]
     failed = [name for name, found, planted in cases if bool(found) != planted]
+    # A root with no ledger is exit 2, not "0 findings"; a clean tree is 0.
+    with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(io.StringIO()):
+        empty_status = owners_status(Path(d))
+    if empty_status != 2:
+        failed.append(f"an empty root (exit {empty_status}, want 2)")
     for name in failed:
         print(f"owners self-test: {name} went wrong")
     if not failed:
@@ -901,7 +912,15 @@ def cmd_owners(args) -> int:
     """Each spec unit has one owning package (the restructure's row 35)."""
     if args.self_test:
         return owners_self_test()
-    findings = owner_findings(Path(args.root))
+    return owners_status(Path(args.root))
+
+
+def owners_status(root: Path) -> int:
+    """`owners`' exit status: 0 clean, 1 a finding, 2 no ledger under `root` (no checkout)."""
+    if not ledger_files(root):
+        print(f"owners: no ledger under {root}: nothing to check")
+        return 2
+    findings = owner_findings(root)
     for f in findings:
         print(f)
     print(f"owners: {len(findings)} findings")

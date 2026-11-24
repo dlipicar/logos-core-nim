@@ -10,7 +10,8 @@ run it after its rebase.
 
   python3 tools/restructure/rewrite_imports.py [--check] [--root DIR]
 
-`--check` prints what it would change and exits 1 if there is anything.
+`--check` prints what it would change and exits 1 if there is anything, and 2 when the root
+holds no source to read (a wrong `--root`).
 """
 
 import argparse
@@ -153,8 +154,13 @@ def main():
     args = parser.parse_args()
     with open(args.map, "rb") as f:
         paths = PathMap(tomllib.load(f))
+    if not os.path.isdir(args.root):
+        print(f"rewrite_imports: {args.root}: not a directory", file=sys.stderr)
+        return 2
     changed = []
+    scanned = 0
     for path in layers.nim_files(args.root):
+        scanned += 1
         full = os.path.join(args.root, path)
         with open(full, encoding="utf-8") as f:
             text = f.read()
@@ -170,8 +176,10 @@ def main():
             continue
         for name in sorted(os.listdir(inspection)):
             full = os.path.join(inspection, name)
-            if not name.endswith(".toml"):
+            # Not exFAT's AppleDouble `._x.toml`, which is no inspection file.
+            if not name.endswith(".toml") or name.startswith("._"):
                 continue
+            scanned += 1
             with open(full, encoding="utf-8") as f:
                 text = f.read()
             new = rewritten_citations(text, paths)
@@ -180,6 +188,10 @@ def main():
                 if not args.check:
                     with open(full, "w", encoding="utf-8") as f:
                         f.write(new)
+    if not scanned:
+        # A root with no source is no checkout (a wrong --root), not one with nothing to rewrite.
+        print(f"rewrite_imports: no .nim or inspection file under {args.root}", file=sys.stderr)
+        return 2
     for path in changed:
         print(path)
     print(f"rewrite_imports: {len(changed)} files {'would change' if args.check else 'changed'}")

@@ -24,6 +24,7 @@
 {.push raises: [], gcsafe.}
 
 import results
+import logos_sdk/base/utf8clip
 import logos_sdk/hash/hashinput
 import logos_sdk/iface/outcome
 import ../transport/io/api
@@ -70,10 +71,10 @@ func transportOf*(words: openArray[uint64]): Result[TransportConfig, string] =
 # Shared pieces ---------------------------------------------------------------------------
 
 func clipped(s: string): string =
-  if s.len > MessageCapacity:
-    s[0 ..< MessageCapacity]
-  else:
-    s
+  ## A carrier I/O event's `message` (`carrier.cddl` l.475, l.482, l.497:
+  ## `tstr .size (0..512)`), cut at a UTF-8 boundary: the strict decoder
+  ## rejects a tstr that is not valid UTF-8 [IMPL; DECISIONS I135].
+  clipUtf8(s, MessageCapacity)
 
 func errorCodeOf*(c: uint8): Opt[ErrorCode] =
   ## A code a message carries; none for one outside the ABI's.

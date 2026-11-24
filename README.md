@@ -273,6 +273,10 @@ flake checks):
 python3 -I tools/affected_suites.py "$(git merge-base master HEAD)" HEAD
 ```
 
+For a merge that touches flake.nix or what it reads outside the Nim sources, `tools/drvcmp.sh`
+compares each x86_64 Linux check's derivation path at the two commits, with no build, on a Linux
+host (its header says how to run it there).
+
 ```bash
 nix develop
 ```

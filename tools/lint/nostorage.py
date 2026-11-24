@@ -47,7 +47,9 @@ def files_named(root, predicate):
     for directory, subdirs, files in os.walk(root):
         subdirs[:] = sorted(d for d in subdirs if d not in SKIPPED_DIRS and not d.startswith("."))
         for f in sorted(files):
-            if predicate(f):
+            # Not exFAT's AppleDouble `._x.nimble` (a TMPDIR or a checkout on
+            # /Volumes/macOS_ext), which is no file of the tree.
+            if predicate(f) and not f.startswith("._"):
                 out.append(os.path.relpath(os.path.join(directory, f), root))
     return out
 
@@ -252,6 +254,10 @@ def self_test():
         found = {f[2] for f in run(dict(CLEAN, **{path: text}))}
         if what not in found:
             failures.append(f"{what} did not fire on {path}: {text!r} (found {found})")
+    # An AppleDouble file beside the nimble file, with bytes that would be a finding.
+    appledouble = run(dict(CLEAN, **{"._logos_core.nimble": '\x00\x05\x16\x07\nrequires "libstorage >= 0.1"\n'}))
+    if appledouble:
+        failures.append(f"a `._` file beside the clean tree fails it: {appledouble}")
     no_roots = {k: v for k, v in CLEAN.items() if not k.startswith("src/logos_core/pm/")}
     if not any(f[2] == "roots" for f in run(no_roots)):
         failures.append("roots that name no source were accepted")

@@ -99,11 +99,17 @@ def kept_dirs(dirnames):
     return sorted(d for d in dirnames if d not in SKIPPED_DIRS and not d.startswith("result"))
 
 
+def tree_file(name):
+    """A file of the tree: not exFAT's AppleDouble `._x` (a TMPDIR or a checkout on
+    /Volumes/macOS_ext), which git never lists either."""
+    return not name.startswith("._")
+
+
 def nimble_files(root):
     out = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = kept_dirs(dirnames)
-        names = [f for f in sorted(filenames) if f.endswith(".nimble")]
+        names = [f for f in sorted(filenames) if f.endswith(".nimble") and tree_file(f)]
         out += [os.path.relpath(os.path.join(dirpath, f), root) for f in names]
     return out
 
@@ -289,7 +295,7 @@ def tracked_files(root, subdir):
     for dirpath, dirnames, filenames in os.walk(os.path.join(root, subdir)):
         dirnames.sort()
         base = os.path.join(root, subdir)
-        found += [os.path.relpath(os.path.join(dirpath, f), base) for f in filenames]
+        found += [os.path.relpath(os.path.join(dirpath, f), base) for f in filenames if tree_file(f)]
     return sorted(found)
 
 
@@ -303,7 +309,7 @@ def scanned_files(root):
     found = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = kept_dirs(dirnames)
-        found += [os.path.relpath(os.path.join(dirpath, f), root) for f in sorted(filenames)]
+        found += [os.path.relpath(os.path.join(dirpath, f), root) for f in sorted(filenames) if tree_file(f)]
     return found
 
 
@@ -681,6 +687,20 @@ def self_test():
     listed = run(CLEAN_TREE, unguarded={CORE_NIMBLE})
     if [f[2] for f in listed] != ["nimble-guard"]:
         failures.append(f"a guarded file still listed in UNGUARDED is not reported: {listed}")
+    # AppleDouble files beside the clean tree, one per walk, each with bytes that would be a finding.
+    appledouble = "\x00\x05\x16\x07\n"
+    beside = run(
+        dict(
+            CLEAN_TREE,
+            **{
+                "._logos_core.nimble": appledouble + GOOD_CORE + 'requires "logos_sdk >= 0.1.0 & < 0.2.0"\n',
+                "sdk/src/logos_sdk/._x.c": appledouble,
+                "._README.md": appledouble + "See " + URL + ".\n",
+            },
+        )
+    )
+    if beside:
+        failures.append(f"`._` files beside the clean tree fail it: {beside}")
     for rule, path, text in PLANTS:
         found = {f[2] for f in run(dict(CLEAN_TREE, **{path: text}))}
         if rule not in found:
@@ -704,7 +724,8 @@ def self_test():
         return 1
     print(
         f"packaging self-test: {len(SATISFIES)} ranges, {len(PLANTS)} planted violations caught,"
-        " the pending switch's two states, a stale UNGUARDED, and a missing and an empty root refused"
+        " the pending switch's two states, a stale UNGUARDED, `._` files skipped, and a missing and an empty"
+        " root refused"
     )
     return 0
 

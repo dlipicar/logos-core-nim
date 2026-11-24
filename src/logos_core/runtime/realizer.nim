@@ -45,6 +45,7 @@ import results
 import logos_sdk/abi/[checks, types]
 import logos_sdk/cbor
 import logos_sdk/cbor/utf8
+import logos_sdk/base/utf8clip
 import logos_sdk/hash/hashinput
 import logos_sdk/iface/[accept, names, outcome, surface]
 import logos_sdk/pins
@@ -303,12 +304,7 @@ func hexOf(bytes: openArray[byte]): string =
 
 func clipMessage*(s: string): string =
   ## At most 512 bytes, cut at a UTF-8 boundary.
-  if s.len <= MaxLoaderMessageBytes:
-    return s
-  var n = MaxLoaderMessageBytes
-  while n > 0 and (uint8(s[n]) and 0xC0) == 0x80:
-    dec n
-  s[0 ..< n]
+  clipUtf8(s, MaxLoaderMessageBytes)
 
 func loaderError*(
     code: LoaderErrorCode, message: string, cause = Opt.none(AbiFailure)

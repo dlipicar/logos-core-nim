@@ -5,11 +5,11 @@
 ## owns its activation and keeps it on its route (`Route.subs`); the threads
 ## that publish hold a reference while they deliver to it.
 ##
-## Delivery is synchronous on the publishing thread (INTERFACE l.1961-1967,
-## RUNTIME l.1179-1182): there is no Runtime event-delivery thread. For each
+## Delivery is synchronous on the publishing thread (INTERFACE l.1918-1920,
+## RUNTIME l.1100-1103): there is no Runtime event-delivery thread. For each
 ## publication the Runtime thread names the candidate subscriptions; the
 ## publishing thread validates the payload and computes its commitment once per
-## selected contract (RUNTIME l.1221-1227); then, for each subscription in
+## selected contract (RUNTIME l.1143-1149); then, for each subscription in
 ## creation order [IMPL], it takes that subscription's delivery gate, asks the
 ## Runtime thread to admit this one handler invocation (the subscription is
 ## active, the route ready, the consumer live, both access scopes and both
