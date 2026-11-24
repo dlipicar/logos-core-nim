@@ -235,12 +235,15 @@ proc buildKitLibraryIn*(
     exports = "",
     strictDestroy = true,
     reason = "",
+    defines: openArray[string] = [],
 ): string =
   ## The kit source `source` as `lib<name>` under the tree's build directory,
   ## in `<variant>/`, built with `mm` (by default this build's) and, when
   ## `exports` names a kit, linked with that kit's export list. A confined kit
   ## is strict about destroy unless `strictDestroy` is false, which takes a
-  ## `reason` (DECISIONS G438).
+  ## `reason` (DECISIONS G438). `defines` are passed as `-d:` switches: a
+  ## source outside the tests' tree reads no `tests/config.nims`, so a test
+  ## build that needs its hooks names them here.
   doAssert strictDestroy or reason.strip.len > 0,
     name & ": building a kit library without strict destroy takes a reason"
   let (compiler, _) = kitCompiler()
@@ -284,6 +287,8 @@ proc buildKitLibraryIn*(
   args.add(kitAuditFlags(false))
   if strictDestroy:
     args.add("-d:lcnKitStrictDestroy")
+  for d in defines:
+    args.add("-d:" & d)
   args.add(kitSwitches()[0])
   args.add(hostPathArgs(src))
   if exports.len > 0:

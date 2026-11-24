@@ -56,6 +56,17 @@
 ## (`confinedSubmit`, `confinedRequestCancel`): the same route, handlers and
 ## typed results as `_MODULE_dispatch` (INTERFACE §2.9.2).
 ##
+## With `KitOptions.encodedResponses` (`--encoded-response:METHOD`; DECISIONS
+## G494), on a confined provider's kit with `asyncApi`, each listed method's
+## handler answers `Result[PreEncoded, InvocationFailure]`: response bytes the
+## module already holds as deterministic CBOR (`preEncoded`), which the route
+## moves into its result with no `encode`. The boundary that commits the
+## response checks them against the method's schema (RUNTIME l.798-805). A name
+## that is not a method of the surface, a method whose response is marked
+## sensitive (its typed value is wiped, and bytes would need a wipe of their
+## own), and the option on any other kit are refused. A kit without it is
+## unchanged.
+##
 ## A kit is generated for a module binding (`ModuleBinding`; INTERFACE §2). One
 ## with a primary document is the binding a concrete module document's set
 ## establishes (`kitModule` of a `ContractSet`), or that set with the earlier
@@ -90,6 +101,10 @@ type
     confined*: bool ## [DECISIONS G335] a module thread per context
     asyncApi*: bool
       ## [DECISIONS G338] export `_MODULE_async_api` (a confined provider's)
+    encodedResponses*: seq[string]
+      ## [IMPL-DECISION G494] bare method names whose handlers answer
+      ## `PreEncoded` bytes, which the route passes through unencoded (a
+      ## confined provider's kit with `asyncApi`; never a marked response)
 
 proc configurationSet*(document: string): Result[ContractSet, string] =
   ## [SPEC CONFIG §2 l.62-66] A configuration document accepted as the Runtime
@@ -234,15 +249,41 @@ proc kitParts(
         "##     # [SPEC CONFIG §8 l.258-266] succeed only once the new value\n" &
         "##     # governs; on failure leave the previous value in force\n"
     )
-  for m in surface.methods:
-    o.add(
-      "##   proc " & handlerName(m.bare) & "(m: T, request: " &
-        names.getOrDefault(m.request) & "): Result[" & names.getOrDefault(m.response) &
-        ", InvocationFailure]\n"
-    )
   let confined = opts.confined
   if opts.asyncApi and not (confined and provider):
     return err("_MODULE_async_api is generated for a confined provider's kit only")
+  # [IMPL-DECISION G494] The pre-encoded responses' refusals.
+  if opts.encodedResponses.len > 0 and not (confined and provider and opts.asyncApi):
+    return err(
+      "pre-encoded responses are generated for a confined provider's kit with the asynchronous API only"
+    )
+  var encoded: seq[string]
+  for name in opts.encodedResponses:
+    var found = false
+    for m in surface.methods:
+      if m.bare == name:
+        found = true
+        if m.sensitiveResponse:
+          return err(
+            "pre-encoded response: " & name &
+              "'s response is marked sensitive, and bytes would need a wipe of their own"
+          )
+    if not found:
+      return err("pre-encoded response: " & name & " is not a method of " & b.module)
+    if name in encoded:
+      return err("pre-encoded response: " & name & " is named twice")
+    encoded.add(name)
+  for m in surface.methods:
+    let response =
+      if m.bare in encoded:
+        "PreEncoded"
+      else:
+        names.getOrDefault(m.response)
+    o.add(
+      "##   proc " & handlerName(m.bare) & "(m: T, request: " &
+        names.getOrDefault(m.request) & "): Result[" & response &
+        ", InvocationFailure]\n"
+    )
   if confined:
     o.add(
       "##\n## Confined (DECISIONS G335-G337): every entry that uses the instance runs on\n" &
@@ -258,6 +299,13 @@ proc kitParts(
       "##\n## Deferred (DECISIONS G338): the kit exports `_MODULE_async_api`; a submitted\n" &
         "## invocation runs the same handler on the module thread, and its cancellation\n" &
         "## cancels an `async` handler's future.\n"
+    )
+  if encoded.len > 0:
+    o.add(
+      "##\n## Pre-encoded (DECISIONS G494): the handlers of " &
+        encoded.mapIt("`" & it & "`").join(", ") & "\n" &
+        "## answer `PreEncoded` response bytes (`preEncoded`), which the route passes\n" &
+        "## through; the boundary that commits them checks them against the schema.\n"
     )
   var mirrors = KitMirrors()
   if provider:
@@ -401,7 +449,12 @@ proc kitParts(
     )
     for m in surface.methods:
       let requestType = names.getOrDefault(m.request)
-      let responseType = names.getOrDefault(m.response)
+      let pre = m.bare in encoded
+      let responseType =
+        if pre:
+          "PreEncoded"
+        else:
+          names.getOrDefault(m.response)
       let h = handlerName(m.bare)
       let marked = m.sensitiveRequest or m.sensitiveResponse
       o.add(
@@ -425,9 +478,13 @@ proc kitParts(
       )
       if marked:
         o.add("      wipeError(response)\n")
-      o.add(
-        "      return\n" & "    result = encodedResponse(encode(response.unsafeGet))\n"
-      )
+      if pre:
+        # [G494] The handler's bytes, moved: no `encode` and no check here.
+        o.add("      return\n" & "    result = takeEncoded(response.get)\n")
+      else:
+        o.add(
+          "      return\n" & "    result = encodedResponse(encode(response.unsafeGet))\n"
+        )
       if m.sensitiveResponse:
         o.add("    wipeTyped(response.get)\n")
       o.add("    return\n")

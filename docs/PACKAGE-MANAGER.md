@@ -10,8 +10,9 @@ G447 and G450 to G453; the code is `src/logos_core/pm/`.
 Tier 5 step 5-3b builds the engine (5-3b-1) and the module that hosts it (5-3b-2). Step 5-5 builds
 installation: 5-5-1 the installed records, the responses, the handoff's construction and the admission
 bound (§8, §12, §13); 5-5-2 the store's root and extraction (§8, §9); 5-5-3 the worker and the spool
-(§10); the operations (§11) follow. Until 5-6a, the Package Manager runs under a test name (`pmtest_module`);
-`list_packages`, installation and the §15 methods come in later steps (5-5, 5-6a, 5-6b).
+(§10); the operations (§11) follow. Step 5-6a-1 makes it the module `logos_package_manager`, which
+logosd composes as the reserved instance `package_manager` (§14); 5-6a-2 serves the system callers'
+methods, and 5-6b `list_packages`.
 
 ## 1. Placement and the data path
 
@@ -21,7 +22,8 @@ bound (§8, §12, §13); 5-5-2 the store's root and extraction (§8, §9); 5-5-3
   and events. The module shell (`pm/shell.nim`, G405) carries them out through the module kit: it
   runs on the instance's module thread under chronos (G335), holds one route per binding through its
   Runtime Control binding, and queues the engine's events, so no engine step runs inside a kit
-  callback. A test module (`pmtest_module`) wraps it with `status` and `resolve`.
+  callback. The module `logos_package_manager` (§14) wraps it; the test module `pmtest_module` keeps
+  `status`, `resolve`, `install` and `handoff` for the suites (G496).
 - **Payloads go between module processes.** The Package Manager's Module Host establishes its own
   routes to its Storage providers through its Runtime Control binding, as any consumer does, and the
   catalog and archives travel over those routes from the provider's process to the Package Manager's.
@@ -439,9 +441,9 @@ Part 5-5-3 (DECISIONS G446's spool half, G447; `pm/worker.nim`, `pm/jobs.nim`, `
 
 ## 11. The operations
 
-Part 5-5-4 (DECISIONS G448, G449; `pm/slots.nim`, `pm/engine.nim`). Until step 5-6a they are reached
-through the test module `pmtest_module` (`inspect`, `install`, `remove`, `update`, `handoff`), whose
-kit has the asynchronous provider API, so that a caller's cancel and a stop reach the operation.
+Part 5-5-4 (DECISIONS G448, G449; `pm/slots.nim`, `pm/engine.nim`). They are reached through the
+module's methods (§14), whose kit has the asynchronous provider API, so that a caller's cancel and a
+stop reach the operation.
 
 - **Two slots:** one installed-state mutation at a time (`install_package`, `remove_package`,
   `update_package`) and, beside it, one `inspect_package`; neither waits for the other. Each runs first
@@ -548,3 +550,35 @@ damage.
 each selected module of the selected variant, after every other check. Invalid CDDL, a document
 commitment mismatch, an absent or invalid root, an unresolved non-common reference and an invalid
 default are each `invalid-package`, so such a package is never installed.
+
+## 14. The module and its instance
+
+Step 5-6a-1 (DECISIONS G490, G491, G494, G495, G500; the owner's Q2, Q7 (b), Q11).
+
+- **The module** `logos_package_manager` (`src/logos_package_manager.nim`) is a library on a kit that
+  lcn-gen generates from the pinned Package Manager contract (`pm/logos_package_manager_kit.nim` and its
+  types; the `.exports` and `.map` files keep the library's symbols to the kit's). `pm/requests.nim`
+  turns each request into the engine's operation; `pm/facade.nim` answers. Its responses are encoded
+  once by `pm/responses.nim` (§12) and handed to the kit as they are (G494), and the kit's boundary
+  still checks them against the contract before they leave.
+- **Who runs it** (G491). logosd composes it from its configuration's `package_manager` section
+  ([DAEMON.md](DAEMON.md) §3): the reserved instance `package_manager`, `hosted_dynamic` in its own
+  Module Host, with PM App A as its primary contract (`pm/contractset.nim`, from the pinned documents;
+  so the Runtime gives it a provider record) and the state assignment `package_manager.state`, and starts
+  it after the operator's start list. The library is the one installed with logosd (`lib/logos-core/`), checked against the
+  hash logosd is built with, or `package_manager.artifact` for development. An operator cannot list,
+  retire or reconfigure it (S12); `logosctl` may start, stop and recover it.
+- **The mark** (G490). The host configuration's top-level `package_manager` names the instance
+  ([HOST-CONFIG.md](HOST-CONFIG.md)); only that instance's Module Host accepts the reserved name and
+  the `logos.` rules of its contracts, and the Runtime binds it as a system service. It never runs in
+  logosd's process or the Runtime's (PKG-0005, PKG-0006).
+- **What each caller reaches.** Any caller with a route may call `inspect_package`,
+  `install_package`, `remove_package` and `update_package`, subject to the authority policy.
+  `get_runtime_handoff` is for a SYSTEM_SERVICE caller, the Runtime's own binding (5-6a-2), and the
+  observation methods (`list_packages`, `list_installed_packages`, `watch_installed_packages`) for
+  readers (Q7 (b); 5-6b). Until then they, and an ordinary caller's `get_runtime_handoff`, are
+  answered `MODULE_ERROR` with no message or detail, the only refusal a provider may answer
+  (INTERFACE l.3308-3311); the operator's log has "package-manager: <method> refused for <caller>:
+  not a reader" (G495).
+- **`list_packages`** (G500; `pm/listing.nim`): the `lgx` entries of the catalog in use, in its
+  canonical order, optionally one package's; 5-6b serves the method.

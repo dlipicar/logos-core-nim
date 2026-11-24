@@ -73,6 +73,17 @@
 ## body, and one module whose declaration is 4 MiB of `implements` commitments. The completion block,
 ## the host's copy, the block's release and the frame repeat their code here, which is private.
 ##
+## `reply facade` (5-6a-1, G497; plan §4.9; planning's Q16 and its conditions of 2026-11-24) times the
+## same way out through the module `logos_package_manager` as 5-6a-1 built it: on the module thread the
+## receive, the facade's answer with its one copy, from the answer's string into the pre-encoded bytes
+## (G494; `pm/facade.nim`'s `operate` and `answered`, private, repeated here as pmtest's `run` is), the
+## kit route's `takeEncoded` (a move), then the same completion. The host's `checkResponse` and the
+## transport's commitment are against PACKAGE MANAGER App A's `install_package` (`pmContractSet`), so
+## the record is checked and committed as the structured `{installed}` it is, where pmtest's
+## `{response: bstr}` was one byte string. The records carry a manifest commitment with the pinned ids,
+## which App A requires and pmtest never checked. For worst-case statements each step prints its five
+## samples with their best, median and max, and each thread the same of its per-iteration totals.
+##
 ## Through the driver (5-3c-2, G455) the run is resumed turn by turn: a step ends at each inspection
 ## and at each spent turn, so the longest step is the longest hold on the module thread. `--budget
 ## <work>` sets the work of one turn (`ResolverTurnWork` by default; 0: no turns), and the steps line
@@ -102,7 +113,7 @@
 ##   pmbench module 4096
 ##   pmbench commit 10000 /tmp/installed
 ##   pmbench start 10000 /tmp/installed
-##   pmbench reply
+##   pmbench reply && pmbench reply facade
 
 import std/[algorithm, monotimes, os, strutils, times]
 import logos_sdk/cbor
@@ -115,7 +126,8 @@ import chronos
 import logos_sdk/base/wipe
 import logos_sdk/codegen/kitrt
 import logos_sdk/iface/[accept, outcome]
-import ../src/logos_core/pm/[admission, jobs, responses]
+import ../src/logos_core/pm/[admission, contractset, jobs, responses]
+from logos_sdk/pins import CommitmentModelId, HashProfileId, HashSuiteId
 import ../src/logos_core/runtime/callcheck
 import ../src/logos_core/transport/envelope
 import ../src/logos_core/transport/io/api
@@ -718,18 +730,27 @@ const ReplyBase =
 proc c_calloc(n, s: csize_t): pointer {.importc: "calloc", header: "<stdlib.h>".}
 proc c_free(p: pointer) {.importc: "free", header: "<stdlib.h>".}
 
-proc replyRecord(): InstalledRecord =
-  InstalledRecord(
+proc replyRecord(facade: bool): InstalledRecord =
+  ## The record both shapes start from. For the facade it carries a manifest commitment with the
+  ## pinned ids (its roots zero, each `bstr .size 32`), which App A's `installed_package_record`
+  ## requires and pmtest's `{response: bstr}` never checked.
+  result = InstalledRecord(
     signer: PackageSigner(profile: "logos.package-signing.cose-sign1-slh-dsa-sha2-192s"),
     identity: PackageIdentity(package: "bench", version: "1.0.0"),
     source: lgxSource("main", "bench@1.0.0"),
     variant: "linux-x86_64",
   )
+  if facade:
+    result.commitment = ManifestCommitment(
+      commitmentModel: CommitmentModelId,
+      hashProfile: HashProfileId,
+      hashSuite: HashSuiteId,
+    )
 
-proc artifactsReply(target: int): InstalledRecord =
+proc artifactsReply(target: int, facade: bool): InstalledRecord =
   ## 65,536 artifacts, the most an archive holds, each path lengthened until the response's body
   ## is about `target` bytes.
-  result = replyRecord()
+  result = replyRecord(facade)
   let n = 65_536
   for i in 0 ..< n:
     result.artifacts.add(
@@ -740,9 +761,9 @@ proc artifactsReply(target: int): InstalledRecord =
   for a in result.artifacts.mitems:
     a.path.add(repeat('x', per))
 
-proc moduleReply(kib: int): InstalledRecord =
+proc moduleReply(kib: int, facade: bool): InstalledRecord =
   ## One module whose declaration holds about `kib` KiB of `implements` commitments.
-  result = replyRecord()
+  result = replyRecord(facade)
   var implements: seq[CborValue]
   var root = newSeq[byte](32)
   var total = 0
@@ -776,6 +797,21 @@ proc pmtestRun(
     copyMem(addr b[0], unsafeAddr a.encoded[0], b.len)
   ok(b)
 
+proc facadeRun(
+    f: Future[OperationAnswer]
+): Future[Result[PreEncoded, InvocationFailure]] {.async: (raises: []).} =
+  ## `src/logos_core/pm/facade.nim`'s `operate` once the shell answered, and `answered` for an
+  ## encoded answer: the one copy, into the pre-encoded bytes (G494).
+  let a =
+    try:
+      await f
+    except CatchableError:
+      return err(failure(ecModule, "bench"))
+  var b = newSeq[byte](a.encoded.len)
+  if b.len > 0:
+    copyMem(addr b[0], unsafeAddr a.encoded[0], b.len)
+  ok(preEncoded(move b))
+
 const ReplySteps = [
   "worker: the value", "worker: its encoding", "worker: the channel's send",
   "module: the channel's receive", "module: the answer to pmtest's bytes",
@@ -786,10 +822,27 @@ const ReplySteps = [
   "io: the commitment", "io: the Response's encoding", "io: the frame",
 ]
 
+const FacadeSteps = [
+  "worker: the value", "worker: its encoding", "worker: the channel's send",
+  "module: the channel's receive", "module: the facade's one copy (answered)",
+  "module: the route's takeEncoded", "module: the completion block",
+  "module: the outcome's wipe", "module: the host's copy",
+  "module: the host's checkResponse", "module: the block's release",
+  "module: respond's channel send", "io: the channel's receive", "io: decodeValue",
+  "io: the commitment", "io: the Response's encoding", "io: the frame",
+]
+
+const ReplyRuns = 5
+
 proc replyOnce(
-    r: InstalledRecord, sel: Selected, spent: var array[ReplySteps.len, float]
+    r: InstalledRecord,
+    sel: Selected,
+    facade: bool,
+    spent: var array[ReplySteps.len, float],
 ): int =
-  ## One response's way, each step's CPU time in `spent`; the body's length.
+  ## One response's way, each step's CPU time in `spent`; the body's length. `facade`: through
+  ## the Package Manager module's answer and route and App A's `install_package`; else pmtest's.
+  let meth = (if facade: "install_package" else: "install")
   var t = cpuTime()
   template lap(i: int) =
     let now = cpuTime()
@@ -816,12 +869,20 @@ proc replyOnce(
   t = cpuTime()
   let fut = newFuture[OperationAnswer]("pmbench")
   fut.complete(OperationAnswer(kind: oaEncoded, encoded: move got.reply))
-  let rf = pmtestRun(fut)
-  var pmBytes = move(rf.internalValue)
-  lap(4)
-  var outcome =
-    encodedResponse(encode(PmtestInstallResponse(response: move pmBytes.get)))
-  lap(5)
+  var outcome: Result[seq[byte], InvocationFailure]
+  if facade:
+    let rf = facadeRun(fut)
+    var pre = move(rf.internalValue)
+    lap(4)
+    doAssert pre.isOk
+    outcome = takeEncoded(pre.get)
+    lap(5)
+  else:
+    let rf = pmtestRun(fut)
+    var pmBytes = move(rf.internalValue)
+    lap(4)
+    outcome = encodedResponse(encode(PmtestInstallResponse(response: move pmBytes.get)))
+    lap(5)
   doAssert outcome.isOk
   let n = outcome.get.len
   let blk = cast[ptr UncheckedArray[uint8]](c_calloc(1, csize_t(16 + n)))
@@ -835,9 +896,10 @@ proc replyOnce(
   copyMem(addr hostBytes[0], d, n)
   lap(8)
   var trail: CallTrail
-  let checked = sel.checkResponse("install", hostBytes, trail)
+  let checked = sel.checkResponse(meth, hostBytes, trail)
   lap(9)
-  doAssert checked.isOk
+  if checked.isErr:
+    raiseAssert "the response does not check: " & $checked.error
   secureZero(blk, 16 + n)
   c_free(blk)
   lap(10)
@@ -860,7 +922,7 @@ proc replyOnce(
   let dv = decodeValue(io.outcome.result, 128)
   lap(13)
   doAssert dv.isOk
-  let commitment = sel.boundary.commitResponse("install", dv.get)
+  let commitment = sel.boundary.commitResponse(meth, dv.get)
   lap(14)
   doAssert commitment.isOk
   let body = encodeCbor(
@@ -878,41 +940,85 @@ proc replyOnce(
   lap(16)
   doAssert frame.len > n
 
-proc replyBench() =
-  ## [G447; planning's ruling of 2026-11-23] A maximal response's way out, step by step.
-  let set = acceptContractSet(PmtestContract).get
+proc spread(samples: openArray[float]): string =
+  ## [G497; planning, 2026-11-24] Best, median and max of `samples`, in ms, then each sample.
+  var s = @samples
+  s.sort()
+  let med =
+    if s.len mod 2 == 1:
+      s[s.len div 2]
+    else:
+      (s[s.len div 2 - 1] + s[s.len div 2]) / 2
+  result =
+    "best_ms=" & ms(s[0]) & " median_ms=" & ms(med) & " max_ms=" & ms(s[^1]) &
+    " runs_ms="
+  for i, x in samples:
+    result.add((if i > 0: "," else: "") & ms(x))
+
+proc replyBench(facade: bool) =
+  ## [G447; planning's ruling of 2026-11-23] A maximal response's way out, step by step; with
+  ## `facade` (G497) through the Package Manager module and App A.
+  let set =
+    if facade:
+      pmContractSet().get
+    else:
+      acceptContractSet(PmtestContract).get
   let sel = buildSelected(set, set.primary.root, 128).get
+  let names = (if facade: FacadeSteps else: ReplySteps)
   for (name, r) in [
-    ("artifacts-65536", artifactsReply(AdmissionLimit - 4096)),
-    ("module-4MiB", moduleReply(4096)),
+    ("artifacts-65536", artifactsReply(AdmissionLimit - 4096, facade)),
+    ("module-4MiB", moduleReply(4096, facade)),
   ]:
-    var best: array[ReplySteps.len, float]
-    for s in best.mitems:
-      s = Inf
+    var samples: array[ReplySteps.len, array[ReplyRuns, float]]
+    var totals: array[3, array[ReplyRuns, float]]
+      # worker, module, I/O: each iteration's sum
     var bytes = 0
-    for run in 0 ..< 5:
+    for run in 0 ..< ReplyRuns:
       var spent: array[ReplySteps.len, float]
-      bytes = replyOnce(r, sel, spent)
-      for i in 0 ..< best.len:
-        best[i] = min(best[i], spent[i])
+      bytes = replyOnce(r, sel, facade, spent)
+      for i in 0 ..< spent.len:
+        samples[i][run] = spent[i]
+        let k =
+          if names[i].startsWith("worker"):
+            0
+          elif names[i].startsWith("module"):
+            1
+          else:
+            2
+        totals[k][run] += spent[i]
     var worker, module, io: float
-    for i, s in ReplySteps:
+    for i, s in names:
+      let best = min(samples[i])
       if s.startsWith("worker"):
-        worker += best[i]
+        worker += best
       elif s.startsWith("module"):
-        module += best[i]
+        module += best
       else:
-        io += best[i]
-    echo "reply shape=", name, " body=", bytes, " admission=", AdmissionLimit
-    for i, s in ReplySteps:
-      echo "  ", alignLeft(s, 38), " cpu_ms=", ms(best[i])
+        io += best
+    echo "reply mode=",
+      (if facade: "facade" else: "pmtest"),
+      " shape=",
+      name,
+      " body=",
+      bytes,
+      " admission=",
+      AdmissionLimit
+    for i, s in names:
+      echo "  ",
+        alignLeft(s, 42), " cpu_ms=", ms(min(samples[i])), " ", spread(samples[i])
     echo "  worker_cpu_ms=",
       ms(worker), " module_cpu_ms=", ms(module), " io_cpu_ms=", ms(io)
+    echo "  worker_total ", spread(totals[0])
+    echo "  module_total ", spread(totals[1])
+    echo "  io_total ", spread(totals[2])
 
 proc main() =
   var args = commandLineParams()
   if args.len == 1 and args[0] == "reply":
-    replyBench()
+    replyBench(facade = false)
+    return
+  if args.len == 2 and args[0] == "reply" and args[1] == "facade":
+    replyBench(facade = true)
     return
   if args.len == 3 and args[0] == "installed":
     installedBench(parseInt(args[1]), parseInt(args[2]))

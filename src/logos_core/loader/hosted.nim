@@ -82,6 +82,9 @@ proc startHosted*(
     init.endpoint = Opt.some(ep.get.path)
     init.transport = Opt.some(ep.get.transport)
     init.runtime_id = Opt.some(ep.get.runtimeId)
+  if h.systemInit():
+    # [G490] The marked Package Manager: its host accepts the reserved name.
+    init.system = Opt.some(true)
   when defined(lcnTestHooks):
     # [DECISIONS I92] A test armed the audit hosts (`setWipeAuditForTests`).
     let audit = wipeAuditInit()

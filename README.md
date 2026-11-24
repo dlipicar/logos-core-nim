@@ -277,6 +277,25 @@ For a merge that touches flake.nix or what it reads outside the Nim sources, `to
 compares each x86_64 Linux check's derivation path at the two commits, with no build, on a Linux
 host (its header says how to run it there).
 
+Known limits of the test suites:
+
+- **Module Host counts are system-wide.** After each case, a hosted suite checks that no Module Host is
+  left (`hostPids`, `tests/support/modulehostbuild.nim`). It counts every live process of the checkout's
+  `build/module-host/<variant>/logos-module-host`, whoever started it. So run one hosted suite at a time
+  per checkout. Two at once fail each other's checks, and hosts a crashed suite left behind (its
+  orphaned logosd respawns them) fail the next suites of that checkout and variant. A per-suite count
+  is not built. A parent-PID filter would hide the leaks the check is for: hosts run in their own
+  process groups, and a stopped logosd's leftover hosts are reparented to launchd or init. The way
+  out is the `--parent=<pid>` argument each host is started with (DECISIONS G264): count only the
+  hosts whose `--parent` is the suite's own process or a child it started (`spawnChild` in
+  `tests/support/daemonproc.nim` would record each pid), reading argv through `KERN_PROCARGS2` on
+  macOS and `/proc/<pid>/cmdline` on Linux.
+- **Backlog: `startClient`'s binding** (`tests/support/routefixture.nim`). It returns the Runtime
+  Control binding from the slot the last client `init` filled. When the client does not come up, that
+  slot still holds an earlier client's binding, which may be freed, or nil. A call through it crashes
+  the suite instead of failing the case. The fix is to fail and stop the case there, as `liveHostOf`
+  does in `tests/test_hosted.nim`.
+
 ```bash
 nix develop
 ```

@@ -615,6 +615,27 @@ proc encodedResponse*(
     return err(moduleError("the response does not match its schema: " & r.error))
   ok(move r.get)
 
+type PreEncoded* = object
+  ## [IMPL-DECISION G494] A response a handler already holds as deterministic
+  ## CBOR, for a method its kit lists in `KitOptions.encodedResponses`: the
+  ## route moves the bytes into its result with no `encode` and no check of
+  ## its own. The boundary that commits the response checks it against the
+  ## method's schema, from bytes, whoever made them (RUNTIME l.798-805), so
+  ## bytes off the schema fail there with MODULE_ERROR. Made only by
+  ## `preEncoded`.
+  bytes: seq[byte]
+
+func preEncoded*(bytes: sink seq[byte]): PreEncoded =
+  ## The response bytes `bytes`, moved, not copied.
+  PreEncoded(bytes: bytes)
+
+func len*(p: PreEncoded): int =
+  p.bytes.len
+
+proc takeEncoded*(p: var PreEncoded): Result[seq[byte], InvocationFailure] =
+  ## The route's result: the bytes, moved out (DECISIONS G276).
+  ok(move p.bytes)
+
 # Services --------------------------------------------------------------------------
 
 proc publishEncoded*(

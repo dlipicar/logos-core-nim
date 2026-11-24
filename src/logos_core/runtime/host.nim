@@ -521,6 +521,7 @@ proc launch(h: ptr HostRuntime): LogosResult =
     permissions: c.permissions,
     initialSettings: c.initialSettings,
     protectedInputs: c.protectedInputs.mapIt((it.instance, it.input)),
+    packageManager: c.packageManager,
     onTerminationRequired: h.terminationHook,
     terminationData: h.terminationData,
     callRecordSink: h.recordSink,

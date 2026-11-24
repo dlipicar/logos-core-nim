@@ -41,7 +41,8 @@ from a source only the host's owner can change.
 ;
 ; An array that is present is non-empty, and the checks the schema cannot
 ; express (unique ids, ordering, the orchestration instance, the authority
-; instance) are applied at logos_runtime_create (runtime/host_config.nim).
+; instance, the package manager instance) are applied at logos_runtime_create
+; (runtime/host_config.nim).
 ; lcn.authority_policy is the Capability Authority's policy input,
 ; authority/policy.cddl (docs/AUTHORITY-POLICY.md).
 
@@ -59,6 +60,10 @@ lcn.app_config = {
   ? permissions: lcn.app_permissions,
   ? state_transfers: [* lcn.app_state_transfer],
   ? protected_inputs: [* lcn.app_protected_input],
+  ; [G490] The instance that holds the Package Manager responsibility (RUNTIME
+  ; l.293): the hosted_dynamic logos_package_manager, the one hosted module
+  ; whose reserved name the Module Host accepts.
+  ? package_manager: lcn.app_instance_id,
 }
 
 lcn.app_runtime = {
@@ -602,6 +607,23 @@ present, not empty, and only with `store_dir` and `state_root`.
 An instance is the `from` of one entry at most and the `to` of one entry at most. Neither side may be
 the Module Loader's instance, a Runtime-assigned name, or the Capability Authority instance. Anything
 else is refused at `create` with `LOGOS_ERR_INVALID_PARAMS` and "state_transfers: …".
+
+### `package_manager`
+
+The instance that holds the Package Manager responsibility (RUNTIME l.293; DECISIONS G490), named
+as `orchestration` and `policy.authority` name theirs. Optional. It must be a listed instance of the
+module `logos_package_manager`, `hosted_dynamic` with placement `process` (a direct one would share
+the Runtime's process, PKG-0006), and neither the orchestration nor the authority instance; otherwise
+`create` refuses with "package_manager names no instance in modules", "package_manager's module is
+not logos_package_manager", "package_manager must be a hosted_dynamic instance with placement
+process", or "package_manager names the orchestration instance" / "… the authority instance".
+
+The mark is the only way a hosted module gets the reserved `logos_` prefix: the Runtime tells that
+instance's Module Host (the carrier's `init` has `system: true`), the host accepts its name and the
+`logos.` rules of its contracts, and the Runtime completes its probe as a system binding, which
+accepts the reserved call surface. Without the mark a hosted module with a reserved name is refused
+by its host, as before. logosd writes the mark for the instance it composes ([DAEMON.md](DAEMON.md)
+§3, "The derived host configuration").
 
 ### `protected_inputs`
 

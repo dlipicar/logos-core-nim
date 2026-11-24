@@ -132,17 +132,21 @@ lcn.dc_cli = {
   ? route_idle_ms: uint32,
 }
 
-; The Package Manager (DECISIONS G399; DAEMON.md §3; docs/PACKAGE-MANAGER.md):
-; instance names an operator entry of modules, hosted_dynamic with placement
-; process, with a state_assignment and no configuration; storage holds at
-; least one binding, each naming another hosted_dynamic entry, with unique
-; names; catalog.storage names one of them. resolver_limits, when present,
-; holds all four limits; absent, logosd's preset applies (DAEMON.md §3). The
-; lcn.pm_* rules are pm/input.cddl's, resolved in one document as lcn.app_*
-; are. logosd composes the instance's lcn.pm_input from this section and the
-; trust file the start accepted.
+; The Package Manager (DECISIONS G399, G491; DAEMON.md §3;
+; docs/PACKAGE-MANAGER.md): logosd composes it as the reserved hosted_dynamic
+; instance package_manager of logos_package_manager (placement process), from
+; artifact if given, else the companion library installed with logosd, whose
+; BLAKE3-256 is compiled in; with neither, the section refuses to start. state
+; is the instance's state_assignment. storage holds at least one binding, each
+; naming a hosted_dynamic entry of modules, with unique names; catalog.storage
+; names one of them. resolver_limits, when present, holds all four limits;
+; absent, logosd's preset applies (DAEMON.md §3). The lcn.pm_* rules are
+; pm/input.cddl's, resolved in one document as lcn.app_* are. logosd composes
+; the instance's lcn.pm_input from this section and the trust file the start
+; accepted. The former instance field is refused, naming state and artifact.
 lcn.dc_package_manager = {
-  instance: lcn.app_instance_id,
+  state: tstr .size (1..128),
+  ? artifact: lcn.app_artifact,
   storage: [* lcn.pm_binding],
   catalog: lcn.pm_catalog_ref,
   ? resolver_limits: lcn.pm_resolver_limits,

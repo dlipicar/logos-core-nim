@@ -70,6 +70,13 @@ proc main() =
   echo orchKitPath
   writeFile(orchStateTypesPath, generatedOrchStateTypes().get)
   echo orchStateTypesPath
+  writeFile(pmTypesPath, generatedPmTypes().get)
+  echo pmTypesPath
+  writeFile(pmKitPath, generatedPmKit().get)
+  echo pmKitPath
+  for kind in ExportListKind:
+    writeFile(pmExportsPath(kind), generatedPmExports(kind).get)
+    echo pmExportsPath(kind)
   for f in nimFixtures:
     writeFile(f.fixturePath, f.generated.get)
     echo f.fixturePath

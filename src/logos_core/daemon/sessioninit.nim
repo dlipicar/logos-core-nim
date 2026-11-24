@@ -36,6 +36,9 @@ type
       ## `--module-config INSTANCE=@FILE`: provisioned values (G141)
     development*: bool ## `--development`: the switch on, at revision 2
     exe*: string ## logosd's executable, for the default `module_host`
+    pmCompanion*: bool = true
+      ## [G491] Assume the logosd that will start has the companion Package
+      ## Manager library: whether it has is logosd's to say at start
 
   InitResult* = object
     runtimeId*: string
@@ -95,7 +98,8 @@ proc makeSession(s: Session, opts: InitOptions): Result[InitResult, string] =
   ?fill(dc, opts, runtimeId)
   let trust = ?initTrust(s, opts.development)
   let bytes = ?dc.encode
-  discard ?prepareDaemon(s, bytes, trust, exe = opts.exe)
+  discard
+    ?prepareDaemon(s, bytes, trust, exe = opts.exe, pmCompanion = opts.pmCompanion)
   ?writeAtomic(s.dir, DaemonConfigName, bytes)
   # [RUNTIME l.2630-2632; I95] The store, with the id and no instance: the
   # Runtime's first start finds it as any later start does.

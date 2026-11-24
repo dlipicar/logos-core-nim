@@ -501,6 +501,10 @@ type
       ## execution revision counts as exhausted (RUNTIME l.3507); 0 is
       ## `DefaultRevisionBudget`
     statics*: seq[StaticRegistration] ## protected static bindings (§2.3, §13.3)
+    packageManager*: Opt[string]
+      ## [IMPL-DECISION G490] the hosted instance the host configuration's
+      ## `package_manager` marks: its host accepts the reserved name, and the
+      ## Runtime its reserved surface; none: no hosted module may use them
     policy*: AuthzPolicy
       ## the internal policy (`allow-all`, with the test rules); unused under
       ## `authority`

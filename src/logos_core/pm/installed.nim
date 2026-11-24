@@ -26,10 +26,10 @@ import logos_sdk/cbor
 import logos_sdk/commitment
 import logos_sdk/crypto/blake3
 import logos_sdk/iface/accept
-import logos_sdk/kit/rc_types
 import ../crypto/slhdsa
 import ../pins
 import ../package/[lgx, manifest, records, signing]
+import ./contractset
 
 export results, blake3, manifest, records, signing
 
@@ -127,23 +127,8 @@ type PmContract = ref object
   files: SchemaSet ## `installed.cddl`, on its own
   filesModel: SchemaModel
 
-proc configurationTypes(): Result[string, string] =
-  ## [SPEC CONFIGURATION §9] The Module Configuration types, as mirrored into the Runtime
-  ## Control types (their supporting document, from `spec/mirrors/CFG/`).
-  let (_, _, supporting) = rcDocuments()
-  for d in supporting:
-    if "logos.module_configuration.configuration_declaration =" in d:
-      return ok(d)
-  err("the Runtime Control types carry no Module Configuration types")
-
 proc loadContract(): Result[PmContract, string] =
-  let cfg = ?configurationTypes()
-  let c = ?acceptContractSet(
-    PackageManagerContractDocument,
-    [],
-    [PackageManifestDocument, cfg],
-    AcceptOptions(system: true),
-  )
+  let c = ?pmContractSet()
   # [IMPL] An ordinary supporting schema, resolved against itself and the common schema
   # only: what it embeds from App A is checked against App A by `checkType`.
   let f = ?acceptContractSet(InstalledCddl, [], [], AcceptOptions())

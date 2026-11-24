@@ -38,7 +38,8 @@ Usage:
   lcn-gen nim-common [--out:DIR] [--import-prefix:P]
   lcn-gen nim [--out:DIR] [--import-prefix:P] [--system] [--module:NAME] PRIMARY.cddl
               [--interface:FILE]... [--supporting:FILE]...
-  lcn-gen kit [--out:DIR] [--import-prefix:P] [--system] [--confined [--async-api]]
+  lcn-gen kit [--out:DIR] [--import-prefix:P] [--system]
+              [--confined [--async-api [--encoded-response:METHOD]...]]
               [--module:NAME] [PRIMARY.cddl] [--interface:FILE]...
               [--supporting:FILE]... [--extends:FILE]...
               [--configuration:FILE --configuration-root:NAME
@@ -122,6 +123,10 @@ lint-callbacks
 --async-api        kit, with --confined, of a provider: also export
                    _MODULE_async_api, the deferred provider surface (INTERFACE
                    §2.9.2; DECISIONS G338)
+--encoded-response:METHOD
+                   kit, with --async-api: METHOD's handler answers PreEncoded
+                   response bytes, passed through unencoded; the boundary
+                   checks them (DECISIONS G494). Not for a marked response
 
 Limits (INTERFACE §2.1): no identifier-length limit; identifiers are never
 truncated, hashed or aliased. Input is bounded by the INTERFACE §5.3 schema
@@ -247,6 +252,7 @@ proc main(): int =
     live = false
     confined = false
     asyncApi = false
+    encodedResponses: seq[string]
     lintSelfTest = false
   for kind, key, val in getopt():
     case kind
@@ -291,6 +297,8 @@ proc main(): int =
         lintSelfTest = true
       of "async-api":
         asyncApi = true
+      of "encoded-response":
+        encodedResponses.add(val)
       of "help", "h":
         echo usage
         return 0
@@ -309,6 +317,8 @@ proc main(): int =
     return fail("--extends applies to kit only\n" & usage)
   if asyncApi and not confined:
     return fail("--async-api needs kit --confined\n" & usage)
+  if encodedResponses.len > 0 and not asyncApi:
+    return fail("--encoded-response needs kit --confined --async-api\n" & usage)
   if (configuration.len > 0) != (configurationRoot.len > 0) or
       (live and configuration.len == 0):
     return fail(
@@ -405,8 +415,12 @@ proc main(): int =
     proc writeKit(b: ModuleBinding, types: string): int =
       ## [DECISIONS G339, G341] The kit of `b`, its types, its configuration
       ## types and its export lists.
-      var kopts =
-        KitOptions(importPrefix: prefix, confined: confined, asyncApi: asyncApi)
+      var kopts = KitOptions(
+        importPrefix: prefix,
+        confined: confined,
+        asyncApi: asyncApi,
+        encodedResponses: encodedResponses,
+      )
       var configTypes = ""
       if configuration.len > 0:
         let text =

@@ -1432,3 +1432,38 @@ suite "ifc.kit: interface-only providers and earlier contracts (INTERFACE §2.6,
       b, KitOptions(importPrefix: SdkImportRoot, confined: true, asyncApi: true)
     )
     check text.isOk and "loadBindingValidator(moduleName, " in text.get
+
+suite "ifc.kit: pre-encoded responses (DECISIONS G494) [IMPL]":
+  test "[IMPL-DECISION G494] a pre-encoded response needs a confined kit with the asynchronous API, a method of the module, an unmarked response and each name once":
+    let b =
+      bindingOf("ledger_module", Opt.some(readFile(fixtureDir / "ledger_module.cddl")))
+    proc kit(
+        confined, asyncApi: bool, names: openArray[string]
+    ): Result[string, string] =
+      kitModule(
+        b,
+        KitOptions(
+          importPrefix: SdkImportRoot,
+          confined: confined,
+          asyncApi: asyncApi,
+          encodedResponses: @names,
+        ),
+      )
+
+    let listed = kit(true, true, ["post"])
+    check listed.isOk
+    check "Result[PreEncoded, InvocationFailure]" in listed.get
+    check "takeEncoded(" in listed.get
+    # Without the option nothing in the kit is pre-encoded.
+    check "PreEncoded" notin kit(true, true, []).get
+    const notAsync =
+      "pre-encoded responses are generated for a confined provider's kit with the asynchronous API only"
+    check kit(true, false, ["post"]).error == notAsync
+    check kit(false, false, ["post"]).error == notAsync
+    check kit(true, true, ["nothing"]).error ==
+      "pre-encoded response: nothing is not a method of ledger_module"
+    # `seal`'s response is marked (`_sensitive`): its bytes would need a wipe of their own.
+    check kit(true, true, ["seal"]).error ==
+      "pre-encoded response: seal's response is marked sensitive, and bytes would need a wipe of their own"
+    check kit(true, true, ["post", "wait", "post"]).error ==
+      "pre-encoded response: post is named twice"
