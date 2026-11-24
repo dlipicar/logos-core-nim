@@ -49,6 +49,10 @@ type
     state*: EndpointState
     listening*: bool
     sessions*: HashSet[ConnId]
+    system*: bool
+      ## [G492; TRN-0330] the system-service endpoint of a marked Package
+      ## Manager: every session accepted here is a system-service session,
+      ## judged against the system ticket store alone
 
   Session* = ref object
     ## One accepted connection, from its Hello verdict until `evClosed`.
@@ -70,6 +74,10 @@ type
     subs*: OrderedTable[uint64, string]
       ## [plan §2.7, Rev R7] the active subscriptions, by id: recorded on the
       ## Runtime thread before the successful SubscriptionResult is sent
+    system*: bool
+      ## [G492; TRANSPORT l.1084] a system-service session: no consumer and
+      ## no route; `binding` names the system-service binding it serves
+    binding*: uint64
 
   Served* = ref object
     tport: TransportPorts
@@ -183,6 +191,33 @@ proc openHosted*(
   sv.byRealization[realization] = id
   ok(e)
 
+proc openHostedSystem*(
+    sv: Served, id: EndpointId, realization, instance, provider, module: string
+): Result[ServedEndpoint, string] =
+  ## [G492; TRANSPORT l.1063, l.1098, TRN-0182..0186] The marked Package
+  ## Manager's system-service endpoint, made and validated before its host is
+  ## spawned beside its provider endpoint: a fresh private directory and an
+  ## exact path of its own [IMPL], the listener passed as fd 6. No Hello
+  ## passes until `adoptHosted` gives it the binding's contract.
+  let ep = createEndpoint(sv.base, module, sv.tport.config.listenBacklog).valueOr:
+    return err("the system-service endpoint cannot be created: " & error.msg)
+  validateEndpoint(ep).isOkOr:
+    discard removeEndpoint(ep)
+    return err("the system-service endpoint is not valid: " & error.msg)
+  let e = ServedEndpoint(
+    id: id,
+    realization: realization,
+    instance: instance,
+    provider: provider,
+    module: module,
+    ep: ep,
+    callee: CalleeEndpoint(endpoint: ep.path, provider: module),
+    state: esServing,
+    system: true,
+  )
+  sv.endpoints[id] = e
+  ok(e)
+
 proc adoptHosted*(
     sv: Served, id: EndpointId, contracts: seq[Digest]
 ): Result[void, string] =
@@ -294,6 +329,46 @@ proc admitted*(
         binding: est.binding,
         endsIn: Opt.none(int64),
         earlier: earlier,
+      ),
+    )
+  )
+
+proc admittedSystem*(
+    sv: Served, conn: ConnId, e: ServedEndpoint, est: SystemEstablished
+): Session =
+  ## [G492; TRN-0340..0345] A system-service Hello passed and its ticket was
+  ## redeemed: the session serves the binding, with no consumer and no route
+  ## (TRANSPORT l.1084). The loop enforces the binding's scope throughout:
+  ## the methods it permits and no event (TRN-0344, TRN-0345).
+  inc sv.nextGeneration
+  result = Session(
+    conn: conn,
+    endpoint: e.id,
+    generation: sv.nextGeneration,
+    system: true,
+    binding: est.binding.binding,
+  )
+  sv.sessions[conn] = result
+  e.sessions.incl(conn)
+  let b = est.binding
+  sv.submit(
+    IoCommand(
+      conn: conn,
+      kind: cmdAdmit,
+      verdict: AdmitVerdict(
+        kind: avEstablished,
+        response: est.response,
+        binding: RouteBinding(
+          provider: b.provider,
+          contract: b.contract,
+          endpoint: b.endpoint,
+          access: RouteAccess(
+            methods: Opt.some(b.methods),
+            publishEvents: Opt.some(b.events),
+            subscribeEvents: Opt.some(b.events),
+          ),
+        ),
+        endsIn: Opt.none(int64),
       ),
     )
   )

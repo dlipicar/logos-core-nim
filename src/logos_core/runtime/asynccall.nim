@@ -114,6 +114,9 @@ type
     owned: ptr Owned ## the outcome until the callback takes it
     completer: int ## the thread running the completion callback
     session*: bool ## [I90] a served invocation: its outcome is a Response on `conn`
+    system*: bool
+      ## [G492] on a system-service session: admitted against the binding,
+      ## with no consumer or route, and run on the binding's own worker
     conn*: uint64
     requestId*: uint64
     sent: bool ## session: its Response was submitted, or none is due (under `lock`)
@@ -820,17 +823,23 @@ proc runRoute(c: ptr AsyncCall, bare: string, params: seq[byte]) =
 proc runHostedRoute(c: ptr AsyncCall, bare: string) =
   ## [plan §2.7 steps 2-6] A Request on a hosted provider's endpoint: admitted
   ## here, checked, run and answered in its Module Host (`hostcall.nim`).
+  ## [G492] On a system-service session the Runtime thread admits it against
+  ## the binding (`rqSysAdmit`; TRN-0344, RUN-0853), on the binding's worker.
   let e = c.engine
-  let reply = e.call(
-    Request(
-      kind: rqAdmit,
-      origin: moduleOrigin($c.consumer),
-      attempt: $c.attempt,
-      route: $c.route,
-      bare: bare,
-      call: c,
-    )
-  )
+  let reply =
+    if c.system:
+      e.call(Request(kind: rqSysAdmit, bare: bare, call: c))
+    else:
+      e.call(
+        Request(
+          kind: rqAdmit,
+          origin: moduleOrigin($c.consumer),
+          attempt: $c.attempt,
+          route: $c.route,
+          bare: bare,
+          call: c,
+        )
+      )
   let h = hostOf(e, c.conn)
   defer:
     if h != nil:
@@ -859,7 +868,16 @@ proc runHostedRoute(c: ptr AsyncCall, bare: string) =
       )
     else:
       h.runHosted(
-        adm, e, c.consumer, c.route, c.generation, c.blob, c.conn, c.requestId, trail
+        adm,
+        e,
+        c.consumer,
+        c.route,
+        c.generation,
+        c.blob,
+        c.conn,
+        c.requestId,
+        trail,
+        system = c.system,
       )
   trail.succeeded = r.isOk
   c.hostCommitted(

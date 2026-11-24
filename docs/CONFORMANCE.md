@@ -92,8 +92,9 @@ Tiers 1 to 4 are closed: `spectrace gate --closed-tier 1 --closed-tier 2 --close
   orchestration module's duties, Loader loss, package-backed selection, upgrade transfer, and the
   stops caused by permission reconciliation; to Tier 5: remote Runtimes, facades, enrollment,
   listeners and exports. Out of scope: §5.2.1 singleton mode (a MAY not taken, l.1094), the Runtime
-  side of system-service sessions over unix-stream (a MAY profile left unused under G48(a)), and
-  requirements on modules, applications, specifications and deployments.
+  side of system-service sessions over unix-stream (a MAY profile left unused under G48(a); until
+  Tier 5 step 5-6a-2, below), and requirements on modules, applications, specifications and
+  deployments.
 - **LOADER** is not claimed (until Tier 4b step 4b-1, below): it is `deferred:tier-4b` as a whole.
   The realizer follows LOADER's direct strategies, records and error codes ("a LOADER-shaped
   internal realizer"), but LOADER's subject is a Module Loader provider backed by a local module
@@ -107,7 +108,8 @@ Tiers 1 to 4 are closed: `spectrace gate --closed-tier 1 --closed-tier 2 --close
   decision, expiry and revocation, which the Runtime supplies in 10b.
 - **TRANSPORT** is claimed for the sans-I/O protocol and the unix-stream I/O layer. Deferred: what the
   Runtime and the Module Host trigger (10b, Tier 4b), Windows and the remote profiles (Tier 5). Out of
-  scope: §8.1.2 (a MAY profile left unused, l.1075) and requirements on contracts and deployments.
+  scope: §8.1.2 (a MAY profile left unused, l.1075; until Tier 5 step 5-6a-2, below) and requirements
+  on contracts and deployments.
 - **INTERFACE** adds the Runtime as ABI caller, route and Runtime Control binding, asynchronous calls
   and the invocation context. Deferred: the boundary-invariance units until a second boundary exists,
   marked-payload erasure (Tier 4b; until then no route is made to a contract that marks a payload,
@@ -467,8 +469,8 @@ claim as it stands.
   CAP-0294 to CAP-0297 not applicable, G286). It grants or refuses all of a module's operating-system
   access at once; no finer containment is claimed (`docs/PERMISSIONS.md`, "What is not enforced").
 - **TRANSPORT** is claimed for the sans-I/O protocol, the unix-stream I/O layer and its integration
-  into the Runtime and the Module Host. Out of scope: §8.1.2 (G48(a)). Tier 5: §8.2.1 (Windows) and
-  the remote profiles.
+  into the Runtime and the Module Host. Out of scope: §8.1.2 (G48(a); until Tier 5 step 5-6a-2,
+  below). Tier 5: §8.2.1 (Windows) and the remote profiles.
 - **INTERFACE** adds execution-boundary invariance (direct against local transport, I91) and
   marked-payload erasure for orc builds, with the five non-claims below (I92). Tier 5: remote mode
   (IFC-0010) and remote bindings; the reverse mapper is claimed in step 5-1 (below).
@@ -779,12 +781,29 @@ The Package Manager as the module `logos_package_manager`, which logosd composes
   override), and the 6cac8335 copies PKG-0630, PKG-0631, PKG-0633, PKG-0637, PKG-0639 to PKG-0647 and PKG-0649. 36
   units. PKG 403/403.
 - **Limits of the claim:**
-  - `get_runtime_handoff` has no caller that may use it until 5-6a-2's system-service binding, and the observation
-    methods none until 5-6b's readers: until then each is `MODULE_ERROR` with no message or detail (G495).
+  - `get_runtime_handoff` has no caller that may use it until 5-6a-2's system-service binding (below), and the
+    observation methods none until 5-6b's readers: until then each is `MODULE_ERROR` with no message or detail (G495).
   - **Windows** hosts no Package Manager until 5-9 (no `logos.local.unix-stream`, so the Loader refuses a hosted request; "What Tier 5 step 5-4 changes"), and **mobile** none:
     the mark refuses a direct instance (G490).
   - The large-reply figures with the module's pre-encoded responses (G497) are not yet measured: they wait for 5-3c-4.
     "The operations" keeps 5-5's figures until then.
+
+The Package Manager's system-service binding (DECISIONS I141; G492, G493; `docs/PACKAGE-MANAGER.md` §14,
+`docs/DEPLOYMENT.md`).
+
+- **Claimed:** TRANSPORT §8.1.2, TRN-0328 to TRN-0345 (18 units), and RUN-0318. The marked instance's Module
+  Host serves a second listener the Runtime made, the system-service endpoint (fd 6, its own private directory); a
+  Hello on it is judged against the system-service ticket store alone, a ticket of the binding's record with its
+  purpose, at most 60 s; the Runtime's engine is the one caller, through its own I/O client after the §8.2 peer
+  check; the session's scope is `get_runtime_handoff` alone, with no event, and the provider sees the
+  SYSTEM_SERVICE caller. `test_system_binding` also carries, for this binding, RUN-0313 to RUN-0317, RUN-0319,
+  RUN-0700, RUN-0851 to RUN-0855, TRN-0182 to TRN-0192, TRN-0194 and TRN-0349, claimed before on the route tests.
+- **Limits of the claim:**
+  - One binding, the Package Manager's, made under bootstrap policy (the host configuration's mark, G490). The
+    Loader and the Capability Authority stay direct (G48(a)).
+  - Nothing in `logosd` asks for a handoff yet: package-backed creation (5-8) is the requester. The engine's
+    request queue (one Request in flight, 64 parked, each with its own end) is reached by the tests' hook alone.
+  - The reply's output room is the held large-reply item's (ruling B): PKG-0559 stays not met (§5.8 of the plan).
 
 ## Properties not claimed
 

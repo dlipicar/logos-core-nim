@@ -33,9 +33,11 @@ default = "claimed"
 "§6" = "claimed"
 "§7" = "claimed"
 "§8.1" = "claimed"
-# §8.1.2: system-service sessions over unix-stream, a MAY profile (l.1056). G48(a)
-# keeps the Loader and the Capability Authority direct, so nothing uses it.
-"§8.1.2" = "out-of-scope:a MAY profile left unused: G48(a) binds the Loader and Capability Authority directly"
+# §8.1.2: system-service sessions over unix-stream, a MAY profile (l.1056), used by the Package
+# Manager's binding: its own listener (fd 6), its own ticket store, `get_runtime_handoff` alone
+# (Tier 5 step 5-6a-2; DECISIONS G492, G493, I141). G48(a) keeps the Loader and the Capability
+# Authority direct.
+"§8.1.2" = "claimed"
 # §8.2 (tier 4, transport I/O): endpoints, peer credentials checked before any
 # byte, and the Hello over sockets (DECISIONS I83). §8.2.1 (Windows): the G107 spike
 # is step 5-4 (I100); the support claim is 5-9's, TRN-0352 below.

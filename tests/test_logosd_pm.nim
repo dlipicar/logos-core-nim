@@ -461,7 +461,7 @@ when defined(posix):
           discard kill(Pid(pid), SIGKILL)
         fail()
 
-    test "[PKG-0004] [PKG-0353] [PKG-0513] [IMPL-DECISION G491] [IMPL-DECISION G402] [IMPL-DECISION G449] under capability-authority, with no operator entry for it: the Package Manager is started (S2), acquires the catalog once the fake is ready (S9 to S11), the operations run end to end, and the records are kept across logosd's restart":
+    test "[PKG-0004] [PKG-0353] [PKG-0513] [IMPL-DECISION G491] [IMPL-DECISION G402] [IMPL-DECISION G449] [IMPL-DECISION G493] under capability-authority, with no operator entry for it: the Package Manager is started (S2), acquires the catalog once the fake is ready (S9 to S11), the operations run end to end, and the records are kept across logosd's restart":
       let c = newCase()
       check c.initPm().code == 0
       c.stock()
@@ -488,6 +488,13 @@ when defined(posix):
       check c.setReadiness("ready")
       check c.acquired(first, catalogLine("configured"))
       check "no readiness subscription" notin first.errText
+      # [G493; I141] The Runtime's system-service binding, in the operator's log.
+      check eventually(
+        "the system-service binding",
+        first,
+        proc(): bool =
+          ("the system-service binding of " & PmInstance & " is ready") in first.errText,
+      )
       # With a catalog in use (without one, any resolution is package-unavailable first),
       # an update of a package not installed.
       check c.pm("update_package", identityRequest("current", "app", "1.0.0")).codeOf ==

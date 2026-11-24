@@ -75,7 +75,7 @@ when defined(posix):
   proc lcnHostSpawn(
     path: cstring,
     argv, envp: cstringArray,
-    carrier, listener, lock: cint,
+    carrier, listener, lock, system: cint,
     pid: ptr cint,
   ): cint {.importc: "lcn_host_spawn", cdecl.}
 
@@ -161,6 +161,10 @@ type
     listenerFd: cint
       ## [RUN-0200] a copy of its endpoint's listener, for the spawn (fd 4)
     endpointPath, runtimeId: cstring ## shared; nil: no endpoint
+    systemFd: cint
+      ## [G492] a copy of the system-service endpoint's listener, for the
+      ## spawn (fd 6); the marked Package Manager's host only
+    systemPath: cstring ## [G492] shared; nil: no system-service endpoint
     transport: array[MaxTransportWords, uint64]
     transportLen: int
     system: bool
@@ -185,7 +189,7 @@ type
     ## `PR_SET_PDEATHSIG` follows the thread that spawned it, and that thread
     ## lives as long as the supervisor.
     h: Host
-    listener, lock: cint
+    listener, lock, system: cint
     done: bool
     rc: cint
     next: ptr SpawnReq
@@ -309,6 +313,7 @@ when defined(posix):
     h.pid = -1
     h.index = index
     h.listenerFd = -1
+    h.systemFd = -1
     h.lockFd = lockFd
     h.rc = rc
     h.publish = publish
@@ -342,8 +347,12 @@ when defined(posix):
       freeShared(h.services)
     if h.listenerFd >= 0:
       discard fdClose(h.listenerFd)
+    if h.systemFd >= 0:
+      discard fdClose(h.systemFd)
     if h.endpointPath != nil:
       deallocShared(h.endpointPath)
+    if h.systemPath != nil:
+      deallocShared(h.systemPath)
     if h.runtimeId != nil:
       deallocShared(h.runtimeId)
     var d = h.dispatches
@@ -436,6 +445,26 @@ when defined(posix):
     ## [G490] Before the realization: the host loads the marked Package Manager,
     ## so `init` carries `system` and the host accepts its reserved name.
     h.system = true
+
+  proc setSystemEndpoint*(h: Host, listener: cint, path: string): Result[void, string] =
+    ## [G492; TRN-0330, TRN-0333] Before the spawn, after `setSystem` and
+    ## `setEndpoint`: the system-service endpoint the Runtime made. The host
+    ## gets a copy of `listener` as its fd 6, closed here once it is spawned;
+    ## the caller keeps its own. `path` goes into `init` (`systemEndpointInit`).
+    if not h.system or h.endpointPath == nil:
+      return err("only the marked Package Manager's provider host serves one")
+    let fd = dupFd(listener)
+    if fd < 0:
+      return err("the listener cannot be duplicated")
+    h.systemFd = fd
+    h.systemPath = sharedCString(path)
+    ok()
+
+  proc systemEndpointInit*(h: Host): Opt[string] =
+    ## [G492] What `init` carries as `system_endpoint`; none for every other host.
+    if h.systemPath == nil:
+      return Opt.none(string)
+    Opt.some($h.systemPath)
 
   proc systemInit*(h: Host): bool =
     ## [G490] Whether `init` carries `system`.
@@ -707,6 +736,7 @@ when defined(posix):
       listener: cint = -1,
       lock: cint = -1,
       args = Opt.none(seq[string]),
+      system: cint = -1,
   ): Result[int, string] =
     ## [IMPL] One process started as a host is (`hostspawn.c`): the carrier on
     ## fd 3, `env` its whole environment. The caller reaps it. The supervision
@@ -731,6 +761,7 @@ when defined(posix):
         carrier,
         listener,
         lock,
+        system,
         addr pid,
       )
       if r != 0:
@@ -756,6 +787,7 @@ when defined(posix):
       h: h,
       listener: (if listener >= 0: listener else: h.listenerFd),
       lock: (if lock >= 0: lock else: h.lockFd),
+      system: h.systemFd,
     )
     when defined(lcnTestHooks):
       if req.listener >= 0 and dropListener.exchange(false):
@@ -779,6 +811,10 @@ when defined(posix):
       # [RUN-0200] The host's fd 4 is its copy; the Runtime keeps its own.
       discard fdClose(h.listenerFd)
       h.listenerFd = -1
+    if h.systemFd >= 0:
+      # [G492] So is its fd 6.
+      discard fdClose(h.systemFd)
+      h.systemFd = -1
     if req.rc != 0:
       return err("the Module Host cannot be started: " & $strerror(-req.rc))
     ok()
@@ -1756,6 +1792,7 @@ when defined(posix):
               p.h.hostFd,
               p.listener,
               p.lock,
+              p.system,
               addr pid,
             )
           else:
@@ -1973,6 +2010,7 @@ else:
       listener: cint = -1,
       lock: cint = -1,
       args = Opt.none(seq[string]),
+      system: cint = -1,
   ): Result[int, string] =
     err(Unsupported)
 
@@ -2016,6 +2054,12 @@ else:
 
   proc setSystem*(h: Host) =
     discard
+
+  proc setSystemEndpoint*(h: Host, listener: cint, path: string): Result[void, string] =
+    err(Unsupported)
+
+  proc systemEndpointInit*(h: Host): Opt[string] =
+    Opt.none(string)
 
   proc systemInit*(h: Host): bool =
     false

@@ -86,7 +86,7 @@ The 308 PKG units by step (`PKG-` omitted):
 | 5-5 | A4 | 7 | 0080, 0436-0441 |
 | 5-6a-1 | A1 | 20 | 0003-0008, 0366, 0367, 0369-0377, 0379, 0519, 0521 |
 | 5-6a-1 | A2 | 2 | 0513, 0514 |
-| 5-6a-2 | A1 | 2 | 0380, 0388 |
+| 5-6a-2 | A1 | 2 | 0380, 0388 (built, I141; with App A's copy 0650) |
 | 5-6b | A1 | 55 | 0368, 0378, 0381, 0383-0387, 0520, 0522-0533, 0538-0542, 0544-0562, 0564-0573 |
 | 5-7a | A4 | 1 | 0435 |
 | 5-8 | B | 19 | 0060, 0287, 0289, 0335, 0337-0345, 0347-0351, 0512 (and TXT-0545, riding on 0351: G391) |
@@ -131,7 +131,7 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-5 | NP-15 (G156), PKG-0275 | keep G156; PKG-0275 by reading | settled by PM l.1096-1101 at 6cac8335 (re-pin P7a): PKG-0275 is stale |
 | 5-5 | TF-12, TF-14 | keep I69's interims; exclude an installed candidate whose signer is no longer accepted | TF-12 settled by PM l.1304-1307 at 6cac8335 (G167); the signer exclusion built at re-pin P7b (I110) |
 | 5-5 | the no-op install and update while the retained signer is not accepted (TF-07's second point); a D9 stop | fail with `signature-verification-failed` | decided (C6: fail); built at re-pin P7b, the update half in the resolver and the install half at resolution (G166) |
-| 5-6a | where the Package Manager runs | hosted in its own process, the engine's binding over TRANSPORT §8.1.2 | decided (C1; the owner's Q2, 2026-11-23: logosd composes it); hosted built in 5-6a-1 (G490, G491): the reserved instance `package_manager`, marked in the host configuration; the binding is 5-6a-2's |
+| 5-6a | where the Package Manager runs | hosted in its own process, the engine's binding over TRANSPORT §8.1.2 | decided (C1; the owner's Q2, 2026-11-23: logosd composes it); hosted built in 5-6a-1 (G490, G491): the reserved instance `package_manager`, marked in the host configuration; the binding built in 5-6a-2 (G492, G493, I141): the system-service endpoint on fd 6, its own ticket store, the engine's queue and the binding's own worker |
 | 5-6b | package record observation | deny by default; the grant is protected deployment input | open (C4) |
 | 5-7a | the remote trust input: its own input and revision, apart from the package trust file | — | decided (C2); built 2026-11-22 by 5-7a-1 (G408): `remote/trust.cbor` and its mark, `logosctl remote trust` |
 | 5-7a | NF-06 (G81), the authority part | G81 (a) narrowed | decided (B5); compared with CA l.77-78 at 6cac8335 (re-pin P6a): the enrolled half of TXT-0359 (claimed for the half with no Runtime enrolled) and TXT-0360 (riding RUN-1125) are 5-7a's; built 2026-11-22 by 5-7a-2 (G415), TXT-0359's enrolled half tested, TXT-0360 with 5-7a-4 |

@@ -164,9 +164,10 @@ default = "claimed"
 "RUN-1062" = "deferred:tier-5"
 # A MAY convenience mode not provided (l.1023).
 "RUN-0158" = "out-of-scope:a MAY convenience mode not provided (singleton direct calls, l.1023)"
-# The Runtime side of system-service sessions over unix-stream (l.1586), a MAY profile (TRANSPORT
-# l.1056) left unused: G48(a) binds the Capability Authority directly.
-"RUN-0318" = "out-of-scope:a MAY profile left unused: G48(a) binds system services directly"
+# The Runtime side of system-service sessions over unix-stream (l.1586; TRANSPORT §8.1.2): the
+# Package Manager's binding, its first Hello the last of its checks (Tier 5 step 5-6a-2; DECISIONS
+# G492, G493, I141). The Loader and the Capability Authority stay direct (G48(a)).
+"RUN-0318" = "claimed"
 # Requirements on provider modules and their contracts.
 "RUN-0116" = "out-of-scope:a requirement on provider modules and their contracts"
 "RUN-0117" = "out-of-scope:a requirement on provider modules and their contracts"

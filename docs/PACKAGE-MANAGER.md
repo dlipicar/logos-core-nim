@@ -11,8 +11,8 @@ Tier 5 step 5-3b builds the engine (5-3b-1) and the module that hosts it (5-3b-2
 installation: 5-5-1 the installed records, the responses, the handoff's construction and the admission
 bound (§8, §12, §13); 5-5-2 the store's root and extraction (§8, §9); 5-5-3 the worker and the spool
 (§10); the operations (§11) follow. Step 5-6a-1 makes it the module `logos_package_manager`, which
-logosd composes as the reserved instance `package_manager` (§14); 5-6a-2 serves the system callers'
-methods, and 5-6b `list_packages`.
+logosd composes as the reserved instance `package_manager` (§14); 5-6a-2 binds it as the Runtime's
+system service, which `get_runtime_handoff` serves, and 5-6b `list_packages`.
 
 ## 1. Placement and the data path
 
@@ -551,7 +551,8 @@ default are each `invalid-package`, so such a package is never installed.
 
 ## 14. The module and its instance
 
-Step 5-6a-1 (DECISIONS G490, G491, G494, G495, G500; the owner's Q2, Q7 (b), Q11).
+Step 5-6a-1 (DECISIONS G490, G491, G494, G495, G500; the owner's Q2, Q7 (b), Q11) and step 5-6a-2
+(G492, G493, I141; the owner's Q3 (a), Q4 (a)).
 
 - **The module** `logos_package_manager` (`src/logos_package_manager.nim`) is a library on a kit that
   lcn-gen generates from the pinned Package Manager contract (`pm/logos_package_manager_kit.nim` and its
@@ -572,11 +573,23 @@ Step 5-6a-1 (DECISIONS G490, G491, G494, G495, G500; the owner's Q2, Q7 (b), Q11
   logosd's process or the Runtime's (PKG-0005, PKG-0006).
 - **What each caller reaches.** Any caller with a route may call `inspect_package`,
   `install_package`, `remove_package` and `update_package`, subject to the authority policy.
-  `get_runtime_handoff` is for a SYSTEM_SERVICE caller, the Runtime's own binding (5-6a-2), and the
-  observation methods (`list_packages`, `list_installed_packages`, `watch_installed_packages`) for
-  readers (Q7 (b); 5-6b). Until then they, and an ordinary caller's `get_runtime_handoff`, are
-  answered `MODULE_ERROR` with no message or detail, the only refusal a provider may answer
-  (INTERFACE l.3308-3311); the operator's log has "package-manager: <method> refused for <caller>:
-  not a reader" (G495).
+  `get_runtime_handoff` is served to a SYSTEM_SERVICE caller only, the Runtime's own binding (below),
+  and the observation methods (`list_packages`, `list_installed_packages`, `watch_installed_packages`)
+  are for readers (Q7 (b); 5-6b). An ordinary caller's `get_runtime_handoff`, and until 5-6b the
+  observation methods, are answered `MODULE_ERROR` with no message or detail, the only refusal a
+  provider may answer (INTERFACE l.3308-3311); the operator's log has "package-manager: <method>
+  refused for <caller>: not a reader" (G495).
+- **The Runtime's binding** (G492, G493; TRANSPORT §8.1.2). The instance's Module Host serves a second
+  listener, the system-service endpoint (fd 6, in a private directory of its own), from the primary
+  contract alone. It accepts only a Hello with a system-service ticket the Runtime issued for this
+  binding; on that session the caller is SYSTEM_SERVICE, only `get_runtime_handoff` is admitted (a
+  subscription is refused), and the calls run on the binding's own worker, so callers that fill the
+  shared call workers cannot hold them. The Runtime makes the binding once the instance is ready,
+  retries a refused Hello from 1 s, doubling to 30 s, each time with a new ticket, and queues its
+  own requests: one in flight, 64 waiting, a request made while the binding is not yet ready
+  answered `NOT_READY` after 10 s at most. A lost session is made again on next use; the instance's
+  stop ends the binding and fails its requests `NOT_READY`. logosd's log has "the system-service
+  binding of package_manager is ready", each failed attempt and its next delay. Nothing in logosd
+  asks for a handoff before 5-8.
 - **`list_packages`** (G500; `pm/listing.nim`): the `lgx` entries of the catalog in use, in its
   canonical order, optionally one package's; 5-6b serves the method.

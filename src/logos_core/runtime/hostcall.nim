@@ -79,9 +79,14 @@ proc runHosted*(
     blob: ptr SchemaBlob,
     conn, requestId: uint64,
     trail: var CallTrail,
+    system = false,
 ): Result[void, InvocationFailure] =
   ## Steps 2-5 for an admitted call: ok once the host's loop committed a
   ## success; the commitments the capture asks for are put in `trail`.
+  ## [G492] `system`: a call on a system-service session. The verdict names
+  ## no consumer, so the provider's caller view is LOGOS_CALLER_SYSTEM_SERVICE
+  ## (RUNTIME l.835), and no invocation-scoped event is in the binding's
+  ## scope (C4; TRN-0344, TRN-0345).
   let call = h.nextRequest()
   let d = h.beginDispatch(call)
   if d == nil:
@@ -93,7 +98,8 @@ proc runHosted*(
     request: requestId,
     contract: @(blob.root),
     call: Opt.some(call),
-    consumer: Opt.some($consumer),
+    consumer: (if system: Opt.none(string) else: Opt.some($consumer)),
+    system: (if system: Opt.some(true) else: Opt.none(bool)),
     retain_request: adm.capture.retainRequest,
     retain_response: adm.capture.retainResponse,
   )
@@ -127,7 +133,15 @@ proc runHosted*(
       let p = m.arm_lcn_Carrier_scoped_check
       var r = LcnCarrierScopedResult(id: p.id)
       let name = checkEventName(p.event)
-      if name.isErr:
+      if system:
+        r.failure = Opt.some(
+          toCarrier(
+            failure(
+              ecNotAuthorised, "no event is in the system-service binding's scope"
+            )
+          )
+        )
+      elif name.isErr:
         r.failure = Opt.some(toCarrier(name.error))
       else:
         let ready = scopedCheck(addr inv, name.get)
@@ -141,7 +155,15 @@ proc runHosted*(
       var r = LcnCarrierScopedResult(id: p.id)
       # [SPEC INTERFACE §1.5; I106] The host's name, checked as given.
       let name = checkEventName(p.event)
-      if name.isErr:
+      if system:
+        r.failure = Opt.some(
+          toCarrier(
+            failure(
+              ecNotAuthorised, "no event is in the system-service binding's scope"
+            )
+          )
+        )
+      elif name.isErr:
         r.failure = Opt.some(toCarrier(name.error))
       else:
         let tag = scopedAdmit(addr inv, name.get)

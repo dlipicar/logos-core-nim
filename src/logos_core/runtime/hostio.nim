@@ -128,7 +128,12 @@ func toMessage*(ev: IoEvent): Opt[LcnCarrierMessage] =
   let m =
     case ev.kind
     of K.evHello:
-      toMessage(LcnCarrierIoHello(conn: ev.conn, frame: ev.frame))
+      # [G492; TRN-0330] The listener that accepted it, never the Hello, says
+      # whether the session is a system-service one.
+      var m = LcnCarrierIoHello(conn: ev.conn, frame: ev.frame)
+      if ev.helloEndpoint == HostSystemEndpoint:
+        m.system = Opt.some(true)
+      toMessage(m)
     of K.evEstablished:
       toMessage(LcnCarrierIoEstablished(conn: ev.conn))
     of K.evDispatch:
@@ -194,7 +199,11 @@ func toEvent*(m: LcnCarrierMessage, index: uint64): Result[Opt[IoEvent], string]
     of K.lcn_Carrier_io_hello:
       let x = m.arm_lcn_Carrier_io_hello
       IoEvent(
-        conn: conn(x.conn), kind: IoEventKind.evHello, helloEndpoint: ep, frame: x.frame
+        conn: conn(x.conn),
+        kind: IoEventKind.evHello,
+        helloEndpoint: (if x.system.isSome: hostedSystemEndpoint(index)
+        else: ep),
+        frame: x.frame,
       )
     of K.lcn_Carrier_io_established:
       IoEvent(

@@ -113,6 +113,10 @@ lcn.carrier_failure = {
 ; [DECISIONS G490] `system`: the instance is the one the host configuration's
 ; `package_manager` marks, so the host accepts its reserved `logos_` name and
 ; the `logos.` rules of its contracts. No other host gets it.
+; [DECISIONS G492; TRANSPORT l.1063, l.1098] `system_endpoint`, only with
+; `system` and `endpoint`: the exact path of the system-service endpoint's
+; listener on fd 6, which the host serves beside fd 4. Every session it
+; accepts there is a system-service session (`io_hello`'s `system`).
 lcn.carrier_init = {
   kind: "init",
   id: uint64,
@@ -127,6 +131,7 @@ lcn.carrier_init = {
   ? runtime_id: tstr .size (1..256),
   ? wipe_audit: [* bstr .size (16..64)],
   ? system: true,
+  ? system_endpoint: tstr .size (1..4096),
 }
 
 lcn.carrier_apply = {
@@ -427,10 +432,15 @@ lcn.carrier_rc_subscription_ended = {
 ; serve as `init_failed` (lane 0).
 
 ; The first frame of a connection, for the Runtime's `acceptHello`.
+; [DECISIONS G492; TRN-0330, TRN-0331] `system`: the loop accepted the
+; connection on the system-service listener (fd 6). The kind is the
+; listener's, never the Hello's: the Runtime judges it against the system
+; ticket store alone.
 lcn.carrier_io_hello = {
   kind: "io_hello",
   conn: uint64,
   frame: bstr,
+  ? system: true,
 }
 
 lcn.carrier_io_established = {
@@ -638,6 +648,10 @@ lcn.carrier_io_stop_serving = {
 ;   provider with an invocation context whose caller is `consumer` (or
 ;   answers `logos.schema` itself) and ends with `call_ended`, which carries
 ;   a commitment only where `retain_request` or `retain_response` asks.
+; - [DECISIONS G492; RUNTIME l.835, l.1084] `system`: admitted on a
+;   system-service session, with no `consumer`: the caller view is
+;   LOGOS_CALLER_SYSTEM_SERVICE. An admission has `consumer` or `system`,
+;   never both.
 lcn.carrier_admit_verdict = {
   kind: "admit_verdict",
   conn: uint64,
@@ -646,6 +660,7 @@ lcn.carrier_admit_verdict = {
   ? failure: lcn.carrier_failure,
   ? call: uint64,
   ? consumer: tstr .size (1..256),
+  ? system: true,
   retain_request: bool,
   retain_response: bool,
 }

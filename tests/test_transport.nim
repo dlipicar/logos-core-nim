@@ -1190,6 +1190,129 @@ suite "trn.hello: Hello and route tickets (TRANSPORT §3.1, §3.3, §8.1)":
     check closeCode(callee.receive(hello)) == Opt.some(ecInvalidParams)
     check closeCode(caller.receive(hello)) == Opt.some(ecInvalidParams)
 
+# System-service fixtures (§8.1.2; DECISIONS G492) ---------------------------------------
+
+proc systemBinding(
+    contract = root,
+    provider = "storage_module",
+    endpoint = "sys-1",
+    purpose = spSystemService,
+): SystemBinding =
+  SystemBinding(
+    runtime: "rt-1",
+    binding: 7,
+    realization: "pm/a1",
+    provider: provider,
+    contract: contract,
+    endpoint: endpoint,
+    methods: @[subtreeOf("storage.exists")],
+    purpose: purpose,
+  )
+
+let sysEndpoint =
+  CalleeEndpoint(endpoint: "sys-1", provider: "storage_module", contracts: @[root])
+
+suite "trn.system: Runtime-owned system-service sessions (TRANSPORT §8.1.2)":
+  test "[TRN-0328] [TRN-0334] [TRN-0335] [TRN-0340] [TRN-0343] [TRN-0194] a live system-service ticket establishes the session: the binding it names comes back, the response token is empty, and it is redeemed":
+    var store: TicketStore[SystemBinding]
+    let t = store.issue(systemBinding(), 0, high(int64)).get
+    let req = helloRequest("storage_module", t, root).get
+    let est = acceptSystemHello(sysEndpoint, store, req, Second).get
+    let resp = decodeMessage(est.response).get.hello
+    check resp.module == "storage_module"
+    check resp.token.len == 0
+    check resp.schema == root
+    check est.binding == systemBinding()
+    check est.binding.purpose == spSystemService
+    check store.len == 0
+    check acceptHelloResponse(decodeMessage(req).get.hello, est.response).isOk
+
+  test "[TRN-0336] [TRN-0342] a system-service ticket expires 60 s after issuance at the latest, and with its binding before that; expired material is NOT_AUTHORISED":
+    var store: TicketStore[SystemBinding]
+    let open = store.issue(systemBinding(), 0, high(int64)).get
+    check store.validate(open, 60 * Second - 1).isOk
+    let f =
+      acceptSystemHello(sysEndpoint, store, helloWith(open), 60 * Second + 1).error
+    check f.code == ecNotAuthorised and f.msg == NotAuthorisedMessage
+    let short = store.issue(systemBinding(), 0, 10 * Second).get
+    check acceptSystemHello(sysEndpoint, store, helloWith(short), 11 * Second).error.code ==
+      ecNotAuthorised
+
+  test "[TRN-0335] [TRN-0342] [TRN-0343] wrong-purpose material is NOT_AUTHORISED, looks like every other refusal, and consumes nothing":
+    var store: TicketStore[SystemBinding]
+    let t = store.issue(systemBinding(purpose = spNone), 0, high(int64)).get
+    let f = acceptSystemHello(sysEndpoint, store, helloWith(t), Second).error
+    check f.code == ecNotAuthorised
+    check f.msg == NotAuthorisedMessage
+    check toHex(t) notin f.msg.toLowerAscii
+    check store.len == 1
+
+  test "[TRN-0329] [TRN-0331] [TRN-0332] a route ticket is unknown to the system-service acceptor and a system-service ticket to the route acceptor, for the same provider and contract; neither consumes the other":
+    var routes: TicketStore[RouteBinding]
+    var systems: TicketStore[SystemBinding]
+    let rt = routes.issue(routeBinding(endpoint = "sys-1"), 0, 100 * Second).get
+    let st = systems.issue(systemBinding(endpoint = "ep-1"), 0, high(int64)).get
+    check acceptSystemHello(sysEndpoint, systems, helloWith(rt), Second).error.code ==
+      ecNotAuthorised
+    check acceptHello(endpoint, routes, helloWith(st), Second).error.code ==
+      ecNotAuthorised
+    check routes.validate(rt, Second).isOk
+    check systems.validate(st, Second).isOk
+
+  test "[TRN-0340] [TRN-0341] [TRN-0342] [TRN-0349] a ticket for another provider, endpoint or contract, and a replayed one, are NOT_AUTHORISED; the Runtime's binding check runs last before redemption, and its refusal consumes nothing":
+    var store: TicketStore[SystemBinding]
+    for b in [
+      systemBinding(provider = "other_module"),
+      systemBinding(endpoint = "sys-2"),
+      systemBinding(contract = sensor.primary.root),
+    ]:
+      let t = store.issue(b, 0, high(int64)).get
+      check acceptSystemHello(sysEndpoint, store, helloWith(t), Second).error.code ==
+        ecNotAuthorised
+      check store.validate(t, Second).isOk
+    let t = store.issue(systemBinding(), 0, high(int64)).get
+    var seen: seq[uint64]
+    let refuse: SystemHelloCheck = proc(b: SystemBinding): Result[void, HelloFailure] =
+      seen.add(b.binding)
+      err(failure(ecNotAuthorised, hrState, NotAuthorisedMessage))
+    let f =
+      acceptSystemHello(sysEndpoint, store, helloWith(t), Second, check = refuse).error
+    check f.code == ecNotAuthorised and f.reason == hrState
+    check seen == @[7'u64]
+    check store.validate(t, Second).isOk
+    # A failed earlier check never reaches it.
+    seen.setLen(0)
+    check acceptSystemHello(
+      sysEndpoint,
+      store,
+      helloWith(t, schemaCommitment(sensorIface)),
+      Second,
+      check = refuse,
+    ).error.reason == hrSchema
+    check seen.len == 0
+    let pass: SystemHelloCheck = proc(b: SystemBinding): Result[void, HelloFailure] =
+      ok()
+    check acceptSystemHello(sysEndpoint, store, helloWith(t), Second, check = pass).isOk
+    let again = acceptSystemHello(sysEndpoint, store, helloWith(t), 2 * Second).error
+    check again.code == ecNotAuthorised and again.msg == NotAuthorisedMessage
+
+  test "[TRN-0343] [TRN-0074] [TRN-0349] §3.1's order holds: a schema other than the binding's contract is VERSION_MISMATCH after the token check, and a bad token with it NOT_AUTHORISED":
+    var store: TicketStore[SystemBinding]
+    let t = store.issue(systemBinding(), 0, high(int64)).get
+    check acceptSystemHello(
+      sysEndpoint, store, helloWith(t, schemaCommitment(sensorIface)), Second
+    ).error.code == ecVersionMismatch
+    check acceptSystemHello(
+      sysEndpoint,
+      store,
+      helloWith(ticketBytes(9), schemaCommitment(sensorIface)),
+      Second,
+    ).error.code == ecNotAuthorised
+    check acceptSystemHello(
+      sysEndpoint, store, wire(helloMap(cbor("other_module"), cbor(@t))), Second
+    ).error.code == ecNotAuthorised
+    check store.validate(t, Second).isOk
+
 suite "trn.ticket: the random-256 route-ticket profile (TRANSPORT §8.1.1)":
   test "[TRN-0169] a ticket that collides with a live one is discarded and regenerated":
     var store: TicketStore[RouteBinding]
