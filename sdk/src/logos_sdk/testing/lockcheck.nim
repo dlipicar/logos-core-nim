@@ -201,7 +201,8 @@ proc srcDirOf(root: string): string =
   ## `root` joined with the `srcDir` its one nimble file declares, or `root` itself.
   var found: seq[string]
   for file in walkFiles(root / "*.nimble"):
-    found.add file
+    if not file.extractFilename.startsWith("._"):
+      found.add file # not exFAT's AppleDouble `._x.nimble`, which is no nimble file
   if found.len == 1:
     for line in readFile(found[0]).splitLines:
       let entry = line.strip
@@ -218,7 +219,8 @@ proc nimbleNameAt(dir: string): string =
   for _ in 0 .. 2:
     var found: seq[string]
     for file in walkFiles(at / "*.nimble"):
-      found.add file
+      if not file.extractFilename.startsWith("._"):
+        found.add file # as in `srcDirOf`
     if found.len == 1:
       return found[0].splitFile.name
     if found.len > 1:

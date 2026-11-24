@@ -4,6 +4,8 @@
 ## lane 0 (init, apply, release), the ends of the carrier, and the spawn
 ## (`hostsup.spawnProcess`, through a stand-in program), and the parent the
 ## spawn names (`--parent=<pid>`, G264 amended 2026-11-21; Tier 5 step 5-7a-1).
+## And the supervisor's side of a lane-1 Runtime Control call, through a fake
+## binding (`hostsup.rcCallReply`; INTERFACE §5.2 l.3860-3864, DECISIONS I135).
 ##
 ## The module is `tests/kit/probe_impl.nim`, a consumer-only library that reads
 ## what to do from its state directory and writes what it saw there. The host
@@ -14,6 +16,7 @@ when defined(posix):
   import std/[os, posix, sequtils, strutils]
   import unittest2
   import results
+  import logos_sdk/abi/types
   import logos_sdk/iface/outcome
   import logos_sdk/base/parentwatch
   import ../src/logos_core/runtime/[carrier, hostio, hostsup]
@@ -538,6 +541,89 @@ when defined(posix):
           r.closeCarrier()
           check r.waitExit() and r.exitedWith == 0
           check reportFileOf(reports, r.pid) == ""
+
+  # The supervisor's lane-1 Runtime Control call (`hostsup.rcCallReply`; DECISIONS
+  # I135) through a fake binding whose `call` leaves a chosen result and
+  # outputs, and whose `release_response` counts.
+  var
+    fakeCode: int32
+    fakeBuf: ptr UncheckedArray[uint8]
+    fakeLen: csize_t
+    fakeReleases: int
+    fakeReleased: (pointer, csize_t)
+    fakeBytes = [0xa0'u8, 0xa0, 0xa0, 0xa0] # empty CBOR maps
+
+  proc fakeCall(
+      binding: ptr LogosRuntimeControlBinding,
+      `method`: cstring,
+      paramsCbor: ptr UncheckedArray[uint8],
+      paramsCborLen: csize_t,
+      outResponseCbor: ptr ptr UncheckedArray[uint8],
+      outResponseCborLen: ptr csize_t,
+  ): LogosResult {.cdecl, gcsafe, raises: [].} =
+    {.cast(gcsafe).}:
+      outResponseCbor[] = fakeBuf
+      outResponseCborLen[] = fakeLen
+      LogosResult(code: CErrorCode(fakeCode))
+
+  proc fakeRelease(
+      binding: ptr LogosRuntimeControlBinding,
+      responseCbor: ptr UncheckedArray[uint8],
+      responseCborLen: csize_t,
+  ) {.cdecl, gcsafe, raises: [].} =
+    {.cast(gcsafe).}:
+      fakeReleases += 1
+      fakeReleased = (pointer(responseCbor), responseCborLen)
+
+  var
+    fakeVtable = LogosRuntimeControlVtable(call: fakeCall, releaseResponse: fakeRelease)
+    fakeRc = LogosRuntimeControlBinding(vtable: addr fakeVtable)
+
+  proc fakeReply(code: ErrorCode, buf: pointer, len: int): LcnCarrierRcReply =
+    ## One call through the fake binding, its outputs `buf` and `len`.
+    fakeCode = (if code == ecOk: 0'i32 else: int32(ord(code)))
+    fakeBuf = cast[ptr UncheckedArray[uint8]](buf)
+    fakeLen = csize_t(len)
+    fakeReleases = 0
+    fakeReleased = (nil, 0)
+    rcCallReply(
+      addr fakeRc,
+      LcnCarrierRcCall(
+        id: 7, `method`: @(toOpenArrayByte("list_modules", 0, 11)), params: @[0xa0'u8]
+      ),
+    )
+
+  proc refusedAsModuleError(r: LcnCarrierRcReply): bool =
+    r.id == 7 and r.value.isNone and r.failure.isSome and
+      r.failure.get.code == uint8(ord(ecModule)) and r.failure.get.message.isNone and
+      r.failure.get.detail.isNone
+
+  suite "host.supervisor: a Runtime Control call's outcome (INTERFACE §5.2 l.3860-3864; DECISIONS I135)":
+    test "[SPEC INTERFACE §5.2] a failure that also hands back a buffer is MODULE_ERROR, and the buffer is not released":
+      let r = fakeReply(ecNotAuthorised, addr fakeBytes[0], 1)
+      check r.refusedAsModuleError
+      check fakeReleases == 0
+
+    test "[SPEC INTERFACE §5.2] LOGOS_OK with a zero length is MODULE_ERROR, and the buffer it handed over is released once":
+      let r = fakeReply(ecOk, addr fakeBytes[0], 0)
+      check r.refusedAsModuleError
+      check fakeReleases == 1
+      check fakeReleased == (pointer(addr fakeBytes[0]), csize_t(0))
+
+    test "[SPEC INTERFACE §5.2] LOGOS_OK with no buffer and a nonzero length is MODULE_ERROR, with nothing read or released":
+      let r = fakeReply(ecOk, nil, 5)
+      check r.refusedAsModuleError
+      check fakeReleases == 0
+
+    test "[SPEC INTERFACE §5.2] a success is copied, then released once; a failure with no outputs keeps its code":
+      let ok = fakeReply(ecOk, addr fakeBytes[0], 2)
+      check ok.failure.isNone and ok.value == Opt.some(@[0xa0'u8, 0xa0])
+      check fakeReleases == 1
+      check fakeReleased == (pointer(addr fakeBytes[0]), csize_t(2))
+      let refused = fakeReply(ecNotAuthorised, nil, 0)
+      check refused.value.isNone and refused.failure.isSome
+      check refused.failure.get.code == uint8(ord(ecNotAuthorised))
+      check fakeReleases == 0
 else:
   import unittest2
 

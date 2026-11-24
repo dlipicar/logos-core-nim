@@ -21,6 +21,7 @@
 
 import results
 import logos_sdk/cbor
+import logos_sdk/base/utf8clip
 import logos_sdk/iface/outcome
 import ../package/[errors, records]
 import ./installed
@@ -31,12 +32,7 @@ const MaxMessageBytes* = 512 ## [SPEC PM §14] `package_error.message`
 
 func publicMessage*(s: string): string =
   ## `s` cut to at most 512 bytes, never inside a UTF-8 sequence.
-  if s.len <= MaxMessageBytes:
-    return s
-  var n = MaxMessageBytes
-  while n > 0 and (byte(s[n]) and 0xC0'u8) == 0x80'u8:
-    dec n
-  s[0 ..< n]
+  clipUtf8(s, MaxMessageBytes)
 
 func errorValue*(code: PackageErrorCode, message = ""): CborValue =
   ## [SPEC PM §14] One `package_error`; an empty message is left out.

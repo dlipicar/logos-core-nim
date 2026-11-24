@@ -1,7 +1,7 @@
 import std/[json, os, random, strutils]
 import unittest2
 import logos_sdk/cbor
-import logos_sdk/base/hex
+import logos_sdk/base/[hex, utf8clip]
 import logos_sdk/crypto/blake3
 import logos_sdk/testing/specdata
 import logos_sdk/testing/testdirs
@@ -362,3 +362,35 @@ suite "cbor: fuzz smoke (fixed seed)":
       if back.isOk:
         check back.get == v
         check encodeCbor(back.get) == bytes
+
+suite "base.utf8clip: text cut to a byte bound (clipUtf8; DECISIONS I135) [IMPL]":
+  const Euro = "\xE2\x82\xAC" # U+20AC, three bytes
+
+  test "[IMPL] a character the bound would split is dropped whole":
+    let s = repeat('x', 511) & Euro # 514 bytes; byte 512 is inside the euro sign
+    let cut = clipUtf8(s, 512)
+    check cut == repeat('x', 511)
+    check isValidUtf8(cut)
+    check utf8Cut(s, 512) == 511
+
+  test "[IMPL] text exactly at the bound is kept, and one byte over is cut back":
+    let atBound = repeat('x', 509) & Euro # 512 bytes
+    check clipUtf8(atBound, 512) == atBound
+    let over = repeat('x', 510) & Euro # 513 bytes
+    check clipUtf8(over, 512) == repeat('x', 510)
+    check clipUtf8(repeat('x', 513), 512) == repeat('x', 512)
+    check isValidUtf8(clipUtf8(over, 512))
+
+  test "[IMPL] four-byte characters, a bound of zero, and the in-place cut":
+    let clef = "\xF0\x9D\x84\x9E" # U+1D11E, four bytes
+    for n in 0 .. 8:
+      let cut = clipUtf8(clef & clef, n)
+      check cut.len == (n div 4) * 4
+      check isValidUtf8(cut)
+    check utf8Cut("abc", -1) == 0
+    var s = repeat('x', 511) & Euro
+    clipUtf8InPlace(s, 512)
+    check s == repeat('x', 511)
+    var short = "ok"
+    clipUtf8InPlace(short, 512)
+    check short == "ok"

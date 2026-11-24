@@ -799,6 +799,21 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
     - the fix is the core item "large-response completion", held until after the pause and needed before a
       release.
 
+- 2026-11-24, Tier 5 restructure clean-up (I135; wave 2), from master d042407:
+  - The Module Host checks a Runtime Control call's outcome with the SDK's `checkOutcome` and releases the
+    buffer only when the call transferred it (INTERFACE §5.2 l.3860-3864). A bad shape is `MODULE_ERROR`.
+  - One `clipUtf8` in `logos_sdk/base/utf8clip` behind every clip helper, so a cut text that reaches a `tstr` stays
+    valid UTF-8 (the Module Host's publish-failure, call-failure and local-failure events among them).
+  - Tools: four checkers exit 2 on a missing or empty root; six walkers skip exFAT's `._` files;
+    `tools/drvcmp.sh` is committed. CI weights for the 12 checks with an analog; logosd-no-ssl keeps its group's
+    mean until a CI run builds it.
+  - X0.1's list: IFC-0043's reason; the SDK's inspection items scoped to the SDK's code (IFC-0077, 0252, 0587,
+    0679, 0953, 0966) and IFC-0602 with the reverse mapper; the `cddl` paths in CDE.toml and CMT.toml; core's
+    two registration tests that tagged IFC-0981 (they keep TXT-0085). Cites of direct delivery moved to
+    6cac8335's lines.
+
+  No unit changes status.
+
 ## Tiers at f4f83471 (the original plan)
 
 | Tier | Area | Verdict |

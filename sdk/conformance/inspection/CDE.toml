@@ -7,15 +7,15 @@ reason = "Addressed to consumers. CddlDocument has no root field; the COMMITMENT
 
 [[item]]
 ids = ["CDE-0064", "CDE-0079"]
-reason = "No structural-equivalence view exists in this repository; the name-preserving model is the only one src/logos_core/cddl exposes."
+reason = "No structural-equivalence view exists in this repository; the name-preserving model is the only one sdk/src/logos_sdk/cddl exposes."
 
 [[item]]
 ids = ["CDE-0065", "CDE-0066"]
-reason = "src/logos_core/cddl derives no identifier or hash from canonical bytes; hashing belongs to the COMMITMENT and HASH layers, which define their own domains."
+reason = "sdk/src/logos_sdk/cddl derives no identifier or hash from canonical bytes; hashing belongs to the COMMITMENT and HASH layers, which define their own domains."
 
 [[item]]
 ids = ["CDE-0078"]
-reason = "No expanded view that follows references exists in src/logos_core/cddl; references are stored by name and never followed."
+reason = "No expanded view that follows references exists in sdk/src/logos_sdk/cddl; references are stored by name and never followed."
 
 [[item]]
 ids = ["CDE-0134"]

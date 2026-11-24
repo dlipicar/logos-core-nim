@@ -10,7 +10,7 @@
 ## the Runtime's numbers on its side and the host's on the other; the caller
 ## side's events and commands, and the loop's own end, never cross.
 
-import std/sequtils
+import std/[sequtils, strutils]
 import unittest2
 import results
 import logos_sdk/abi/checks
@@ -486,6 +486,51 @@ suite "run.carrier: a hosted provider's loop over lane 2 (G273) [IMPL]":
       check toMessage(IoEvent(kind: k)).isNone
     # A connection number no loop gives breaks the protocol.
     check toEvent(toMessage(LcnCarrierIoClosed(conn: 5)), Index).isErr
+
+  test "[IMPL] an event's long message is cut to 512 bytes at a UTF-8 boundary, and crosses (DECISIONS I135)":
+    # 511 bytes, then a three-byte character the 512-byte bound would split.
+    let long = repeat('x', 511) & "\xE2\x82\xAC" & "tail"
+    let cut = repeat('x', 511)
+    let a = roundTrip(
+      IoEvent(
+        conn: HostConn,
+        kind: IoEventKind.evPublishFailed,
+        pubFailEvent: "e",
+        pubFailMsg: long,
+      )
+    )
+    check a.pubFailMsg == cut
+    let f = PublishFailure(kind: high(PublishErrorKind), code: ecNotReady, msg: long)
+    let b = roundTrip(
+      IoEvent(
+        conn: HostConn,
+        kind: IoEventKind.evPublishResult,
+        pubResultTag: 5,
+        pubResultRequest: 9,
+        pubResultFailure: Opt.some(f),
+      )
+    )
+    check b.pubResultFailure.get.msg == cut
+    let c = roundTrip(
+      IoEvent(
+        conn: HostConn,
+        kind: IoEventKind.evLocalFailure,
+        localCode: ecNotReady,
+        localMsg: long,
+      )
+    )
+    check c.localMsg == cut
+    # Exactly 512 bytes, ending on a character's last byte, cross whole.
+    let full = repeat('x', 509) & "\xE2\x82\xAC"
+    let d = roundTrip(
+      IoEvent(
+        conn: HostConn,
+        kind: IoEventKind.evLocalFailure,
+        localCode: ecNotReady,
+        localMsg: full,
+      )
+    )
+    check d.localMsg == full
 
   test "[IMPL-DECISION G273] every order for a hosted connection reaches the host's loop as the same command, in its numbers":
     var contract: Digest

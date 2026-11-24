@@ -47,6 +47,7 @@
 import std/[atomics, locks, monotimes, strutils, tables, times, typedthreads]
 import results
 import logos_sdk/base/parentwatch
+import logos_sdk/base/utf8clip
 import logos_sdk/crypto/blake3
 import logos_sdk/iface/outcome
 import ../remote/carrier
@@ -215,12 +216,7 @@ func cutMessage*(message: string, max = ReplyMessageMax): string =
   ## back to the last complete code point, so that text reaching a tstr (an
   ## error reply, a log, a Runtime Control answer) stays valid UTF-8, which
   ## the strict decoder requires.
-  if message.len <= max:
-    return message
-  var n = max
-  while n > 0 and (uint8(message[n]) and 0xC0) == 0x80:
-    dec n
-  message[0 ..< n]
+  clipUtf8(message, max)
 
 proc wake(s: RemoteSupervisor) =
   when defined(posix):

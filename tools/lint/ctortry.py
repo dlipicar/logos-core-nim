@@ -138,7 +138,9 @@ def lint(roots):
     for root in roots:
         for d, _, files in os.walk(root):
             for name in sorted(files):
-                if name.endswith(".nim"):
+                # Not exFAT's AppleDouble `._x.nim`, which holds no Nim (a TMPDIR or a
+                # checkout on /Volumes/macOS_ext).
+                if name.endswith(".nim") and not name.startswith("._"):
                     scanned += 1
                     path = os.path.join(d, name)
                     for line, what in findings(path):
@@ -165,6 +167,13 @@ def self_test():
             if text is not None:
                 with open(os.path.join(dirs[name], "a.nim"), "w", encoding="utf-8") as f:
                     f.write(text)
+        # its hoisted form, beside an AppleDouble file whose bytes would be a finding.
+        dirs["appledouble"] = os.path.join(tmp, "appledouble")
+        os.mkdir(dirs["appledouble"])
+        with open(os.path.join(dirs["appledouble"], "a.nim"), "w", encoding="utf-8") as f:
+            f.write(HOISTED)
+        with open(os.path.join(dirs["appledouble"], "._a.nim"), "wb") as f:
+            f.write(b"\x00\x05\x16\x07" + PLANTED.encode())
         missing = os.path.join(tmp, "missing")
         cases = [
             ("a missing root", [missing], 2),
@@ -172,6 +181,7 @@ def self_test():
             ("an empty root", [dirs["empty"]], 2),
             ("a planted `?`", [dirs["planted"]], 1),
             ("its hoisted form", [dirs["hoisted"]], 0),
+            ("its hoisted form beside a `._` file", [dirs["appledouble"]], 0),
         ]
         for what, roots, want in cases:
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):

@@ -7,7 +7,7 @@ reason = "Scope statements: COMMITMENT defines no trust anchoring, and runtimes,
 
 [[item]]
 ids = ["CMT-0014", "CMT-0017"]
-reason = "Permissions for tooling. Names that are not contract-bearing exist only in the cdCDDLe model (src/logos_core/cddl); construct.buildSchema emits schema declarations only for local qualified names and metadata never reaches the Logos model, so no retained diagnostic name can affect an identity."
+reason = "Permissions for tooling. Names that are not contract-bearing exist only in the cdCDDLe model (sdk/src/logos_sdk/cddl); construct.buildSchema emits schema declarations only for local qualified names and metadata never reaches the Logos model, so no retained diagnostic name can affect an identity."
 
 [[item]]
 ids = ["CMT-0027", "CMT-0028"]

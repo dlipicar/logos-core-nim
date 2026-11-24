@@ -49,6 +49,8 @@ each whole tree it names even where it walks only part of it (test_package's lay
 
 import argparse
 import collections
+import contextlib
+import io
 import os
 import re
 import subprocess
@@ -589,6 +591,13 @@ def self_test(root):
             got = set(affected(tree, changed)[0])
             if got != want:
                 failures.append(f"planted {changed}: got {sorted(got)}, want {sorted(want)}")
+        # A tree with no suite is exit 2, not "0 of 0 suites"; the planted tree with one is 0.
+        empty = os.path.join(scratch, "empty")
+        os.makedirs(empty)
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            statuses = (report(Tree.from_dir(empty), ["a.nim"]), report(tree, ["src/logos_core/a.nim"]))
+        if statuses != (2, 0):
+            failures.append(f"an empty tree and the planted one: exit {statuses}, want (2, 0)")
     if os.path.isfile(os.path.join(root, NEARLY_ALL)):
         tree = Tree.from_dir(root)
         for changed, want in REPO_CASES:
@@ -623,16 +632,28 @@ def main():
     if a.root:
         if not a.changed or a.base:
             ap.error("--root takes --changed and no revisions")
+        if not os.path.isdir(a.root):
+            print(f"affected_suites: {a.root}: not a directory", file=sys.stderr)
+            return 2
         tree, changed = Tree.from_dir(a.root), a.changed
     else:
         if not a.base or a.changed:
             ap.error("give BASE [TREE], or --root with --changed")
         diff = git(a.repo, "diff", "--name-only", "--no-renames", "-z", a.base, a.tree)
         tree, changed = Tree.from_git(a.repo, a.tree), [f for f in diff.split("\0") if f]
+    return report(tree, changed, a.variant, a.why)
+
+
+def report(tree, changed, variant=None, why=False):
+    """Print the suites `changed` reaches in `tree`. The exit status: 0, or 2 for a tree with no
+    suite, which is no tree of this repository (a wrong root), not a change that reaches nothing."""
     result, unmapped, total = affected(tree, changed)
+    if total == 0:
+        print("affected_suites: no test suite in the tree: nothing to check", file=sys.stderr)
+        return 2
     for name in sorted(result):
-        line = f"{name}-{a.variant}" if a.variant else name
-        print(f"{line}: {' <- '.join(result[name])}" if a.why else line)
+        line = f"{name}-{variant}" if variant else name
+        print(f"{line}: {' <- '.join(result[name])}" if why else line)
     print(f"{len(result)} of {total} suites from {len(changed)} changed files", file=sys.stderr)
     if unmapped:
         print("reaching no suite: " + ", ".join(unmapped), file=sys.stderr)

@@ -25,6 +25,7 @@ import std/[os, sets, strutils, tables]
 import results
 import logos_sdk/cbor
 import logos_sdk/cbor/utf8
+import logos_sdk/base/utf8clip
 import logos_sdk/crypto/blake3
 import ../durable
 import logos_sdk/codegen/common_types
@@ -353,12 +354,8 @@ func classificationOf*(text: string): Result[Failure, string] =
 func rsFailure(f: Failure): LcnRsFailure =
   # [IMPL] A realizer's text may name host paths: it is not stored.
   var reason = (if f.internal: "" else: f.reason)
-  if reason.len > 512:
-    # `lcn.rs_failure.reason`: cut at a character boundary.
-    var n = 512
-    while n > 0 and (uint8(reason[n]) and 0xC0'u8) == 0x80'u8:
-      dec n
-    reason = reason[0 ..< n]
+  # `lcn.rs_failure.reason`: cut at a character boundary.
+  reason = clipUtf8(reason, 512)
   LcnRsFailure(
     classification: f.classification,
     reason: (if reason.len > 0: Opt.some(reason) else: Opt.none(string)),

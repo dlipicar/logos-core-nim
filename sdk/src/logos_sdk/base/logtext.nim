@@ -6,6 +6,8 @@
 
 {.push raises: [], gcsafe.}
 
+import ./utf8clip
+
 const ForeignTextLimit* = 256
   ## [IMPL] the bytes kept of text the Runtime did not write, in one diagnostic
 
@@ -36,10 +38,7 @@ func capped*(s: string, limit: int): string =
   ## when anything was cut.
   if s.len <= limit:
     return s
-  var cut = max(limit - 3, 0)
-  while cut > 0 and (byte(s[cut]) and 0xc0) == 0x80:
-    dec cut
-  s[0 ..< cut] & "..."
+  s[0 ..< utf8Cut(s, limit - 3)] & "..."
 
 func supplied*(text, by: string): string =
   ## Text `by` supplied, in a diagnostic: one line, at most
