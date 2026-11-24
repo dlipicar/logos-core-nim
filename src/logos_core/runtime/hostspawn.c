@@ -10,8 +10,10 @@
      and fd 6 the system endpoint's listener (step 5-6a-2; DECISIONS G492),
      each only when given (>= 0);
    - no other descriptor: POSIX_SPAWN_CLOEXEC_DEFAULT on Darwin only,
-     posix_spawn_file_actions_addclosefrom_np(7) on glibc 2.34 and later, and
-     everywhere the daemon's own close-on-exec descriptors;
+     posix_spawn_file_actions_addclosefrom_np on glibc 2.34 and later (from 7
+     for the host given fd 6, from 6 for every other, so none keeps the
+     daemon's fd 6), and everywhere the daemon's own close-on-exec
+     descriptors;
    - a process group of its own (its pid), so ending the group reaches what
      the module itself spawned;
    - an empty signal mask and the default action for SIGPIPE, SIGTERM, SIGINT
@@ -91,7 +93,8 @@ int lcn_host_spawn(const char *path, char *const argv[], char *const envp[],
   if (k >= 0 && (r = posix_spawn_file_actions_adddup2(&fa, k, 5)) != 0) goto done;
   if (y >= 0 && (r = posix_spawn_file_actions_adddup2(&fa, y, 6)) != 0) goto done;
 #ifdef LCN_HAVE_CLOSEFROM
-  if ((r = posix_spawn_file_actions_addclosefrom_np(&fa, 7)) != 0) goto done;
+  if ((r = posix_spawn_file_actions_addclosefrom_np(&fa, y >= 0 ? 7 : 6)) != 0)
+    goto done;
 #endif
   pid_t pid = 0;
   r = posix_spawn(&pid, path, &fa, &at, argv, envp);

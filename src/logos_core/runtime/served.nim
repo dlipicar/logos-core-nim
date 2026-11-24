@@ -198,7 +198,8 @@ proc openHostedSystem*(
   ## Manager's system-service endpoint, made and validated before its host is
   ## spawned beside its provider endpoint: a fresh private directory and an
   ## exact path of its own [IMPL], the listener passed as fd 6. No Hello
-  ## passes until `adoptHosted` gives it the binding's contract.
+  ## passes until the binding's creation (`engine.checkSystemBinding`) gives it
+  ## the binding's contract.
   let ep = createEndpoint(sv.base, module, sv.tport.config.listenBacklog).valueOr:
     return err("the system-service endpoint cannot be created: " & error.msg)
   validateEndpoint(ep).isOkOr:

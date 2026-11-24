@@ -44,15 +44,17 @@ const
   DefaultEndedRoutes* = 4096
     ## [IMPL] ended route records kept per consumer once nothing reaches them
   MaxWorkers* = 64 ## [IMPL] worker threads; more jobs wait in the queue
-  MaxCallWorkers* {.intdefine: "lcnMaxCallWorkers".} = 64
+  FixedCallWorkers* = 64
+    ## [IMPL] both call-worker pools' size, fixed (docs/HOST-CONFIG.md)
+  MaxCallWorkers* {.intdefine: "lcnMaxCallWorkers".} = FixedCallWorkers
     ## [IMPL] threads that run asynchronous calls (INTERFACE §2.9), apart from
     ## the lifecycle workers so long provider calls never hold bind, init or
     ## destroy jobs; more calls wait in their queue. [5-6a-2] A test build may
-    ## lower it (`test_system_binding`).
+    ## lower it (`test_system_binding`); no other build may change it (below).
   MaxNestedWorkers* = 64
     ## [IMPL; I88 D-d] overflow lifecycle workers, spawned one at a time while
     ## queued jobs starve behind 64 busy ones (`EngineLimits.starvationDelay`)
-  MaxNestedCallWorkers* {.intdefine: "lcnMaxNestedCallWorkers".} = 64
+  MaxNestedCallWorkers* {.intdefine: "lcnMaxNestedCallWorkers".} = FixedCallWorkers
     ## [IMPL; I88 D-d] overflow call workers, the same; past them the oldest
     ## queued call is refused (`EngineLimits.refuseDelay`)
   MaxAsyncCalls* = 4096
@@ -86,6 +88,15 @@ const
     ## apart from the lifecycle, call and evaluation workers, so a slow
     ## handler never delays a start or a call; more drains wait in their queue
   MaxListLimit* = 1000 ## [SPEC RUNTIME l.3379]
+
+when not defined(lcnTestHooks) and
+    (MaxCallWorkers != FixedCallWorkers or MaxNestedCallWorkers != FixedCallWorkers):
+  # [DECISIONS G493 (g); Fable §13.1] docs/HOST-CONFIG.md calls both pools fixed: only a
+  # test-hook build may change their size.
+  {.
+    error:
+      "lcnMaxCallWorkers and lcnMaxNestedCallWorkers are fixed at 64 (docs/HOST-CONFIG.md); only a test-hook build (lcnTestHooks) may set them"
+  .}
 
 func namesLoader*(id: string, rec: ModuleRecord): bool =
   ## [IMPL-DECISION G246; LOADER l.80] The Module Loader's reserved instance

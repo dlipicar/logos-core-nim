@@ -12,7 +12,8 @@
 ## engine's test clock. `test_system_binding.nims` lowers the shared call-worker pool to 2 + 2.
 ## A transport consumer (`trnowner`) presents tickets on either endpoint.
 
-import std/[atomics, monotimes, os, sequtils, strutils, tables, times, typedthreads]
+import
+  std/[atomics, monotimes, os, osproc, sequtils, strutils, tables, times, typedthreads]
 import unittest2
 import ../src/logos_core/runtime/engine
 import logos_sdk/abi/[checks, types]
@@ -835,6 +836,30 @@ when defined(posix):
         check x.isSome and x.get.ok
       releaseAll()
       e.finish()
+
+    test "[IMPL-DECISION G493] the call-worker pools are fixed: a build without the test hooks that sets lcnMaxCallWorkers or lcnMaxNestedCallWorkers does not compile, and a test-hook build may":
+      # From the repository's root, which `tests/config.nims` (the test hooks) does not cover.
+      let source = repo / "src/logos_core/runtime/plumbing.nim"
+      proc checked(defines: seq[string]): tuple[output: string, exitCode: int] =
+        execCmdEx(
+          quoteShellCommand(
+            @[getCurrentCompilerExe(), "check", "--hints:off", "--warnings:off"] &
+              defines & hostPathArgs(source) &
+              @["--nimcache:" & work / "pool-check", source]
+          ),
+          workingDir = repo,
+        )
+
+      for d in ["-d:lcnMaxCallWorkers=2", "-d:lcnMaxNestedCallWorkers=2"]:
+        let (output, code) = checked(@[d])
+        checkpoint(output)
+        check code != 0
+        check "only a test-hook build (lcnTestHooks) may set them" in output
+      let hooked = checked(
+        @["-d:lcnMaxCallWorkers=2", "-d:lcnMaxNestedCallWorkers=2", "-d:lcnTestHooks"]
+      )
+      checkpoint(hooked.output)
+      check hooked.exitCode == 0
 
     test "[IMPL-DECISION G492] the engine's queue: with one Request in flight and 64 parked, a 65th fails MODULE_ERROR before anything is sent; the parked ones are sent and answered in order":
       let s = setup("queue")

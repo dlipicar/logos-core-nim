@@ -648,7 +648,7 @@ lcn.carrier_io_stop_serving = {
 ;   provider with an invocation context whose caller is `consumer` (or
 ;   answers `logos.schema` itself) and ends with `call_ended`, which carries
 ;   a commitment only where `retain_request` or `retain_response` asks.
-; - [DECISIONS G492; RUNTIME l.835, l.1084] `system`: admitted on a
+; - [DECISIONS G492; RUNTIME l.835; TRANSPORT l.1084] `system`: admitted on a
 ;   system-service session, with no `consumer`: the caller view is
 ;   LOGOS_CALLER_SYSTEM_SERVICE. An admission has `consumer` or `system`,
 ;   never both.

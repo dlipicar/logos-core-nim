@@ -195,8 +195,11 @@ when defined(posix):
 
   var endpoints = 0
 
-  proc providerInit(path: string, module = "meter_module"): LcnCarrierMessage =
-    ## `init` for the meter library as a provider whose endpoint is `path`.
+  proc providerInit(
+      path: string, module = "meter_module", system = Opt.none(string)
+  ): LcnCarrierMessage =
+    ## `init` for the meter library as a provider whose endpoint is `path`; with `system`,
+    ## as the marked provider whose system-service endpoint is that path (G492).
     toMessage(
       LcnCarrierInit(
         id: 1,
@@ -207,6 +210,8 @@ when defined(posix):
         endpoint: Opt.some(path),
         transport: Opt.some(transportWords(defaultTransportConfig())),
         runtime_id: Opt.some("7f3a2c1e-5b4d-4e6f-8a9b-0c1d2e3f4a5b"),
+        system: (if system.isSome: Opt.some(true) else: Opt.none(bool)),
+        system_endpoint: system,
       )
     )
 
@@ -300,6 +305,27 @@ when defined(posix):
         check f.code.kind == LcnCarrierInitFailedCodeChoiceKind.Realization_failed
         check f.phase.kind == LcnCarrierInitFailedPhaseChoiceKind.Bind
         check "listener" in f.message
+        r.closeCarrier()
+        check r.waitExit()
+      discard fdClose(pair[0])
+      discard fdClose(pair[1])
+      discard fdClose(ep.listener)
+      removeDir(ep.dir.base)
+
+    test "[TRN-0186] [IMPL-DECISION G492] H-6b the marked provider's init naming a system-service endpoint, with no listener on fd 6, or a socket there that is not listening: init_failed realization-failed, the module destroyed":
+      let ep = newEndpoint()
+      var pair: array[2, cint]
+      check socketPair(addr pair) == 0
+      for system in [cint(-1), pair[0]]:
+        # fd 4 is the endpoint's own listener: only fd 6 is wrong.
+        var r = startHost(host, listener = ep.listener, system = system)
+        defer:
+          r.stop()
+        let f =
+          r.initFailure(providerInit(ep.path, system = Opt.some(ep.path & ".sys")))
+        check f.code.kind == LcnCarrierInitFailedCodeChoiceKind.Realization_failed
+        check f.phase.kind == LcnCarrierInitFailedPhaseChoiceKind.Bind
+        check "system-service listener" in f.message
         r.closeCarrier()
         check r.waitExit()
       discard fdClose(pair[0])
@@ -407,7 +433,7 @@ when defined(posix):
         check toSeq(walkDir(dir)).len == 1 # `probe.cmd` alone: no init ran
 
   suite "host.module: spawn (plan §2.3, R4, R5)":
-    test "[IMPL] H-14 the child starts with --parent=<the Runtime's pid> as its one argument, an empty signal mask, default actions, only the allow-listed environment, /dev/null on fd 0, the lock on fd 5 and nothing above it":
+    test "[IMPL] [IMPL-DECISION G492] H-14 the child starts with --parent=<the Runtime's pid> as its one argument, an empty signal mask, default actions, only the allow-listed environment, /dev/null on fd 0, the lock on fd 5 and nothing above it, not even the daemon's own fd 6 left open and inheritable":
       # Built without Nim's own signal handlers, which would replace the
       # dispositions the spawn set before the probe could read them.
       let program = buildChild(
@@ -429,10 +455,28 @@ when defined(posix):
       var lockStat: Stat
       discard fstat(lockFd, lockStat)
       let want = deliverySettings()
+      # [G492] This process's fd 6, open and inheritable during the spawn: a host given no
+      # system endpoint must not keep it. Where the spawn closes inherited descriptors
+      # (Darwin's flag, glibc's closefrom); bionic relies on close-on-exec alone.
+      const inheritedSix = defined(macosx) or (defined(linux) and not defined(android))
+      let sixFlags = fcntl(6, F_GETFD)
+      when inheritedSix:
+        if sixFlags < 0:
+          let f = posix.open(cstring(lockPath), O_RDONLY)
+          check f >= 0 and dup2(f, 6) == 6
+          discard posix.close(f)
+        else:
+          discard fcntl(6, F_SETFD, sixFlags and not FD_CLOEXEC)
+        check fcntl(6, F_GETFD) == 0
       let s =
         newSupervisor(program, @["LCN_SPAWN_PASSED", "LCN_SPAWN_UNSET"] & @SanitizerEnv)
       let h = s.newHost(nil, nil, nil, 1024).get
       check h.spawn(lock = lockFd).isOk
+      when inheritedSix:
+        if sixFlags < 0:
+          discard posix.close(6)
+        else:
+          discard fcntl(6, F_SETFD, sixFlags)
       discard pthread_sigmask(SIG_SETMASK, old, blocked)
       discard posix.close(lockFd)
       let m = h.awaitLane0()
