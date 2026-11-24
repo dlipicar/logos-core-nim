@@ -589,20 +589,30 @@ else:
     test "[IMPL] hosted placement is not supported on this platform; the host is a stub":
       skip()
 
-# [DECISIONS I146] The dispatch pool's counting, on every platform: pure, so every order of posts
-# and the workers' receives is walked, where a timed test would see only the orders its host runs.
+# [DECISIONS I146] The dispatch pool's counting, on every platform: pure, so every order of posts,
+# the workers' receives and the jobs' ends is walked, where a timed test would see only the orders
+# its host runs. `claim` and `finished` are the ones `host/endpoint.nim`'s `post` and `poolLoop`
+# call; the worker's side (nothing counted at a receive, `finished` once after each job) is this
+# model's, as `poolLoop` has it.
+import std/sets
 import ../src/logos_core/host/dispatchcount
 
-type PoolModel = object
-  ## Posts into the pool's queue and the workers that take them; a taken job blocks, as a
-  ## provider's call that waits for a file does. `old`: the counting before I146, which made a
-  ## worker idle when started and claimed it only once it had taken a job.
-  counts: DispatchCounts
-  old: bool
-  oldIdle, oldCount: int
-  posted, receiving, queued, running: int
+type
+  PoolModel = object
+    ## Posts into the pool's queue, the workers that take them, and the jobs' ends. `old`: the
+    ## counting before I146, which made a worker idle when started and claimed it only once it
+    ## had taken a job.
+    counts: DispatchCounts
+    old: bool
+    oldIdle, oldCount: int
+    posted, receiving, queued, running, ended: int
 
-proc post(m: var PoolModel, cap: int) =
+  Walked = object
+    ok: bool ## every state kept the invariant, and every order ended with every job done
+    claims: set[DispatchClaim] ## the claim kinds some order made
+    tookWaiting, wentIdle: bool ## `finished`'s two outcomes, each seen in some order
+
+proc post(m: var PoolModel, cap: int, w: var Walked) =
   inc m.posted
   inc m.queued
   if m.old:
@@ -612,6 +622,7 @@ proc post(m: var PoolModel, cap: int) =
       inc m.receiving
   else:
     let c = m.counts.claim(cap)
+    w.claims.incl c.kind
     if c.kind == dcGrow:
       doAssert c.index == m.counts.count - 1
       inc m.receiving
@@ -623,28 +634,63 @@ proc take(m: var PoolModel) =
   if m.old:
     dec m.oldIdle
 
-proc allRun(cap, jobs: int, old = false): bool =
-  ## Whether every order of `jobs` posts and the workers' receives ends with every job running.
-  var ok = true
-  proc walk(m: PoolModel) =
-    if not ok:
+proc finish(m: var PoolModel, w: var Walked) =
+  ## A running job ends; its worker goes back to its receive.
+  dec m.running
+  inc m.ended
+  inc m.receiving
+  if m.old:
+    inc m.oldIdle
+  elif m.counts.finished():
+    w.tookWaiting = true
+  else:
+    w.wentIdle = true
+
+func holds(m: PoolModel): bool =
+  ## [Fable §13.4] With A the workers not running a job (a new one from its claim) and Q the
+  ## jobs claimed and not yet received: A - Q = idle - waiting, and never both idle and waiting.
+  m.receiving - m.queued == m.counts.idle - m.counts.waiting and
+    not (m.counts.idle > 0 and m.counts.waiting > 0)
+
+proc walk(cap, jobs: int, ends: bool, old = false): Walked =
+  ## Every order of `jobs` posts, the workers' receives and, with `ends`, the running jobs'
+  ## ends. Done means every job running (`ends` false: each blocks for ever) or ended.
+  var w = Walked(ok: true)
+  var seen: HashSet[array[10, int]]
+  proc step(m: PoolModel) =
+    if not w.ok:
+      return
+    let key = [
+      m.posted, m.receiving, m.queued, m.running, m.ended, m.counts.idle,
+      m.counts.waiting, m.counts.count, m.oldIdle, m.oldCount,
+    ]
+    if key in seen:
+      return
+    seen.incl key
+    if not m.old and not m.holds:
+      w.ok = false
       return
     var moved = false
     if m.posted < jobs:
       var n = m
-      n.post(cap)
-      walk(n)
+      n.post(cap, w)
+      step(n)
       moved = true
     if m.receiving > 0 and m.queued > 0:
       var n = m
       n.take()
-      walk(n)
+      step(n)
       moved = true
-    if not moved and m.running != jobs:
-      ok = false
+    if ends and m.running > 0:
+      var n = m
+      n.finish(w)
+      step(n)
+      moved = true
+    if not moved and (if ends: m.ended else: m.running) != jobs:
+      w.ok = false
 
-  walk(PoolModel(old: old))
-  ok
+  step(PoolModel(old: old))
+  w
 
 suite "host.module: the dispatch pool's counts (DECISIONS I146)":
   test "[IMPL-DECISION I146] two posts before any worker has taken a job start two workers, at distinct indexes; a worker whose job ended is the next post's":
@@ -672,6 +718,12 @@ suite "host.module: the dispatch pool's counts (DECISIONS I146)":
     check c.idle == 2 and c.count == 2 and c.waiting == 0
 
   test "[IMPL-DECISION I146] in every order of four posts and the workers' receives, four blocking calls all run; the counting before I146 leaves one queued in some order":
-    check allRun(cap = 64, jobs = 4)
-    check allRun(cap = 4, jobs = 4)
-    check not allRun(cap = 64, jobs = 4, old = true)
+    check walk(cap = 64, jobs = 4, ends = false).ok
+    check walk(cap = 4, jobs = 4, ends = false).ok
+    check not walk(cap = 64, jobs = 4, ends = false, old = true).ok
+
+  test "[IMPL-DECISION I146] in every order of five posts, the workers' receives and the jobs' ends under a cap of 2, every state keeps A - Q = idle - waiting with never both idle and waiting, and every job runs and ends; the walk reaches every claim and both ends of a job":
+    let w = walk(cap = 2, jobs = 5, ends = true)
+    check w.ok
+    check w.claims == {dcIdle, dcGrow, dcWaiting}
+    check w.tookWaiting and w.wentIdle

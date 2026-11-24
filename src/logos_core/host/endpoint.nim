@@ -103,7 +103,7 @@ type
     next: ptr HostInv
 
   Job = object
-    inv: int ## a `ptr HostInv`; 0 ends the worker
+    inv: int ## a `ptr HostInv`; the workers end with the process
     hook: bool ## run its `request_cancel`
 
   Pool = object
@@ -690,8 +690,6 @@ proc poolLoop(p: ptr Pool) =
     try:
       j = p.ch.recv()
     except Exception:
-      return
-    if j.inv == 0:
       return
     let d = cast[ptr HostInv](j.inv)
     if j.hook:
