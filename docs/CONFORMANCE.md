@@ -1214,7 +1214,8 @@ What the figures say:
   bytes), each probe of the intern table and each step of a contract lookup. Counted as one unit each,
   the wide shape's 80,000 new names and a heap holding them made turns of 10 to 16 ms at the same
   budget. A unit costs about 17 to 40 ns in every plain shape whose steps the budget ends (dense 4,096:
-  154 million units in 4.25 s), and 4.7 to 10 ns in the contract shapes, whose bytes overcount (safe).
+  154 million units in 4.25 s), and 4.7 to 10 ns in the contract shapes, whose bytes overcount (safe);
+  0.7 to 1.4 ns since 5-3c-4, which encodes no catalog contract on the module thread.
   The chain shapes' time per unit is well above that, about 130 ns, as in 5-3c-2: their time is their
   steps, one for each of up to 4,095 inspections at about 42 units each, and a step's fixed cost (its
   resume, and the bench's clock reads around it) is a few µs.
@@ -1224,6 +1225,29 @@ What the figures say:
   the provider shape (`largestStep`). `test_pm_driver` asserts it under 2,048 for each contract shape,
   and under a test hook that makes every contract's hash collide (2,200 contracts, 5.7 million more
   units, largest step 256).
+- **Inspections carry encodings** (5-3c-4, G482). The counts are unchanged for a run that ends by
+  itself: pmbench's 45 runs (19 shapes at 32,768 and 65,536, the 7 contract shapes at 32,768) give master
+  `7a307a8` and this tree the same outcome, counters, steps, turns, work, largest step and release turns,
+  every one (framework.lan, the two builds alternating run by run). Three exceptions, by design:
+  - a run dropped while a catalog record is being numbered: its release counts that record without the
+    contracts already moved into the walk;
+  - the engine's turns: a judgment's decode turns are gone. Master's engine decoded the bench's
+    maximal judgment, 80,000 entries and 22,000 contracts, in 100 turns of its own
+    (`DecodeOperation`), 79 for 80,000 entries alone and 22 for 22,000 contracts alone; now it takes
+    none (`tools/pmbench.nim receive` on both trees);
+  - an inspection built by hand that repeats a provided contract: the builder keeps the repeat, where
+    `provided` gives each once. No bench shape does.
+
+  The times, from the same session: the module thread no longer encodes a catalog contract, so the
+  contract shapes' totals fall to between an eighth and a quarter (contracts 18,000 × 32 from 1.45 s to
+  0.36 s, 18,000 × 8 from 340 ms to 67 ms; 0.7 to 1.4 ns a unit against 4.7 to 6.3), and their longest
+  turns from 0.23-0.58 ms to 0.07-0.43 ms. The plain shapes are unchanged: totals within 3% but for one
+  run each way (wide with 1,000 attempts, 41 against 46 ms at 32,768 and 43 against 39 at 65,536), and
+  the longest turns within their noise. The bench's peaks for the contract shapes are 1.5 to 7.5 MiB
+  higher, the same at 8 manifests as at 32: the bench keeps every answer as values (the oracle's form)
+  and builds a record's encodings when it is supplied, so one record's buffer lives through its walk
+  beside the bench's values. In the module the values are the worker's and are freed there, and the
+  resolver's own heap falls ("The operation bound").
 - **Without G478, ORC's cycle collector held the thread** in the contract shapes: on 5-3c-3's branch
   before G478 (the same machine, at a load of about 4), the longest turns were 3 to 118 ms, on resumes
   that counted no more work than their neighbors, in the code that dropped the last reference to a
@@ -1298,6 +1322,16 @@ inspection built when it is asked for), by what the units are:
   and each distinct one's encoding kept once. When they repeat, the peak is one manifest's decoded
   contracts while they are numbered, about 150 MiB for 80,000, for 8 or 16 manifests alike;
 - inspections of plain entries held and never bound: 0.1 to 0.2 KiB.
+
+Since 5-3c-4 (G482) an inspection holds each contract as its encoding, 221 bytes here, and 5 to 8
+bytes beside it, where it held about 1.0 KiB of decoded values. The resolver's own heap at its peak
+(`memprobe2.nim` read with `getOccupiedMem` at each turn's end, orc `-d:release`, the Mac), against
+5-3c-3's tree with the same probe: when the manifests list the same 80,000 contracts, 92.9 to 42.5 MiB
+for 8 manifests and 95.5 to 45.1 MiB for 16; when no two list the same contract, 377 to 328 bytes a
+unit (8 manifests of 10 entries with 8,000 contracts each), 339 to 314 (16) and 362 to 332 (8 of one
+entry with 18,000), most of it each distinct encoding kept once. Units, work, turns and the largest
+step are the same in each. The bound's figures above stand: the worst unit is still a requirement on
+a name that never binds.
 
 So one operation's resolver state is at most about 460 MiB at the proposed default of 262,144 units,
 and about 29 GiB at the proposed maximum of 2^24 (1.8 KiB a unit).
@@ -1413,24 +1447,37 @@ memory and no inspection runs on the module thread.
   10.6 MiB. Now the module thread holds at most 0.2 ms at a time, and the worker's miss is the hash (about
   0.9 s a GiB) and the inspection pass (about 0.8 s). A piece crosses as a `string`: as a `seq[byte]`, refc's
   channel copied it one element at a time, 3.4 ms a piece on the module thread.
-- **The judgment's receipt** (`tools/pmbench.nim receive`; plan W3). A judgment crosses with its contracts encoded
-  and is decoded at most 1,024 dependency entries and contracts a turn (`DecodeTurnUnits`). The largest a 4 MiB
-  manifest allows, beside 5-3c's longest turn (under 11 ms on the Mac, "Resolver limits"):
+- **The judgment's receipt** (`tools/pmbench.nim receive`; plan W3; DECISIONS G482 since 5-3c-4). A judgment
+  crosses as the resolver holds it, its contracts as encodings in one buffer, and is cached and handed to its
+  operation in the turn it arrives: no turn decodes it. The worker builds it from the manifest's values. The
+  largest a 4 MiB manifest allows, on framework.lan (x86_64, load about 2), this tree and master `7a307a8` in one
+  session, three runs each, CPU time. The module thread's part is the receive and the estimate; under orc the
+  receive is a move:
 
-  | Judgment | orc: send / receive | orc: turns (longest), decoding in all | refc: send / receive | refc: turns (longest), decoding in all |
-  |---|---|---|---|---|
-  | 80,000 dependencies, no contracts | 0 / 0 | 79 (0.41-0.54 ms), 2.2-2.5 ms | 4.2-5.6 / 17.6-22.6 ms | 79 (8.6-10.7 ms), 17-20 ms |
-  | 1 dependency, 22,000 contracts | 0 / 0 | 22 (1.74-1.84 ms), 24-25 ms | 0.8 / 2.6-3.4 ms | 22 (8.1-8.2 ms), 44-47 ms |
-  | 20,000 dependencies, 20,000 contracts | 0 / 0 | 40 (1.78-1.99 ms), 24 ms | 1.8 / 8.5-8.9 ms | 40 (7.2-7.9 ms), 39-41 ms |
+  | Judgment | orc: worker's build / receive and estimate | refc: worker's build / send / receive / estimate | master `7a307a8`: decode turns, longest (orc / refc); refc receive |
+  |---|---|---|---|
+  | 80,000 dependencies, no contracts | 0.9-1.8 / 0.06-0.11 ms | 13-23 / 4.0-7.1 / 4.4-8.6 / 0.41-0.52 ms | 79, 0.73-0.76 / 7.0-7.9 ms; 13.5-16.1 ms |
+  | 1 dependency, 22,000 contracts | 17-19 / under 0.01 ms | 29-30 / 0.82-0.85 / 0.77-0.78 / 0.001 ms | 22, 0.77-1.34 / 8.0-8.7 ms; 3.1-3.2 ms |
+  | 20,000 dependencies, 20,000 contracts | 15-27 / 0.02-0.03 ms | 29-42 / 1.6-2.8 / 1.8-3.7 / 0.08 ms | 40, 0.69-0.79 / 8.0-8.9 ms; 7.8-7.9 ms |
+  | 80,000 dependencies, 22,000 contracts | 18-19 / 0.09-0.11 ms | 47-51 / 4.7-5.3 / 5.1-5.4 / 0.39-0.41 ms | 100, 0.70-0.80 / 1.1-1.2 ms; 23.9-24.3 ms |
 
-  Under orc, which the packaged logosd is (DAEMON.md §1), a judgment is moved and every turn is under 2 ms. Under
-  refc the receive copies it in one step, up to about 23 ms for 80,000 entries, twice 5-3c's longest turn, and a
-  decoding turn takes up to about 11 ms. That is the refc test variant's figure; the fallback of plan W3 (pieces of
-  4,096 entries) is not built (G447).
+  Under orc, which the packaged logosd is (DAEMON.md §1), the module thread holds a judgment's arrival for at
+  most 0.11 ms. Under refc the receive is still one step, a copy, now 5.1 to 5.4 ms for the largest judgment where
+  master's took 23.9 to 24.3 ms on the same machine (an entry no longer holds a list of its own), under 5-3c's
+  longest turn; the fallback of plan W3 (pieces of 4,096 entries) stays unbuilt (G447). The encode is the
+  worker's: 18 to 19 ms of its time under orc for the largest judgment, 47 to 51 ms under refc. Before 5-3c-4
+  (D1) the module thread decoded a judgment in up to 100 turns, up to 8.9 ms each under refc here; the Mac's
+  figures for that are G447's.
 - **The verification cache's bound** (G447): no inspection over 256 KiB by its estimate is cached, so the cache
   holds at most `cache_entries` × 256 KiB, 64 MiB at the default and 1 GiB at the maximum. The estimate's
   constants were measured as the heap's growth over many copies, under orc and refc, and `test_pm_vcache` holds the
-  estimate above it for three shapes.
+  estimate above it for five shapes.
+  - **A contract's weight** (`ContractUnitBytes`, G447 amended by G482): 192 bytes beyond its encoding, since an
+    inspection holds its contracts as encodings in one buffer (5-3c-4). Measured with `tools/pmbench.nim
+    unitbytes` (the Mac, `-d:release`): at worst 186.7 B under orc and 188.7 B under refc, at 22 contracts, where
+    the buffer of 4,180 bytes is rounded up to two pages; 4.7 to 8.0 B for 1,000 contracts or more, 34 B for one.
+    It was 1,024 for a decoded tree of nine CBOR values (655 B and 848 B). The constant moves which archives the
+    cache keeps, never an outcome.
 
 ## The operations
 
@@ -1646,6 +1693,11 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `
   `jobs.setCrashAt` sets the crash point on the worker's half of the store;
   `admission.admissionLimitForTests` lowers the admission bound. `test_pm_store` and
   `test_pm_install` call them in the test's process.
+- The resolver (5-3c; DECISIONS G455, G482): `resolver.contractHashShiftForTests` shifts every
+  contract's hash so that all of them collide; `inspectionBytesForTests` lowers the bound
+  `eligibleInspection` asserts on an inspection's encodings; `heldContractsForTests` reads how many
+  contract encodings a run's inspection of a source still holds. `test_resolver` calls them in the
+  test's process.
 - The extraction pace (5-5-4): a test-hook build of `pm/store.nim` reads `LCN_TEST_EXTRACT_PACE_MS`
   once, when the module library is loaded, and pauses the extraction sink that many milliseconds
   for each MiB written. It is the one hook a variable selects, because it lives in the Module Host's

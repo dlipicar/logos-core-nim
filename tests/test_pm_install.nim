@@ -560,8 +560,13 @@ when defined(posix):
         return false
       if p.modules.mapIt(encodeCbor(it.value)) != q.modules.mapIt(encodeCbor(it.value)):
         return false
-      if p.dependencies.mapIt(it.toWire) != q.dependencies.mapIt(it.toWire):
+      if p.dependencies.len != q.dependencies.len:
         return false
+      for k in 0 ..< p.dependencies.len:
+        let (d, e) = (p.dependencies[k], q.dependencies[k])
+        if d.package != e.package or d.kind != e.kind or d.version != e.version or
+            d.contracts.mapIt(encodeCbor(it)) != e.contracts.mapIt(encodeCbor(it)):
+          return false
     true
 
   func identities(s: Snapshot): seq[PackageIdentity] =

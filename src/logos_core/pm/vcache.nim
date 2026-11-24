@@ -59,10 +59,14 @@ const
   DependencyUnitBytes* = 192
     ## [IMPL; G447] a dependency entry beyond its two strings; measured about 71 B under orc
     ## and 127 B under refc
-  ContractUnitBytes* = 1024
-    ## [IMPL; G447] a contract (listed by a dependency entry, or provided) beyond its
-    ## deterministic encoding: a tree of nine CBOR values; measured about 655 B under orc and
-    ## 848 B under refc
+  ContractUnitBytes* = 192
+    ## [IMPL; G447, G482] a contract (listed by a dependency entry, or provided) beyond its
+    ## deterministic encoding, which the inspection holds in one buffer with an `int32` end
+    ## each (5-3c-4). Measured (`tools/pmbench.nim unitbytes`, the Mac, `-d:release`) at its
+    ## worst, 22 contracts, where the 4,180-byte buffer is rounded up to two pages: 186.7 B under
+    ## orc and 188.7 B under refc; 4.7 to 8.0 B for a thousand or more, 34 B for one. 1,024
+    ## before G482, for a decoded tree of nine CBOR values. The constant moves which archives
+    ## the cache keeps, never an outcome
 
 type
   CacheEntry* = object
@@ -154,12 +158,21 @@ func unitBytes*(kind: InputUnitKind): int =
   of iuDependency: DependencyUnitBytes
   of iuDependencyContract, iuProvided: ContractUnitBytes
 
-proc estimatedBytes*(x: Inspection): int =
+func estimatedBytes*(x: Inspection): int =
   ## [G447] The bytes the cache counts for `x`: over the resolver's walk (G477), each unit's
-  ## kind constant and the bytes of its variable parts. A contract's bytes are its encoded
-  ## size, so this walks every contract: call it once per insertion, never on a lookup.
-  for u in x.inputUnits:
-    result += unitBytes(u.kind) + u.bytes
+  ## kind constant and the bytes of its variable parts. [G482] Summed by lengths: a
+  ## contract's bytes are its encoding's length, and the encodings are one buffer, so no
+  ## contract is walked. Call it once per insertion, never on a lookup.
+  case x.kind
+  of ikEligible:
+    result = unitBytes(iuRecord) + x.identity.package.len + x.identity.version.len
+    for d in x.dependencies:
+      result += unitBytes(iuDependency) + d.package.len + d.version.len
+    result += x.contractCount * ContractUnitBytes + x.contractData.len
+  of ikIneligible:
+    result = unitBytes(iuRecord) + x.error.msg.len
+  of ikUnavailable:
+    result = unitBytes(iuRecord) + x.reason.len
 
 proc judgePackage*(
     source: LgxSource,
@@ -245,8 +258,7 @@ proc admit*(
 ): Inspection =
   ## [G403, G447] The judgment of the archive whose BLAKE3-256 is `digest`, answered; kept when
   ## it verified and `estimate`, its `estimatedBytes`, is at most `MaxCachedInspectionBytes`.
-  ## The caller gives the estimate: the engine sums it from the encoded judgment's lengths
-  ## (`jobs.estimatedBytes`), so no contract is walked here (Fable's D1 condition 6). An
+  ## The caller gives the estimate (`estimatedBytes`, by lengths; Fable's D1 condition 6). An
   ## ineligible or unavailable archive is never kept, so its error is always the current one.
   if o.inspection.kind == ikUnavailable:
     return o.inspection

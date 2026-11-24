@@ -10,6 +10,10 @@
 ## changes the resolver's results on purpose (a re-pin, an owner's answer) changes this copy in the
 ## same commit and states the difference in DECISIONS, or retires the comparison with a DECISIONS row
 ## saying why.
+##
+## (5-3c-4, G482) The resolver's `Inspection` holds its contracts as encodings; this copy reads the
+## old shape under its test-side name, `ValueInspection` (`valueinspection.nim`), from an inspector of
+## its own, given beside the input. Its search and its reads are unchanged.
 
 {.push raises: [].}
 
@@ -19,6 +23,7 @@ import logos_sdk/cbor
 import
   ../../src/logos_core/package/
     [errors, manifest, records, resolver, semver, signing, trust]
+import ./valueinspection
 
 # The search state ------------------------------------------------------------------
 
@@ -68,12 +73,12 @@ type
     catalog: seq[CatalogEntry]
     limits: ResolverLimits
     trust: TrustInput
-    inspect: Inspector
+    inspect: ValueInspector
     retained: RetainedCheck
     installedAt: Table[(string, string), int]
     entries: Table[(string, string), seq[int]] ## by ascending source encoding
     versions: Table[string, seq[string]] ## descending SemVer precedence
-    inspected: Table[seq[byte], Inspection]
+    inspected: Table[seq[byte], ValueInspection]
     evals: Table[(string, string), Eval]
     assigned: Table[string, Cand]
     reqs: Table[string, seq[Req]]
@@ -101,7 +106,7 @@ func contractKeys(cs: openArray[CborValue]): HashSet[seq[byte]] =
   for c in cs:
     result.incl(encodeCbor(c))
 
-proc initResolver(input: ResolverInput): Resolver =
+proc initResolver(input: ResolverInput, inspect: ValueInspector): Resolver =
   let l = input.limits
   doAssert l.names > 0 and l.depth > 0 and l.candidates > 0 and l.attempts > 0 and
     l.names <= MaxResolverLimits.names and l.depth <= MaxResolverLimits.depth and
@@ -114,7 +119,7 @@ proc initResolver(input: ResolverInput): Resolver =
     catalog: input.catalog,
     limits: input.limits,
     trust: input.trust,
-    inspect: input.inspect,
+    inspect: inspect,
     retained: input.retained,
   )
   var parsed: Table[string, SemVer]
@@ -153,7 +158,7 @@ proc initResolver(input: ResolverInput): Resolver =
     )
   r
 
-proc inspectSource(r: var Resolver, s: PackageSource): Inspection =
+proc inspectSource(r: var Resolver, s: PackageSource): ValueInspection =
   let k = s.encoded
   if k notin r.inspected:
     r.inspected[k] = r.inspect(s, r.trust)
@@ -809,7 +814,10 @@ proc run(r: var Resolver, root: RootReference): Result[Resolution, PackageError]
       return err(unavailableDependency("no complete dependency closure exists"))
 
 proc oracleResolve*(
-    input: ResolverInput, root: RootReference, counters: var ResolverCounters
+    input: ResolverInput,
+    inspect: ValueInspector,
+    root: RootReference,
+    counters: var ResolverCounters,
 ): Result[Resolution, PackageError] =
   ## [SPEC PM §11, §15] Resolves the complete transitive closure of `root`, or
   ## reports an update that changes nothing, or fails with
@@ -818,14 +826,14 @@ proc oracleResolve*(
   ## `artifact-integrity-failed` (retained bytes absent or altered) or the
   ## root's own error. `counters` holds the counts either way; they depend only
   ## on the inputs.
-  var r = initResolver(input)
+  var r = initResolver(input, inspect)
   result = r.run(root)
   counters = r.counters
 
 proc oracleResolve*(
-    input: ResolverInput, root: RootReference
+    input: ResolverInput, inspect: ValueInspector, root: RootReference
 ): Result[Resolution, PackageError] =
   var counters: ResolverCounters
-  oracleResolve(input, root, counters)
+  oracleResolve(input, inspect, root, counters)
 
 {.pop.}
