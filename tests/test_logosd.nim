@@ -121,7 +121,8 @@ when defined(posix):
 
   proc newCase(): Case =
     inc cases
-    result.dir = makeShortBase("lgd" & $cases, deepest = "/s/run/logosctl.sock")
+    result.dir =
+      makeShortBase("lgd" & $cases, deepest = "/s/run/logosctl.sock", perCase = true)
     result.s = Session(dir: result.dir / "s")
 
   proc ctl(c: Case, args: varargs[string]): Ran =
@@ -509,6 +510,9 @@ when defined(posix):
         for pid in hostPids():
           discard kill(Pid(pid), SIGKILL)
         fail()
+      # The case's directories, its children's output files with them: kept
+      # if it failed (`shortdir`).
+      endCaseBases(testStatusIMPL == TestStatus.FAILED)
 
     test "init: the layout and its modes, a UUIDv4 Runtime id, trust revision 1 with its mark, the evidence key and its binding":
       let c = newCase()
@@ -1032,7 +1036,8 @@ when defined(posix):
       # transport (a Module Host here). The logosctl and lcn_call sockets
       # (`run/*.sock`) still fit.
       inc cases
-      let dir = makeShortBase("lgd" & $cases, deepest = "/" & repeat("s", 90))
+      let dir =
+        makeShortBase("lgd" & $cases, deepest = "/" & repeat("s", 90), perCase = true)
       let length = int(sunPathMax()) - 20 # `<session>/run/lcn_call.sock` fits
       let c = Case(dir: dir, s: Session(dir: dir / repeat("s", length - dir.len - 1)))
       check c.s.dir.len == length

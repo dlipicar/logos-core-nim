@@ -139,7 +139,9 @@ when defined(posix):
   proc newCase(): Case =
     inc cases
     result.dir = makeShortBase(
-      "lpm" & $cases, deepest = "/s/run/ep/12345678/logos_logos_package_manager.sock"
+      "lpm" & $cases,
+      deepest = "/s/run/ep/12345678/logos_logos_package_manager.sock",
+      perCase = true,
     )
     result.s = Session(dir: result.dir / "s")
 
@@ -460,6 +462,9 @@ when defined(posix):
         for pid in hostPids():
           discard kill(Pid(pid), SIGKILL)
         fail()
+      # The case's directories, its children's output files with them: kept
+      # if it failed (`shortdir`).
+      endCaseBases(testStatusIMPL == TestStatus.FAILED)
 
     test "[PKG-0004] [PKG-0353] [PKG-0513] [IMPL-DECISION G491] [IMPL-DECISION G402] [IMPL-DECISION G449] under capability-authority, with no operator entry for it: the Package Manager is started (S2), acquires the catalog once the fake is ready (S9 to S11), the operations run end to end, and the records are kept across logosd's restart":
       let c = newCase()

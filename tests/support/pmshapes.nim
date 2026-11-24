@@ -45,8 +45,9 @@ import logos_sdk/crypto/blake3
 import ../../src/logos_core/pins as core_pins
 import ../../src/logos_core/package/[errors, manifest, records, resolver, trust]
 import ../../src/logos_core/pm/driver
+import ./valueinspection
 
-export results, errors, resolver
+export results, errors, resolver, valueinspection
 
 proc digestOf(h: string): typeof(ManifestCommitment().schemaRoot) =
   let bytes = hex.fromHex(h).get
@@ -64,7 +65,10 @@ let commitment = ManifestCommitment(
 
 type Shape* = object
   catalog: seq[CatalogEntry]
-  answers: Table[seq[byte], Inspection]
+  answers: Table[seq[byte], ValueInspection]
+    ## [G482] values: the oracle reads them, the resolver is given them `held`
+  unchecked*: bool
+    ## the resolver's answers are not checked against the values (`held`): the bench's
   root: string
   rootVersion: string
 
@@ -81,7 +85,7 @@ proc add(
       identity: PackageIdentity(package: name, version: version), source: src
     )
   )
-  s.answers[src.encoded] = Inspection(
+  s.answers[src.encoded] = ValueInspection(
     kind: ikEligible,
     identity: PackageIdentity(package: name, version: version),
     commitment: commitment,
@@ -188,20 +192,30 @@ proc hub*(n, v: int): Shape =
 func rootOf*(s: Shape): RootReference =
   RootReference(package: Opt.some(s.root), version: Opt.some(s.rootVersion))
 
+proc valueInspector*(s: Shape): ValueInspector =
+  ## [G482] The shape's answers as values: the oracle's inspector.
+  let answers = s.answers
+  result = proc(
+      source: PackageSource, trust: TrustInput
+  ): ValueInspection {.gcsafe, raises: [].} =
+    answers.getOrDefault(
+      source.encoded, ValueInspection(kind: ikUnavailable, reason: "no such source")
+    )
+
 proc inputOf*(s: Shape, limits: ResolverLimits): ResolverInput =
   ## [IMPL-DECISION G454] The shape as one synchronous resolver run's input, every inspection
   ## answered from the table and nothing installed: what `test_resolver` compares with the frozen
-  ## oracle and what `tools/pmbench.nim --sync` times.
-  let answers = s.answers
+  ## oracle (given `valueInspector`) and what `tools/pmbench.nim --sync` times. [G482] The
+  ## resolver is given each answer `held`.
+  let values = s.valueInspector
+  let check = not s.unchecked
   ResolverInput(
     catalog: s.catalog,
     limits: limits,
     inspect: proc(
         source: PackageSource, trust: TrustInput
     ): Inspection {.gcsafe, raises: [].} =
-      answers.getOrDefault(
-        source.encoded, Inspection(kind: ikUnavailable, reason: "no such source")
-      ),
+      held(values(source, trust), check),
     retained: proc(p: InstalledPackage): Result[void, string] {.gcsafe, raises: [].} =
       ok(),
   )
@@ -355,10 +369,15 @@ proc driveShape*(
       result.longestCpu = cpu
     case st.kind
     of dsNeed:
+      # [G482] Held as the worker would send it, outside the step's time.
       d.supply(
         st.source,
-        s.answers.getOrDefault(
-          st.source.encoded, Inspection(kind: ikUnavailable, reason: "no such source")
+        held(
+          s.answers.getOrDefault(
+            st.source.encoded,
+            ValueInspection(kind: ikUnavailable, reason: "no such source"),
+          ),
+          not s.unchecked,
         ),
       )
     of dsRetained:

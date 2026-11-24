@@ -407,18 +407,20 @@ a file or from bytes, and never inflated whole:
 
 ## 10. The worker and the spool
 
-Part 5-5-3 (DECISIONS G446's spool half, G447; `pm/worker.nim`, `pm/jobs.nim`, `pm/spool.nim`).
+Part 5-5-3 (DECISIONS G446's spool half, G447; `pm/worker.nim`, `pm/jobs.nim`, `pm/spool.nim`), and 5-3c-4's inspection form (G482).
 
 - **One worker thread per instance** reads and writes archives, so none is written, read or judged on
   the module thread. It starts at `_MODULE_init`, after the store's start, with its own copy of the
   trust input, the platform, the LGX limits and the path rules for that start; a thread that cannot be
   created fails initialization. Its jobs run one at a time, in order. Its answers reach the module
   thread through the kit's `post`, one drain at a time; it never calls the kit otherwise.
-- **Nothing that crosses holds a reference** (checked at compile time). A judgment crosses with its
-  contracts as their deterministic encodings and is decoded on the module thread at most 1,024
-  dependency entries and contracts a turn, between other events, so a 4 MiB manifest never takes one
-  long step. Under orc a message is moved; under refc it is copied, up to about 23 ms for an
-  80,000-entry judgment (CONFORMANCE).
+- **Nothing that crosses holds a reference** (checked at compile time). The resolver's inspection
+  holds its contracts as their deterministic encodings, in one buffer (G482, 5-3c-4), so a judgment
+  crosses as it is and is cached and handed to its operation in the turn it arrives. Only an
+  installation's staged record is decoded on the module thread, its dependencies at most 1,024
+  entries and contracts a turn, between other events, so a 4 MiB manifest never takes one long step.
+  Under orc a message is moved; under refc it is copied, 5.1 to 5.4 ms for the largest judgment
+  (80,000 entries and 22,000 contracts) on framework.lan (CONFORMANCE).
 - **The spool** is `<state_dir>/install/spool/`, 0700, emptied by the store's start. Each archive
   retrieved goes to its own file there, `<request>-<n>.lgx`, created 0600 and exclusively, never
   following a link. The fetcher hands each 1 MiB answer to the worker, which appends and hashes it; at

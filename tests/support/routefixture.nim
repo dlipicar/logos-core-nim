@@ -241,20 +241,11 @@ when declared(transportParity):
   # sensor providers routed over local transport (G254), each reached through
   # the Runtime's endpoint for it (G257). A documented difference has its own
   # `when declared(transportParity)` branch.
-  import std/exitprocs
   import ../../src/logos_core/runtime/routing
   import ./shortdir
 
-  proc removeAtExit(dir: string) =
-    ## The closure keeps its own copy: the main module's globals are destroyed
-    ## before exit procedures run.
-    addExitProc(
-      proc() =
-        removeDir(dir)
-    )
-
   let parityBase = makeShortBase("lcnlt", "/e999/12345678/logos_sensor_module.sock")
-  removeAtExit(parityBase)
+    ## removed at the exit (`shortdir`)
 
 proc config(policy = allowAll(), extra: seq[StaticRegistration] = @[]): EngineConfig =
   inc engines
