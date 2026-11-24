@@ -100,7 +100,9 @@ PKG-0274, whose LGX half is the extraction check, to 5-5 (G362). App A's 38 rule
 the sections state: ten are claimed and 28 are deferred by name with their twins, five to 5-5, two to 5-8 and 21 to 5-6a
 (G363). PKG-0568 is now deferred by name to 5-6b (G362). The count by step above is still that of 6a4dfa28, except
 that planning's rulings on step 5-3a's plan (2026-11-20, Q8, Q18, Q19) moved PKG-0083 from 5-3b to 5-3a,
-PKG-0166 and PKG-0169 from 5-11 to 5-3a, and PKG-0167 from 5-11 to 5-3b.
+PKG-0166 and PKG-0169 from 5-11 to 5-3a, and PKG-0167 from 5-11 to 5-3b. Planning's ruling on step 5-5's plan
+(2026-11-22, Q-P1 (a)) and TIER5-PLAN's row 5-5 moved PKG-0060, PKG-0337, PKG-0339 to PKG-0344 and PKG-0348 from 5-8
+to 5-5, which builds and tests them; 5-8 keeps PKG-0338, PKG-0347 and PKG-0351 (G391), built at 5-5-1.
 
 A dropped area's units that bind without it stay and are claimed in their own steps: TRN-0352, PKG-0190,
 PKG-0166, PKG-0167, PKG-0169, the `nix` and `quic` refusals (plan A1). At the close (5-13) every unit
@@ -128,14 +130,15 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-5 | the no-op install and update while the retained signer is not accepted (TF-07's second point); a D9 stop | fail with `signature-verification-failed` | decided (C6: fail); built at re-pin P7b, the update half in the resolver and the install half at resolution (G166) |
 | 5-6a | where the Package Manager runs | hosted in its own process, the engine's binding over TRANSPORT §8.1.2 | open (C1) |
 | 5-6b | package record observation | deny by default; the grant is protected deployment input | open (C4) |
-| 5-7a | the remote trust input: its own input and revision, apart from the package trust file | — | decided (C2) |
-| 5-7a | NF-06 (G81), the authority part | G81 (a) narrowed | decided (B5); compared with CA l.77-78 at 6cac8335 (re-pin P6a): the enrolled half of TXT-0359 (claimed for the half with no Runtime enrolled) and TXT-0360 (riding RUN-1125) are 5-7a's |
+| 5-7a | the remote trust input: its own input and revision, apart from the package trust file | — | decided (C2); built 2026-11-22 by 5-7a-1 (G408): `remote/trust.cbor` and its mark, `logosctl remote trust` |
+| 5-7a | NF-06 (G81), the authority part | G81 (a) narrowed | decided (B5); compared with CA l.77-78 at 6cac8335 (re-pin P6a): the enrolled half of TXT-0359 (claimed for the half with no Runtime enrolled) and TXT-0360 (riding RUN-1125) are 5-7a's; built 2026-11-22 by 5-7a-2 (G415), TXT-0359's enrolled half tested, TXT-0360 with 5-7a-4 |
 | 5-7a | NA-04 (G255); TF-30 point 1 (G194) | kept | decided (B9) |
 | 5-7a | enrollment and trust-anchor changes (G87) | offline, under the session lock, at the next start | decided (B3) |
-| 5-7a | G298 | its answers stay for a profile the build lacks; *no record is kept* is re-decided with listener records | decided (B8) |
+| 5-7a | G298 | its answers stay for a profile the build lacks; *no record is kept* is re-decided with listener records | decided (B8); re-decided 2026-11-22 by 5-7a-2 (G412): records kept, only enabling fails |
 | 5-7a, 5-7b | the remote process layout; facades | Runtime-owned TLS processes, a signing seam (logosd signs by default); a facade is a provider record, never served by logosd | decided (B1, B4) |
 | 5-7b | NL-07 (G355) | the `route_failure` spellings and the state table | decided (B6) |
 | 5-7b | NR-04 (G356) | resolve or fail | decided (B7) |
+| 5-7b | Runtime Control events to a consumer of another Runtime (G413's interim) | a Subscribe over remote Runtime Control is SubscriptionResult MODULE_ERROR; 5-7b, with reflected state, delivers them (R l.3184, in RUN-0600's paragraph) and extends the claimed RUN-0676 and RUN-0677 to such a subscriber | decided 2026-11-22 (planning) |
 | 5-8 | TF-44 (G351); a D9 stop | the plan's §6 wording | open (D2) |
 | 5-8 | how a package-backed instance comes to exist | configured entries with pins written offline (recommended) | open (D1) |
 | 5-8 | TF-04, TS-06, TP-07 | `requires` stays advisory; a pin is protected input; `create_module` carries none | open (D3) |
@@ -144,6 +147,8 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-11 | NP-13 | provenance attests the assembled archive | open (E3) |
 | 5-13 | TF-43 (G310); the units still deferred | the member set of E1; E2's relabels | open (E1, E2, E3) |
 | N-2 | marked methods through the CLI | local targets only (INTERFACE l.368-369, l.373): a marked request from files or stdin, a marked response to stdout, every copy erased; non-local targets refused | decided 2026-11-17 (owner); built in N-2d (G349, I102) |
+| N-3 | the blockchain module's placements: NP-14, a module cannot declare the placements it supports (G421) | `hosted_dynamic` with placement `process` only, one node per process, stated in `docs/DEPLOYMENT.md` §26 and the module's README; nothing refuses another placement | decided 2026-11-21 (planning's ruling on the library's threads); built in N-3.3 (I118); NP-14 open |
+| N-5 | blockchain's v2 D6 row: a supported machine whose slowest proof is over 5 s (G475) | (i): no preparation method; destroy waits for a running spend; the stop figure 10 s | decided 2026-11-22 (owner, Q4 (i) on desktops and servers, Linux and macOS); built in N-5.2 (I126); provisional until the mobile exploration at the end of the work, where a phone over 5 s brings (ii) as v3 extending v2 |
 
 Unanswered upstream and bearing on Tier 5: NP-12 to NP-14 (NP-11 is settled by text: PM l.964, l.1172, and
 NP-15 by PM l.1096-1101 at 6cac8335),
@@ -510,6 +515,253 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
 
   Claimed: PKG-0474 (the bindings' retrieval API and locator encodings: PACKAGE-MANAGER.md §4, STORAGE-FETCH §5,
   DAEMON.md §3), and PKG-0353's hosted half, under logosd. PKG 279/279.
+
+- 2026-11-22, Tier 5 step 5-7a-1 (I117; G407-G411; G264 amended; G86, G87, G194, G255 and G324 noted),
+  remote Runtimes' foundations, with no remote process yet:
+  - The Module Host binds itself to the pid its spawner names (`logos_sdk/base/parentwatch.nim`).
+  - The daemon configuration's `remote` section; with `remote.enabled` the Runtime id must be a
+    lowercase UUIDv4 (G407).
+  - The remote trust input `remote/trust.cbor` and its mark, RUNTIME's enrollment schema held unchanged,
+    G299's start table and the rules per key (two stricter than the text), the loader report,
+    `logosctl remote trust`, and the verifier's snapshot (G408). The carried 5-3a item is closed.
+  - The TLS credential and `logosctl remote credential new|show|rotate`, rotation as a cutover taken up
+    at the next start (G409).
+  - The remote control channel's CDDL, logosd's signing service, the relay to `logos_keyholder` with its
+    own checks, limit and count, and the test-only process copy (G410, G411). Handshakes signed all
+    three ways in `test_remote_tls`. logosd spawning the holder, and the remote processes, are 5-7a-2's.
+  - `libcrypto` is split from `libssl` (`transport/tls/p256.nim`), and logosd imports no libssl binding
+    (lint `daemon-no-ssl`). Its link drops libssl's objects, and its binary is checked to hold no libssl
+    code (G409: `test_logosd` on plain builds, the flake check `logosd-no-ssl` on the deployed logosd).
+  - `docs/REMOTE.md` (new), `docs/DAEMON.md` §2, §3, §6a, §6b, `docs/DEPLOYMENT.md` §2 and §5 (row 5d
+    Supported), `docs/HOST-CONFIG.md` (the host's argv).
+
+  Claimed: RUN-0493 to RUN-0500, RUN-0869, RUN-0928, RUN-0929, TRN-0217, TRN-0369 and PKG-0435 (14
+  units).
+
+- 2026-11-22, Tier 5 step 5-7a-2 (I117; G412, G413, G415; G298 re-decided; G81 and G205 amended; Q4 as
+  planning ruled), the target side of remote Runtime Control:
+  - Authority: a consumer of an actively enrolled Runtime is matched only by a subject naming that
+    Runtime (`runtimes`), and `policy: allow-all` with `remote.enabled` refuses the start (G415).
+  - Listener and export records from the configuration and Runtime Control, with their origin. A record
+    of any profile may be kept disabled; only enabling `quic`, or any profile without a remote program,
+    is G298's MODULE_ERROR (G412).
+  - Runtime Control disables last across restarts in `state/remote-exposure.cbor`; enables last for the
+    run. `logosctl remote exposure list|reset` (Q4).
+  - The `logos_remote` program's listener role, supervised by logosd from one thread, ending with logosd
+    whatever ends it. logosd spawns `logos_keyholder` (G411).
+  - Inbound Runtime Control: the Hello token rules, the forwarded consumer, the order of checks of
+    l.1835, forwarded discovery. `get_execution_permissions` and `report_failure` are NOT_AUTHORISED for
+    a forwarded consumer. `establish_route` (until 5-7a-3) and event subscriptions (until 5-7b) are
+    interim MODULE_ERROR (G413).
+  - `docs/REMOTE.md`, `DAEMON.md` §2, §6c (new), §10, `DEPLOYMENT.md` §4 and §5d, `AUTHORITY-POLICY.md`,
+    `HOST-CONFIG.md`.
+
+  Claimed: 38 RUN units (RUN-0092, RUN-0336 to RUN-0340, RUN-0342 to RUN-0344, RUN-0502, RUN-0503,
+  RUN-0508 to RUN-0510, RUN-0513, RUN-0514, RUN-0516 to RUN-0518, RUN-0595, RUN-0596, RUN-0598,
+  RUN-0613 to RUN-0618, RUN-0621, RUN-0622, RUN-0898, RUN-0984 to RUN-0989, RUN-1124), TRN-0206 and
+  TRN-0227 (40 units), and TXT-0359's enrolled half. RUN-0341 moves to 5-7a-4; RUN-0511, RUN-0512 and
+  RUN-0515 to 5-7a-3. TXT-0163 rides on RUN-1125 now, and TXT-0360 stays with it (5-7a-4).
+
+- 2026-11-22, Tier 5 step N-3 (I118), the blockchain node as a Logos Core module (G419-G424, G441; D10 revised,
+  G97 and G144 amended): a Nim confined kit module over the library's C binding, linked in as a static archive, in
+  the library's clone (`lcn/blockchain-module`). Contract v1 (three reads and `chain_progress_event`), the typed
+  configuration with no environment and no home directory, `_init` starting the node and an unprepared destroy
+  stopping it, placement `hosted_dynamic`/`process` only (NP-14 open; the open-items row). T9 runs it under logosd
+  in a Module Host with `logosctl`: a call, events, `describe`, a failure the restart policy recovers, five clean
+  stops, and a start refused without host-ambient. `docs/DEPLOYMENT.md` §26 answers for it as a payload module
+  (placement, resources, keystore, stop figure, NTP, NAT, the bootstrap period); no row of the item table changes,
+  and no inspection item is made untrue: CAP-0075 to CAP-0082 still hold (one permission, host-ambient), and rows
+  8b, 9 and 21 hold for the node's state and keystore. `docs/DAEMON.md` gains the module as the Grants example.
+  No unit changes status.
+
+- 2026-11-22, Tier 5 restructure step R9 with R10b (W2-X X0.1; R8): each claimed unit belongs to the package
+  that implements its rule, and its evidence is in that package's own tree (a tagged test there, or an item
+  in its `conformance/inspection/`). `spectrace gate`, `owners` and `deploydoc` count only the owner's tree.
+  - INTERFACE's ledger, main claims file and inspection file are under `sdk/conformance/`. Core claims the
+    Runtime's 143 IFC units in `conformance/claims/IFC.toml`, 13 of them by inspection
+    (`conformance/inspection/IFC.toml`).
+  - The SDK claims 124 RUN units and 7 CFG units in `sdk/conformance/claims/`: the Runtime Control schema and
+    header, and the kit's side of configuration delivery.
+  - The SDK's tests now carry the 11 IFC units whose only evidence was in core's suites: ten in `test_kit`,
+    `test_kit_confined` and `test_calls`, and IFC-0577 in a new audit-build suite, `sdk/tests/test_wipe_kit.nim`
+    (the ledger's marked `seal`, with no Runtime). IFC-0518's inspection item is reworded and the unit tested too.
+  - No unit changes status. The claimed set is unchanged, unit for unit (`tools/restructure/claim_split.py
+    --compare`, 3572 units). Per package at the branch point: IFC core 143, SDK 665; RUN core 767, SDK 124; CFG
+    core 119, SDK 7. Merged with master (5-7a's claims), RUN core is 816.
+
+- 2026-11-22, Tier 5 step 5-3c-1 (I122; G454), the resolver's incremental search:
+  - `package/resolver.nim` keeps the search's state incrementally and gives the same results: the unresolved names
+    on a heap, each bound name's depth with a trail of what each bind changed, propagation in ascending depth
+    before the bind, the depth limit over what a bind changed, a frame's versions tested as they come, the cycle
+    walk pruned by depth, and its work counted. Writing the closure reads candidates in place (it was cubic in a
+    dense closure). 5-3b-2's test hook is gone.
+  - The frozen oracle `tests/support/oracle_resolver.nim` (the search at `10cc598`), compared by `test_resolver` on
+    2,000 seeded catalogs, 1,000 seeded acyclic catalogs and the bench's shapes at the preset and the maxima;
+    thirteen mutations of the four parts each fail it.
+  - `tests/support/pmshapes.nim` gains the `lift` shape and a synchronous input, `tools/pmbench.nim` a
+    `--sync new|oracle|input` mode, `test_pm_driver` the `lift` counts; CONFORMANCE "Resolver limits" and DEPLOYMENT §12
+    the new costs. The driver still reruns from the root (5-3c-2).
+  - The probe `test_iterprobe` checks the closure-iterator rules 5-3c-2 relies on, under orc, refc and orc-release.
+  - For 5-5: CONFORMANCE "The archive's inspection", the verification cache's hold and peak memory with the
+    in-memory reader at 1 MiB, 64 MiB and 1 GiB (`tools/pmbench.nim archive`, `inspect`).
+
+  No unit changes status; PKG §11's stay claimed on the same tests, which the oracle suite strengthens.
+
+- 2026-11-22, Tier 5 step 5-3c-2 (I122; G455), the resumable run and slicing:
+  - `package/resolver.nim` runs the search as a resumable run (closure iterators): a turn ends where the run needs
+    an inspection or an installed record's retained-bytes answer (5-5's suspension point), or once
+    `ResolverTurnWork` (32,768) units of work are spent; its state is then freed a turn at a time. The synchronous
+    `resolve` drives it with no budget. The resolver's setup over the catalog is the run's first turns: done at once
+    it held the thread for about 0.4 s at the catalog's 65,536 entries. A list's growth counts as work, and a
+    maximum-size manifest's dependency list is built once and copied nowhere. None of it changes a result.
+  - `pm/driver.nim` holds the run for the operation's life and no longer reruns it (G405 amended). `pm/engine.nim`
+    issues `cmContinue` for a spent turn, frees finished and cancelled runs by continues of their own, cancels an
+    operation its caller gave up, and answers the running ones at `stop`. `pm/shell.nim` runs each continue from a
+    `callSoon` of its own, so I/O and timers go between two turns (F2).
+  - The operation bound's resolver half (G477): `ResolverInput.operationEntries` counts the inputs one root
+    operation reads (each record once, with its dependency entries, the contracts they list and its provided
+    contracts: one walk, `inputUnits`, beside `Inspection`), and the read that takes the count over it ends the
+    operation with `package-unavailable` (PM l.1308-1309), the four limits untouched. The synchronous API runs with
+    none; 5-5-3 adds the protected key `operation_entries` and weighs its cache over the same walk. No unit changes
+    status.
+  - Contracts within the turn bound (5-3c-3, G455): each is numbered once per run at G477's read point, in a sliced
+    step that counts it with its bytes. Requirements and candidates hold spans of numbers, compared by binary search
+    with each probe counted, and a name's need is gathered once per frame. Before it, one entry listing 18,000
+    contracts held the thread for 5.2 s in one turn. No unit changes status.
+  - `test_resolver` drives 2,000 seeded catalogs through the run under six turn budgets against the oracle;
+    `test_pm_driver` gains the engine's turns (alternation, stop, cancel, release) and each shape under every
+    budget; `test_pm_hosted` a sliced operation with a second operation and a readiness event between its turns.
+    `pmtest_module` takes turns of one work unit. CONFORMANCE "The resumable run" and DEPLOYMENT §12 give the
+    costs. G443's gate is amended to before 5-5-3.
+
+  No unit changes status.
+
+- 2026-11-23, Tier 5 step N-5 (I126), the blockchain module's contract v2 (G469-G476, G479, G481, I130, I131,
+  I133; D20, G97, G419, G422 and G340 amended): v2 extends v1, frozen at N-5.1's first commit, with the library's
+  reads, typed (blocks, transactions, the wallet, Blend, PoW, the deployment), the events `new_block_event` and
+  `lib_event`, the spends with a caller-chosen request id and a synced record each (`spend_status`), and the key
+  methods (a copy renamed over the keystore, for the next start), served by seven glue workers with delayed
+  Responses. v2 and the configuration schema froze at the library clone's `a834055da`. The module calls the
+  library's stock start (the owner's (b)): its HTTP API on `127.0.0.1` and `SystemSig`'s hold on SIGINT, which
+  `docs/DEPLOYMENT.md` §26 already stated; §26 gains the new state (the spend records, the key methods' files),
+  mining as configuration and destroy's wait for a running spend. `docs/DAEMON.md`'s Grants example moves to v2's
+  root, with v1's rule beside it. The open-items table gains the v2 D6 row, provisional until the mobile
+  exploration. No row of the item table changes, and no inspection item is made untrue: CAP-0075 to CAP-0082 still
+  hold (one permission, host-ambient), and rows 8b, 9 and 21 hold for the node's state, keystore and spend
+  records. No unit changes status.
+
+- 2026-11-23, Tier 5 step N-4 (I119; G425-G432, G480; G91, G97, G99, G100, G136 and G147 amended), storage_module,
+  sub-parts N-4.1 to N-4.5. The Storage node is a `hosted_dynamic` module in `logos_module/` on storage's
+  `logos-core-module` branch (`ca6b8687`), with storage's files as they are at `4fe02344` (G432):
+  - the module: the confined refc kit, typed configuration with the `extip` default, one start phase, `storage.stop`
+    and the strict destroy (G426, G427, G430, G431);
+  - it provides `lcn.storage_fetch` (G428), and core's `test_storage_fetch` runs it as the provider, opt in, under orc,
+    refc and orc-release;
+  - its data methods and paths (G425, G429);
+  - its lifecycle under logosd (`test_module_hosted`).
+
+  Its contract and configuration schema freeze at N-4.5's merge (G480). No unit changes status: the module's hosted
+  case adds evidence for RUN-0815, claimed since step 4b-3.2.
+
+- 2026-11-23, Tier 5 step N-5.4 (I134; I124's item for N-3), the blockchain module on the foreign-thread entry rule:
+  `report_failure` through `RouteSet.prepareRc` (G464), the procedures its workers and subscriptions post marked
+  `{.lcnModuleThread.}` (G465), and the library clone's flake check `blockchain-module-lint-callbacks` (G467;
+  0 findings), merged at the clone's `407dfb768`. In package mode a module suite that builds core's daemon needs
+  core's own dependencies, which `sdk/docs/MODULE-KIT.md` §9 now says. v2's contract and root are unchanged. No
+  unit changes status.
+
+- 2026-11-22, Tier 5 step 5-5-1 (I121; G445's files, G450, G451, G452), installed records, responses, the
+  handoff's construction and the admission bound, all pure code:
+  - `pm/installed.nim` and `pm/installed.cddl`: the installed record from a verified package, its record file
+    and the index, each checked on load against its text, App A and the signed manifest.
+  - `pm/responses.nim`: one encoder per §15 response variant, the 512-byte message cut and `MODULE_ERROR`.
+  - `pm/handoff.nim`: `runtime_handoff` for a selected module, with its configuration declaration accepted
+    under LOGOS-MODULE-CONFIGURATION; PKG-0060 at inspection in `vcache.inspect`.
+  - `pm/admission.nim`: each required result in its real Transport envelope within the 16 MiB body.
+  - Suite `test_pm_records`, and cases in `test_pm_vcache`; `tests/support/lgxbuild.nim` builds signed packages
+    with modules and configurations.
+
+  Claimed: PKG-0060, PKG-0172, PKG-0177, PKG-0178, PKG-0291, PKG-0337, PKG-0339 to PKG-0344, PKG-0348, PKG-0356,
+  PKG-0357, PKG-0359 to PKG-0362, PKG-0438, PKG-0468, PKG-0469, and App A's PKG-0618 to PKG-0620, PKG-0624 and
+  PKG-0628. 27 units; PKG-0338, PKG-0347 and PKG-0351 are built and stay deferred to 5-8. PKG 307/307, with
+  5-7a-1's PKG-0435.
+
+- 2026-11-22, Tier 5 step 5-5-2 (I121; G444, the rest of G445, G446's writing half), the installed-state
+  store and extraction, a synchronous library that 5-5-3's worker and 5-5-4's operations call:
+  - `pm/store.nim`: the root `<state_dir>/install/` with its lock and path-rule probe, staging, the commit
+    (one `writeAtomic` of the index after `syncfs` on Linux ext4 from 5.8, or a `fsync` of each file and
+    directory elsewhere), the start, deferred retirement and the retained hash.
+  - `pm/extract.nim`: descriptor-relative writes, no link followed, 0400 files in 0700 directories; reads below
+    a record the same way.
+  - `LgxPackage.signature` keeps the verified `manifest.cose`; `handoff.admissionHandoffs` gives the admission
+    bound each module's handoff. `durable.nim` is unchanged.
+  - Suite `test_pm_store` (POSIX only; Windows skips it).
+
+  Claimed: PKG-0181, PKG-0182, PKG-0204, PKG-0219, PKG-0274, PKG-0292, PKG-0293 (with TXT-0472), PKG-0471,
+  PKG-0487, PKG-0489, PKG-0499, PKG-0500, PKG-0610 and PKG-0611 by test; PKG-0488 and PKG-0498 by inspection.
+  16 units. PKG-0487 to PKG-0489 rest on the owner's Q5 (a), answered 2026-11-22. PKG 323/323.
+
+- 2026-11-23, Tier 5 step 5-5-3 (I121; G447, G446's spool half, G453's limits, G75's note, G477's key), the
+  worker and the spool:
+  - `pm/worker.nim`: one thread per instance, started at `_MODULE_init` after the store's start (moved here from
+    5-5-4) and joined at `_MODULE_destroy`; answers reach the module thread through the kit's `post`.
+  - `pm/jobs.nim`: the jobs and answers, checked free of references at compile time; a judgment crosses with its
+    contracts encoded and is decoded a turn at a time (1,024 entries and contracts). Two departures from the plan,
+    the encoded judgment (D1) and no failure event (D2), accepted by planning with Fable's conditions.
+  - `pm/spool.nim`: `<state_dir>/install/spool/`, each archive appended 1 MiB at a time with its BLAKE3, 0600 and
+    exclusive, judged and deleted; the inspections' share of 4 × `archive_bytes`; a write that fails makes the
+    archive unavailable.
+  - The verification cache keeps no inspection over 256 KiB by the walk's estimate; `lcn.pm_limits` gains
+    `operation_entries` and `operation_deadline_ms`; the LGX limits scale with `archive_bytes` (the owner's Q3 (d)).
+  - Suite "the worker and the spool" in `test_pm_driver`, cases in `test_pm_input` and `test_pm_vcache`;
+    `tools/pmbench.nim spool` and `receive`; CONFORMANCE "The worker and the spool"; DEPLOYMENT §12's budget.
+
+  Claimed: PKG-0011, PKG-0012, PKG-0192 and PKG-0271. 4 units. PKG 327/327.
+
+- 2026-11-23, Tier 5 step 5-5-4 (I121; G448, G449, G453's target platform; G446's spool budget; G447's stop
+  corrected), the operations. Step 5-5 is complete with it:
+  - `pm/slots.nim`: two slots, inspections and installed-state mutations, each with a queue of 16 behind it;
+    `MODULE_ERROR` past that.
+  - The engine's operations: `inspect`, `install`, `remove`, `update` and the `handoff` query; the snapshot of
+    shared immutable records with its holds, the retired list and `wjCollect`; `operation_deadline_ms` and the
+    last-commit rule; the fault map; a log line for each operation; the mutation's spool budget with the refetch
+    by digest; the retained check on the worker.
+  - The store in two halves (Fable's design A): the worker owns the files from the start's hand-over, the module
+    thread owns the snapshot.
+  - `pmtest_module` gains the five methods, and its kit the asynchronous provider API, so that a stop cancels an
+    operation's call (0.49 s, against 10.08 s without it).
+  - Suite `test_pm_install` (39 cases), cases in `test_pm_hosted` and `test_logosd_pm`; `tools/pmbench.nim
+    installed`, `module`, `commit`, `start` and `reply`; CONFORMANCE "The operations"; DEPLOYMENT rows 1, 12b
+    and 16a, §1, §12 and four duty rows; PACKAGE-MANAGER §11.
+  - Limits stated in G449: no job cancel, a call cancelled after its last commit began, a worker that hangs. And
+    in G445: the store's start takes about 1 ms a record under orc on the Mac, so the default startup deadline
+    holds about 120,000 records, below the index's 200,000 (DEPLOYMENT §12).
+  - The worker encodes each response, and the module thread carries the bytes (G447). Their way out is a stated
+    exception, a confined kit module's: a 16 MiB `{installed}` holds the module thread 99 ms under orc and 175 ms
+    under refc on the Mac, about 200 ms and 390 ms on server.lan (the host's check and commitment, the SDK's
+    completion copy, the kit's second encoding), left to the core item "large-response completion".
+
+  Claimed: PKG-0080, PKG-0189, PKG-0190, PKG-0389 to PKG-0410, PKG-0436, PKG-0437, PKG-0439, PKG-0440, PKG-0470,
+  PKG-0534 to PKG-0537, PKG-0608 and PKG-0609 by test; PKG-0222, PKG-0363, PKG-0441 and PKG-0493 by inspection;
+  BCP-0033 and BCP-0035. 40 PKG units and 2 BCP units. PKG-0411 is `out-of-scope`: a MAY not taken, since every
+  installed-state mutation is serialized in one slot (G449). TXT-0493 to TXT-0495 and PKG-0608 and PKG-0609 leave
+  the re-pin's deferred list. PKG 367/367, BCP 53/53. Areas A3 and A4's 5-5 units are all claimed.
+
+- 2026-11-23, Tier 5 step 5-3c-4 (I122; G482; G447, G455 and G477 amended), inspections carry contract encodings:
+  - `package/resolver.nim`: an eligible `Inspection` holds its contracts as their deterministic encodings, in one
+    private buffer with `int32` ends, built only by `eligibleInspection` and checked free of references
+    (`package/reffree.nim`). The numbering moves a catalog record's encodings into its walk and hashes ranges of
+    them with the same function; G477's walk reads lengths.
+  - `pm/jobs.nim` and `pm/engine.nim`: a judgment crosses as it is and is cached and supplied in the turn it
+    arrives; D1's decode is left for the staged record. `pm/vcache.nim`: the estimate by lengths, and
+    `ContractUnitBytes` 192, measured (it was 1,024).
+  - The oracle keeps the values shape as a test-side type (`tests/support/valueinspection.nim`), and every oracle
+    suite checks the builder against it. New cases in `test_resolver`, `test_pm_vcache` and `test_pm_driver`.
+  - Every resolver count is unchanged for a run that ends by itself, with three exceptions (CONFORMANCE "The
+    resumable run"); a judgment's decode turns are gone (100 for the bench's maximal judgment, 80,000 entries and 22,000
+    contracts; none now).
+
+  No unit changes status. PKG 367/367.
 
 ## Tiers at f4f83471 (the original plan)
 

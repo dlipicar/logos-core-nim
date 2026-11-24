@@ -4,14 +4,16 @@
 ## from a table (commitments are opaque to resolution); then the engine over
 ## real signed LGX archives served by a scripted provider.
 
-import std/[sequtils, strutils, tables]
+import std/[os, sequtils, strutils, tables]
 import unittest2
+import logos_sdk/cbor
 import logos_sdk/pins
 import logos_sdk/base/hex
 import ../src/logos_core/pins as core_pins
 import ../src/logos_core/package/[errors, resolver]
 import ../src/logos_core/daemon/config
-import ./support/[pmfixture, pmshapes, pmworld]
+import ../src/logos_core/pm/input_types as pm_input_types
+import ./support/[pmfixture, pmshapes, pmworld, valueinspection]
 
 # Synthetic catalogs -----------------------------------------------------------------
 
@@ -64,16 +66,16 @@ proc add(
   u.outcomes[s.encoded] =
     case outcome
     of ikEligible:
-      Inspection(
-        kind: ikEligible,
-        identity: ident(
+      eligibleInspection(
+        ident(
           if claims.len > 0:
             claims
           else:
             name & "@" & version
         ),
-        commitment: commitOf(name & "@" & version & "#" & $n),
-        dependencies: deps.mapIt(dep(it)),
+        commitOf(name & "@" & version & "#" & $n),
+        deps.mapIt(dep(it)),
+        [],
       )
     of ikIneligible:
       Inspection(kind: ikIneligible, error: packageError(pecSignature, "not signed"))
@@ -260,9 +262,12 @@ proc scene(
     entries: openArray[(CatalogEntry, seq[byte])],
     trust = orgTrust,
     resolverLimits = MaxResolverLimits,
+    turnWork = ResolverTurnWork,
+    limits = Opt.none(pm_input_types.LcnPmLimits),
 ): Scene =
   ## The engine with `entries` as its kept, matching catalog and each archive
-  ## (an empty one is absent) served under the entry's locator.
+  ## (an empty one is absent) served under the entry's locator. `turnWork` is
+  ## the work of one resolution turn (G455).
   var cat: seq[CatalogEntry]
   for (e, archive) in entries:
     cat.add(e)
@@ -270,8 +275,14 @@ proc scene(
       result.objects[e.source.objectLocator] = archive
   let doc = catalogBytes(cat)
   result.objects[bytesOf("catalog")] = doc
-  result.w =
-    newWorld(doc, kept = keptFor(doc), trust = trust, resolverLimits = resolverLimits)
+  result.w = newWorld(
+    doc,
+    kept = keptFor(doc),
+    limits = limits,
+    trust = trust,
+    resolverLimits = resolverLimits,
+    turnWork = turnWork,
+  )
   result.w.emit(result.w.e.start())
   result.w.bringUp()
   result.w.serve(result.objects, result.calls)
@@ -422,6 +433,140 @@ suite "engine resolution over signed archives (G405)":
       b.get.packages.mapIt(($it.identity, it.commitment))
     check withP.calls.allIt(it.locator != bytesOf("lib.provenance"))
     check withP.statted == plain.statted
+
+# Turns (Tier 5 step 5-3c-2; DECISIONS G455) -----------------------------------------------
+
+proc answerCall(s: var Scene) =
+  ## Answers the oldest call the engine made, from the scene's objects.
+  let c = s.w.take({cmStat, cmRead})
+  s.calls.add(c)
+  let data = s.objects.getOrDefault(c.locator, @[])
+  let a =
+    if c.locator notin s.objects:
+      failureOf(fcUnavailable)
+    elif c.kind == cmStat:
+      sized(uint64(data.len))
+    else:
+      dataOf(data[int(c.offset) ..< int(c.offset) + int(c.length)])
+  s.w.handle(answered(c.call, a))
+
+proc untilTurn(s: var Scene, request: uint64) =
+  ## Answers calls until `request` has a turn due.
+  while request notin s.w.continues:
+    doAssert s.w.has({cmStat, cmRead}), "no call to answer"
+    s.answerCall()
+
+proc replyTo(s: Scene, request: uint64): Result[Resolution, PackageError] =
+  for c in s.w.replies:
+    if c.request == request:
+      return c.outcome
+  doAssert false, "no reply to " & $request
+
+suite "engine turns (G455)":
+  # A turn budget of one work unit: every operation spans many turns, each a later event.
+  # `lib` is listed at 40 more versions that `app`'s requirement rejects, never retrieved:
+  # each is tested in a turn of its own.
+  var entries = @[(entryOf("app", "1.0.0"), app100), (entryOf("lib", "1.2.0"), lib120)]
+  for i in 0 ..< 40:
+    entries.add((entryOf("lib", "2.0." & $i), newSeq[byte]()))
+
+  test "[IMPL-DECISION G455] a spent turn continues in a later one; two operations take turns one after the other, with the outcomes of unsliced runs":
+    var whole = scene(entries)
+    let want = whole.resolveIn(root("app")).summary
+    check want.startsWith("app@1.0.0")
+    var s = scene(entries, turnWork = 1)
+    s.w.emit(s.w.e.resolve(1, root("app")))
+    s.w.emit(s.w.e.resolve(2, root("app")))
+    var order: seq[uint64]
+    while true:
+      # An operation has one continue issued at a time.
+      for op in [1'u64, 2]:
+        check s.w.continues.countIt(it == op) <= 1
+      if s.w.has({cmStat, cmRead}):
+        s.answerCall()
+      elif s.w.continues.len > 0:
+        if s.w.continues[0] != ReleaseOperation:
+          order.add(s.w.continues[0])
+        discard s.w.turn()
+      else:
+        break
+    check s.w.replies.len == 2
+    check s.replyTo(1).summary == want
+    check s.replyTo(2).summary == want
+    var alternated = 0
+    for i in 2 ..< order.len:
+      if order[i] == order[i - 2] and order[i] != order[i - 1]:
+        inc alternated
+    checkpoint $order.len & " turns, " & $alternated & " alternations"
+    check order.countIt(it == 1) > 40
+    check order.countIt(it == 2) > 40
+    check alternated > 40
+    check s.w.e.releasingRuns == 0
+
+  test "[IMPL-DECISION G455] [IMPL-DECISION G405] stop during a sliced operation answers it package-unavailable, and no turn follows (G437)":
+    var s = scene(entries, turnWork = 1)
+    s.w.emit(s.w.e.resolve(1, root("app")))
+    s.untilTurn(1)
+    check s.w.turn()
+    check 1'u64 in s.w.continues
+    check s.w.replies.len == 0
+    s.w.emit(s.w.e.stop())
+    check s.w.replies.len == 1
+    check s.replyTo(1).isErr
+    check s.replyTo(1).error.code == pecPackageUnavailable
+    check s.w.e.pendingRequests == 0
+    check s.w.e.releasingRuns == 0
+    let issued = s.w.queue.len
+    while s.w.turn():
+      discard
+    check s.w.replies.len == 1
+    check s.w.queue.len == issued
+    check s.w.e.resolve(2, root("app")).len == 0
+    check s.w.e.stop().len == 0
+
+  test "[IMPL-DECISION G455] a cancelled operation takes no more turns and is not answered; its queued retrieval is dropped, a late continue is ignored, and its run is released (F3)":
+    var s = scene(entries, turnWork = 1)
+    s.w.emit(s.w.e.resolve(1, root("app")))
+    s.w.emit(s.w.e.resolve(2, root("lib", "1.2.0")))
+    # Each run's setup takes turns before its first retrieval.
+    while s.w.e.queued("main") < 2:
+      doAssert s.w.turn(), "a turn is due"
+    # The second retrieval waits behind the first: cancelled, it is dropped.
+    s.w.emit(s.w.e.cancel(2))
+    check s.w.e.queued("main") == 1
+    s.untilTurn(1)
+    s.w.emit(s.w.e.cancel(1))
+    check 1'u64 in s.w.continues
+    check s.w.e.pendingRequests == 0
+    check s.w.e.releasingRuns == 2
+    check s.w.e.cancel(1).len == 0
+    let made = s.calls.len
+    s.w.serve(s.objects, s.calls)
+    check s.w.replies.len == 0
+    check s.calls.len == made # `lib` is never retrieved
+    check s.w.e.releasingRuns == 0
+    check s.w.continues.len == 0
+
+  test "[IMPL-DECISION G455] a finished operation's run is released turn by turn after its answer; no request takes the releases' id":
+    var s = scene(entries, turnWork = 1)
+    s.w.emit(s.w.e.resolve(1, root("app")))
+    var releases = 0
+    while s.w.has({cmStat, cmRead}) or s.w.continues.len > 0:
+      if s.w.has({cmStat, cmRead}):
+        s.answerCall()
+        continue
+      if s.w.continues[0] == ReleaseOperation:
+        check s.w.replies.len == 1 # answered before any of its release
+        check s.w.e.releasingRuns == 1
+        inc releases
+      discard s.w.turn()
+    check s.replyTo(1).isOk
+    check releases > 1
+    check s.w.e.releasingRuns == 0
+    s.w.emit(s.w.e.resolve(ReleaseOperation, root("app")))
+    check s.w.replies.len == 2
+    check s.replyTo(ReleaseOperation).error.code == pecInvalidRequest
+    check s.w.continues.len == 0
 
 # The measurement's shapes, by their counts -----------------------------------------
 
@@ -596,3 +741,547 @@ suite "the resolver measurement's shapes, by their counts (ruling M6; G443)":
         attempts = 9,
         steps = 10,
       )
+
+  test "[IMPL-DECISION G454] the lift deepens the whole core with each newer `y` and gives it up; a deepening past the limit ends it":
+    # The root, the n core names and `y`: n + 2 names. Each of the v - 1 newer versions of `y`
+    # requires `c0000` one level deeper than the root does, so the last core name is at depth
+    # n + 1, and `yz ^2.0.0`, which no version meets (never charged or inspected). `y@1.0.0`
+    # completes the closure. Attempts: the root, the core and every version of `y`.
+    const n = 30
+    check lift(n, 1).counted(preset) ==
+      expect(
+        ok = true,
+        names = n + 2,
+        depth = n,
+        candidates = 1,
+        attempts = n + 2,
+        steps = n + 3,
+      )
+    check lift(n, 4).counted(preset) ==
+      expect(
+        ok = true,
+        names = n + 2,
+        depth = n + 1,
+        candidates = 4,
+        attempts = n + 1 + 4,
+        steps = n + 2 + 4,
+      )
+    # A core reaching the depth limit: the first newer `y` deepens its last name past it, which
+    # ends the operation, though `y@1.0.0` would complete the closure (PM l.1276-1277). The
+    # deepened depth is counted.
+    check lift(depthLimit, 2).counted(preset) ==
+      expect(
+        limit = "dependency_depth",
+        names = depthLimit + 2,
+        depth = depthLimit + 1,
+        candidates = 1,
+        attempts = depthLimit + 2,
+        steps = depthLimit + 3,
+      )
+
+  test "[IMPL-DECISION G455] each shape gives one outcome, the same counters and work, and the same retrievals under every turn budget; a small one slices it into turns":
+    for (name, s, lim) in [
+      ("chain", chain(depthLimit + 1), preset),
+      ("dense", dense(depthLimit + 1), preset),
+      ("layered", layered(depthLimit + 1, depthLimit), preset),
+      ("wide", wide(50, 4), limitsWith(attempts = MaxResolverLimits.attempts)),
+      ("wide at its limit", wide(50, 6), limitsWith(attempts = 20)),
+      ("hub", hub(30, 4), preset),
+      ("hub at its limit", hub(4, 6), limitsWith(candidates = 4)),
+      ("lift", lift(30, 4), preset),
+      ("lift past the depth", lift(depthLimit, 2), preset),
+    ]:
+      let base = driveShape(s, lim, NoTurnBudget)
+      check base.turns == 0
+      var most = high(int)
+      for budget in [ResolverTurnWork, 1_000, 64, 17, 1]:
+        checkpoint name & " under " & $budget
+        let r = driveShape(s, lim, budget)
+        check r.outcome.summary == base.outcome.summary
+        check r.counters == base.counters
+        check r.work == base.work
+        check r.steps == base.steps + r.turns
+        # A smaller budget never takes fewer turns.
+        check r.turns >= (if most == high(int): 0 else: most)
+        most = r.turns
+        if budget == 1:
+          check r.turns > 0
+      # A budget of one unit ends a turn at each count: one unit, or a step counted as
+      # several (a list's growth, a setup entry's bytes; chain: 522 turns for 1,231 units).
+      check most >= int(base.work div 4)
+
+  test "[IMPL-DECISION G455] (5-3c-3) contracts within the turn bound: each contract shape gives one outcome, the same counters, work and retrievals under every budget; every contract is counted with its bytes, and no step walks them in one go":
+    # Each contract is numbered when its record is read: a unit and its 221 encoded bytes at
+    # least. So the work exceeds them all, where before it counted none (5.2 s in one turn for
+    # 18,000 contracts in one entry, G455's exception). And the most work between two turn
+    # checks is a constant: one contract and the slots' growth, never a walk of an entry's or a
+    # record's contracts.
+    const LargestStep = 2_048
+    for (name, s, contracts, outcome) in [
+      ("contracts", contracts(2_000, 2), 2 * 2 * 2_000, "error dependency-unavailable"),
+      ("provider", provider(5_000, 300), 1 + 5_000 + 300, "q@1.0.0"),
+      ("versioned", versioned(1_000, 4), 4 * 1_000, "error dependency-unavailable"),
+    ]:
+      checkpoint name
+      let base = driveShape(s, preset, NoTurnBudget)
+      check base.outcome.summary.startsWith(outcome)
+      check base.work > contracts * 222
+      check base.largestStep <= LargestStep
+      for budget in [ResolverTurnWork, 1_000, 64, 1]:
+        checkpoint name & " under " & $budget
+        let r = driveShape(s, preset, budget)
+        check r.outcome.summary == base.outcome.summary
+        check r.counters == base.counters
+        check r.work == base.work
+        check r.steps == base.steps + r.turns
+        check r.largestStep <= LargestStep
+        # Each resume spends less than its budget and one step more.
+        check r.steps >= int(base.work div (budget + LargestStep))
+
+  test "[IMPL-DECISION G455] (5-3c-3) contracts whose hashes collide (a test hook): each probe of the chain is a unit and a turn check, so the chain costs work and turns, never a step; the outcome, counters and work are the same under every budget":
+    # The hash is unkeyed (the work must be the same in every run), so a signer can choose
+    # encodings that collide (Fable's review of 5-3c-3 §1). The hook shifts each hash left by
+    # 40 bits: every encoding starts at the same slot, and the k-th new one walks past the k
+    # before it.
+    const LargestStep = 2_048
+    # contracts(1_100, 1): two entries of 1,100, a chain longer than LargestStep.
+    let n = 2 * 1_100
+    let spread = driveShape(contracts(1_100, 1), preset)
+    contractHashShiftForTests = 40
+    try:
+      let chained = driveShape(contracts(1_100, 1), preset)
+      check chained.outcome.summary == spread.outcome.summary
+      check chained.counters == spread.counters
+      check chained.work - spread.work >= int64(n * (n - 1) div 4)
+      check chained.largestStep <= LargestStep
+      let s = contracts(150, 1)
+      let base = driveShape(s, preset, NoTurnBudget)
+      check base.outcome.summary.startsWith("error dependency-unavailable")
+      for budget in [ResolverTurnWork, 1_000, 64, 1]:
+        checkpoint "under " & $budget
+        let r = driveShape(s, preset, budget)
+        check r.outcome.summary == base.outcome.summary
+        check r.counters == base.counters
+        check r.work == base.work
+        check r.steps == base.steps + r.turns
+        check r.largestStep <= LargestStep
+    finally:
+      contractHashShiftForTests = 0
+
+  test "[IMPL-DECISION G477] the operation bound: a shape reads its records and their entries; at that count it resolves as without a bound, one below it ends package-unavailable, the same under every turn budget, with no limit named":
+    # dense(n): n records and n(n-1)/2 dependency entries; chain(n): n records, n - 1 entries.
+    check driveShape(dense(10), preset).counters.entries == 10 + 45
+    check driveShape(chain(10), preset).counters.entries == 10 + 9
+    for (name, s, lim) in [
+      ("chain past the depth", chain(depthLimit + 1), preset),
+      ("dense", dense(depthLimit + 1), preset),
+      ("layered", layered(depthLimit + 1, depthLimit), preset),
+      ("wide", wide(50, 4), limitsWith(attempts = MaxResolverLimits.attempts)),
+      ("hub", hub(30, 4), preset),
+      ("lift", lift(30, 4), preset),
+    ]:
+      let base = driveShape(s, lim, NoTurnBudget)
+      let e = base.counters.entries
+      check base.counters.bound == ""
+      var first: BenchRun
+      for budget in [NoTurnBudget, 64, 1]:
+        checkpoint name & " under " & $budget
+        let at = driveShape(s, lim, budget, Opt.some(e))
+        check at.outcome.summary == base.outcome.summary
+        check at.counters == base.counters
+        let below = driveShape(s, lim, budget, Opt.some(e - 1))
+        check below.outcome.summary == "error package-unavailable"
+        check below.counters.bound == "operation_entries"
+        check below.counters.limit == ""
+        check below.counters.entries == e
+        if budget == NoTurnBudget:
+          first = below
+        else:
+          check below.counters == first.counters
+          check below.work == first.work
+
+# The worker and the spool (Tier 5 step 5-5-3; DECISIONS G446, G447) --------------------
+
+type
+  HoldsRef = object
+    n: int
+    r: ref int
+
+  HoldsClosure = object
+    f: proc()
+
+  HoldsPointer = object
+    p: pointer
+
+proc junk(n: int): seq[byte] =
+  ## `n` bytes that are no LGX archive: judged ineligible, which is all a spool test needs.
+  result = newSeq[byte](n)
+  for i in 0 ..< n:
+    result[i] = byte(i mod 251)
+
+proc spoolFiles(s: Scene): int =
+  for _ in walkDir(s.w.spoolDir):
+    inc result
+
+proc reads(s: Scene): int =
+  s.calls.countIt(it.kind == cmRead)
+
+proc contract(i: int): CborValue =
+  cbor("contract-" & $i)
+
+proc judgedOpened(s: Scene, archive: seq[byte]): Opened =
+  ## The worker's judgment of `archive`, as `wjOpen` answers it.
+  var w: WorkerState
+  discard
+    w.runJob(WorkerJob(kind: wjStart, config: s.w.e.workerConfig(s.w.spoolDir)), nil)
+  discard w.runJob(
+    WorkerJob(
+      kind: wjAppend,
+      file: 900,
+      first: true,
+      name: spoolName(900, 900),
+      chunk: textOf(archive),
+    ),
+    nil,
+  )
+  discard w.runJob(WorkerJob(kind: wjFinish, file: 900), nil)
+  result = w.runJob(WorkerJob(kind: wjOpen, file: 900), nil).get.opened
+  discard w.runJob(WorkerJob(kind: wjDrop, file: 900), nil)
+  w.close()
+
+proc padOpen(s: var Scene, job: WorkerJob, contracts = 0, entries = 0) =
+  ## Runs `wjOpen` and hands the engine its judgment with `contracts` more provided and
+  ## `entries` more dependency entries, which no catalog entry satisfies.
+  s.w.work.delete(0)
+  s.w.jobs.add(job.kind)
+  var r = s.w.worker.runJob(job, nil).get
+  doAssert r.opened.inspection.kind == ikEligible
+  var v = values(r.opened.inspection)
+  for i in 0 ..< contracts:
+    v.provides.add(contract(i))
+  for i in 0 ..< entries:
+    v.dependencies.add(
+      PackageDependency(package: "zz.pad" & $i, kind: rkCompatible, version: "1.0.0")
+    )
+  r.opened.inspection = held(v)
+  s.w.handle(worked(r))
+
+proc drive(s: var Scene) =
+  ## Answers calls, runs worker jobs and turns until none is left.
+  while true:
+    if s.w.has({cmStat, cmRead}):
+      s.answerCall()
+    elif s.w.work.len > 0:
+      discard s.w.runOne()
+    elif s.w.continues.len > 0:
+      discard s.w.turn()
+    else:
+      break
+
+suite "the worker and the spool (G446, G447)":
+  test "[IMPL-DECISION G447] [IMPL-DECISION G482] what crosses to the worker holds no reference, the inspection included, checked at compile time":
+    check refFree(WorkerJob)
+    check refFree(WorkerResult)
+    check refFree(Opened)
+    check refFree(Inspection) # [G482] its contracts are encodings in one buffer
+    check not refFree(CborValue)
+    check not refFree(HoldsRef)
+    check not refFree(HoldsClosure)
+    check not refFree(HoldsPointer)
+    check not refFree(seq[HoldsRef])
+    check not refFree(cstring)
+    check compiles(requireRefFree(WorkerJob))
+    check compiles(requireRefFree(Inspection))
+    check not compiles(requireRefFree(CborValue))
+
+  test "[IMPL-DECISION G447] [IMPL-DECISION G482] a staged record's dependencies are decoded a budget at a time, unchanged":
+    var deps = @[PackageDependency(package: "lib", kind: rkExact, version: "1.0.0")]
+    for i in 0 ..< 50:
+      deps[0].contracts.add(contract(i))
+    for i in 0 ..< 3000:
+      deps.add(
+        PackageDependency(package: "d" & $i, kind: rkCompatible, version: "1.0.0")
+      )
+    let staged = eligibleInspection(ident("app@1.0.0"), commitOf("app"), deps, [])
+    check staged.dependencies.len + staged.contractCount == 3051
+    var d = initDecoding(staged)
+    var budget = DecodeTurnUnits
+    check not d.decodeSome(budget)
+    check budget == 0
+    budget = DecodeTurnUnits
+    check not d.decodeSome(budget)
+    budget = DecodeTurnUnits
+    check d.decodeSome(budget)
+    check budget == 3 * DecodeTurnUnits - 3051
+    let got = d.take()
+    check got.len == deps.len
+    check got.mapIt(it.package) == deps.mapIt(it.package)
+    check got.mapIt(it.version) == deps.mapIt(it.version)
+    check got[0].kind == rkExact
+    check got[0].contracts.mapIt(encodeCbor(it)) ==
+      deps[0].contracts.mapIt(encodeCbor(it))
+    # A budget that runs out at every place, entries without contracts among them: each entry
+    # once, and every contract in order.
+    var many: seq[PackageDependency]
+    for i in 0 ..< 7:
+      var dep =
+        PackageDependency(package: "d" & $i, kind: rkCompatible, version: "1.0.0")
+      for c in 0 ..< i mod 3:
+        dep.contracts.add(contract(10 * i + c))
+      many.add(dep)
+    let units = 7 + 0 + 1 + 2 + 0 + 1 + 2 + 0
+    for step in 1 .. 4:
+      var e =
+        initDecoding(eligibleInspection(ident("app@1.0.0"), commitOf("app"), many, []))
+      var turns = 0
+      while true:
+        var b = step
+        inc turns
+        if e.decodeSome(b):
+          break
+      check turns >= units div step
+      let back = e.take()
+      check back.mapIt(it.package) == many.mapIt(it.package)
+      for i, dep in back:
+        check dep.contracts.mapIt(encodeCbor(it)) ==
+          many[i].contracts.mapIt(encodeCbor(it))
+
+  test "[IMPL-DECISION G447] [IMPL-DECISION G482] a real judgment, every field set, crosses a channel as it is, and the cache's estimate by lengths is the walk's":
+    var s = scene([(entryOf("app", "1.0.0"), app100)])
+    var o = s.judgedOpened(app100)
+    check o.inspection.kind == ikEligible
+    check o.profile.len > 0
+    check o.kid.len > 0
+    check o.variant.len > 0
+    check o.inspection.dependencies.len > 0
+    var v = values(o.inspection)
+    for i in 0 ..< 40:
+      v.dependencies[0].contracts.add(contract(i))
+    for i in 0 ..< 30:
+      v.provides.add(contract(100 + i))
+    o.inspection = held(v)
+    var ch: Channel[WorkerResult]
+    ch.open()
+    ch.send(WorkerResult(kind: wrOpened, file: 7, opened: o))
+    let back = ch.recv()
+    ch.close()
+    check back.opened.inspection.matches(v)
+    check back.opened.profile == o.profile
+    check back.opened.kid == o.kid
+    check back.opened.key == o.key
+    check back.opened.variant == o.variant
+    for x in [
+      back.opened.inspection,
+      Inspection(
+        kind: ikIneligible, error: packageError(pecInvalidPackage, "an archive's fault")
+      ),
+      Inspection(kind: ikUnavailable, reason: "the archive could not be read"),
+    ]:
+      var walked = 0
+      for u in x.inputUnits:
+        walked += unitBytes(u.kind) + u.bytes
+      check x.estimatedBytes == walked
+
+  test "[PKG-0012] [PKG-0011] [PKG-0192] [IMPL-DECISION G447] an archive is spooled, never held: at most SpoolLag pieces wait for the worker; its file is the instance's own, never executable, and deleted once judged":
+    let size = 5 * ReadStep + 100
+    var s = scene([(entryOf("big", "1.0.0"), junk(size))])
+    s.w.holdWork = true
+    s.w.emit(s.w.e.resolve(1, root("big")))
+    while s.w.has({cmStat, cmRead}):
+      s.answerCall()
+    check s.reads == SpoolLag # the next read waits for a piece to be written
+    check s.w.work.len == SpoolLag
+    check s.w.work.allIt(it.kind == wjAppend and it.chunk.len == ReadStep)
+    check s.w.work[0].first and not s.w.work[1].first
+    check s.w.e.spooled == 1
+    check s.w.e.shareUsed == int64(size)
+    check s.w.runOne() # one written: one more read
+    check s.w.has({cmRead})
+    # [PKG-0012] the archive's bytes go to a file below the instance's own root before anything
+    # reads them; [PKG-0011] [PKG-0192] 0600 in a 0700 directory, never executable, read only by
+    # the reader (the worker's jobs: append, finish, open, drop)
+    var files: seq[string]
+    for kind, path in walkDir(s.w.spoolDir):
+      check kind == pcFile
+      files.add(path)
+    check files.len == 1
+    check files[0].extractFilename.isSpoolName
+    when defined(posix):
+      check getFilePermissions(files[0]) == {fpUserRead, fpUserWrite}
+      check getFilePermissions(s.w.spoolDir) == {fpUserRead, fpUserWrite, fpUserExec}
+    s.answerCall()
+    check s.reads == SpoolLag + 1
+    check not s.w.has({cmRead})
+    s.w.holdWork = false
+    s.w.runWork()
+    s.w.serve(s.objects, s.calls)
+    check s.w.replies.len == 1
+    check s.replyTo(1).isErr
+    check s.reads == 6
+    check s.w.jobs.countIt(it == wjOpen) == 1
+    check s.w.jobs.countIt(it == wjDrop) == 1
+    check s.w.e.spooled == 0
+    check s.w.e.shareUsed == 0
+    check s.spoolFiles == 0
+    check s.w.e.cache.counters.opened == 1
+    check s.w.jobs.allIt(it in {wjAppend, wjFinish, wjOpen, wjDrop})
+
+  test "[IMPL-DECISION G446] the inspections' share: an archive that would pass 4 x archive_bytes waits, first in, first out, until a spool file is deleted":
+    var entries: seq[(CatalogEntry, seq[byte])]
+    for i in 0 ..< 5:
+      entries.add((entryOf("p" & $i, "1.0.0"), junk(4000)))
+    let limits = Opt.some(pm_input_types.LcnPmLimits(archive_bytes: Opt.some(4096'u64)))
+    var s = scene(entries, limits = limits)
+    s.w.holdWork = true
+    for i in 0 ..< 5:
+      s.w.emit(s.w.e.resolve(uint64(i + 1), root("p" & $i)))
+    s.w.serve(s.objects, s.calls)
+    check s.statted.len == 5
+    check s.reads == 4
+    check s.w.e.spooled == 4
+    check s.w.e.shareUsed == 16000 # 4 x 4000 of 4 x 4096
+    check s.w.e.shareWaiting == 1
+    check s.w.replies.len == 0
+    s.w.holdWork = false
+    s.w.runWork()
+    s.w.serve(s.objects, s.calls)
+    check s.reads == 5
+    check s.w.replies.len == 5
+    check s.w.e.spooled == 0
+    check s.w.e.shareUsed == 0
+    check s.w.e.shareWaiting == 0
+    check s.spoolFiles == 0
+
+  test "[IMPL-DECISION G446] [IMPL-DECISION G455] a cancelled operation's archive is dropped: waiting for the share at once, spooled at its next step, never judged":
+    var entries: seq[(CatalogEntry, seq[byte])]
+    for i in 0 ..< 5:
+      entries.add((entryOf("p" & $i, "1.0.0"), junk(4000)))
+    let limits = Opt.some(pm_input_types.LcnPmLimits(archive_bytes: Opt.some(4096'u64)))
+    var s = scene(entries, limits = limits)
+    s.w.holdWork = true
+    for i in 0 ..< 5:
+      s.w.emit(s.w.e.resolve(uint64(i + 1), root("p" & $i)))
+    s.w.serve(s.objects, s.calls)
+    check s.w.e.shareWaiting == 1
+    s.w.emit(s.w.e.cancel(5)) # waits for the share
+    check s.w.e.queued("main") == 0
+    s.w.emit(s.w.e.cancel(1)) # spooled, its digest not yet given
+    check s.w.e.spooled == 4
+    s.w.holdWork = false
+    s.w.runWork()
+    s.w.serve(s.objects, s.calls)
+    check s.reads == 4
+    check s.w.replies.mapIt(it.request) == @[2'u64, 3, 4]
+    check s.w.jobs.countIt(it == wjOpen) == 3
+    check s.w.e.spooled == 0
+    check s.w.e.shareUsed == 0
+    check s.spoolFiles == 0
+
+  test "[PKG-0271] [IMPL-DECISION G446] a spool file that cannot be written ends the retrieval: the archive is unavailable and the log names the cause (PM l.1094)":
+    var s = scene([(entryOf("big", "1.0.0"), junk(3 * ReadStep))])
+    discard s.w.worker.runJob(
+      WorkerJob(kind: wjStart, config: s.w.e.workerConfig(s.w.spoolDir / "missing")),
+      nil,
+    )
+    let r = s.resolveIn(root("big"))
+    check r.isErr
+    check r.error.code == pecPackageUnavailable
+    check s.reads < 3 # ended early; a read already issued is ignored
+    check s.w.logs.anyIt(
+      "could not be written to the spool on the state directory's file system" in it and
+        "cannot create the spool file" in it
+    )
+    check s.w.jobs.countIt(it == wjOpen) == 0
+    check s.w.e.spooled == 0
+    check s.w.e.shareUsed == 0
+
+  test "[IMPL-DECISION G447] [IMPL-DECISION G482] a judgment of more than DecodeTurnUnits contracts is admitted and supplied in the turn it arrives: no turn decodes it; the outcome is the same":
+    let entries =
+      @[(entryOf("app", "1.0.0"), app100), (entryOf("lib", "1.2.0"), lib120)]
+    var whole = scene(entries)
+    let want = whole.resolveIn(root("app")).summary
+    check want.startsWith("app@1.0.0")
+    var s = scene(entries)
+    s.w.holdWork = true
+    s.w.emit(s.w.e.resolve(1, root("app")))
+    var padded = false
+    var turns = 0
+    while true:
+      if s.w.has({cmStat, cmRead}):
+        s.answerCall()
+      elif s.w.work.len > 0:
+        let job = s.w.work[0]
+        if job.kind == wjOpen and not padded:
+          # app's judgment, with 2500 more provided contracts: three decode turns before G482
+          s.padOpen(job, contracts = 2500)
+          padded = true
+          check s.w.e.cache.counters.opened == 1 # admitted in this turn
+          check DecodeOperation notin s.w.continues
+          check s.w.e.droppingJudgments == 0
+          check s.w.e.spooled == 0 # deleted once judged
+        else:
+          discard s.w.runOne()
+      elif s.w.continues.len > 0:
+        if s.w.continues[0] == DecodeOperation:
+          inc turns
+        discard s.w.turn()
+      else:
+        break
+    check padded
+    check turns == 0
+    check s.w.replies.len == 1
+    check s.replyTo(1).summary == want
+    s.w.emit(s.w.e.resolve(DecodeOperation, root("app")))
+    check s.replyTo(DecodeOperation).error.code == pecInvalidRequest
+    check s.spoolFiles == 0
+
+  test "[IMPL-DECISION G447] a spool writer and a retrieval keep their running digest when copied (refc's copy through type information, upstream ISSUES 195)":
+    let a = junk(3000)
+    let b = junk(5000)
+    var s = scene([(entryOf("app", "1.0.0"), app100)])
+    var w = createSpool(s.w.spoolDir, spoolName(7, 1))
+    var copied = w # as the worker's table copies its writers in and out
+    copied.append(a)
+    copied.append(b)
+    check copied.finish() == blake3(a & b)
+    check copied.failure.len == 0
+    check removeSpool(copied.path).isOk
+    var f = initRetrieval(bytesOf("x"), 1 shl 20, 1000)
+    var g = f # as the engine's job queue copies its retrievals
+    discard g.start()
+    discard g.onAnswer(sized(uint64(a.len)))
+    let step = g.onAnswer(dataOf(a))
+    check step.kind == skDone
+    check step.digest == blake3(a)
+
+  test "[IMPL-DECISION G447] [IMPL-DECISION G455] [IMPL-DECISION G482] a judgment whose operation is cancelled before it arrives is not admitted: its encodings go at once, and its dependency entries a turn at a time when there are many (Fable's D1 condition 5)":
+    let entries = @[(entryOf("app", "1.0.0"), app100)]
+    for (pad, freeTurns) in [(2500, 3), (500, 0)]:
+      checkpoint $pad & " entries"
+      var late = scene(entries)
+      late.w.holdWork = true
+      late.w.emit(late.w.e.resolve(1, root("app")))
+      while true:
+        if late.w.has({cmStat, cmRead}):
+          late.answerCall()
+        elif late.w.work.len > 0:
+          let job = late.w.work[0]
+          if job.kind == wjOpen:
+            late.w.emit(late.w.e.cancel(1))
+            late.padOpen(job, contracts = 2500, entries = pad)
+            break
+          discard late.w.runOne()
+        else:
+          discard late.w.turn()
+      check late.w.e.droppingJudgments == (if freeTurns > 0: 1 else: 0)
+      var lateTurns = 0
+      while late.w.continues.len > 0:
+        if late.w.continues[0] == DecodeOperation:
+          inc lateTurns
+        discard late.w.turn()
+      check lateTurns == freeTurns # 2,500 and app's own entries, 1,024 a turn
+      check late.w.e.droppingJudgments == 0
+      check late.w.e.cache.counters.opened == 0 # never admitted
+      check late.w.replies.len == 0
+      late.w.runWork()
+      check late.spoolFiles == 0

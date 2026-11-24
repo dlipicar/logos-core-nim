@@ -65,8 +65,10 @@ default = "claimed"
 "BCP-0058" = "out-of-scope:a requirement on specification authors"
 "BCP-0059" = "out-of-scope:a requirement on specification authors"
 "BCP-0060" = "out-of-scope:a requirement on specification authors"
-# §5.3: the QUIC remote transport and the Package Manager realization profiles are Tier 5.
+# §5.3: the QUIC remote transport and the nix realization profile are Tier 5. The lgx realization profile
+# (BCP-0033) and at least one profile (BCP-0035) are claimed by step 5-5-4, with the operations (DECISIONS
+# G449; tests/test_pm_install.nim).
 "BCP-0032" = "deferred:tier-5"
-"BCP-0033" = "deferred:tier-5"
+"BCP-0033" = "claimed"
 "BCP-0034" = "deferred:tier-5"
-"BCP-0035" = "deferred:tier-5"
+"BCP-0035" = "claimed"

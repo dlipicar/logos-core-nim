@@ -32,6 +32,7 @@ when defined(posix):
   import ../src/logos_core/runtime/[engine, hostsup]
   import logos_sdk/abi/types
   import logos_sdk/base/clock
+  from logos_sdk/base/entry import lcnCallback
   from logos_sdk/base/wipe import ChannelsMove, MarkedUnsupported
   import logos_sdk/cbor
   import logos_sdk/commitment
@@ -47,7 +48,7 @@ when defined(posix):
     LogosNSRuntimeRouteId, LogosNSRuntimeRuntimeInstanceId
   import
     ./support/[fakeca, modulehostbuild, shortdir],
-    logos_sdk/testing/[kitbuild, kitruntime]
+    logos_sdk/testing/[freshthread, kitbuild, kitruntime]
   import ./kit/bulk_impl, logos_sdk/testing/fixtures/meter_impl
   import
     ./generated/[bulk_module_calls, bulk_module_types],
@@ -1231,6 +1232,18 @@ when defined(posix):
       stateAssignment: Opt.some(state),
     )
 
+  type FreshRead = object
+    ## [DECISIONS G466] C-15's read of channel 21 through a direct route, made
+    ## on a fresh thread, and that thread's id.
+    h: ptr LogosRouteHandle
+    thread: int
+    ok: bool
+
+  proc freshRead(arg: pointer) {.lcnCallback.} =
+    let r = cast[ptr FreshRead](arg)
+    r.thread = getThreadId()
+    r.ok = r.h[].read(21).isOk
+
   type Consumer = object ## The probe's command files.
     dir: string ## its state directory
     n: int ## the commands posted
@@ -2098,6 +2111,39 @@ when defined(posix):
       check c.linesOf("closed") == @["0"]
       e.finish()
       check noHostLeft()
+
+    test "[IMPL-DECISION G466] C-15 a direct Event published on a thread the subscriber's library has never seen: the typed helpers' consumer, direct_dynamic, hears it on that thread before the publish returns, and its callback registered that thread first":
+      ## The most common path for an Event. A direct route delivers on the
+      ## publishing thread (INTERFACE l.1918-1920), so G466's first delivery
+      ## on a new thread never moves it: here the publish itself is on a fresh
+      ## thread (`freshthread`). The meter is in this program and publishes
+      ## 210 inside the read; the listener is a kit library with its own Nim
+      ## runtime, which has never run on that thread. Under orc without
+      ## `useMalloc` an unregistered thread faults on its first allocation; the
+      ## listener's `entered` is the probe, the only detector under refc.
+      var cfg = hosted()
+      cfg.routing = @[RoutingRule(callee: MeterModule, mode: rmDirect)]
+      discard cfg.stateOf()
+      let dir = cfg.stateOf("l")
+      writeFile(dir / "listen.cmd", hexOf(meterRoot) & "\n" & hexOf(meterSchema) & "\n")
+      let e = fixtureEngine(cfg)
+      discard e.started(meter(), "m")
+      check e.started(listenerRecord(hosted = false), "l").state == msReady
+      let c = Consumer(dir: dir)
+      check c.noted("opened", "sub 0")
+      check c.noted("heard", "210 ")
+      let (_, rc) = e.startClient("c")
+      let rec = rc.establish("k").recordOf
+      check rec.invocationOf.isNone
+      var h = rc.handle(rec.route)
+      var job = FreshRead(h: addr h)
+      check onFreshThread(freshRead, addr job)
+      check job.ok
+      let heard = c.linesOf("heard")
+      check heard.len == 2
+      check ("210 " & $job.thread & " entered") in heard
+      h.release()
+      e.finish()
 
   # M-1 to M-3: a module built with the other memory manager ---------------------------
 

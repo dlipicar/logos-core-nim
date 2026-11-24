@@ -337,6 +337,45 @@
             meta.mainProgram = "logos-module-host";
           };
 
+          # The key holder (Tier 5 step 5-7a-1; DECISIONS G410; docs/REMOTE.md): logosd's
+          # `remote.signing = "key-holder"` program, which loads the Runtime's key itself.
+          # `remote.key_holder` names it; logosd's package puts it at
+          # ../libexec/logos-core/logos_keyholder. A release build without test hooks (R5, D27).
+          logosKeyholder = nimDerivation {
+            pname = "logos-keyholder";
+            version = coreVersion;
+            src = nimSources;
+            buildPhase = ''
+              runHook preBuild
+              nim c --mm:orc -d:release --outdir:build/bin src/logos_keyholder.nim
+              runHook postBuild
+            '';
+            installPhase = ''
+              install -Dm755 build/bin/logos_keyholder $out/bin/logos_keyholder
+            '';
+            meta.mainProgram = "logos_keyholder";
+          };
+
+          # The remote program (Tier 5 step 5-7a-2; DECISIONS G411; docs/REMOTE.md): logosd's
+          # TLS processes, the programs that link BoringSSL's libssl, which logosd does not
+          # (G409). logosd starts it from `runtime.remote_program`, by default
+          # ../libexec/logos-core/logos_remote. A release build without test hooks or test
+          # signing (R5, D27).
+          logosRemote = nimDerivation {
+            pname = "logos-remote";
+            version = coreVersion;
+            src = nimSources;
+            buildPhase = ''
+              runHook preBuild
+              nim c --mm:orc -d:release --outdir:build/bin src/logos_remote.nim
+              runHook postBuild
+            '';
+            installPhase = ''
+              install -Dm755 build/bin/logos_remote $out/bin/logos_remote
+            '';
+            meta.mainProgram = "logos_remote";
+          };
+
           # PM §3, §4, §4.3, §7.1 package tools (a subset: no fetch or install).
           lcnPkg = nimDerivation {
             pname = "lcn-pkg";
@@ -378,12 +417,18 @@
           };
 
           # logosd and logosctl (Tier 4b step 4b-6; DECISIONS I95; docs/DAEMON.md): orc
-          # release builds without test hooks (R5, D27). logosd finds the Module Host at
-          # ../libexec/logos-core and liblcn_call at ../lib/logos-core, where its package
-          # puts them. [G343] logosd is built with the BLAKE3-256 of liblcn_call's final
+          # release builds without test hooks (R5, D27). logosd finds the Module Host, the key
+          # holder and the remote program at ../libexec/logos-core and liblcn_call at
+          # ../lib/logos-core, where its package puts them. [G343] logosd is built with the BLAKE3-256 of liblcn_call's final
           # store file, and the library is copied after the fixup, so no strip or patchelf
           # changes the bytes the Module Loader checks against that digest.
           daemonVersion = coreVersion;
+          # [DECISIONS G409] logosd's switches, which the flake check `logosd-no-ssl` builds its
+          # probe with, so the same BoringSSL objects compile under the same nimcache names.
+          # logosd adds only `lcnVersion` and `lcnCallArtifactHash`, constants of its own Nim
+          # code. The binding reads platform defines, BORINGSSL_USE_ASM and
+          # BORINGSSL_ZERO_RECORD_BUFFERS, and neither of these.
+          logosdSwitches = "--mm:orc -d:release";
           logosd = nimDerivation {
             pname = "logosd";
             version = daemonVersion;
@@ -392,13 +437,15 @@
               runHook preBuild
               nim c -d:release --outdir:build/bin tools/artifact_hash.nim
               cliHash=$(build/bin/artifact_hash ${lcnCallLib}/lib/logos-core/liblcn_call${sharedLib})
-              nim c --mm:orc -d:release -d:lcnVersion=${daemonVersion} \
+              nim c ${logosdSwitches} -d:lcnVersion=${daemonVersion} \
                 -d:lcnCallArtifactHash=$cliHash --outdir:build/bin src/logosd.nim
               runHook postBuild
             '';
             installPhase = ''
               install -Dm755 build/bin/logosd $out/bin/logosd
               install -Dm755 ${lib.getExe logosModuleHost} $out/libexec/logos-core/logos-module-host
+              install -Dm755 ${lib.getExe logosKeyholder} $out/libexec/logos-core/logos_keyholder
+              install -Dm755 ${lib.getExe logosRemote} $out/libexec/logos-core/logos_remote
             '';
             postFixup = ''
               install -Dm444 ${lcnCallLib}/lib/logos-core/liblcn_call${sharedLib} \
@@ -556,7 +603,10 @@
             lcnGen
             lcnPkg
             logosModuleHost
+            logosKeyholder
+            logosRemote
             logosd
+            logosdSwitches
             logosctl
             logosdSmoke
             android
@@ -579,6 +629,8 @@
           lcn-gen = s.lcnGen;
           lcn-pkg = s.lcnPkg;
           logos-module-host = s.logosModuleHost;
+          logos-keyholder = s.logosKeyholder;
+          logos-remote = s.logosRemote;
           inherit (s) logosd logosctl;
         }
         // lib.optionalAttrs (s.android != null) {
@@ -694,6 +746,29 @@
               '';
             };
           logosd-smoke = s.logosdSmoke;
+          # [DECISIONS G409] The shipped logosd holds no libssl code (Fable's check of logosd's
+          # link and planning's ruling, 2026-11-22). A probe that imports the BoringSSL binding
+          # is built with logosd's switches (`logosdSwitches`); none of the symbols that only
+          # libssl's objects in its nimcache define may be in the deployed binary
+          # (tests/support/nossl.nim). The probe itself, linked without dead stripping, must
+          # fail the check, so the search is not vacuous. The test build's check is in
+          # test_logosd.
+          logosd-no-ssl = s.nimDerivation {
+            name = "logosd-no-ssl";
+            src = s.nimSources;
+            buildPhase = ''
+              runHook preBuild
+              nim c --hints:off ${s.logosdSwitches} --nimcache:build/sslprobe \
+                -o:build/sslprobe-bin tests/support/sslprobe.nim
+              nim c --hints:off -d:release --outdir:build tests/support/nosslcheck.nim
+              build/nosslcheck build/sslprobe ${s.logosd}/bin/logosd
+              if build/nosslcheck build/sslprobe build/sslprobe-bin; then
+                echo "the probe, which links libssl's objects whole, passes the check"
+                exit 1
+              fi
+              runHook postBuild
+            '';
+          };
           # No `?` inside a half-built constructor: it leaks on Nim 2.2.14 (I77).
           lint-ctor-try = s.pkgs.runCommand "lint-ctor-try" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
             cd ${s.nimSources}
@@ -731,6 +806,15 @@
               python3 ${./tools/lint/packaging.py}
               touch $out
             '';
+          # [DECISIONS G464-G467] Every C-callable procedure of the SDK, core and the test kit
+          # modules registers its thread first, or carries its exemption and reason; no
+          # `Entered` value is made without `entered`. The command module repositories run.
+          lint-callbacks = s.pkgs.runCommand "lint-callbacks" { nativeBuildInputs = [ s.lcnGen ]; } ''
+            cd ${s.nimSources}
+            lcn-gen lint-callbacks --self-test
+            lcn-gen lint-callbacks sdk/src src tests/kit
+            touch $out
+          '';
           # [DECISIONS G442] Every environment a test gives a Module Host names the sanitizer
           # variables (tests/support/sanitizerenv.nim), so a sanitizer check sees its hosts' reports.
           lint-sanitizer-env = s.pkgs.runCommand "lint-sanitizer-env" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''

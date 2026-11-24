@@ -8,7 +8,7 @@
 
 {.push raises: [].}
 
-import std/strutils
+import std/[strutils, tables]
 import chronos
 import results
 import ./params
@@ -80,5 +80,80 @@ func checkSignInput*(
   if input[head - 1] != 0:
     return err("not a TLS 1.3 CertificateVerify input (separator)")
   ok()
+
+# The signing channel's client end (Tier 5 step 5-7a-1; G410) -----------------------------
+
+type
+  SendSignFn* =
+    proc(id: uint64, alg: uint16, input: seq[byte]): bool {.gcsafe, raises: [].}
+    ## Writes one sign request to the channel; false when the channel is gone.
+
+  SignClient* = ref object
+    ## A TLS process's end of its signing channel (G323, G410): each
+    ## CertificateVerify input goes out as one request and the engine waits
+    ## for its answer. The key stays at the other end, logosd's signing service
+    ## or its key holder. One event loop owns it.
+    role: TlsRole
+    send: SendSignFn
+    next: uint64
+    pending: Table[uint64, Future[SignResult].Raising([CancelledError])]
+    closed: bool
+
+proc newSignClient*(role: TlsRole, send: SendSignFn): SignClient =
+  ## The client end for a process whose connections are all of `role`.
+  SignClient(role: role, send: send)
+
+func waiting*(c: SignClient): int =
+  ## Requests sent and not yet answered.
+  c.pending.len
+
+proc signer*(c: SignClient): Signer =
+  ## The `Signer` the engine uses. A request for another role than the
+  ## client's is refused here and never sent; a closed channel answers
+  ## `unavailable`.
+  result = proc(
+      role: TlsRole, alg: uint16, input: seq[byte]
+  ): Future[SignResult] {.async: (raises: [CancelledError]), gcsafe.} =
+    if role != c.role:
+      return refused()
+    if c.closed:
+      return unavailable()
+    inc c.next
+    let id = c.next
+    let fut = Future[SignResult].Raising([CancelledError]).init("tls.signClient")
+    c.pending[id] = fut
+    if not c.send(id, alg, input):
+      c.pending.del(id)
+      return unavailable()
+    try:
+      return await fut
+    except CancelledError as e:
+      c.pending.del(id)
+      raise e
+
+proc deliver*(c: SignClient, id: uint64, r: SignResult): bool =
+  ## The answer to request `id`. False when no request is waiting under that
+  ## id: a fault of the other end, which ends the channel. An answer to a
+  ## cancelled request comes too late and is dropped (true).
+  if id == 0 or id > c.next:
+    return false
+  var fut: Future[SignResult].Raising([CancelledError])
+  if not c.pending.pop(id, fut):
+    return true
+  if not fut.finished:
+    fut.complete(r)
+  true
+
+proc close*(c: SignClient) =
+  ## The channel ended: every waiting request answers `unavailable`, and
+  ## later ones too.
+  c.closed = true
+  var futs: seq[Future[SignResult].Raising([CancelledError])]
+  for f in c.pending.values:
+    futs.add(f)
+  c.pending.clear()
+  for f in futs:
+    if not f.finished:
+      f.complete(unavailable())
 
 {.pop.}

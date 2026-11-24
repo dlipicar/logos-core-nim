@@ -28,7 +28,7 @@ import logos_sdk/cbor/utf8
 import logos_sdk/crypto/blake3
 import ../durable
 import logos_sdk/codegen/common_types
-import ./[plumbing, store_types]
+import ./[forwarded, plumbing, store_types]
 
 export results
 
@@ -369,6 +369,14 @@ func failureOf(f: LcnRsFailure): Result[Failure, string] =
   r.reason = f.reason.get("")
   ok(r)
 
+func originArm(o: Origin): LcnRsOriginARInstanceMap =
+  ## [G413] A forwarded consumer's origin keeps its Runtime.
+  if o.instance.isForwarded:
+    let p = o.instance.forwardedParts
+    LcnRsOriginARInstanceMap(instance: p.instance, runtime: Opt.some(p.runtime))
+  else:
+    LcnRsOriginARInstanceMap(instance: o.instance)
+
 func toRs(x: StoredInstance): LcnRsInstance =
   result = LcnRsInstance(
     instance: x.instance,
@@ -409,11 +417,18 @@ func toRs(x: StoredInstance): LcnRsInstance =
       if x.origin.host:
         LcnRsOrigin(kind: LcnRsOriginKind.Host, arm_Host: LcnRsOriginARHostMap())
       else:
-        LcnRsOrigin(
-          kind: LcnRsOriginKind.Instance,
-          arm_Instance: LcnRsOriginARInstanceMap(instance: x.origin.instance),
-        )
+        LcnRsOrigin(kind: LcnRsOriginKind.Instance, arm_Instance: originArm(x.origin))
     )
+
+func consumerOf(instance: string, runtime: Opt[string]): Result[string, string] =
+  ## [G413] The engine's id of a stored consumer: a forwarded one's from its
+  ## Runtime and instance id.
+  if runtime.isNone:
+    return ok(instance)
+  let id = forwardedId(runtime.get, instance)
+  if id.len == 0:
+    return err("a forwarded consumer's Runtime id is not valid")
+  ok(id)
 
 func fromRs(x: LcnRsInstance): Result[StoredInstance, string] =
   let record = ?fromRs(x.record)
@@ -450,11 +465,13 @@ func fromRs(x: LcnRsInstance): Result[StoredInstance, string] =
       )
     s.intentRevision = x.intent_revision.get
     let o = x.origin.get
-    s.origin =
-      if o.kind == LcnRsOriginKind.Host:
-        hostOrigin()
-      else:
-        moduleOrigin(o.arm_Instance.instance)
+    if o.kind == LcnRsOriginKind.Host:
+      s.origin = hostOrigin()
+    else:
+      let c = consumerOf(o.arm_Instance.instance, o.arm_Instance.runtime)
+      if c.isErr:
+        return err("instance " & x.instance & ": " & c.error)
+      s.origin = moduleOrigin(c.get)
     if s.intentRevision > s.revision:
       return err("instance " & x.instance & ": an intent revision past the revision")
   elif x.intent_revision.isSome or x.origin.isSome:
@@ -484,7 +501,17 @@ proc encodeSnapshot*(snap: Snapshot): Result[seq[byte], string] =
   for k in snap.createKeys:
     x.create_keys.add(
       LcnRsCreateKey(
-        consumer: k.consumer, key: k.key, module: k.module, instance: k.instance
+        consumer: (
+          if k.consumer.isForwarded: k.consumer.forwardedParts.instance else: k.consumer
+        ),
+        consumer_runtime:
+          if k.consumer.isForwarded:
+            Opt.some(k.consumer.forwardedParts.runtime)
+          else:
+            Opt.none(string),
+        key: k.key,
+        module: k.module,
+        instance: k.instance,
       )
     )
   encode(x)
@@ -551,10 +578,9 @@ proc decodeSnapshot*(data: openArray[byte]): Result[Snapshot, string] =
   for r in x.retired:
     s.retired.add(RetiredId(instance: r.instance, stateAssignment: r.state_assignment))
   for k in x.create_keys:
+    let consumer = ?consumerOf(k.consumer, k.consumer_runtime)
     s.createKeys.add(
-      CreateKey(
-        consumer: k.consumer, key: k.key, module: k.module, instance: k.instance
-      )
+      CreateKey(consumer: consumer, key: k.key, module: k.module, instance: k.instance)
     )
   ?checkInvariants(s)
   ok(s)

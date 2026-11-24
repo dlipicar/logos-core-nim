@@ -34,6 +34,8 @@ from ../src/logos_core/durable import release, writeAtomic
 from ../src/logos_core/cli/lcn_call_configuration_types import
   LcnCallSettings, LcnCallSettingsDeploymentChoiceKind, decode
 import ./support/authfixture, logos_sdk/testing/[kitbuild, schemasuite]
+from ../src/logos_core/transport/tls/trust import TrustSnapshot, newTrustSnapshot
+import ../src/logos_core/remote/carrier_types
 from ../src/logos_core/pm/input import MaxReadDeadlineMs
 from ../src/logos_core/package/resolver import
   ResolverLimits, resolverLimits, `==`, MaxResolverLimits, names, depth, candidates,
@@ -123,7 +125,8 @@ const
     "lcn.daemon_config", "lcn.dc_runtime", "lcn.dc_policy", "lcn.dc_orchestration",
     "lcn.dc_restart", "lcn.dc_override", "lcn.dc_call_audit", "lcn.dc_evidence_store",
     "lcn.dc_permissions", "lcn.dc_ctl", "lcn.dc_cli", "lcn.dc_package_manager",
-    "lcn.dc_test_hooks", "lcn.dc_test_diagnostics",
+    "lcn.dc_test_hooks", "lcn.dc_test_diagnostics", "lcn.dc_remote",
+    "lcn.dc_remote_signing",
   ]
   TrustRules = ["lcn.trust_mark", "lcn.ev_key_binding"]
   TrustdocRules = [
@@ -496,6 +499,246 @@ suite "dc.checks: DAEMON.md §3, checks 1 to 4 [IMPL-DECISION G293] [IMPL-DECISI
     let ctlAndStore =
       dcText(extra = "\"ctl\": {\"workers\": 0}, \"call_audit\": {\"store\": {}}")
     check refusal(ctlAndStore) == "ctl.workers must be 1 to 32"
+
+# dc.remote --------------------------------------------------------------------------
+
+const RemoteId = "1b4e28ba-2fa1-4d3b-a3f5-ef19a2b0c0de" ## a lowercase UUID version 4
+
+proc remoteText(remote: string, id = RemoteId): string =
+  ## A daemon-config for Runtime `id` with `remote` as its `remote` field.
+  dcText(extra = "\"remote\": " & remote).replace("\"rt-1\"", "\"" & id & "\"")
+
+suite "dc.remote: the remote section, DAEMON.md §3 check 4 [IMPL-DECISION G407] [IMPL-DECISION G410]":
+  test "[RUN-0492] with remote.enabled the Runtime id must be a lowercase canonical UUID version 4; without it, any id":
+    let on = checked(remoteText("{\"enabled\": true}"))
+    check on.isOk
+    if on.isOk:
+      check on.get.remote.enabled and on.get.remote.signing == rsLogosd
+    const Refused = "runtime.runtime_instance_id must be a lowercase UUID version 4"
+    for id in [
+      "rt-1", # not a UUID
+      "1B4E28BA-2FA1-4D3B-A3F5-EF19A2B0C0DE", # upper case
+      "1b4e28ba-2fa1-1d3b-a3f5-ef19a2b0c0de", # version 1
+      "1b4e28ba-2fa1-4d3b-c3f5-ef19a2b0c0de", # variant 110
+      "1b4e28ba2fa14d3ba3f5ef19a2b0c0de", # not canonical: no hyphens
+      "{1b4e28ba-2fa1-4d3b-a3f5-ef19a2b0c0de}", # not canonical: braces
+      "1b4e28ba-2fa1-4d3b-a3f5-ef19a2b0c0dg", # not hex
+    ]:
+      checkpoint id
+      check Refused in refusal(remoteText("{\"enabled\": true}", id))
+      # The same id without remote, or with it off, is accepted (RUN-0490: any id).
+      check checked(remoteText("{\"enabled\": false}", id)).isOk
+      check checked(dcText().replace("\"rt-1\"", "\"" & id & "\"")).isOk
+    let off = checked(dcText())
+    check off.isOk and not off.get.remote.enabled
+    for v in ["8", "9", "a", "b"]:
+      check isUuidV4("1b4e28ba-2fa1-4d3b-" & v & "3f5-ef19a2b0c0de")
+    # init's ids qualify.
+    for _ in 0 ..< 32:
+      check isUuidV4(newRuntimeId().get)
+
+  posixTest "[IMPL-DECISION G410] signing: logosd by default; key-holder with a checked key_holder program and only then; process-copy in a test build only":
+    let holder = freshDir("kh")
+    createDir(holder)
+    let program = holder / "logos_keyholder"
+    writeFile(program, "#!/bin/sh\n")
+    setFilePermissions(program, {fpUserRead, fpUserWrite, fpUserExec})
+    let kh = checked(
+      remoteText(
+        "{\"enabled\": true, \"signing\": \"key-holder\", \"key_holder\": \"" &
+          dq(program) & "\"}"
+      )
+    )
+    check kh.isOk
+    if kh.isOk:
+      check kh.get.remote.signing == rsKeyHolder and kh.get.remote.keyHolder == program
+    check checked(remoteText("{\"enabled\": true, \"signing\": \"logosd\"}")).isOk
+    check "remote.signing \"key-holder\" needs remote.key_holder" in
+      refusal(remoteText("{\"enabled\": true, \"signing\": \"key-holder\"}"))
+    check "remote.key_holder needs remote.signing \"key-holder\"" in
+      refusal(
+        remoteText("{\"enabled\": true, \"key_holder\": \"" & dq(program) & "\"}")
+      )
+    # Checked as runtime.module_host is (checkProgramFile).
+    for (path, why) in [
+      ("relative/logos_keyholder", "must be an absolute path"),
+      (holder / "missing", "does not exist"),
+      (holder, "is not a regular file"),
+    ]:
+      checkpoint path
+      check ("remote.key_holder " & why) in
+        refusal(
+          remoteText(
+            "{\"enabled\": true, \"signing\": \"key-holder\", \"key_holder\": \"" &
+              dq(path) & "\"}"
+          )
+        )
+    setFilePermissions(program, {fpUserRead, fpUserWrite, fpUserExec, fpGroupWrite})
+    check "remote.key_holder is writable by its group or others" in
+      refusal(
+        remoteText(
+          "{\"enabled\": true, \"signing\": \"key-holder\", \"key_holder\": \"" &
+            dq(program) & "\"}"
+        )
+      )
+    let copy = dcOf(remoteText("{\"enabled\": true, \"signing\": \"process-copy\"}"))
+    check "accepted only by a logosd built for tests" in
+      checkRemote(copy, testSigningBuild = false).error
+    let accepted = checkRemote(copy, testSigningBuild = true)
+    check accepted.isOk and accepted.get.signing == rsProcessCopy
+
+proc tlsAddress(port: int, extra = ""): string =
+  "{\"transport\": \"tls-tcp\", \"host\": \"127.0.0.1\", \"port\": " & $port & extra &
+    "}"
+
+proc listener(address: string, enabled = false): string =
+  "{\"address\": " & address & ", \"enabled\": " & $enabled &
+    ", \"runtime_control_enabled\": false}"
+
+proc export1(address: string, provider = "p-x", runtime = ""): string =
+  "{\"listener\": " & address & ", \"provider\": {\"provider\": \"" & provider & "\"" &
+    (if runtime.len > 0: ", \"runtime_instance_id\": \"" & runtime & "\""
+    else: "") & "}, \"enabled\": true}"
+
+proc withRecords(
+    listeners: seq[string], exports: seq[string] = @[], enabled = true
+): string =
+  var r = "{\"enabled\": " & $enabled
+  if listeners.len > 0:
+    r.add ", \"listeners\": [" & listeners.join(", ") & "]"
+  if exports.len > 0:
+    r.add ", \"exports\": [" & exports.join(", ") & "]"
+  r & "}"
+
+proc prepared(
+    diag: string, snapshot = Opt.none(TrustSnapshot)
+): Result[Prepared, string] =
+  let seen =
+    if snapshot.isSome:
+      Opt.some(RemoteSeen(snapshot: snapshot.get))
+    else:
+      Opt.none(RemoteSeen)
+  prepareDaemon(Session(dir: freshDir()), dcBytes(diag), prod, remote = seen)
+
+suite "dc.remote: allow-all, listeners and exports [IMPL-DECISION G412] [IMPL-DECISION G415]":
+  test "[IMPL-DECISION G415] policy allow-all is refused with remote.enabled, and accepted with it off":
+    let on = dcText(
+        policy = "{\"kind\": \"allow-all\"}", extra = "\"remote\": {\"enabled\": true}"
+      )
+      .replace("\"rt-1\"", "\"" & RemoteId & "\"")
+    check "policy: allow-all is refused with remote.enabled" in refusal(on, dev)
+    check checked(on.replace("\"enabled\": true", "\"enabled\": false"), dev).isOk
+
+  test "[IMPL-DECISION G412] listeners and exports need remote.enabled":
+    let a = tlsAddress(7400)
+    check "remote.listeners and remote.exports need remote.enabled" in
+      refusal(remoteText(withRecords(@[listener(a)], enabled = false)))
+    check "remote.listeners and remote.exports need remote.enabled" in
+      refusal(remoteText(withRecords(@[], @[export1(a)], enabled = false)))
+    check checked(remoteText(withRecords(@[listener(a)], @[export1(a)]))).isOk
+
+  test "[IMPL-DECISION G408] [IMPL-DECISION G412] compose: the snapshot given, else an empty one, and the records as Runtime Control holds them":
+    let a = tlsAddress(7400)
+    let p = prepared(remoteText(withRecords(@[listener(a)], @[export1(a)]))).get
+    let r = p.composition.appConfig.remote.get
+    let m = LcnRchMessage.decode(r.snapshot).get
+    check m.kind == LcnRchMessageKind.lcn_Rch_snapshot
+    check m.arm_lcn_Rch_snapshot.records.len == 0
+    check r.listeners.get.len == 1 and r.exports.get.len == 1
+    check r.listeners.get[0].address.arm_lcn_Rc_tls_tcp_runtime_address.port == 7400
+    let t = newTrustSnapshot(3, [], []).get
+    let q = prepared(remoteText("{\"enabled\": true}"), Opt.some(t)).get
+    let s = LcnRchMessage.decode(q.composition.appConfig.remote.get.snapshot).get
+    check s.arm_lcn_Rch_snapshot.revision == 3
+    check q.composition.appConfig.remote.get.listeners.isNone
+    # without remote.enabled, no remote section
+    check prepared(dcText()).get.composition.appConfig.remote.isNone
+
+  test "[SPEC RUNTIME l.3319-3321] [IMPL-DECISION G412] the records are validated as Runtime Control validates them":
+    let a = tlsAddress(7400)
+    let b = tlsAddress(7401)
+    for (records, why) in [
+      (
+        withRecords(
+          @[listener(tlsAddress(7400, ", \"profile\": \"logos.remote.quic\""))]
+        ),
+        "an address whose profile its transport does not select",
+      ),
+      (withRecords(@[listener(a), listener(a)]), "an address is given twice"),
+      (withRecords(@[listener(a)], @[export1(b)]), "an export names no listener here"),
+      (
+        withRecords(
+          @[listener(a)],
+          @[export1(a, runtime = "7d0e3f1a-9b2c-4a5d-8e6f-1a2b3c4d5e6f")],
+        ),
+        "an export names another Runtime's provider",
+      ),
+      (
+        withRecords(@[listener(a)], @[export1(a), export1(a)]),
+        "an export is given twice",
+      ),
+      (
+        withRecords(@[listener(a, enabled = true)]),
+        "an enabled listener needs runtime.remote_program",
+      ),
+    ]:
+      checkpoint why
+      let r = prepared(remoteText(records))
+      check r.isErr and why in r.error
+    # this Runtime's own id on a provider, two exports of one provider on two
+    # listeners, and a disabled quic listener are all accepted
+    check prepared(
+      remoteText(
+        withRecords(
+          @[
+            listener(a),
+            listener(b),
+            listener(
+              "{\"transport\": \"quic\", \"host\": \"127.0.0.1\", \"port\": 7402}"
+            ),
+          ],
+          @[export1(a, runtime = RemoteId), export1(b)],
+        )
+      )
+    ).isOk
+
+  posixTest "[IMPL-DECISION G411] [IMPL-DECISION G412] an enabled listener: tls-tcp with remote_program; quic refused":
+    let dir = freshDir("rp")
+    createDir(dir)
+    let program = dir / "logos_remote"
+    writeFile(program, "#!/bin/sh\n")
+    setFilePermissions(program, {fpUserRead, fpUserWrite, fpUserExec})
+    proc withProgram(records: string): string =
+      remoteText(records).replace(
+        "{\"runtime_instance_id\": \"" & RemoteId & "\"}",
+        "{\"runtime_instance_id\": \"" & RemoteId & "\", \"remote_program\": \"" &
+          dq(program) & "\"}",
+      )
+
+    let p =
+      prepared(withProgram(withRecords(@[listener(tlsAddress(7400), enabled = true)])))
+    check p.isOk
+    if p.isOk:
+      check p.get.composition.appConfig.runtime.remote_program == Opt.some(program)
+    let q = prepared(
+      withProgram(
+        withRecords(
+          @[
+            listener(
+              "{\"transport\": \"quic\", \"host\": \"127.0.0.1\", \"port\": 7402}",
+              enabled = true,
+            )
+          ]
+        )
+      )
+    )
+    check q.isErr and "not supported by this Runtime" in q.error
+    check "remote_program is writable by its group or others" in (
+      block:
+        setFilePermissions(program, {fpUserRead, fpUserWrite, fpUserExec, fpGroupWrite})
+        let r = prepared(withProgram(withRecords(@[])))
+        if r.isOk: "" else: r.error
+    )
 
 # dc.compose -------------------------------------------------------------------------
 
@@ -2125,6 +2368,7 @@ suite "dc.docs: docs/DAEMON.md carries the schemas and the system rules verbatim
     for name in [
       "daemon/daemon_config.cddl", "daemon/trust.cddl", "package/trustdoc.cddl",
       "daemon/ctl.cddl", "daemon/logosctl.cddl", "daemon/evstore.cddl", "cli/cli.cddl",
+      "daemon/remote_trust.cddl",
     ]:
       checkpoint name
       let schema = readFile(root / "src/logos_core" / name)

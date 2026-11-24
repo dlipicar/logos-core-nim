@@ -19,6 +19,7 @@ suite "core.nim-types: core's generated modules (D29)":
     check generatedHostConfigTypes().get == readFile(hostConfigTypesPath)
     check generatedDaemonConfigTypes().get == readFile(daemonConfigTypesPath)
     check generatedTrustTypes().get == readFile(trustTypesPath)
+    check generatedRemoteTrustTypes().get == readFile(remoteTrustTypesPath)
     check generatedTrustdocTypes().get == readFile(trustdocTypesPath)
     check generatedPmInputTypes().get == readFile(pmInputTypesPath)
     check generatedEvstoreTypes().get == readFile(evstoreTypesPath)
@@ -34,6 +35,8 @@ suite "core.nim-types: core's generated modules (D29)":
       check generatedLcnCallExports(kind).get == readFile(lcnCallExportsPath(kind))
     check generatedStoreTypes().get == readFile(storeTypesPath)
     check generatedCarrierTypes().get == readFile(carrierTypesPath)
+    check generatedRemoteCarrierTypes().get == readFile(remoteCarrierTypesPath)
+    check generatedRemoteExposureTypes().get == readFile(remoteExposureTypesPath)
     check generatedCaTypes().get == readFile(caTypesPath)
     check generatedCaKit().get == readFile(caKitPath)
     check generatedLdrTypes().get == readFile(ldrTypesPath)
@@ -56,12 +59,14 @@ suite "core.nim-types: core's generated modules (D29)":
     check stamp in readFile(hostConfigTypesPath)
     check stamp in readFile(storeTypesPath)
     check stamp in readFile(carrierTypesPath)
+    check stamp in readFile(remoteCarrierTypesPath)
     for path in [
       caTypesPath, caKitPath, ldrTypesPath, ldrKitPath, policyTypesPath, stateTypesPath,
       orchTypesPath, orchConfigTypesPath, orchKitPath, orchStateTypesPath,
-      daemonConfigTypesPath, trustTypesPath, trustdocTypesPath, pmInputTypesPath,
-      evstoreTypesPath, ctlTypesPath, logosctlTypesPath, logosctlKitPath, cliTypesPath,
-      lcnCallTypesPath, lcnCallConfigTypesPath, lcnCallKitPath,
+      daemonConfigTypesPath, trustTypesPath, remoteTrustTypesPath,
+      remoteExposureTypesPath, trustdocTypesPath, pmInputTypesPath, evstoreTypesPath,
+      ctlTypesPath, logosctlTypesPath, logosctlKitPath, cliTypesPath, lcnCallTypesPath,
+      lcnCallConfigTypesPath, lcnCallKitPath,
     ]:
       checkpoint path
       check stamp in readFile(path)

@@ -55,6 +55,7 @@ lcn.app_config = {
   ? call_audit: lcn.app_call_audit,
   ? routing: [* lcn.app_routing_rule],
   ? transport: lcn.app_transport,
+  ? remote: lcn.app_remote,
   ? permissions: lcn.app_permissions,
   ? state_transfers: [* lcn.app_state_transfer],
   ? protected_inputs: [* lcn.app_protected_input],
@@ -73,11 +74,15 @@ lcn.app_runtime = {
   ? endpoint_dir: lcn.app_path,
   ? module_host: lcn.app_path,
   ? module_host_env: [* lcn.app_env_name],
+  ? remote_program: lcn.app_path,
 }
 
 ; module_host: the logos-module-host program, an absolute path (Tier 4b step
 ; 4b-3); without it hosted_dynamic is refused. module_host_env: the names of
 ; the variables every Module Host gets from the daemon's environment.
+; remote_program: the logos_remote program, an absolute path (Tier 5 step
+; 5-7a-2; DECISIONS G411); without it no remote profile is enabled here, and
+; enabling a remote listener is MODULE_ERROR (G412).
 lcn.app_env_name = tstr .size (1..128)
 
 lcn.app_path = tstr .size (1..4096)
@@ -136,6 +141,21 @@ lcn.app_transport = {
   ? max_outbound: uint16,
   ? max_calls: uint32,
   ? max_in_flight: uint32,
+}
+
+; Remote transport (RUNTIME §9.3.9; Tier 5 step 5-7a-2; DECISIONS G408, G412,
+; G415; docs/REMOTE.md). Only the embedding host sets it (logosd's compose).
+; snapshot: this start's trust snapshot, one deterministic-CBOR lcn.rch_snapshot
+; (remote/carrier.cddl); its Runtimes with an active record are the enrolled
+; ones. listeners and exports: the deployment's records (RUNTIME l.3319-3321),
+; held as Runtime Control holds them (lcn.rc_x is logos.runtime_control.x and
+; lcn.rt_x is logos.runtime.x, generated from the mirrored contract), each
+; address at most once and each export naming a listener here, validated as
+; Runtime Control validates them.
+lcn.app_remote = {
+  snapshot: bstr .size (1..16842752),
+  ? listeners: [* lcn.rc_remote_listener_record],
+  ? exports: [* lcn.rc_provider_export_record],
 }
 
 ; The permission profile (RUNTIME l.1595, l.2526-2604; DECISIONS G110, G279,
@@ -1089,10 +1109,14 @@ ends it for the Module Loader; nothing restarts it (LOADER l.105). The packaged 
   descriptor 3 the private carrier to the Runtime (a socket pair the Runtime makes; DECISIONS G266);
   descriptor 4 a provider's listener (below); descriptor 5 the instance's restart lock (below); no
   other descriptor of the Runtime; a process group of its own; an empty signal mask, and SIGPIPE,
-  SIGTERM, SIGINT and SIGHUP at their default actions. `argv` is only the program's name: nothing
-  about the instance is in its command line or environment. On Linux it is killed when the
-  Runtime's supervision thread ends (`PR_SET_PDEATHSIG`). It runs as the Runtime's user: placement
-  `process` is a separate address space, not a sandbox (LOADER §3).
+  SIGTERM, SIGINT and SIGHUP at their default actions. `argv` is the program's name and
+  `--parent=<pid>`, the Runtime's process id: nothing about the instance is in its command line or
+  environment. Before anything else the host binds itself to that process (DECISIONS G264, amended
+  2026-11-21): on Linux it sets `PR_SET_PDEATHSIG`, so it is killed when the Runtime's supervision
+  thread ends, and then, on Linux and macOS, it checks that its parent is still that pid. A host whose
+  Runtime ended before that check has been adopted and exits 70; one started without a valid
+  `--parent` exits 2. It runs as the Runtime's user: placement `process` is a separate address
+  space, not a sandbox (LOADER §3).
 - **Supervision** (DECISIONS G265). One supervision thread per Runtime, started with the first host,
   watches every carrier and reaps each host it started (`waitpid` on its own pids, never on any
   child). After every end, an orderly one too, the host's whole process group is killed, and the

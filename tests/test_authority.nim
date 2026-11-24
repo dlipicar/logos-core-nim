@@ -170,6 +170,8 @@ proc open(
     dir = "",
     facts: SharedFacts = nil,
     profile: ProfileSource = nil,
+    enrolled: seq[string] = @[],
+    runtimeId = Rt,
 ): Env =
   result.dir =
     if dir.len > 0:
@@ -191,7 +193,9 @@ proc open(
     result.clock,
     result.sink.sink,
     limits,
+    runtimeId = runtimeId,
     profile = profile,
+    enrolled = enrolled,
   )
 
 proc close(e: var Env) =
@@ -3093,3 +3097,212 @@ suite "cap.provider: the module through its services":
     check scoped == 1
     check authorityFor(c.dir).get.watchCount == 0
     c.close()
+
+# cap.remote ----------------------------------------------------------------------------
+
+const
+  R2 = "2b1c7a7e-5a1f-4c3e-9d2a-0f6b8e4d1c2a" ## an enrolled Runtime
+  R3 = "7d0e3f1a-9b2c-4a5d-8e6f-1a2b3c4d5e6f" ## a Runtime with no active enrollment
+  R1 = "c0ffee00-1234-4abc-8def-0123456789ab" ## a UUIDv4 id for this Runtime
+
+proc field(v: CborValue, name: string): CborValue =
+  for e in v.entries:
+    if e.key.kind == ckText and e.key.text == name:
+      return e.value
+  nil
+
+proc withSelectorRuntimes(p: LcnAuthorityPolicy, id: string): seq[byte] =
+  ## The first rule's first scope, a provider-access scope with `providers`,
+  ## given `runtimes` there too: what `lcn.ap_selector` has no field for.
+  let v = toCbor(p)
+  let providers = v.field("rules").items[0].field("scopes").items[0].field("providers")
+  providers.entries.add((cbor("runtimes"), cborArray(cbor(id))))
+  encodeCbor(v)
+
+proc remoteEval(
+    e: Env, instance, runtime: string, scopes: seq[Scope]
+): EvaluateResponse =
+  e.a.evaluate(
+    systemCaller(),
+    EvaluateRequest(consumer: address(instance, runtime), scopes: scopes),
+  )
+
+proc remoteIssue(
+    e: Env, issuer, instance, runtime: string, scopes: seq[Scope]
+): IssueGrantResponse =
+  e.a.issueGrant(
+    moduleCaller(issuer),
+    IssueGrantRequest(
+      consumer: address(issuer), target: address(instance, runtime), scopes: scopes
+    ),
+  )
+
+proc mentions[T](x: T, id: string): bool =
+  let b = encodeCbor(toCbor(x))
+  var text = newString(b.len)
+  for i, c in b:
+    text[i] = char(c)
+  id in text
+
+proc anyCall(): LcnApScope =
+  paPattern(@[LcnApActionKind.Call], exact = testContract())
+
+suite "cap.remote: forwarded consumers [IMPL-DECISION G415]":
+  test "[IMPL-DECISION G415] runtimes: lowercase UUIDv4s, never this Runtime's own, never beside modules, signers or packages, never empty, and only in subjects":
+    proc load(rules: seq[LcnApRule], runtimeId = R1): bool =
+      loadPolicy(policyBytes(rules), NoProfile, runtimeId).isOk
+
+    check load(@[allowRule(subject(runtimes = @[R2]), @[anyCall()])])
+    check load(
+      @[allowRule(subject(runtimes = @[R2], instances = @["x"]), @[anyCall()])]
+    )
+    check not load(@[allowRule(subject(runtimes = @["rt-9"]), @[anyCall()])])
+    check not load(@[allowRule(subject(runtimes = @[R2.toUpperAscii]), @[anyCall()])])
+    check not load(@[allowRule(subject(runtimes = @[R1]), @[anyCall()])])
+    check load(@[allowRule(subject(runtimes = @[R1]), @[anyCall()])], runtimeId = Rt)
+    for s in [
+      subject(runtimes = @[R2], modules = @["alpha"]),
+      subject(runtimes = @[R2], signers = @[gammaSigner()]),
+      subject(runtimes = @[R2], packages = @["pkg"]),
+    ]:
+      check not load(@[allowRule(s, @[anyCall()])])
+    # issue, revoke and inspect targets are subjects too
+    check not load(
+      @[
+        revokeRule(
+          subject(modules = @["beta"]), targetSubject(subject(runtimes = @[R1]))
+        )
+      ]
+    )
+    check load(
+      @[
+        inspectRule(
+          anyone(), grants = Opt.some(targetSubject(subject(runtimes = @[R2])))
+        )
+      ]
+    )
+    var empty = policyValue(@[allowRule(subject(runtimes = @[R2]), @[anyCall()])])
+    empty.rules[0].arm_lcn_Ap_allow.subject.runtimes = Opt.some(newSeq[string]())
+    check loadPolicy(encode(empty).get, NoProfile, R1).isErr
+    # a provider selector names this Runtime's providers: no runtimes there
+    let sel = policyValue(
+      @[
+        allowRule(
+          anyone(),
+          @[
+            paPattern(
+              @[LcnApActionKind.Call],
+              exact = testContract(),
+              providers = Opt.some(subject(instances = @["m-a"])),
+            )
+          ],
+        )
+      ]
+    )
+    check loadPolicy(encode(sel).get, NoProfile, R1).isOk
+    check loadPolicy(withSelectorRuntimes(sel, R2), NoProfile, R1).isErr
+
+  test "[IMPL-DECISION G415] a forwarded consumer is matched only by a subject naming its Runtime, while that Runtime is enrolled":
+    var e = open(
+      policyBytes(
+        @[
+          allowRule(anyone(), @[anyCall()]),
+          allowRule(subject(runtimes = @[R2], instances = @["x"]), @[anyCall()]),
+        ]
+      ),
+      enrolled = @[R2],
+    )
+    # {} matches every local instance and no forwarded consumer
+    check e.evaluate("m-a", @[callM1()]).decisionOf.allowed
+    check e.remoteEval("x", R2, @[callM1()]).decisionOf.allowed
+    check e.remoteEval("y", R2, @[callM1()]).decisionOf.denialOf ==
+      DenialKind.Not_granted
+    # a Runtime with no active enrollment: its consumer is unknown (CA l.76)
+    check e.remoteEval("x", R3, @[callM1()]).errorOf == CaCode.Invalid_request
+    e.close()
+
+  test "[IMPL-DECISION G415] a Runtime named without an enrollment loads, matches nothing, and the load report names it":
+    let bytes = policyBytes(
+      @[
+        allowRule(subject(runtimes = @[R2, R3]), @[anyCall()]),
+        inspectRule(
+          anyone(), audit = Opt.some(targetSubject(subject(runtimes = @[R3])))
+        ),
+      ]
+    )
+    let p = loadPolicy(bytes, NoProfile, R1).get
+    let report = p.unenrolledRuntimes(@[R2])
+    check report.len == 2
+    check "rules[0].subject names Runtime " & R3 in report[0]
+    check "rules[1].audit names Runtime " & R3 in report[1]
+    check p.unenrolledRuntimes(@[R2, R3]).len == 0
+    var e = open(bytes, enrolled = @[R2])
+    check e.remoteEval("x", R2, @[callM1()]).decisionOf.allowed
+    check e.remoteEval("x", R3, @[callM1()]).errorOf == CaCode.Invalid_request
+    e.close()
+
+  test "[TXT-0359] [IMPL-DECISION G415] the enrolled half: a grant targets a consumer of an enrolled Runtime without the instance being checked; of any other Runtime it is invalid-request":
+    var e = open(
+      policyBytes(
+        @[
+          issueRule(
+            subject(modules = @["beta"]),
+            targetSubject(subject(runtimes = @[R2])),
+            @[paPattern(@[LcnApActionKind.Call], exact = testContract())],
+          ),
+          inspectRule(
+            anyone(),
+            grants = Opt.some(targetSubject(anyone())),
+            audit = Opt.some(targetSubject(anyone())),
+          ),
+        ]
+      ),
+      enrolled = @[R2],
+    )
+    let g = e.remoteIssue("m-b", "x", R2, @[callM1()]).grantOf
+    check g.target.runtime_instance_id == R2
+    let d = e.remoteEval("x", R2, @[callM1()]).decisionOf
+    check d.allowed and d.grant_ids.get == @[g.grant_id]
+    check e.remoteEval("y", R2, @[callM1()]).decisionOf.denialOf ==
+      DenialKind.Not_granted
+    check e.remoteIssue("m-b", "x", R3, @[callM1()]).issueErrorOf ==
+      CaCode.Invalid_request
+    # a local target is not covered by a target naming R2 only
+    check e.issue("m-b", "m-a", @[callM1()]).kind ==
+      LogosNSCapabilityAuthorityIssueGrantResponseKind.Map_denial
+    # (x): an inspect target naming no Runtime covers forwarded consumers' records
+    var seen = 0
+    for r in e.query("m-c"):
+      if r.mentions(R2):
+        inc seen
+    check seen >= 2 # the issue and the evaluations of x and y
+    let listed = e.a.listGrants(
+      moduleCaller("m-c"), ListGrantsRequest(consumer: address("m-c"))
+    ).listOf
+    check listed.grants.len == 1
+    e.close()
+
+  test "[IMPL-DECISION G415] an inspect target naming a Runtime covers only that Runtime's consumers":
+    var e = open(
+      policyBytes(
+        @[
+          allowRule(subject(runtimes = @[R2]), @[anyCall()]),
+          allowRule(anyone(), @[anyCall()]),
+          inspectRule(
+            subject(instances = @["m-c"]),
+            audit = Opt.some(targetSubject(subject(runtimes = @[R2]))),
+          ),
+          inspectRule(
+            subject(instances = @["m-b"]), audit = Opt.some(targetSubject(anyone()))
+          ),
+        ]
+      ),
+      enrolled = @[R2],
+    )
+    check e.remoteEval("x", R2, @[callM1()]).decisionOf.allowed
+    check e.evaluate("m-a", @[callM1()]).decisionOf.allowed
+    let narrow = e.query("m-c")
+    check narrow.len == 1 and narrow[0].mentions(R2)
+    let wide = e.query("m-b")
+    check wide.len == 2
+    e.close()

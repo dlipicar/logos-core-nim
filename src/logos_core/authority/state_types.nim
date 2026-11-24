@@ -10,7 +10,7 @@ import logos_sdk/codegen/common_types
 export nimrt, common_types
 
 const
-  primaryDocument = "; logos-core-nim.authority-state.v1: the Capability Authority\'s state, in its\x0A; own state assignment (DECISIONS I84; docs/AUTHORITY-POLICY.md). Each file is\x0A; one Logos deterministic-CBOR value: meta.cbor an lcn.as_meta,\x0A; grants/<grant id>.cbor an lcn.as_grant, audit/<16 hex digits>.cbor an\x0A; lcn.as_segment. A grant and an audit record are embedded as the bytes the\x0A; generated Capability Authority codecs make, so this schema names no CA type.\x0A\x0Alcn.as_meta = {\x0A  format: \"logos-core-nim.authority-state.v1\",\x0A  runtime_instance_id: tstr .size (1..128),\x0A  contract: bstr .size 32,\x0A  policy: lcn.as_policy,\x0A  audit_floor: uint64,\x0A  policy_records: [* lcn.as_record],\x0A}\x0A\x0A; the active policy: its digest, revision and when it became active\x0Alcn.as_policy = {\x0A  digest: bstr .size 32,\x0A  revision: uint64,\x0A  changed_at: uint64,\x0A}\x0A\x0A; one audit record, its recording sequence number, and the facts of its\x0A; consumer (else its target) when it was recorded: local detail (CA l.1349)\x0Alcn.as_record = {\x0A  seq: uint64,\x0A  record: bstr,\x0A  ? subject: lcn.as_facts,\x0A}\x0A\x0A; module is absent when the facts could not be read: the instance id alone\x0Alcn.as_facts = {\x0A  instance: tstr .size (1..128),\x0A  ? module: tstr .size (1..64),\x0A  ? signer: bstr .size 48,\x0A  ? package: tstr .size (1..128),\x0A}\x0A\x0A; a grant as issued or as its last transition left it, the facts of its target\x0A; at issuance, and its issue, revoke and expiry records\x0Alcn.as_grant = {\x0A  grant: bstr,\x0A  target: lcn.as_facts,\x0A  records: [* lcn.as_record],\x0A}\x0A\x0A; up to 256 records written behind, from `first` on\x0Alcn.as_segment = {\x0A  first: uint64,\x0A  records: [* lcn.as_record],\x0A}\x0A"
+  primaryDocument = "; logos-core-nim.authority-state.v1: the Capability Authority\'s state, in its\x0A; own state assignment (DECISIONS I84; docs/AUTHORITY-POLICY.md). Each file is\x0A; one Logos deterministic-CBOR value: meta.cbor an lcn.as_meta,\x0A; grants/<grant id>.cbor an lcn.as_grant, audit/<16 hex digits>.cbor an\x0A; lcn.as_segment. A grant and an audit record are embedded as the bytes the\x0A; generated Capability Authority codecs make, so this schema names no CA type.\x0A\x0Alcn.as_meta = {\x0A  format: \"logos-core-nim.authority-state.v1\",\x0A  runtime_instance_id: tstr .size (1..128),\x0A  contract: bstr .size 32,\x0A  policy: lcn.as_policy,\x0A  audit_floor: uint64,\x0A  policy_records: [* lcn.as_record],\x0A}\x0A\x0A; the active policy: its digest, revision and when it became active\x0Alcn.as_policy = {\x0A  digest: bstr .size 32,\x0A  revision: uint64,\x0A  changed_at: uint64,\x0A}\x0A\x0A; one audit record, its recording sequence number, and the facts of its\x0A; consumer (else its target) when it was recorded: local detail (CA l.1349)\x0Alcn.as_record = {\x0A  seq: uint64,\x0A  record: bstr,\x0A  ? subject: lcn.as_facts,\x0A}\x0A\x0A; module is absent when the facts could not be read: the instance id alone.\x0A; runtime: a forwarded consumer\'s Runtime (G415), whose facts are its instance\x0A; id and Runtime alone; absent for a local instance.\x0Alcn.as_facts = {\x0A  instance: tstr .size (1..128),\x0A  ? runtime: tstr .size (1..128),\x0A  ? module: tstr .size (1..64),\x0A  ? signer: bstr .size 48,\x0A  ? package: tstr .size (1..128),\x0A}\x0A\x0A; a grant as issued or as its last transition left it, the facts of its target\x0A; at issuance, and its issue, revoke and expiry records\x0Alcn.as_grant = {\x0A  grant: bstr,\x0A  target: lcn.as_facts,\x0A  records: [* lcn.as_record],\x0A}\x0A\x0A; up to 256 records written behind, from `first` on\x0Alcn.as_segment = {\x0A  first: uint64,\x0A  records: [* lcn.as_record],\x0A}\x0A"
   interfaceDocuments: array[0, string] = []
   supportingDocuments: array[0, string] = []
 
@@ -30,6 +30,7 @@ type
     instance*: string
     module*: Opt[string]
     package*: Opt[string]
+    runtime*: Opt[string]
     signer*: Opt[seq[byte]]
 
   LcnAsGrant* = object
@@ -91,6 +92,8 @@ proc stepEncLcnAsFacts*(w: var EncWork, src: pointer, dst: ptr CborValue) =
     inc n
   if x.package.isSome:
     inc n
+  if x.runtime.isSome:
+    inc n
   if x.signer.isSome:
     inc n
   let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
@@ -107,6 +110,10 @@ proc stepEncLcnAsFacts*(w: var EncWork, src: pointer, dst: ptr CborValue) =
     node.entries[k].key = cbor("package")
     node.entries[k].value = cbor(x.package.get)
     inc k
+  if x.runtime.isSome:
+    node.entries[k].key = cbor("runtime")
+    node.entries[k].value = cbor(x.runtime.get)
+    inc k
   if x.signer.isSome:
     node.entries[k].key = cbor("signer")
     node.entries[k].value = cbor(x.signer.get)
@@ -122,9 +129,12 @@ proc stepDecLcnAsFacts*(w: var DecWork, v: CborValue, dst: pointer) =
   let f2 = v.lookup("package")
   if f2.isSome:
     r.package = Opt.some(f2.get.text)
-  let f3 = v.lookup("signer")
+  let f3 = v.lookup("runtime")
   if f3.isSome:
-    r.signer = Opt.some(f3.get.bytes)
+    r.runtime = Opt.some(f3.get.text)
+  let f4 = v.lookup("signer")
+  if f4.isSome:
+    r.signer = Opt.some(f4.get.bytes)
 
 proc toCbor*(x: LcnAsFacts): CborValue =
   runEnc(stepEncLcnAsFacts, addr x)
@@ -143,10 +153,10 @@ proc stepEncLcnAsGrant*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   node.entries[k].value = cbor(x.grant)
   inc k
   node.entries[k].key = cbor("records")
-  let a4 = newCborArray(x.records.len)
-  node.entries[k].value = a4
-  for i5 in 0 ..< x.records.len:
-    w.later(stepEncLcnAsRecord, addr x.records[i5], addr a4.items[i5])
+  let a5 = newCborArray(x.records.len)
+  node.entries[k].value = a5
+  for i6 in 0 ..< x.records.len:
+    w.later(stepEncLcnAsRecord, addr x.records[i6], addr a5.items[i6])
   inc k
   node.entries[k].key = cbor("target")
   w.later(stepEncLcnAsFacts, addr x.target, addr node.entries[k].value)
@@ -156,12 +166,12 @@ proc stepDecLcnAsGrant*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnAsGrant](dst)
   r[] = LcnAsGrant()
   r.grant = v.lookup("grant").get.bytes
-  let f6 = v.lookup("records").get
-  r.records.setLen(f6.items.len)
-  for i7 in 0 ..< f6.items.len:
-    w.later(stepDecLcnAsRecord, f6.items[i7], addr r.records[i7])
-  let f8 = v.lookup("target").get
-  w.later(stepDecLcnAsFacts, f8, addr r.target)
+  let f7 = v.lookup("records").get
+  r.records.setLen(f7.items.len)
+  for i8 in 0 ..< f7.items.len:
+    w.later(stepDecLcnAsRecord, f7.items[i8], addr r.records[i8])
+  let f9 = v.lookup("target").get
+  w.later(stepDecLcnAsFacts, f9, addr r.target)
 
 proc toCbor*(x: LcnAsGrant): CborValue =
   runEnc(stepEncLcnAsGrant, addr x)
@@ -189,10 +199,10 @@ proc stepEncLcnAsMeta*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   w.later(stepEncLcnAsPolicy, addr x.policy, addr node.entries[k].value)
   inc k
   node.entries[k].key = cbor("policy_records")
-  let a10 = newCborArray(x.policy_records.len)
-  node.entries[k].value = a10
-  for i11 in 0 ..< x.policy_records.len:
-    w.later(stepEncLcnAsRecord, addr x.policy_records[i11], addr a10.items[i11])
+  let a11 = newCborArray(x.policy_records.len)
+  node.entries[k].value = a11
+  for i12 in 0 ..< x.policy_records.len:
+    w.later(stepEncLcnAsRecord, addr x.policy_records[i12], addr a11.items[i12])
   inc k
   node.entries[k].key = cbor("runtime_instance_id")
   node.entries[k].value = cbor(x.runtime_instance_id)
@@ -203,12 +213,12 @@ proc stepDecLcnAsMeta*(w: var DecWork, v: CborValue, dst: pointer) =
   r[] = LcnAsMeta()
   r.audit_floor = uint64(v.lookup("audit_floor").get.uint)
   r.contract = v.lookup("contract").get.bytes
-  let f9 = v.lookup("policy").get
-  w.later(stepDecLcnAsPolicy, f9, addr r.policy)
-  let f12 = v.lookup("policy_records").get
-  r.policy_records.setLen(f12.items.len)
-  for i13 in 0 ..< f12.items.len:
-    w.later(stepDecLcnAsRecord, f12.items[i13], addr r.policy_records[i13])
+  let f10 = v.lookup("policy").get
+  w.later(stepDecLcnAsPolicy, f10, addr r.policy)
+  let f13 = v.lookup("policy_records").get
+  r.policy_records.setLen(f13.items.len)
+  for i14 in 0 ..< f13.items.len:
+    w.later(stepDecLcnAsRecord, f13.items[i14], addr r.policy_records[i14])
   r.runtime_instance_id = v.lookup("runtime_instance_id").get.text
 
 proc toCbor*(x: LcnAsMeta): CborValue =
@@ -273,10 +283,10 @@ proc stepDecLcnAsRecord*(w: var DecWork, v: CborValue, dst: pointer) =
   r[] = LcnAsRecord()
   r.record = v.lookup("record").get.bytes
   r.seq = uint64(v.lookup("seq").get.uint)
-  let f14 = v.lookup("subject")
-  if f14.isSome:
+  let f15 = v.lookup("subject")
+  if f15.isSome:
     r.subject = Opt.some(default(LcnAsFacts))
-    w.later(stepDecLcnAsFacts, f14.get, addr r.subject.get)
+    w.later(stepDecLcnAsFacts, f15.get, addr r.subject.get)
 
 proc toCbor*(x: LcnAsRecord): CborValue =
   runEnc(stepEncLcnAsRecord, addr x)
@@ -295,20 +305,20 @@ proc stepEncLcnAsSegment*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   node.entries[k].value = cbor(uint64(x.first))
   inc k
   node.entries[k].key = cbor("records")
-  let a15 = newCborArray(x.records.len)
-  node.entries[k].value = a15
-  for i16 in 0 ..< x.records.len:
-    w.later(stepEncLcnAsRecord, addr x.records[i16], addr a15.items[i16])
+  let a16 = newCborArray(x.records.len)
+  node.entries[k].value = a16
+  for i17 in 0 ..< x.records.len:
+    w.later(stepEncLcnAsRecord, addr x.records[i17], addr a16.items[i17])
   inc k
 
 proc stepDecLcnAsSegment*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnAsSegment](dst)
   r[] = LcnAsSegment()
   r.first = uint64(v.lookup("first").get.uint)
-  let f17 = v.lookup("records").get
-  r.records.setLen(f17.items.len)
-  for i18 in 0 ..< f17.items.len:
-    w.later(stepDecLcnAsRecord, f17.items[i18], addr r.records[i18])
+  let f18 = v.lookup("records").get
+  r.records.setLen(f18.items.len)
+  for i19 in 0 ..< f18.items.len:
+    w.later(stepDecLcnAsRecord, f18.items[i19], addr r.records[i19])
 
 proc toCbor*(x: LcnAsSegment): CborValue =
   runEnc(stepEncLcnAsSegment, addr x)

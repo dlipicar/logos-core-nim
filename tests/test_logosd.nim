@@ -4,7 +4,8 @@
 ## development switch and its banner, trust continuity, the trust anchor
 ## commands and their refusals (G397), the offline writers' lock, concurrent
 ## shells, retirement, the socket path's limits, a Loader loss, a key bound to
-## another Runtime, and the call-evidence store's commands.
+## another Runtime, the call-evidence store's commands, and a binary with no
+## libssl code in it (G409).
 ##
 ## The children are built for the suite's variant (`daemonbuild.nim`): logosd
 ## with test hooks, logosctl without. They run with `posix_spawn`, their
@@ -34,7 +35,8 @@ when defined(posix):
     acquire, ensurePrivateDir, release, removeIfPresent, writeAtomic
   import
     ./support/[
-      clibuild, daemonbuild, daemonproc, evfixture, modulehostbuild, shortdir, slowdown
+      clibuild, daemonbuild, daemonproc, evfixture, modulehostbuild, nossl, shortdir,
+      slowdown,
     ],
     logos_sdk/testing/[kitbuild, testdirs]
 
@@ -1642,6 +1644,20 @@ when defined(posix):
         skip()
       else:
         ledgerCase(hosted = true)
+
+    test "[IMPL-DECISION G409] logosd holds no libssl code: none of the symbols only libssl's objects define is in the binary (plain builds)":
+      # Plain builds only. A sanitizer can keep libssl's tables and their code
+      # alive: ASan registers each object's globals, and the other sanitizers
+      # add constructors to each object. An audit build exports every symbol on
+      # Linux (`-rdynamic`), and a prebuilt logosd (`LCN_LOGOSD`) has no nimcache
+      # beside it; the flake check `logosd-no-ssl` checks the shipped binary.
+      let nimcache = dExe.parentDir / "nimcache"
+      if kitSanitizer.len > 0 or kitAudit or not dirExists(nimcache):
+        skip()
+      else:
+        let r = checkNoSsl(nimcache, dExe)
+        checkpoint r.problem
+        check r.problem == ""
 else:
   import unittest2
 

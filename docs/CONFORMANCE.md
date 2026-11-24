@@ -7,8 +7,8 @@ of its units. `tools/spectrace/spectrace.py` does the bookkeeping. In the dev sh
 
 ## Requirement ledger
 
-Each spec's files sit under the conformance tree of the package that owns them: `conformance/` for core
-and `sdk/conformance/` for the SDK (CDE, CMT and HSH). `<tree>/requirements/<PFX>.jsonl` holds one line per unit. The first line records the spec file,
+Each spec's ledger sits under the conformance tree of the package that owns it: `sdk/conformance/` for the
+SDK (CDE, CMT, HSH and IFC) and `conformance/` for core (the rest). `<tree>/requirements/<PFX>.jsonl` holds one line per unit. The first line records the spec file,
 the spec revision and the next free ID.
 
 | Prefix | Spec | Prefix | Spec |
@@ -45,8 +45,11 @@ match the pinned specs.
 
 ## Claims
 
-`<tree>/claims/<PFX>.toml` gives each section a status. A spec two packages share has a claims file in each,
-and `spectrace owners` holds that each unit has one owner. The longest matching section key wins,
+`<tree>/claims/<PFX>.toml` gives each section a status. Each unit is claimed by the package that implements
+its rule (DECISIONS R8). A spec two packages share (IFC, RUN, CFG) has a claims file in each, and each
+gives the other package's units `out-of-scope:<package>`. `spectrace owners` holds that each unit has one
+owner, that a unit neither claims has the same status in both files, and that a claimed unit's tests and
+inspection items are in its owner's trees. The longest matching section key wins,
 and `default` covers the rest. Section keys are `§4.4`, `App B.1`, or `§1/Heading` for an unnumbered
 heading under a numbered one.
 
@@ -522,6 +525,12 @@ the facade process that passes the invocation's Runtime as the one expected (5-7
 also run the carrier against pyOpenSSL (G128, suite `tls.independent peer`); where `LCN_TLS_PEER_PYTHON` is
 not set, as under `nimble test`, those five cases are skipped.
 
+Part 5-7a-1 adds the protected input the snapshot is built from: logosd's remote trust input and its
+mark (G408), accepted at the start before any connection (TRN-0217), and the Runtime's own credential
+(G409), the one algorithm pair this implementation offers and accepts (TRN-0369). The handshakes are
+signed through the control channel by logosd's signing service, its key holder or, in tests, the
+process itself (G410), each in `test_remote_tls`.
+
 Part 5-2d pinned nim-boringssl 0.0.16 and turned on its `BORINGSSL_ZERO_RECORD_BUFFERS` (G327). The re-pin
 to 6cac8335 took the option off again (P4d): the new text forbids marked payloads on `tls-tcp` and `quic`
 whatever the library does (TRANSPORT l.1188-1189; RUNTIME l.1808, l.2939), so the build is upstream's
@@ -712,7 +721,8 @@ marker) and the catalog and provenance selections. Its schema and rules are core
   package name are 1 to 128 bytes and a key 48 bytes. The number of anchors and names is bounded only by
   the file's size.
 - **Key separation** (PM l.533): no anchor may use a call-evidence key of the session, retired ones
-  included. It supplies evidence to PKG-0435, which stays with step 5-7a until the TLS key exists.
+  included. It supplies evidence to PKG-0435, claimed since step 5-7a-1, where the TLS key and the
+  evidence key each refuse the other's file (G409).
 
 ### What Tier 5 step 5-3b-1 changes
 
@@ -751,8 +761,10 @@ module is a test build (`pmtest_module`), so a packaged deployment has none.
   real routes (`test_logosd_pm`, `test_pm_hosted`). PKG 279/279, with 307 units left for Tier 5.
 - **Limits of the claim.** The only `lcn.storage_fetch` provider is the test fake; the storage module is N-4's.
   A trust file change reaches the Package Manager only at the next start (BCP-0049). The resolver limits are
-  bounded, not cheap: at logosd's preset (G443) one package with a maximum-size manifest in the closure holds the
-  Package Manager's thread about a minute for one step; "Resolver limits" below gives the measured cost.
+  bounded, not cheap: at logosd's preset (G443) one package with a maximum-size manifest in the closure held the
+  Package Manager's thread about a minute for one step before 5-3c-1; "Resolver limits" below gives the measured
+  cost. Since 5-3c-1 and 5-3c-2 (G454, G455) the resolution's longest hold measured is under 11 ms at the preset
+  and at the maxima ("The resumable run"), and a large closure costs time in all, a turn at a time.
 
 ## Properties not claimed
 
@@ -959,7 +971,8 @@ one handler holds the Package Manager's module thread. The driver reruns the res
 after each inspection (DECISIONS G405), so a closure of n names takes n + 1 steps, and the thread is
 free between two steps while a retrieval runs. The figures are CPU time, orc with `-d:release`, one
 run at a time, on an Apple M1 Max (macOS) and an AMD Ryzen AI 9 HX 370 (x86_64 Linux). CI asserts
-the shapes' counts, never a time (`test_pm_driver`, ruling M6).
+the shapes' counts, never a time (`test_pm_driver`, ruling M6). The tables in this subsection are the
+resolver as 5-3b-2 built it (`10cc598`); "After the incremental search" gives 5-3c-1's.
 
 The shapes:
 - **wide**: a root with w dependency names that sort last and 20 names, each with two versions, that
@@ -1023,7 +1036,341 @@ What the figures say:
 - **The cost fix** is a step of its own after 5-3b (DECISIONS G443): incremental depths, ordered
   unresolved names, a run resumed instead of rerun, and slicing by a fixed count of work, so no
   result or counter changes. It comes before 5-5, or before the first step that lets a consumer other
-  than the operator's tools start a root operation, whichever is first.
+  than the operator's tools start a root operation, whichever is first. Its first half, the
+  incremental search, is built (5-3c-1, DECISIONS G454; below). The second, the run resumed and
+  sliced, is built too (5-3c-2, G455; "The resumable run" below).
+
+### After the incremental search
+
+5-3c-1 keeps the search and changes its state (DECISIONS G454): numbered names, the unresolved names
+on a heap, depths kept for bound names with a trail, versions tested as they come, and the cycle walk
+pruned by depth. The rows below are one synchronous `resolve` of each shape (`tools/pmbench.nim
+--sync`), every inspection answered at once, each run in its own process: the resolver ("new") and the
+frozen oracle, which is the search at `10cc598` (`tests/support/oracle_resolver.nim`). Both give the
+same outcome and counters in every row, and `test_resolver` compares the two on these shapes at both
+limit sets. The figures are CPU time, orc with `-d:release`, on the two machines above. Work is the
+resolver's count of units (G454), the same on both. Peak is the process's maximum resident memory:
+the resolver's, the oracle's, and that of the input alone (`--sync input`), which both start from. The
+Mac ran these with other work loaded on it (load average about 250), so its CPU times are high.
+**One run at logosd's preset** (256 / 32 / 256 / 1,024):
+
+| Shape | Ended by | New, Mac | Oracle, Mac | New, Linux | Oracle, Linux | Work | Peak MiB, Mac: new / oracle |
+|---|---|---|---|---|---|---|---|
+| chain, 33 names | resolved | 0.35 ms | 0.65 ms | 0.54 ms | 0.99 ms | 385 | 7.1 / 7.1 |
+| dense, 32 names | resolved | 0.74 ms | 2.4 ms | 0.65 ms | 4.0 ms | 4,558 | 7.8 / 7.9 |
+| layered, 256 names in 32 layers | resolved | 30.2 ms | 728 ms | 28.1 ms | 521 ms | 286,525 | 42.5 / 45.4 |
+| hub, 30 names, 256 versions of the last | no closure | 8.8 ms | 57.0 ms | 6.4 ms | 40.0 ms | 163,946 | 10.8 / 10.8 |
+| lift, 30 names, 256 versions of `y` | resolved | 9.1 ms | 54.9 ms | 2.8 ms | 35.1 ms | 127,447 | 8.6 / 8.6 |
+| wide, w = 80,000 | `assignment_attempts` | 67.0 ms | 64.4 s | 66.3 ms | 47.9 s | 328,234 | 198 / 153 |
+
+**One run at the maxima** (4,096 / 4,095 / 4,096 / 1,048,576), with `assignment_attempts` lowered where a row says. The oracle is not run past 1,024 names, where one of its runs takes minutes:
+
+| Shape | Ended by | New, Mac | Oracle, Mac | New, Linux | Oracle, Linux | Work | Peak MiB, Mac: new / oracle / input |
+|---|---|---|---|---|---|---|---|
+| dense, 256 names | resolved | 29.6 ms | 724 ms | 23.8 ms | 538 ms | 294,526 | 44.5 / 47.7 / — |
+| dense, 1,024 names | resolved | 458 ms | 43.4 s | 347 ms | 40.2 s | 4,717,054 | 511 / 534 / 84.3 |
+| dense, 2,048 names | resolved | 1.96 s | — | 1.30 s | — | 18,871,294 | 1,936 / — / 306 |
+| dense, 4,096 names | resolved | 8.29 s | — | 5.83 s | — | 75,491,326 | 7,539 / — / 1,185 |
+| chain, 2,048 names | resolved | 19.5 ms | 1.31 s | 14.9 ms | 754 ms | 24,565 | 17.7 / 19.2 / — |
+| chain, 4,095 names | resolved | 40.1 ms | 5.79 s | 31.1 ms | 3.15 s | 49,129 | 28.1 / 30.6 / 12.9 |
+| hub, 255 names, 4 versions | no closure | 28.8 ms | 700 ms | 22.5 ms | 463 ms | 460,325 | 38.7 / 39.5 / — |
+| lift, 255 names, 4 versions | resolved | 33.0 ms | 759 ms | 24.9 ms | 591 ms | 390,229 | 44.2 / 47.4 / — |
+| layered, 1,024 names in 64 layers | resolved | 439 ms | 44.7 s | 332 ms | 38.3 s | 4,648,069 | 503 / 525 / 83.1 |
+| layered, 4,096 names in 64 layers | resolved | 8.06 s | — | 5.21 s | — | 74,330,677 | 7,441 / — / 1,168 |
+| wide, w = 80,000, 1,000 attempts | `assignment_attempts` | 55.9 ms | 62.1 s | 64.4 ms | 53.9 s | 328,042 | 198 / 153 / 26.1 |
+| wide, w = 80,000, 100,000 attempts | `assignment_attempts` | 233 ms | — | 217 ms | — | 1,120,042 | 198 / — / — |
+
+**Through the driver at the preset**, which still reruns the resolver from the root after each inspection (before, from the table above → after):
+
+| Shape | Steps | Longest step, Mac | Longest step, Linux | Total, Mac | Total, Linux |
+|---|---|---|---|---|---|
+| chain, 33 names | 34 | 0.56 ms → 0.30 ms | 0.53 ms → 0.46 ms | 9.9 ms → 7.2 ms | 11.6 ms → 10.5 ms |
+| dense, 32 names | 33 | 2.0 ms → 0.66 ms | 1.8 ms → 1.00 ms | 27 ms → 12.2 ms | 21.7 ms → 18.5 ms |
+| layered, 256 names in 32 layers | 257 | 659 ms → 39.4 ms | 553 ms → 20.4 ms | 60.9 s → 3.96 s | 43.5 s → 2.56 s |
+| hub, 30 names, 256 versions of the last | 288 | 49 ms → 14.4 ms | 38 ms → 6.1 ms | 6.6 s → 1.48 s | 5.2 s → 961 ms |
+| lift, 30 names, 256 versions of `y` | 288 | — → 8.7 ms | — → 2.5 ms | — → 792 ms | — → 493 ms |
+| wide, w = 80,000 | 31 | 55.7 s → 77.5 ms | 76.0 s → 86.6 ms | 121.3 s → 1.98 s | 171.2 s → 2.28 s |
+
+What the figures say:
+- **An attempt no longer scans every required name.** The wide shape's 1,024 attempts take
+  67 ms instead of 64 s on the Mac (Linux: 66 ms instead of 48 s), about 0.06 ms each. 100,000
+  attempts take about 0.22 s, so the maximum's 1,048,576 would take about 2.4 s by extrapolation
+  (before: about 14.5 h).
+- **Depths change only where a bind changes them.** A chain of 4,095 names takes 40 ms instead of
+  5.8 s (Linux: 31 ms instead of 3.2 s). The dense and layered shapes now cost about their edges:
+  4,096 dense names (about 8.4 million edges) take 8.3 s (Linux: 5.8 s), and 4,096 names in 64 layers
+  8.1 s (Linux: 5.2 s).
+- **Writing the closure was cubic** in a dense closure: it copied each dependency's candidate, its
+  lists included, for every edge. The oracle keeps that cost, which is most of its 43 s at dense 1,024;
+  the resolver reads them in place.
+- **Through the driver** at the preset, the longest step falls from 55.7 s to 78 ms (wide) and from
+  659 ms to 39 ms (layered) on the Mac, and from 76.0 s to 87 ms and from 553 ms to 20 ms on Linux. The totals still count one rerun from the root after each inspection,
+  which 5-3c-2 removed (G455; "The resumable run" below); its slicing is what bounds one turn at the maxima.
+- **Memory** is of the same order as before. At dense 1,024 the resolver peaks at 511 MiB and the
+  oracle at 534 MiB, of which 84 MiB is the input. At the maxima a dense closure of 4,096 names peaks
+  at 7.4 GiB, of which 1.2 GiB is the input (Linux: 7.3 and 1.2 GiB). The rest, about 750 bytes for each of the 8.4 million
+  edges, is held as before: each requirement in its dependent's candidate and in its name's list, the
+  inspections and catalog picks it reads, and the closure's edges. The wide shape's 80,000 names cost
+  45 MiB more than the oracle's, in the arrays kept for each numbered name.
+
+### The resumable run
+
+5-3c-2 (DECISIONS G455) makes a root operation's resolution one run that the driver holds for the
+operation's life. Nothing is rerun from the root: a step resumes the run, and the run stops where it
+needs an inspection or once its turn's work is spent (`ResolverTurnWork`, 32,768 units). Between two
+turns the module thread is free for route answers, timers, readiness events and other operations
+([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) §4). After the outcome the run's state is freed by turns of
+their own, the release. 5-3c-3 brings contracts within the same bound: each is numbered once, in
+sliced steps (G455). The rows are each shape through the driver (`tools/pmbench.nim --budget`),
+every inspection answered at once, each in its own process:
+- a turn is one step, the time one handler holds the module thread;
+- the steps are the turns that end with the work spent ("Turns"), one for each inspection, and the
+  outcome;
+- the figures are CPU time, orc with `-d:release`, on the Linux machine above (framework.lan, x86_64),
+  on 5-3c-3 merged with master `a27379f`, so with `CborValue` acyclic (G478), at a load under 1, with
+  the queue lock held and nothing else queued. The Mac is not given: it was shared at a load of 50 to
+  100 while 5-3c-3 was measured, and 5-3c-2's Mac figures, taken at a load of 30 to 80, are in this
+  file's history. One run's longest turn still varies by up to half between runs (the wide shape at the
+  preset: 5.0 to 8.4 ms over five runs, four of them on 5-3c-3's branch);
+- work is the run's count of units (G454), the same on every machine and under any budget. It is
+  higher than 5-3c-2's: since 5-3c-3 it also counts each frame's requirements, walked once for the
+  contracts and pins they ask, a requirement's version text as it is copied, and each record's
+  numbering (a unit, and one for each 16 of its entries for a record with no contracts; G455).
+
+**At logosd's preset** (256 / 32 / 256 / 1,024):
+
+| Shape | Ended by | Steps | Turns | Longest turn | Total | Work |
+|---|---|---|---|---|---|---|
+| chain, 33 names | resolved | 34 | 0 | 0.07 ms | 0.43 ms | 1,420 |
+| dense, 32 names | resolved | 33 | 0 | 0.12 ms | 0.99 ms | 9,614 |
+| layered, 256 names in 32 layers | resolved | 258 | 1 | 2.15 ms | 23.3 ms | 586,428 |
+| hub, 30 names, 256 versions of the last | no closure | 288 | 0 | 0.26 ms | 10.2 ms | 219,271 |
+| lift, 30 names, 256 versions of `y` | resolved | 288 | 0 | 0.26 ms | 4.94 ms | 141,629 |
+| wide, w = 80,000 | `assignment_attempts` | 71 | 40 | 5.11 ms | 40.9 ms | 1,736,843 |
+
+**At the maxima** (4,096 / 4,095 / 4,096 / 1,048,576), with `assignment_attempts` lowered where a row
+says. The last row is a catalog at its bound of 65,536 entries (`package_manager.limits`), most of
+them one name's versions:
+
+| Shape | Ended by | Turns | Longest turn | Total | Release: turns, longest | Work | Peak MiB |
+|---|---|---|---|---|---|---|---|
+| dense, 256 names | resolved | 2 | 2.01 ms | 23.4 ms | 6, 0.59 ms | 604,974 | 34 |
+| dense, 1,024 names | resolved | 57 | 2.17 ms | 271 ms | 81, 0.73 ms | 9,655,370 | 425 |
+| dense, 2,048 names | resolved | 235 | 2.22 ms | 1.07 s | 320, 1.06 ms | 38,602,134 | 1,693 |
+| dense, 4,096 names | resolved | 941 | 3.43 ms | 4.25 s | 1,272, 1.53 ms | 154,366,234 | 6,554 |
+| chain, 2,048 names | resolved | 1 | 1.09 ms | 11.3 ms | 2, 0.59 ms | 85,988 | 14 |
+| chain, 4,095 names | resolved | 2 | 2.63 ms | 22.2 ms | 3, 1.07 ms | 171,964 | 24 |
+| hub, 255 names, 4 versions | no closure | 7 | 0.68 ms | 17.6 ms | 2, 0.59 ms | 778,060 | 30 |
+| lift, 255 names, 4 versions | resolved | 2 | 2.06 ms | 18.4 ms | 6, 0.61 ms | 699,247 | 34 |
+| layered, 1,024 names in 64 layers | resolved | 55 | 2.21 ms | 267 ms | 77, 0.71 ms | 9,494,840 | 420 |
+| layered, 4,096 names in 64 layers | resolved | 1,256 | 3.66 ms | 4.16 s | 1,063, 1.61 ms | 151,657,929 | 6,486 |
+| wide, w = 80,000, 1,000 attempts | `assignment_attempts` | 40 | 5.07 ms | 39.7 ms | 11, 1.40 ms | 1,735,755 | 129 |
+| wide, w = 80,000, 100,000 attempts | `assignment_attempts` | 172 | 5.22 ms | 199 ms | 11, 1.59 ms | 6,190,998 | 129 |
+| lift, 30 names, 65,500 versions of `y` (a catalog of 65,532 entries) | `candidates_per_name` | 34 | 6.24 ms | 63.7 ms | 7, 3.53 ms | 3,314,182 | 99 |
+
+**The turn budget:** the plan's 65,536 units against 32,768, for the shapes whose longest turn the
+budget decides:
+
+| Shape | Turns at 32,768 / 65,536 | Longest turn at 32,768 / 65,536 | Longest release turn at 32,768 / 65,536 |
+|---|---|---|---|
+| dense, 4,096 names | 941 / 469 | 3.43 ms / 5.51 ms | 1.53 ms / 2.79 ms |
+| layered, 4,096 names in 64 layers | 1,256 / 624 | 3.66 ms / 4.87 ms | 1.61 ms / 2.01 ms |
+| dense, 1,024 names | 57 / 27 | 2.17 ms / 5.97 ms | 0.73 ms / 1.27 ms |
+| dense, 2,048 names | 235 / 116 | 2.22 ms / 4.91 ms | 1.06 ms / 1.83 ms |
+| wide, w = 80,000 | 40 / 22 | 5.11 ms / 5.04 ms | 1.41 ms / 3.17 ms |
+| wide, w = 80,000, 100,000 attempts | 172 / 86 | 5.22 ms / 5.07 ms | 1.59 ms / 2.73 ms |
+| lift, 30 names, 65,500 versions of `y` (a catalog of 65,532 entries) | 34 / 17 | 6.24 ms / 4.92 ms | 3.53 ms / 6.01 ms |
+
+**Contracts** (5-3c-3), at the preset and 32,768 units, each listed contract a commitment's encoding of
+221 bytes (`tests/support/pmshapes.nim`). `contracts c k`: k manifests of two dependency entries listing
+c contracts each, on names whose records provide none, so nothing completes. `provider p l`: a record
+providing p contracts, numbered out of order so they are sorted, and a later bind looking l of them up.
+`versioned c v`: v versions each listing c contracts that nothing provides, each bound and given up.
+Without G478 the work and the turns are the same; its other figures are under the table:
+
+| Shape | Contracts listed | Turns | Largest step | Work | Longest turn | Total | Peak MiB | ns per unit |
+|---|---|---|---|---|---|---|---|---|
+| contracts 18,000, 1 manifest | 36,000 | 250 | 256 | 8,241,382 | 0.26 ms | 41.2 ms | 47 | 5.0 |
+| contracts 8,000, 4 manifests | 64,000 | 443 | 256 | 14,614,068 | 0.52 ms | 75.9 ms | 78 | 5.2 |
+| contracts 18,000, 8 manifests | 288,000 | 1,998 | 256 | 65,819,050 | 0.46 ms | 356 ms | 341 | 5.4 |
+| contracts 18,000, 32 manifests | 1,152,000 | 7,989 | 257 | 263,218,973 | 0.54 ms | 1.44 s | 1,346 | 5.5 |
+| provider 20,000, 1 looked up | 1 | 150 | 1,251 | 4,932,920 | 0.56 ms | 49.2 ms | 29 | 10.0 |
+| provider 20,000, 20,000 looked up | 20,000 | 295 | 1,251 | 9,698,750 | 0.26 ms | 45.2 ms | 46 | 4.7 |
+| versioned 8,000, 8 versions | 64,000 | 441 | 256 | 14,611,173 | 0.22 ms | 70.4 ms | 78 | 4.8 |
+
+What the figures say:
+- **Nothing is rerun.** Through the driver at the preset each total is one run's: 256 names in 32
+  layers take 23.3 ms instead of 2.56 s, and the wide shape 41 ms instead of 2.28 s.
+- **One turn holds the thread for a few milliseconds.** At 32,768 units the longest turn of every
+  shape, at the preset and at the maxima, is under 7 ms here and was under 9 ms in every run of 5-3c-3's
+  bench; every contract shape's is under 0.6 ms. The longest are the wide shape's, whose root, the
+  build of one candidate from a maximum-size manifest of about 80,000 entries in one go, takes about
+  3 ms on the Mac (G455) and whose other turns do nearly the same work, and the catalog of 65,532
+  entries'. Each varies by up to half between runs (the wide shape 5.0 to 8.4 ms, the catalog 4.3 to
+  6.2 ms).
+- **What keeps turns even** is that work counts what takes time (G455): each list's growth, a
+  candidate's manifest entries, a name first numbered in a bind (with its bytes, as the setup counts
+  it), each level of a heap operation and, since 5-3c-3, each contract numbered (a unit and its encoded
+  bytes), each probe of the intern table and each step of a contract lookup. Counted as one unit each,
+  the wide shape's 80,000 new names and a heap holding them made turns of 10 to 16 ms at the same
+  budget. A unit costs about 17 to 40 ns in every plain shape whose steps the budget ends (dense 4,096:
+  154 million units in 4.25 s), and 4.7 to 10 ns in the contract shapes, whose bytes overcount (safe);
+  0.7 to 1.4 ns since 5-3c-4, which encodes no catalog contract on the module thread.
+  The chain shapes' time per unit is well above that, about 130 ns, as in 5-3c-2: their time is their
+  steps, one for each of up to 4,095 inspections at about 42 units each, and a step's fixed cost (its
+  resume, and the bench's clock reads around it) is a few µs.
+- **Contracts are within the bound** (5-3c-3, G455). Before it, one dependency entry listing 18,000
+  contracts on a name with a record held the thread for 5.2 s in one turn on the Mac, and its work read
+  80. Now the most work counted between two turn checks is 257 units in the contract shapes and 1,251 in
+  the provider shape (`largestStep`). `test_pm_driver` asserts it under 2,048 for each contract shape,
+  and under a test hook that makes every contract's hash collide (2,200 contracts, 5.7 million more
+  units, largest step 256).
+- **Inspections carry encodings** (5-3c-4, G482). The counts are unchanged for a run that ends by
+  itself: pmbench's 45 runs (19 shapes at 32,768 and 65,536, the 7 contract shapes at 32,768) give master
+  `7a307a8` and this tree the same outcome, counters, steps, turns, work, largest step and release turns,
+  every one (framework.lan, the two builds alternating run by run). Three exceptions, by design:
+  - a run dropped while a catalog record is being numbered: its release counts that record without the
+    contracts already moved into the walk;
+  - the engine's turns: a judgment's decode turns are gone. Master's engine decoded the bench's
+    maximal judgment, 80,000 entries and 22,000 contracts, in 100 turns of its own
+    (`DecodeOperation`), 79 for 80,000 entries alone and 22 for 22,000 contracts alone; now it takes
+    none (`tools/pmbench.nim receive` on both trees);
+  - an inspection built by hand that repeats a provided contract: the builder keeps the repeat, where
+    `provided` gives each once. No bench shape does.
+
+  The times, from the same session: the module thread no longer encodes a catalog contract, so the
+  contract shapes' totals fall to between an eighth and a quarter (contracts 18,000 × 32 from 1.45 s to
+  0.36 s, 18,000 × 8 from 340 ms to 67 ms; 0.7 to 1.4 ns a unit against 4.7 to 6.3), and their longest
+  turns from 0.23-0.58 ms to 0.07-0.43 ms. The plain shapes are unchanged: totals within 3% but for one
+  run each way (wide with 1,000 attempts, 41 against 46 ms at 32,768 and 43 against 39 at 65,536), and
+  the longest turns within their noise. The bench's peaks for the contract shapes are 1.5 to 7.5 MiB
+  higher, the same at 8 manifests as at 32: the bench keeps every answer as values (the oracle's form)
+  and builds a record's encodings when it is supplied, so one record's buffer lives through its walk
+  beside the bench's values. In the module the values are the worker's and are freed there, and the
+  resolver's own heap falls ("The operation bound").
+- **Without G478, ORC's cycle collector held the thread** in the contract shapes: on 5-3c-3's branch
+  before G478 (the same machine, at a load of about 4), the longest turns were 3 to 118 ms, on resumes
+  that counted no more work than their neighbors, in the code that dropped the last reference to a
+  `CborValue` (DECISIONS G478). Longest turn, total and peak MiB in the table's order: 7.37 ms, 55.6 ms,
+  55; 9.38 ms, 97.0 ms, 93; 36.5 ms, 444 ms, 406; 118 ms, 1.71 s, 1,633; 3.02 ms, 36.0 ms, 34; 7.95 ms,
+  63.8 ms, 56; 6.82 ms, 94.4 ms, 94. With it, the totals are 16 to 29% lower and the peaks 14 to 18%
+  lower. Provider with 1 lookup is the exception in the table only: its total varies from 23 to 49 ms
+  between runs of this tree (six runs), and over five rounds alternating with the branch its median
+  is 23.5 ms against 28.6 without G478.
+- **What the turn test cannot see.** `largestStep` catches work counted in one lump, not work counted
+  not at all, which was the contract defect (80 units for 5 s). The bench is the check for that, at
+  every change to `resolver.nim`: a shape whose steps the budget ends and whose time per unit is well
+  above the plain shapes' (17 to 40 ns), or one with a long turn of little work, does work it does not
+  count. It is not a suite gate: CI asserts counts, never time.
+- **The shapes without contracts against 5-3c-2** (3b2d6a0, the two builds alternating, three rounds,
+  both without G478): dense 4,096, layered 4,096 in 64 layers and dense 1,024 within 3%; chain 4,095
+  about 23 ms against 20; lift 30 with 65,500 versions of `y` 59 ms against 54 (8%); the preset's
+  shapes within their noise; the longest turns unchanged.
+- **The budget:** at 65,536 the longest turns are up to about three times as long (dense 1,024: 6.0 ms
+  against 2.2; dense 4,096: 5.5 ms against 3.4) for half the turns, and the totals are within 3% (the
+  catalog's within 10%). 32,768 keeps most turns at 1 to 3 ms, which leaves room for a slower machine.
+- **A turn bounds the hold, not the resolution.** Dense 4,096 still takes 4.25 s of the thread in all,
+  in 941 turns. The wide shape at the maximum `assignment_attempts` (1,048,576) took 1.8 s on the Mac
+  in 1,344 turns, the longest 5.1 ms (5-3c-2).
+- **The setup** (the names numbered, each name's versions and each identity's records put in order)
+  is the run's first turns (G455): the catalog of 65,532 entries has no turn over 6.3 ms. What is left
+  before the first turn is the driver's copy of the catalog, 2.6 ms at 65,532 entries and under 1 ms at
+  4,096.
+- **The release** frees what a run holds, a turn at a time: at dense 4,096, 1,272 turns, the longest
+  1.5 ms, and 0.26 s in all. Freed at once, that state held the thread for seconds.
+- **Memory:** 6.3 to 6.4 GiB at 4,096 dense or layered names, 129 MiB for the wide shape and 99 MiB
+  for the catalog of 65,532 entries. A listed contract is a 4-byte number in the run, each distinct
+  one's encoding kept once (G477's figures below).
+- **CI asserts counts:** `test_pm_driver` gives each shape, the contract shapes among them, the same
+  outcome, counters, work and retrievals under budgets of 32,768, 1,000, 64, 17 and 1 units and under
+  none (M6).
+
+### The operation bound
+
+G477. One root operation reads at most `operation_entries` inputs (5-5-3's protected key). The unit is
+one walk, `inputUnits` beside `Inspection` in `package/resolver.nim`: a unit for each record read
+(inspected or installed), for each of its dependency entries, for each contract a dependency entry lists
+(PM l.295) and for each contract it provides; each record once. A count equal to the bound goes on; the
+read that takes it over ends the operation with `package-unavailable` (PM l.1308-1309). The four resolver
+limits and their counters are untouched. The count is the same on every machine; `tools/pmbench.nim`
+prints it (`entries=`). 5-5-3's verification cache weighs the same walk in bytes.
+
+| Shape | Limits | Units read |
+|---|---|---|
+| chain 33 | preset | 65 |
+| dense 32 | preset | 528 |
+| layered 256/32 | preset | 32,007 |
+| hub 30/256 | preset | 8,405 |
+| wide 80,000 | preset | 80,051 |
+| chain 4,095 | maxima | 8,189 |
+| hub 255/4, lift 255/4 | maxima | 33,668, 32,653 |
+| dense 4,096 | maxima | 8,390,656 |
+| layered 4,096/64 | maxima | 8,261,695 |
+| wide 80,000, 1,048,576 attempts | maxima | 80,062 |
+| lift 30/65,500 | maxima | 12,756 |
+
+The table's shapes list no contracts. The resolver state a unit costs, on the Mac under orc
+`-d:release` (peak RSS less the input's; `build/scratch/memprobe.nim` and `memprobe2.nim`, each
+inspection built when it is asked for), by what the units are:
+- requirements on names that never bind, bound by k manifests of the same 80,000 names: about 0.8 KiB;
+  dense 4,096 is the same (6.5 GiB);
+- the same with distinct names: about 1.6 to 1.8 KiB, the worst measured;
+- dependency entries listing contracts (k bound manifests, each of 10 entries with 8,000 contracts, or
+  of 1 entry with 18,000), the contracts encoded commitments of 221 bytes: about 1.5 KiB, and held and
+  never bound about 1.0 KiB, until 5-3c-3 numbered them (G455). Now (`memprobe2.nim`'s `fancd`), 0.3
+  to 0.45 KiB when no two manifests list the same contract: a 4-byte number for each listed contract,
+  and each distinct one's encoding kept once. When they repeat, the peak is one manifest's decoded
+  contracts while they are numbered, about 150 MiB for 80,000, for 8 or 16 manifests alike;
+- inspections of plain entries held and never bound: 0.1 to 0.2 KiB.
+
+Since 5-3c-4 (G482) an inspection holds each contract as its encoding, 221 bytes here, and 5 to 8
+bytes beside it, where it held about 1.0 KiB of decoded values. The resolver's own heap at its peak
+(`memprobe2.nim` read with `getOccupiedMem` at each turn's end, orc `-d:release`, the Mac), against
+5-3c-3's tree with the same probe: when the manifests list the same 80,000 contracts, 92.9 to 42.5 MiB
+for 8 manifests and 95.5 to 45.1 MiB for 16; when no two list the same contract, 377 to 328 bytes a
+unit (8 manifests of 10 entries with 8,000 contracts each), 339 to 314 (16) and 362 to 332 (8 of one
+entry with 18,000), most of it each distinct encoding kept once. Units, work, turns and the largest
+step are the same in each. The bound's figures above stand: the worst unit is still a requirement on
+a name that never binds.
+
+So one operation's resolver state is at most about 460 MiB at the proposed default of 262,144 units,
+and about 29 GiB at the proposed maximum of 2^24 (1.8 KiB a unit).
+
+### The archive's inspection
+
+The other hold on the Package Manager's module thread is the verification cache's inspection of a
+fetched archive (DECISIONS G403; `pm/vcache.nim` `inspect`). It takes BLAKE3 of the whole archive
+and, on a miss, opens it in memory with `openLgx`: the gzip member, the USTAR entries, the manifest's
+signature, and the selected variant's artifacts against their digests. `archive_bytes` bounds the
+archive, 1 GiB by default ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) §2).
+
+It was measured for 5-3c's plan §5 and for 5-5. 5-5-2b replaced the in-memory reader with a streaming
+one, and 5-5-3 moved the inspection off the module thread to a spool file; both measured again at the
+same sizes ("The streaming reader", "The worker and the spool"). The setup:
+- the archive is signed for the host, with one data artifact of pseudo-random, so incompressible,
+  bytes (`tools/pmbench.nim archive`);
+- `tools/pmbench.nim inspect` reads it and times a miss, a hit and BLAKE3 alone;
+- the figures are CPU time, orc with `-d:release`, each the median of three processes, with each
+  process's peak memory;
+- the core is 5-3c-1's, whose `lgx.nim`, `vcache.nim` and `signing.nim` are those of `10cc598`.
+
+| Archive | Bytes | Miss, Mac | Miss, Linux | Hit, Mac | Hit, Linux | BLAKE3 alone, Mac | BLAKE3 alone, Linux | Peak MiB, Mac / Linux |
+|---|---|---|---|---|---|---|---|---|
+| 1 MiB | 1,065,981 | 6.5 ms | 4.1 ms | 0.62 ms | 0.14 ms | 0.62 ms | 0.12 ms | 16 / 11 |
+| 64 MiB | 67,146,429 | 326 ms | 211 ms | 42 ms | 8.8 ms | 39 ms | 8.8 ms | 550 / 458 |
+| 1 GiB (1,023 MiB of payload) | 1,073,037,548 | 6.03 s | 4.19 s | 672 ms | 140 ms | 648 ms | 139 ms | 8,833 / 8,803 |
+
+What the figures say:
+- **A miss holds the thread** for about 4 ms per MiB on Linux and 6 ms on the Mac: 4.2 s and 6.0 s
+  for 1 GiB. BLAKE3 of the archive is 0.14 s of it on Linux. The rest is inflating, the USTAR entries
+  and their copies, and the artifacts' own digests.
+- **A hit** reads the whole archive too, for its digest: 0.14 s for 1 GiB on Linux and 0.67 s on the
+  Mac, which ran loaded (a load average of 110 to 130).
+- **Memory:** one inspection peaks at about 8.2 times the archive, 8.8 GiB for 1 GiB on both machines.
+  That includes the process's own copy of the archive, which the Package Manager also holds after a
+  retrieval. So the default `archive_bytes` needs about 9 GiB for one inspection.
+- 5-5-3's worker removes the hold from the module thread, and 5-5-2b's streaming reader is what
+  bounds the memory.
 
 ## Storage fetch limits
 
@@ -1031,6 +1378,206 @@ What the figures say:
 bytes, and a provider refuses any other `length` with `invalid-length` before it looks at the object; a
 response holds at most 1 MiB of data, far below the 16 MiB frame body (TRANSPORT l.372). A locator is 1
 to 4,096 bytes, as a package source's `object` is (PACKAGE MANAGER l.789-801).
+
+## The streaming reader
+
+Step 5-5-2b (DECISIONS G446, G75's sixth row, G29's note of 2026-11-22). `package/lgx.nim` reads an archive in
+one pass of 1 MiB pieces. Over a file (`inspectLgx(fileSource(path), …)`) one inspection keeps the manifest
+files, the path table, a digest per selected file and the selected variant's documents (at most 64 MiB), so its
+peak does not grow with the archive. Over bytes the caller already holds the archive, and `openLgx` also keeps the
+selected artifacts' bytes. Since 5-5-3 the verification cache inspects over the archive's spool file ("The worker
+and the spool"). An installed package is inflated twice, once to judge it and once to extract it.
+
+- **Tested:** `test_lgx_peak` runs each inspection in a child process and reads its peak resident size. Over a
+  file the peaks at 64 MiB and 256 MiB of incompressible content differ by at most 8 MiB and stay under 96 MiB.
+  The control, the reader before 5-5-2b (`tests/support/lgxoracle.nim`) on the 64 MiB archive, passes 96 MiB.
+  `test_lgx_equiv` compares every reading with that reader's results (G29's note).
+- **The full corpus** [IMPL]: by default `test_lgx_equiv` samples its 180-file archive (each cut that keeps
+  `manifest.cose` costs four signature verifications). `LCN_LGX_FULL_CORPUS=1` samples nothing: all three
+  archives are cut at every 512-byte boundary of the tar stream and of the compressed stream and at every trailer
+  byte, and every entry of each is dropped, doubled, swapped and has each header field broken. It runs once in the
+  final CI pass, orc-release on Linux, from the dev shell, since a flake check does not see the caller's
+  environment: `LCN_LGX_FULL_CORPUS=1 nim c -r --mm:orc -d:release tests/test_lgx_equiv.nim`. In that build on
+  the Mac it compares 9,315 archives in about 20 minutes (1,198 s); by default, about 1,430 in under 2 minutes.
+- **Measured** (a scratch program, not committed: 5-3c-1's `pmbench archive` and `pmbench inspect`, with
+  `inspectLgx` over the file beside them; one signed archive whose one data artifact is incompressible; CPU time
+  of the inspection and the process's peak, each the median of three processes; Mac, `-d:release`). "In memory" is
+  the verification cache's inspection, BLAKE3 of the archive and then `openLgx`, the archive read into the
+  process first; 5-3c-1 measured the same with the reader before 5-5-2b.
+
+  | Archive | Over a file, orc | Over a file, refc | In memory, orc | In memory, refc | In memory before 5-5-2b, orc (5-3c-1) |
+  |---|---|---|---|---|---|
+  | 1 MiB (1,065,982 bytes) | 2.7 ms, 10.6 MiB | 3.4 ms, 13.2 MiB | 4.3 ms, 11.6 MiB | 5.0 ms, 14.3 MiB | 6.5 ms, 16 MiB |
+  | 64 MiB (67,146,429) | 57 ms, 10.6 MiB | 54 ms, 13.2 MiB | 166 ms, 138 MiB | 187 ms, 267 MiB | 326 ms, 550 MiB |
+  | 256 MiB (268,534,430) | 205 ms, 10.6 MiB | 211 ms, 13.2 MiB | 675 ms, 522 MiB | 757 ms, 1,035 MiB | not measured |
+  | 1 GiB (1,073,037,548; 1,023 MiB of content) | 793 ms, 10.6 MiB | 844 ms, 13.2 MiB | 2.90 s, 2,056 MiB | 3.04 s, 4,104 MiB | 6.03 s, 8,833 MiB |
+
+  Reading a file costs about 0.8 s of CPU per GiB, all of it inflating and hashing. The in-memory figures also
+  hash the whole archive (5-3c-1: about 0.65 s per GiB on the Mac), and 5-3c-1's Mac ran at a load average of 110
+  to 130. In memory the peak is about twice the archive under orc and four times under refc: the archive and the
+  selected artifact's bytes, where the reader before 5-5-2b took about 8.2 times. `test_lgx_peak` with
+  `LCN_LGX_PEAK_GIB=1` gives the same bound under orc in a debug build: 11.3 MiB for an archive of 1,057,314,997
+  bytes, the largest the default compressed limit admits for its shape, and 1.82 GiB for the reader before 5-5-2b
+  at 256 MiB.
+
+## The worker and the spool
+
+Step 5-5-3 (DECISIONS G446's spool half, G447). Each retrieved archive goes, 1 MiB `read_object` answer at a time,
+to the Package Manager's worker thread, which appends it to a spool file with its BLAKE3 and then judges the file
+with the streaming reader; the module thread looks the digest up and receives the judgment. So no archive is in
+memory and no inspection runs on the module thread.
+
+- **Tested:** `test_pm_driver` "the worker and the spool (G446, G447)" (at most `SpoolLag` pieces unwritten, the
+  file's modes, the share's wait, a cancel, a spool write that fails, decoding a turn at a time), with 5-3b's and
+  5-3c's suites unchanged on the worker.
+- **Measured** (`tools/pmbench.nim spool`: the fetcher's spooled mode, the jobs over a channel, the worker's appends
+  and judgment, the module thread's receipt and decoding, both sides on one thread and timed apart; CPU time, the
+  archives of "The streaming reader", three processes each, each process's peak; Mac, `-d:release`). The module
+  thread's work per piece is the fetcher's copy of the answer and the hand-over. A hit spools and hashes the archive
+  again and answers from the cache; a miss also runs the inspection pass.
+
+  | Archive | Module thread per piece (longest), in all: orc | refc | Worker, miss / hit: orc | refc | Peak, orc / refc |
+  |---|---|---|---|---|---|
+  | 1 MiB | 0.06-0.09 ms (0.18), 0.13-0.19 ms | 0.13 ms (0.30), 0.25-0.32 ms | 3.8-4.2 / 1.1-1.2 ms | 4.7-5.1 / 1.1-1.2 ms | 13.8 / 19.9 MiB |
+  | 64 MiB | 0.03 ms (0.16), 2.0-2.4 ms | 0.08 ms (0.24), 5.2 ms | 106-115 / 55-59 ms | 107-112 / 57-58 ms | 13.8 / 24.4 MiB |
+  | 1 GiB | 0.03 ms (0.20), 28-34 ms | 0.075 ms (0.24), 76-79 ms | 1.63-1.69 / 0.86-0.95 s | 1.66-1.72 / 0.88-0.93 s | 13.8 / 25.2 MiB |
+
+  Beside the earlier figures for 1 GiB: before 5-5-2b a miss held the module thread 6.03 s and peaked at 8,833 MiB
+  (5-3c-1, "The archive's inspection"); 5-5-2b's reader in memory 2.90 s and 2,056 MiB, over a file 0.79 s and
+  10.6 MiB. Now the module thread holds at most 0.2 ms at a time, and the worker's miss is the hash (about
+  0.9 s a GiB) and the inspection pass (about 0.8 s). A piece crosses as a `string`: as a `seq[byte]`, refc's
+  channel copied it one element at a time, 3.4 ms a piece on the module thread.
+- **The judgment's receipt** (`tools/pmbench.nim receive`; plan W3; DECISIONS G482 since 5-3c-4). A judgment
+  crosses as the resolver holds it, its contracts as encodings in one buffer, and is cached and handed to its
+  operation in the turn it arrives: no turn decodes it. The worker builds it from the manifest's values. The
+  largest a 4 MiB manifest allows, on framework.lan (x86_64, load about 2), this tree and master `7a307a8` in one
+  session, three runs each, CPU time. The module thread's part is the receive and the estimate; under orc the
+  receive is a move:
+
+  | Judgment | orc: worker's build / receive and estimate | refc: worker's build / send / receive / estimate | master `7a307a8`: decode turns, longest (orc / refc); refc receive |
+  |---|---|---|---|
+  | 80,000 dependencies, no contracts | 0.9-1.8 / 0.06-0.11 ms | 13-23 / 4.0-7.1 / 4.4-8.6 / 0.41-0.52 ms | 79, 0.73-0.76 / 7.0-7.9 ms; 13.5-16.1 ms |
+  | 1 dependency, 22,000 contracts | 17-19 / under 0.01 ms | 29-30 / 0.82-0.85 / 0.77-0.78 / 0.001 ms | 22, 0.77-1.34 / 8.0-8.7 ms; 3.1-3.2 ms |
+  | 20,000 dependencies, 20,000 contracts | 15-27 / 0.02-0.03 ms | 29-42 / 1.6-2.8 / 1.8-3.7 / 0.08 ms | 40, 0.69-0.79 / 8.0-8.9 ms; 7.8-7.9 ms |
+  | 80,000 dependencies, 22,000 contracts | 18-19 / 0.09-0.11 ms | 47-51 / 4.7-5.3 / 5.1-5.4 / 0.39-0.41 ms | 100, 0.70-0.80 / 1.1-1.2 ms; 23.9-24.3 ms |
+
+  Under orc, which the packaged logosd is (DAEMON.md §1), the module thread holds a judgment's arrival for at
+  most 0.11 ms. Under refc the receive is still one step, a copy, now 5.1 to 5.4 ms for the largest judgment where
+  master's took 23.9 to 24.3 ms on the same machine (an entry no longer holds a list of its own), under 5-3c's
+  longest turn; the fallback of plan W3 (pieces of 4,096 entries) stays unbuilt (G447). The encode is the
+  worker's: 18 to 19 ms of its time under orc for the largest judgment, 47 to 51 ms under refc. Before 5-3c-4
+  (D1) the module thread decoded a judgment in up to 100 turns, up to 8.9 ms each under refc here; the Mac's
+  figures for that are G447's.
+- **The verification cache's bound** (G447): no inspection over 256 KiB by its estimate is cached, so the cache
+  holds at most `cache_entries` × 256 KiB, 64 MiB at the default and 1 GiB at the maximum. The estimate's
+  constants were measured as the heap's growth over many copies, under orc and refc, and `test_pm_vcache` holds the
+  estimate above it for five shapes.
+  - **A contract's weight** (`ContractUnitBytes`, G447 amended by G482): 192 bytes beyond its encoding, since an
+    inspection holds its contracts as encodings in one buffer (5-3c-4). Measured with `tools/pmbench.nim
+    unitbytes` (the Mac, `-d:release`): at worst 186.7 B under orc and 188.7 B under refc, at 22 contracts, where
+    the buffer of 4,180 bytes is rounded up to two pages; 4.7 to 8.0 B for 1,000 contracts or more, 34 B for one.
+    It was 1,024 for a decoded tree of nine CBOR values (655 B and 848 B). The constant moves which archives the
+    cache keeps, never an outcome.
+
+## The operations
+
+Step 5-5-4 (DECISIONS G448, G449, G453's target platform; I121). `inspect`, `install`, `remove` and `update` run in
+two slots, one for inspections and one for every installed-state mutation, each with a queue of at most 16 behind it
+(`MODULE_ERROR` past that); each running operation has `operation_deadline_ms` from when it takes its slot. The
+module thread holds the snapshot of installed records, the holds and the retired list; the worker holds the store's
+files after the start (Fable's design A). A commit's new snapshot shares every unchanged record.
+
+- **Tested:** `test_pm_install` (39 cases, through `tests/support/pmworld.nim` with a store and the worker's jobs
+  inline): the slots and queues, the deadline and the last commit, the checks before resolution, the spool budget and
+  the refetch by digest, the retained check, install, remove, update and inspect, failures at each step, signer
+  replacement and C6, the request checks, the admission failure, `nix`, messages and the handoff. After each
+  mutation kind and each failure point, the live snapshot equals the one a restart builds from disk.
+  `test_pm_hosted` "[IMPL-DECISION G449]" (3 cases) runs them in a hosted instance with the fake provider: across a
+  restart; during a paced extraction (the `LCN_TEST_EXTRACT_PACE_MS` hook, "Test hooks"), with a second operation
+  and a route renewal answered; and through two stops. `test_logosd_pm` keeps an installed record across logosd's
+  restart.
+- **A stop** (G449, Fable's stop check `tier5-plans/fable-checks/step5-5-4-stop-drain.md`): the Runtime cancels the
+  provider's admitted calls, the kit (with the asynchronous provider API) cancels the handler, the engine cancels the
+  operation, the call ends, `_MODULE_destroy` follows, and the worker's stop flag ends its job within one piece.
+  Measured on the Mac under orc: 0.49 s with an install's call in flight (10.08 s, the stop deadline, before the kit
+  had the API), and 0.37 s after an operation's deadline answered while the worker extracts. Both suites assert
+  under 5 s. Both stops run in hosted direct mode (no routing rule: logosd's default for the Package Manager);
+  local transport is not covered.
+- **Measured** (`tools/pmbench.nim installed`, `module` and `commit`; the Mac, `-d:release`, three runs each):
+
+  | Measure | orc | refc |
+  |---|---|---|
+  | one module declaration's decode, a 4 MiB module of 22,076 commitments (the module thread's hold between turns) | 21 ms | 38 ms |
+  | a snapshot of 200,000 records at the longest identities (the index's bound) | 188 MiB | 259 MiB |
+  | `packages()`, the resolver's copy, at 200,000 records | 45-54 ms, 147 MiB | 195-210 ms, 261 MiB |
+  | 10,000 records with 4 dependencies each: snapshot / `packages()` | 35 MiB / 6.3-8.5 ms | 42.5 MiB / 38 ms |
+  | `next()`, a commit's new snapshot, at 200,000 / 10,000 records | 6-13 ms / 0.1-0.35 ms | 7 ms / 0.1-0.35 ms |
+  | the worker's commit at 10,000 records (a 3.27 MB index): CPU, wall | 35-43 ms, 39-49 ms | 42-49 ms, 48-59 ms |
+  | the worker's commit at 200,000 records (a 65.4 MB index): CPU | 771 ms | — |
+
+  The module declaration's decode is the longest hold the operations add to the module thread, about twice 5-3c's
+  longest resolver turn on the Mac (under 11 ms, "Resolver limits") under orc. The resolver's copy and the
+  snapshots are module-thread memory (DEPLOYMENT §12). The commit runs on the worker.
+- **The store's start** (`tools/pmbench.nim start`; G445's note; the Mac, `-d:release`, three runs each): records
+  written directly, each a data package's manifest, record file and an empty signature file (the start verifies no
+  signature), then `openStore` timed. Under orc, 0.83-1.03 ms a record at 1,000 records, 0.84-0.96 ms at 10,000
+  (8.4-9.6 s) and 1.01-1.02 ms at 50,000 (50.7-51.0 s); under refc 1.46-1.67 ms at 10,000 (14.6-16.7 s). Per
+  record under orc: the manifest's commitment 0.5 ms (of it 0.1 ms the PM §4 schema's root, computed again at
+  each call), decoding the manifest 20 µs and the record file 50 µs. The start runs in `_MODULE_init`, inside the
+  startup deadline (120 s by default): about 120,000 records under orc and 80,000 under refc fit it on the Mac,
+  below the index's 200,000 (DEPLOYMENT §12).
+- **Limits** (G449): no job cancel, so an operation that ends by its deadline or its caller's cancel leaves its
+  worker job to run to its end, at most one more extraction of the largest archive (a 16 MiB install took
+  0.86-0.91 s end to end in a test build on the Mac, so about a minute for 1 GiB); a call cancelled after its last
+  commit began ends cancelled while the commit goes on (INTERFACE l.2112); a worker that hangs in a write or a sync
+  makes a stop end at the stop deadline.
+- **The exception: a large response's way out** (G447; planning's ruling of 2026-11-23; `tools/pmbench.nim
+  reply`; the Mac (an M1 Max), `-d:release`, CPU time, best of five, three runs each, at a load average of 60 to
+  80; and server.lan, a Ryzen 5 4500U, inside the bench's Nix build, at 2.6 to 3.8).
+  The worker encodes a response and the module thread carries the bytes (G447), but on their way out the bytes
+  still hold the module thread longer than a turn. A maximal `{installed}` (65,536 artifacts, a 16.0 MiB body,
+  the admission bound of PM l.824) holds it 98.6-99.1 ms under orc and 174.9-175.7 ms under refc in one turn
+  on the Mac, nine to sixteen times 5-3c's longest turn there (under 11 ms, "Resolver limits"), and
+  198.1-203.8 ms and 388.2-398.7 ms on server.lan; a 4 MiB one (one module's declaration of `implements`
+  commitments) 24.1-24.4 ms and 43.9-44.7 ms on the Mac, 50.9-51.3 ms and 95.1-95.5 ms on server.lan. Each
+  step, timed alone as the code runs it, in ms, the Mac / server.lan:
+
+  | Step | Thread | 16 MiB, orc | 16 MiB, refc | 4 MiB, orc | 4 MiB, refc |
+  |---|---|---|---|---|---|
+  | the record's value and its encoding (`wjStage`, `wjReply`) | worker | 76.6-77.2 / 185.0-187.2 | 125.7-129.0 / 343.1-344.2 | 19.7-19.8 / 48.1-48.5 | 32.5-33.4 / 87.0-87.6 |
+  | the kit's `encode`: pmtest's `{response: bstr}` encoded again | module | 19.3-19.6 / 35.6-36.9 | 24.5-26.2 / 56.3-57.0 | 4.8-4.9 / 9.0-9.3 | 5.1-5.2 / 7.8-7.9 |
+  | the completion's block, filled a byte at a time (the SDK's `confinedrt.completeDeferred`) | module | 21.7-21.8 / 37.3-42.3 | 21.7-22.0 / 44.3 | 5.4 / 12.8-12.9 | 5.4-5.5 / 11.0 |
+  | the host's `checkResponse`: the schema check and the response's commitment (`completeOp`) | module | 54.2-54.8 / 108.8-109.5 | 68.9-70.6 / 155.0-155.4 | 13.1-13.2 / 25.4-25.6 | 18.8-19.4 / 41.0-41.3 |
+  | `respond`'s channel send (refc copies the `IoCommand`) | module | 0 / 0 | 55.0-56.2 / 117.6-127.8 | 0 / 0 | 13.8-13.9 / 31.9-32.0 |
+  | the rest: the receive, pmtest's copy, the wipes, the host's copy, the block's release | module | 3.0-3.1 / 15.7-15.8 | 2.9-3.1 / 14.1-14.2 | 0.8 / 3.6 | 0.8 / 3.3 |
+  | **the module thread in all** | module | **98.6-99.1 / 198.1-203.8** | **174.9-175.7 / 388.2-398.7** | **24.1-24.4 / 50.9-51.3** | **43.9-44.7 / 95.1-95.5** |
+  | the transport's commitment, computed again (`CalleeConn.respond`) | I/O | 52.5-53.5 / 103.2-104.1 | 70.2-73.4 / 163.6-164.3 | 12.8-12.9 / 25.4 | 19.2-19.7 / 43.2-43.5 |
+  | the Response's encoding | I/O | 18.8-19.1 / 33.5-35.7 | 19.4 / 28.5-28.6 | 4.6-4.7 / 8.0-8.6 | 4.8 / 7.0-7.1 |
+  | the rest: the receive (refc copies), `decodeValue`, the frame | I/O | 0.7-0.8 / 3.2 | 53.4-54.1 / 116.7-125.9 | 0.2 / 0.9 | 13.2-13.6 / 31.5 |
+
+  - **Its scope: confined kit modules, not the Package Manager alone** (RUNTIME §4.1 l.838-840: a response
+    that does not validate and commit is not returned; Fable's check
+    `tier5-plans/fable-checks/large-response-completion.md`):
+    storage_module, blockchain_module, pmtest and 5-6a's facade. With the asynchronous API the kit completes on
+    the module thread (`confinedrt.nim:1024-1086`), and the Module Host copies and checks the response inline
+    on that thread (`host/endpoint.nim:519-562`, `:443-468`; `runtime/callcheck.nim:81-98`). The Runtime's own
+    completion, for a provider in its process, does the same (`runtime/asynccall.nim:562-597`). A confined kit
+    without the API pays it on the host's call worker instead (`host/endpoint.nim:480-512`).
+  - **The wait** (read from the code, not run). The completing thread also waits with no bound of its own: the
+    host's `commit` sleeps while the I/O loop has no room (`host/endpoint.nim:222-238`), which happens once
+    64 MiB is submitted and not yet committed (`maxPendingOutputBytes`, `transport/io/loop.nim:379-408`). A
+    consumer that stops reading is closed only at the write stall timeout (`writeStallTimeout`, 30 s by
+    default). So a few maximal replies to a stalled consumer can hold a confined module's thread for up to 30 s.
+  - **The worker's encode** waits in the worker's queue, so another operation's file work waits behind it
+    (77 ms under orc for 16 MiB on the Mac, 186 ms on server.lan); it holds no turn.
+  - **What 5-6a's facade avoids** by carrying the worker's bytes: the kit's second encoding and pmtest's copy,
+    22-28 ms of the 16 MiB figure on the Mac and 45-63 ms on server.lan. The rest stays: about 77 ms under orc
+    and 148 ms under refc on the Mac, 153-158 ms and 325-336 ms on server.lan.
+  - **The fix is the core item "large-response completion"** (planning's ruling; designed with Fable after the
+    pause): the facade passing the bytes through (5-6a's part); completing off the module thread (INTERFACE
+    §2.9.2 lets a completion come from any thread); the SDK's completion copy; and the response's commitment,
+    computed twice, and its speed; the wait above goes with it. The item is held by the pause. Nothing is
+    changed in 5-5-4.
 
 ## Event output overflow
 
@@ -1074,7 +1621,8 @@ Hooks under `src/` follow one rule (D27, revised 2026-11-13; DECISIONS I89):
    test.
 
 The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `orchestration`,
-`hostsup`, `wipeaudit`, `ctlmodule`, `evstore`, `tls_engine`, `tls_stream` and `tls_keysigner`):
+`hostsup`, `wipeaudit`, `ctlmodule`, `evstore`, `tls_engine`, `tls_stream`, `tls_keysigner`,
+`pm_store`, `pm_jobs` and `pm_admission`):
 
 - `host.setPolicyForTests`: the authority policy the next `start` installs.
 - `engine.loaderJournalForTests`: the Module Loader's request journal, kept in the engine's side table.
@@ -1135,6 +1683,28 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `
   B1: tests only); `engine.newTlsContextForTests` makes settings no conforming peer has (TLS 1.2
   allowed, or no certificate) to show the refusals; `stream.abortForTests` ends a connection without
   close_notify. All are called by `test_remote_tls`, which is also an audit build (`base/wipeaudit`).
+- Signing with the TLS key (G410): `remote.signing = "process-copy"` and `signsvc.testKeyMessage`,
+  which send the key to a TLS process, exist only in a build with `-d:logosTestSigning` (owner
+  decision B1: tests only); a packaged logosd refuses the setting. `test_remote_signing` and
+  `test_remote_tls` are built with it.
+- The Package Manager's installed state (5-5; DECISIONS G446, G447, G449): `store.crashAt=` stops
+  a commit at a named point, as a crash would, `store.rules` changes a root's path rules, and
+  `store.syncMode=` its sync; `jobs.failStage` fails the stage of a named package, and
+  `jobs.setCrashAt` sets the crash point on the worker's half of the store;
+  `admission.admissionLimitForTests` lowers the admission bound. `test_pm_store` and
+  `test_pm_install` call them in the test's process.
+- The resolver (5-3c; DECISIONS G455, G482): `resolver.contractHashShiftForTests` shifts every
+  contract's hash so that all of them collide; `inspectionBytesForTests` lowers the bound
+  `eligibleInspection` asserts on an inspection's encodings; `heldContractsForTests` reads how many
+  contract encodings a run's inspection of a source still holds. `test_resolver` calls them in the
+  test's process.
+- The extraction pace (5-5-4): a test-hook build of `pm/store.nim` reads `LCN_TEST_EXTRACT_PACE_MS`
+  once, when the module library is loaded, and pauses the extraction sink that many milliseconds
+  for each MiB written. It is the one hook a variable selects, because it lives in the Module Host's
+  process, which a test cannot call. The Runtime's host passes the variable only when its
+  configuration's `module_host_env` names it, so the Runtime's host still selects it (rule 4). Only
+  `test_pm_hosted` does, to stop an instance inside a long extraction. A packaged build of the module
+  has no hook code, so the variable does nothing there.
 
 No deployment binary contains them.
 
@@ -1158,7 +1728,10 @@ ids = ["HSH-0004"]
 reason = "Statement about what a profile document must contain; satisfied by HASH itself."
 ```
 
-`spectrace gate` (a flake check) fails when a claimed unit has no test or inspection item, when a
+A unit's evidence counts only in its owner's trees: a test under `tests/` for core or `sdk/tests/` for the
+SDK, or an item in that package's `conformance/inspection/` (R8).
+
+`spectrace gate` (a flake check) fails when a claimed unit has no test or inspection item there, when a
 test names an unknown or retired ID, when a claims file has an invalid status, when an inspection item
 names a unit that is not claimed (inspection stands for a test, so it covers claimed units only), or,
 with `--closed-tier N`, when any status defers to tier N. It prints the deferred units per label.

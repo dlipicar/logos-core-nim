@@ -57,8 +57,14 @@ marked field, as the library does (G277).
   daemon-config.cbor       0600  lcn.daemon_config (§3)
   trust.cbor               0600  lcn.package_trust (§6; absent: the compiled-in floor)
   keys/                    0700  evidence keys and their bindings (§9)
-  state/                   0700  trust-mark.cbor, store/, modules/, evidence/
-  work/                    0700  runtime.work_dir; never emptied (restart locks)
+  remote/                  0700  with remote.enabled: trust.cbor, lcn.remote_trust (§6a)
+    credential/            0700  the TLS credential: key.p8 0600, cert.der, peer.cbor (§6b)
+    credential-next/       0700  a rotation not yet taken up (§6b)
+    keyholder.count        0600  the key holder's own count (§6b; key-holder mode)
+  state/                   0700  trust-mark.cbor, remote-trust-mark.cbor, remote-exposure.cbor (§6c),
+                                 store/, modules/, evidence/
+  work/                    0700  runtime.work_dir; never emptied (restart locks; remote/ the
+                                 listener processes' locks, §10)
   run/                     0700  recreated at each start: logosctl.sock, lcn_call.sock, ep/
 ```
 
@@ -66,7 +72,9 @@ marked field, as the library does (G277).
   path component that is a link where a directory is expected.
 - `lock` is an advisory lock (`flock`). logosd holds it for its whole life. Every offline `logosctl`
   command that writes (`init`, `daemon config set`, `trust anchor …`, `trust development`,
-  `trust reestablish`, `trust evidence-keys rotate`, `state purge`), and `state list`, which reads the
+  `trust reestablish`, `trust evidence-keys rotate`, `remote trust …` and `remote credential …` except
+  `show`, `remote exposure reset`, `state purge`), and
+  `state list`, which reads the
   Runtime's store under the store's own lock, takes it, and is refused while logosd runs: "another logosd
   or an offline logosctl command holds this session" (exit 1). Other offline reads take no lock.
 - `run/` is emptied and recreated at each start while logosd holds the lock, so a socket left by a killed
@@ -82,8 +90,8 @@ marked field, as the library does (G277).
   sets the endpoint directory itself; there is no setting for it.
 - `work/` is the Runtime's `work_dir`. It keeps the Module Hosts' restart locks (`work/hosts/`), so it is
   never emptied.
-- `state/` holds the Runtime's persistent state (`state/store`, `state/modules`), the trust mark and the
-  call-evidence store (`state/evidence/`, §9).
+- `state/` holds the Runtime's persistent state (`state/store`, `state/modules`), the trust mark, the
+  remote trust mark (§6a) and the call-evidence store (`state/evidence/`, §9).
 - **The store is made by `init`, never by logosd.** `logosctl init` writes `state/store/runtime-state.cbor`
   holding the session's Runtime id and no instance. A start that finds no such file is refused (exit 1):
   "the Runtime state store is missing …; restore state/ from a backup, or make a new session with
@@ -125,6 +133,7 @@ lcn.daemon_config = {
   ? call_audit: lcn.dc_call_audit,
   ? routing: [* lcn.app_routing_rule],
   ? transport: lcn.app_transport,
+  ? remote: lcn.dc_remote,
   ? permissions: lcn.dc_permissions,
   ? state_transfers: [* lcn.app_state_transfer],
   ? ctl: lcn.dc_ctl,
@@ -133,7 +142,7 @@ lcn.daemon_config = {
   ? test_hooks: lcn.dc_test_hooks,
 }
 
-; runtime_instance_id: assigned by logosctl init (RUNTIME l.2665) and fixed for
+; runtime_instance_id: assigned by logosctl init (RUNTIME l.2586) and fixed for
 ; the session's life. The directories come from the session layout.
 lcn.dc_runtime = {
   runtime_instance_id: tstr .size (1..128),
@@ -144,6 +153,7 @@ lcn.dc_runtime = {
   ? max_payload_depth: uint16,
   ? module_host: lcn.app_path,
   ? module_host_env: [* lcn.app_env_name],
+  ? remote_program: lcn.app_path,
 }
 
 ; allow-all needs the development switch in the trust file (decision 11).
@@ -265,6 +275,26 @@ lcn.dc_test_diagnostics = {
   text: tstr .size (1..1024),
   count: uint32,
 }
+
+; remote: the remote profile logos.remote.tls-tcp (G407-G410; REMOTE.md).
+; enabled: logosd starts its remote side, which needs runtime_instance_id to be
+; a lowercase UUID version 4 (RUNTIME l.2592-2593) and the remote trust input
+; (section 6a), and refuses policy allow-all (G415). signing: what signs the
+; TLS handshakes with the Runtime's key; absent is "logosd". key-holder needs
+; key_holder, the logos_keyholder program, and key_holder needs key-holder;
+; "process-copy" is accepted only by a logosd built with -d:logosTestSigning.
+; listeners and exports (G412; RUNTIME §9.3.9): the deployment's remote
+; listener and provider export records, as Runtime Control holds them, only
+; with enabled; validated as Runtime Control validates them (l.3319-3321).
+lcn.dc_remote = {
+  enabled: bool,
+  ? signing: lcn.dc_remote_signing,
+  ? key_holder: lcn.app_path,
+  ? listeners: [* lcn.rc_remote_listener_record],
+  ? exports: [* lcn.rc_provider_export_record],
+}
+
+lcn.dc_remote_signing = "logosd" / "key-holder" / "process-copy"
 ```
 
 The rules named `lcn.app_*` and `lcn.ap_*` are the host configuration's and the authority policy's, and
@@ -286,6 +316,7 @@ them ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) for the last).
 | `orchestration` | `start`: the operator instances the orchestrator starts, in order; `restart`, `overrides`, `resync_ms`: its restart policy ([HOST-CONFIG.md](HOST-CONFIG.md), "The reference orchestration module"). An override may name `logosctl` or `authority`. |
 | `call_audit` | `call_records` and `evidence` as in the host configuration; `store` (§9) needs `evidence`. |
 | `routing`, `transport` | As in the host configuration. |
+| `remote` | The remote profile `logos.remote.tls-tcp` ([REMOTE.md](REMOTE.md); DECISIONS G407-G410). `enabled`: logosd starts its remote side, which reads the remote trust input (§6a) and needs `runtime.runtime_instance_id` to be a lowercase UUID version 4 (RUNTIME l.2592-2593). `signing`: what signs the TLS handshakes with the Runtime's key, `logosd` (the default) or `key-holder`, the `logos_keyholder` program at `key_holder` (an absolute path, checked as `runtime.module_host` is); `process-copy` is refused except by a logosd built for tests. |
 | `permissions` | `profile`: absent selects the reference profile `logos-core-nim.permission-profile.v1`, since logosd always selects one; `initial`: the operator instances' settings. An entry naming a system instance or module is refused: logosd provisions those itself (§5). |
 | `state_transfers` | As in the host configuration: an operator instance's replacement continues from its state, applied once at the next start (§11, "Replacing an instance"). Neither side may be a system instance. |
 | `ctl` | The socket (§7): `socket_dir` (absolute; default `<session>/run`), `workers` (1–32, default 4), `idle_timeout_ms` (100–600000, default 30000). |
@@ -314,6 +345,8 @@ reported with the field it concerns, and logosd exits 1.
 3. The development switch: `allow-all` and `test_hooks` need it (§6).
 4. `ctl`'s and `cli`'s bounds and absolute paths; `call_audit.store` needs `call_audit.evidence`; the evidence key's file, its `kid`
    and its binding name this Runtime (§9).
+   `remote`: `key_holder` with `signing` `key-holder` only, and the reverse; `process-copy` only in a
+   test build; with `enabled`, the Runtime id is a lowercase UUID version 4.
 5. The derived host configuration passes the library's own checks (`logos_runtime_create`'s), and the
    orchestrator's value passes the module's.
 
@@ -684,6 +717,230 @@ switch turned off, is withdrawn from that start on, and nothing running is affec
   digits, another kid). A writer's result carries `revision` and `changed`, an anchor command's `kid`, and
   `trust development`'s `development` and `development_anchors`, the number of anchors the file marks
   `development`, whether or not anything changed.
+
+## 6a. The remote trust input
+
+With `remote.enabled` (§3), `<session>/remote/trust.cbor` is the remote trust input (RUNTIME §9.3.7,
+l.2590-2682; DECISIONS G408): the complete remote trust-anchor set and the enrollment records, under one
+revision of its own, apart from the package trust file. `state/remote-trust-mark.cbor` records the highest
+revision used, the BLAKE3-256 digest of that file's bytes, its anchor set, and for each enrollment key
+(`runtime_instance_id`, `profile`) the record accepted, or every record of a conflict. Without
+`remote.enabled` logosd reads neither file, so a session that never enables it needs neither.
+
+The enrollment records are RUNTIME's published supporting schema, `logos.runtime_enrollment`
+(l.2599-2632), held unchanged: a record another implementation writes reads as it is. A supporting schema
+imports nothing (COMMITMENT §3.1 step 6), so lcn-gen appends the mirrored rules
+(`spec/mirrors/RNT/9.3.7.runtime-enrollment.cddl`) to the document below, each name
+`logos.runtime_enrollment.x` renamed `lcn.enrollment_x`; nothing else changes, and CBOR carries no rule
+name. Each anchor is a direct anchor (G324): the DER certificate the Runtime enrolled under it presents.
+The peer file is what `logosctl remote credential` writes for each peer and `remote trust import`
+reads.
+
+```cddl
+; logosd's remote trust input and its continuity mark (Tier 5 step 5-7a-1;
+; DECISIONS G408; RUNTIME §9.3.7, l.2590-2682). Each is one Logos
+; deterministic-CBOR value in a file of its own; docs/DAEMON.md §6a documents
+; them. The enrollment records are RUNTIME's published supporting schema,
+; logos.runtime_enrollment (l.2599-2632), held unchanged: lcn-gen appends the
+; mirrored rules (spec/mirrors/RNT/9.3.7.runtime-enrollment.cddl) to this
+; document, each name logos.runtime_enrollment.x renamed lcn.enrollment_x, since
+; a supporting document imports nothing (COMMITMENT §3.1 step 6). The names
+; below that start lcn.enrollment_ are those rules.
+
+; logos-core-nim.remote-trust.v1, <session>/remote/trust.cbor: the complete
+; trust-anchor set and the enrollment records, under one revision (l.2673)
+; that every offline change raises by one. Each anchor is a direct anchor
+; (owner decision B2; G324): the DER certificate the Runtime enrolled under it
+; presents.
+lcn.remote_trust = {
+  format: "logos-core-nim.remote-trust.v1",
+  revision: uint64,
+  anchors: [* lcn.remote_anchor],
+  enrollments: [* lcn.enrollment_remote_runtime_enrollment],
+}
+
+lcn.remote_anchor = {
+  id: lcn.enrollment_trust_anchor_id,
+  certificate: bstr .size (1..16384),
+}
+
+; logos-core-nim.remote-trust-mark.v1, <session>/state/remote-trust-mark.cbor:
+; the highest revision used, the BLAKE3-256 of that file's bytes, its anchor
+; set, and for each enrollment key (runtime_instance_id, profile) the newest
+; record accepted, or every record of a conflict at that revision (l.2650-2654,
+; l.2664, l.2674).
+lcn.remote_trust_mark = {
+  format: "logos-core-nim.remote-trust-mark.v1",
+  revision: uint64,
+  digest: bstr .size 32,
+  anchors: [* lcn.remote_anchor],
+  enrollments: [* lcn.enrollment_remote_runtime_enrollment],
+}
+
+; logos-core-nim.remote-peer.v1: what logosctl remote credential writes for the
+; operator to give each peer, and logosctl remote trust import reads there:
+; one Runtime's anchor and its enrollment record, which names that anchor.
+lcn.remote_peer = {
+  format: "logos-core-nim.remote-peer.v1",
+  anchor: lcn.remote_anchor,
+  enrollment: lcn.enrollment_remote_runtime_enrollment,
+}
+```
+
+**At start**, before any remote process starts, logosd applies the input's rules (schema and the 16 MiB
+bound; anchor ids distinct; each enrollment key once; each Runtime id a lowercase UUID version 4,
+l.2592; an active record's keys distinct), reads it twice as the package trust file is read (a change in
+between refuses the start), and decides against the mark:
+
+| Mark | File | Decision |
+|---|---|---|
+| absent | any | refused: re-establish (l.2680-2682) |
+| revision r | revision > r, the enrollment rules pass | mark written, then used |
+| revision r | revision = r, same digest | accepted (identical replay; l.2676) |
+| revision r | revision = r, other digest | refused (l.2675) |
+| revision r | revision < r | refused (l.2675) |
+
+- **The enrollment rules**, for a file above the mark, key by key against the mark's record
+  (l.2650-2656): a higher revision replaces it; the same record keeps it; a different record at the same
+  revision is a **conflict**: logosd starts, that identity is rejected (G324: the verifier holds it as
+  conflicting, with every key either record names) until a later file carries a higher revision for the
+  key, and the start logs `remote-trust-report: Runtime … has 2 conflicting records …`. A `revoked`
+  record supersedes lower revisions and admits no session (l.2655), from the next start (B3).
+- **Two rules are stricter than the text** (G408): a **stale record** (a lower revision than the mark's
+  for its key) refuses the whole start, not only that peer, since the file as a whole is then older than
+  what this node accepted; and a **key the mark holds that the file omits** refuses the start, since the
+  text has no deletion, only revocation, so records are kept for good. REMOTE.md gives their cost.
+- **Refused** means logosd does not start (exit 1) and names the cause; the mark is unchanged. Both
+  inputs' checks are done before either mark moves, so nothing is refused after a mark moved except a
+  failed write (G299).
+- **The loader report** (G324 extended): the start logs `remote-trust-report:` lines, and the offline
+  commands print the same, for (1) an active `tls-tcp` record whose anchor is not in the set, or whose
+  anchor's key is not among its keys; (2) a record's key no anchor can match (under a direct anchor only
+  the anchor certificate's key can); (3) an anchor that cannot be a direct anchor (not a self-issued
+  P-256 certificate signed by its own key; a CA; Key Usage without digitalSignature; Extended Key Usage
+  without both serverAuth and clientAuth, since a Runtime is both; a critical extension validation does
+  not process) or that no active record names. Records stay unchanged and fail closed in the verifier;
+  `anchor add` refuses (3) up front. A record whose anchor was withdrawn stays in force as data and fails
+  every handshake at the anchor check.
+- **The snapshot** the remote processes take at spawn (`transport/tls/trustsnap.nim`): every anchor by its
+  id in lowercase hex at the input's revision, and the current record of each `logos.remote.tls-tcp`
+  key. Records of `logos.remote.quic` are held and unused.
+
+### The remote trust commands
+
+Every command is offline; every writer holds the session lock and is refused while logosd runs. Every
+change applies at the next start of logosd (B3), and the command says so.
+
+| Command | What it does |
+|---|---|
+| `remote trust init` | an empty input at revision 1 and its mark. Refused where either exists, which would roll back |
+| `remote trust show` | the revision, the mark, what continuity would decide (or the refusal a start would give), each anchor with its check, each record, and the report |
+| `remote trust reestablish --revision N` | after loss of the mark: a new one from the current file, when N is the file's revision and the file passes the start's rules. A conflict the lost mark held is gone (l.2680-2682) |
+| `remote trust anchor add CERT [--id HEX]` | a direct anchor from a DER certificate file, its id the certificate's BLAKE3-256 unless `--id` names one. The same anchor again changes nothing; the same id with another certificate is refused |
+| `remote trust anchor remove --id HEX` | a withdrawal (l.2677). Records that name the anchor stay, and fail closed |
+| `remote trust enroll add @RECORD` | one record, `.cbor` or `.diag`, in the published schema: a new key, or a higher revision than the record held. The same record changes nothing; a lower revision, or another record at the same revision, is refused, so no command makes a stale record or a conflict |
+| `remote trust enroll revoke RUNTIME [--profile tls-tcp\|quic]` | a `revoked` record one revision above the record held; it adds that the restart is what closes that Runtime's connections |
+| `remote trust import @PEER` | a peer file's anchor and record as one change; the record must name that anchor. `--node` and `--address`, which add the peer to `lcn_call`'s nodes, come with the nodes (5-7a-4) |
+
+- **Every writer** builds the next file with one edit and checks it as a start would, against the mark
+  when there is one, so it never writes a file logosd refuses. It writes revision + 1, or nothing when the
+  edit changes nothing ("unchanged", `"changed": false`).
+- Provisioning errors are printed locally, exit 1; no command reports through the Logos error registry
+  (RUNTIME l.2646-2649).
+- JSON: `remote trust show`'s result carries `file`, `revision`, `digest`, `mark`, `continuity`,
+  `refusal`, `anchors` (`id`, `certificate_bytes`, `problems`), `enrollments` (`runtime`, `profile`,
+  `revision`, `status`, and for an active one `anchor` and `keys`, in hex), `report` and `conflicts`. A
+  writer's result carries `revision`, `changed`, `report` and `conflicts`.
+
+## 6b. The TLS credential
+
+With `remote.enabled`, logosd authenticates to other Runtimes with one long-term P-256 key and a
+self-signed certificate that each peer holds as a direct anchor (owner decision B2; DECISIONS G409,
+G324). Both are in `<session>/remote/credential/`:
+
+| File | What |
+|---|---|
+| `key.p8` | the private key, PKCS#8, mode 0600, never a link |
+| `cert.der` | the certificate: ecdsa-with-SHA256, signed by its own key; Key Usage critical digitalSignature; no Extended Key Usage; subject `CN=logos runtime <id>`, which no verifier uses; valid from 300 s before it was made |
+| `peer.cbor` | `lcn.remote_peer` (§6a): the anchor (its id the certificate's BLAKE3-256) and this Runtime's enrollment record naming it with the one key, for each peer to import |
+
+- **A start with `remote.enabled` and no credential is refused** (exit 1): "remote.enabled needs a TLS
+  credential: logosctl remote credential new makes one". A start logs the certificate's SHA-256, the
+  enrollment revision and who signs.
+- **The key is separate from every other key** (PKG-0435; CA l.1312): its own command, file and
+  algorithm. The call-evidence key loader refuses `key.p8` and the TLS loader refuses an evidence key,
+  by shape and by path.
+
+| Command | What it does |
+|---|---|
+| `remote credential new [--days N]` | the session's first credential, valid N days (default 3650, at most 36500), its record at revision 1. Refused when one exists |
+| `remote credential show` | the credential, a pending rotation, and the key holder's count, without the key |
+| `remote credential rotate [--days N]` | the next credential in `remote/credential-next/`, its record at the current revision + 1 with the new key alone. Refused while one is pending |
+
+- `new` and `rotate` hold the session lock and are refused while logosd runs. Each prints the
+  certificate's SHA-256, the anchor id, the key and the peer file to give each peer (`logosctl remote
+  trust import @peer.cbor` there).
+- **Rotation is a cutover** (G324 limit 1): an enrollment names one anchor and a direct anchor has one
+  key, so old and new keys cannot overlap. Each peer imports the new peer file; this node takes the
+  rotation up at its next start with `remote.enabled`. It renames `credential` to `credential-old`, then
+  `credential-next` to `credential`, and removes `credential-old`, overwriting its key first. A start
+  interrupted between or after the renames finishes them. Connections with a peer fail from the first of
+  the two restarts until both hold the new credential. REMOTE.md gives the order of steps.
+- JSON: `credential` (and `pending`) carry `runtime`, `revision`, `certificate_sha256`, `anchor_id`,
+  `spki`, `certificate` (hex), `not_before`, `not_after` (UTC) and `peer_file`; `show` adds
+  `key_holder` (`signed`, `refused`) once the holder has written its count.
+
+**Who signs** (`remote.signing`, §3; owner decision B1; G410). The TLS processes hold no key: each sends
+its handshake's CertificateVerify input over its control channel, and the answer is a signature or a
+refusal, which fails that handshake.
+
+| `remote.signing` | Who holds the key |
+|---|---|
+| absent or `logosd` | logosd's signing service, which loads `key.p8` at start |
+| `key-holder` | `logos_keyholder` (the program `remote.key_holder` names), which loads `key.p8` itself. logosd never opens it: it checks the credential at start without reading the key, and relays each request to the holder |
+| `process-copy` | each TLS process, sent the key at spawn; accepted only by a logosd built with `-d:logosTestSigning` (tests) |
+
+- Each request is checked where it is signed, and in key-holder mode by logosd too: a TLS 1.3
+  CertificateVerify input for the role logosd fixed for that process (a request names none), ECDSA
+  P-256 with SHA-256 only, at most 100 a second with bursts of 200 for each process at logosd and for
+  the holder as a whole [IMPL].
+- The key holder takes `--session=<dir> --parent=<logosd's pid>` and its channel as descriptor 3. It
+  binds itself to logosd first and exits once logosd is gone (its channel ends, or its parent changes).
+  It keeps its own count in `remote/keyholder.count` (two lines, `signed N` and `refused N`, carried
+  across its runs, written every 60 s while it changes and at its exit), which logosd neither writes nor
+  reads. logosd starts the holder at its start in key-holder mode, before any listener process.
+
+**logosd holds no TLS code** (G409). It signs through BoringSSL's libcrypto
+(`transport/tls/p256.nim`) and imports no libssl binding (lint `daemon-no-ssl`). The binding compiles
+libssl's sources into every program that imports it. logosd's link drops them by dead stripping, and
+the binary is checked to hold none of their symbols: `test_logosd` checks plain builds, and the flake
+check `logosd-no-ssl` checks the deployed logosd. The link line still names libssl's objects.
+
+## 6c. Durable remote disables
+
+A listener's `enabled` or `runtime_control_enabled`, or an export's `enabled`, turned off through
+Runtime Control stays off across restarts and crashes; an enable through Runtime Control lasts for the
+run (Q4 as planning ruled; DECISIONS G412; RUNTIME leaves it open, l.3289, l.3319-3321). The fields
+turned off are kept in `state/remote-exposure.cbor` (`daemon/remote_exposure.cddl`,
+`logos-core-nim.remote-exposure.v1`), one entry per listener address or per export (the listener
+address and the provider id), with the fields off, the consumer that turned them off and when, and the
+BLAKE3-256 digest of the configuration's entry for that key as that run started.
+
+- **A disable** turns the exposure off for the run first (new connections stop, Runtime Control
+  sessions end where Runtime Control was turned off), then writes the entry. A failed write fails the
+  call with MODULE_ERROR "disabled for this run; not recorded, so the next start applies the
+  configuration: <cause>", the exposure still off; a repeat once the write can succeed records it.
+- **An enable** removes the entry first, then turns the exposure on; a failed removal fails the call
+  and the exposure stays off.
+- **At start** each entry whose digest matches its configuration entry is applied, so the record starts
+  with those fields off, logged as `remote exposure: kept disabled: …`; any other entry (its
+  configuration entry changed or gone, or a record Runtime Control made) is dropped, logged as `remote
+  exposure: dropped, …`, and the file rewritten.
+  So changing a listener's or export's configuration entry (`daemon config set`) re-enables it.
+- **Offline:** `logosctl remote exposure list` prints the entries (a reader: no lock). `logosctl remote
+  exposure reset (--listener ADDR [--provider ID] | --all)` removes entries under the session lock,
+  applying at the next start; ADDR is the address as `list` prints it (`tls-tcp HOST:PORT` and any
+  optional field as ` name=value`).
 
 ## 7. The logosctl instance and its socket
 
@@ -1195,6 +1452,23 @@ prints the roots. Where the Runtime answers `NOT_AUTHORISED`, the launcher print
 Runtime's message; it guesses no reason. Every process of logosd's user can use `lcn_call` with all of
 these grants, as with the logosctl instance (§7): grant it what the session's user may call.
 
+**Example: a payload module** (`blockchain_module`; [DEPLOYMENT.md](DEPLOYMENT.md) §26; DECISIONS
+G424, G469, G476). It calls no other module, and `report_failure` needs no grant. Its module record
+names contract v2's root as `primary_contract` and v1's under `extends` (G393); without v1's the start
+ends `initialization-failed`. Three rules are all it needs. The first two are the rule above for
+`lcn_call`, with `subscribe-event` added, once on v2's root and once on v1's: the Runtime describes a
+provider only if each of its contracts may be discovered, so without v1's rule every call is
+`NOT_AUTHORISED`. With them `logosctl call`, `describe` and `subscribe` reach it. A rule that narrows
+`access.methods` names the methods of the module's policy classes the session's user may call (the
+module's `policy-classes.json`); its `spend` and `keys` classes are for local subjects only. The third
+allows the `blockchain_module` instance its own `publish-event` on v2's root; without it every
+`chain_progress_event`, `new_block_event` and `lib_event` is skipped (Streams). Its permission
+settings must hold the profile's minimum, `logos-core-nim.host-ambient` with the empty constraints. With
+no `permissions.initial` entry for the module, logosd writes that entry itself ("Permission settings"
+above; G294), so the entry is optional. An entry that is present but lacks host-ambient refuses the start
+`NOT_AUTHORISED` (`authority-denied`; DECISIONS G110; [PERMISSIONS.md](PERMISSIONS.md), "Admission and
+the snapshot").
+
 ### Streams (G349)
 
 - **`subscribe MODULE EVENT [--count N] [--for DURATION] [--instance I] [--contract ROOT]`**: one event
@@ -1390,11 +1664,25 @@ These are what the store does and does not protect (CA l.1364; CAP-0415):
 
 ## 10. Remote surfaces
 
-logosd has no remote transport, no listener and no provider export: nothing is reachable from another
-host (SEC l.525; R l.2769). The Runtime Control's remote methods answer as
-[HOST-CONFIG.md](HOST-CONFIG.md) says, after authorization (R l.1540): the two lists an empty page,
-`set_provider_export` INVALID_PARAMS, `set_remote_listener` MODULE_ERROR for enabling a listener and
-success for disabling one, with no record kept. `logosctl` calls none of them.
+Without `remote.enabled` nothing is reachable from another host (SEC l.525; R l.2769). With it, each
+enabled listener record (`remote.listeners`, or one Runtime Control enabled) is one `logos_remote`
+process (DECISIONS G411; [REMOTE.md](REMOTE.md)): logosd binds the address, takes the restart lock
+`work/remote/listener-<hash>.lock` and spawns the program (`runtime.remote_program`) with the socket;
+the record is enabled once the process listens. The process authenticates each peer against this
+start's trust snapshot, with logosd's certificate and signer (§6b), and relays what Runtime Control
+needs to logosd: no module payload crosses logosd. It ends with logosd however logosd ends (a SIGKILL
+included), and a lock another process holds refuses the start, naming the pid written in it.
+
+- **Runtime Control to another Runtime** (G413): a listener with `runtime_control_enabled` serves the
+  `logos_runtime_control` endpoint to enrolled Runtimes' consumers. Each call is judged by the
+  capability-authority policy for that forwarded consumer, which only a subject naming its Runtime
+  matches ([AUTHORITY-POLICY.md](AUTHORITY-POLICY.md), subjects; G415); `policy: allow-all` with
+  `remote.enabled` refuses the start.
+- **Records:** the four methods hold real records (G412): a disabled record for any valid address,
+  enabling a `quic` one or any one without `runtime.remote_program` MODULE_ERROR, a bind failure
+  TRANSPORT_ERROR. The disables they make last (§6c). `logosctl` calls none of them.
+- **Not yet:** provider sessions to another Runtime (remote routes, step 5-7a-3), and this Runtime as
+  a source (step 5-7a-4).
 
 ## 11. State protection
 

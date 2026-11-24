@@ -9,7 +9,7 @@ import std/[os, parseopt, strutils]
 import results
 import logos_sdk/base/hex
 import logos_sdk/iface/[accept, rmap]
-import logos_sdk/codegen/[callsgen, hostgen, kitgen, nimgen, sdkroot]
+import logos_sdk/codegen/[callsgen, cblint, hostgen, kitgen, nimgen, sdkroot]
 
 const sdkVersion = block:
   ## [DECISIONS G433] The SDK's version, read from its nimble file when lcn-gen is
@@ -47,6 +47,7 @@ Usage:
                 [--interface:FILE]... [--supporting:FILE]...
   lcn-gen cddl [--out:DIR] [--system] (--module:NAME | --subject:NS) [--header]
                [LOGICAL=]HEADER...
+  lcn-gen lint-callbacks [--self-test] [PATH...]
 
 logos-types  writes DIR/logos_types.h
 logos-runtime
@@ -82,6 +83,13 @@ cddl         reads exactly the C headers named, without a preprocessor, and
              logical name is LOGICAL, or else its file name. The subject
              is input, never inferred: --module or --subject names it
              exactly
+lint-callbacks
+             checks every C-callable procedure in the .nim files under each
+             PATH: marked {.lcnCallback.} or {.lcnModuleThread.}, exempt
+             with {.lcnNoNimHeap: "why".} or {.lcnOwnRuntime: "why".}, or
+             starting with kitEnter() or bindingEnter() (DECISIONS G464-G467);
+             and no Entered value made without entered(p). Prints each
+             finding and exits 1 on any; --self-test runs its fixtures first
 
 --import-prefix:P  how Nim output imports this library (default: """ &
   SdkImportRoot & """)
@@ -239,12 +247,13 @@ proc main(): int =
     live = false
     confined = false
     asyncApi = false
+    lintSelfTest = false
   for kind, key, val in getopt():
     case kind
     of cmdArgument:
       if command.len == 0:
         command = key
-      elif command == "cddl":
+      elif command in ["cddl", "lint-callbacks"]:
         headers.add(key)
       elif primary.len == 0:
         primary = key
@@ -278,6 +287,8 @@ proc main(): int =
         live = true
       of "confined":
         confined = true
+      of "self-test":
+        lintSelfTest = true
       of "async-api":
         asyncApi = true
       of "help", "h":
@@ -306,6 +317,8 @@ proc main(): int =
     )
   if (subject.len > 0 or wantHeader) and command != "cddl":
     return fail("--subject and --header apply to cddl only\n" & usage)
+  if lintSelfTest and command != "lint-callbacks":
+    return fail("--self-test applies to lint-callbacks only\n" & usage)
   case command
   of "cddl":
     if interfaces.len > 0 or supporting.len > 0:
@@ -323,6 +336,31 @@ proc main(): int =
       outDir,
       wantHeader,
     )
+  of "lint-callbacks":
+    if lintSelfTest:
+      let failed = selfTest()
+      for f in failed:
+        stderr.writeLine "lint-callbacks self-test: " & f
+      if failed.len > 0:
+        return 1
+      echo "lint-callbacks self-test: every fixture's verdict holds"
+    if headers.len == 0 and lintSelfTest:
+      return 0
+    var stats: Stats
+    let found = lintPaths(
+      if headers.len > 0:
+        headers
+      else:
+        @["."],
+      stats,
+    )
+    for f in found:
+      echo f.path, ":", f.line, ": ", f.name, ": ", f.message
+    echo "lint-callbacks: ",
+      stats.files, " files, ", stats.callable, " C-callable procedures (", stats.marked,
+      " marked, ", stats.entries, " entries, ", stats.noNimHeap, " lcnNoNimHeap, ",
+      stats.ownRuntime, " lcnOwnRuntime), ", found.len, " findings"
+    if found.len > 0: 1 else: 0
   of "logos-types":
     write(outDir, "logos_types.h", logosTypesHeader())
   of "logos-runtime":

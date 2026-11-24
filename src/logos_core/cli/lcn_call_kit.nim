@@ -67,7 +67,7 @@ template exportLcnCall*(T: typedesc) =
       destroyModule(instance)
     GC_unref(instance)
 
-  proc lcnCallKitName(): cstring {.exportc: "logos_lcn_call_MODULE_name", dynlib, cdecl, gcsafe, raises: [].} =
+  proc lcnCallKitName(): cstring {.exportc: "logos_lcn_call_MODULE_name", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "a static string".} =
     system.cstring(moduleName)
 
   proc lcnCallKitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: "logos_lcn_call_MODULE_init", dynlib, cdecl, gcsafe, raises: [].} =

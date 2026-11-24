@@ -12,9 +12,10 @@ namedBin["lcn_pkg"] = "lcn-pkg"
 namedBin["logos_module_host"] = "logos-module-host"
 # logosd and logosctl need unix-stream sockets, peer credentials and signals: POSIX hosts
 # only (DECISIONS I95; docs/DAEMON.md). The Module Host lands beside logosd, where its
-# default lookup finds it.
+# default lookup finds it, and so do the key holder (DECISIONS G410), which
+# `remote.key_holder` names, and the remote program (DECISIONS G411).
 when not defined(windows):
-  bin.add ["logosd", "logosctl"]
+  bin.add ["logosd", "logosctl", "logos_keyholder", "logos_remote"]
 
 # [DECISIONS G436] Nimble 0.26.2 or later: 0.20.1 empties or crashes on a lock made over an existing
 # one, and on macOS crashes without --useSystemNim. Every Nimble command passes --useSystemNim, so

@@ -4,7 +4,7 @@
 ## logs every source it is asked about; one test resolves real signed LGX
 ## packages through `lgxInspector`.
 
-import std/[random, sequtils, sets, strutils, tables]
+import std/[algorithm, hashes, random, sequtils, sets, strutils, tables]
 import unittest2
 import logos_sdk/[cbor, pins]
 import logos_sdk/base/hex
@@ -12,6 +12,8 @@ import logos_sdk/testing/specdata
 import logos_sdk/crypto/blake3, ../src/logos_core/crypto/slhdsa
 import ../src/logos_core/pins as core_pins
 import ../src/logos_core/package/[lgx, resolver, signing, trust]
+import ../src/logos_core/daemon/config
+import ./support/[oracle_resolver, pmshapes, valueinspection]
 
 proc b(s: string): seq[byte] =
   @(s.toOpenArrayByte(0, s.high))
@@ -88,7 +90,8 @@ proc source(name, version: string, n = 0): PackageSource =
 type
   Universe = ref object
     catalog: seq[CatalogEntry]
-    outcomes: Table[seq[byte], Inspection]
+    outcomes: Table[seq[byte], ValueInspection]
+      ## [G482] values: the oracle reads them, the resolver is given them `held`
     installed: seq[InstalledPackage]
     log: seq[string] ## the sources inspected, in order
     altered: HashSet[string] ## installed identities whose retained bytes are altered
@@ -118,7 +121,7 @@ proc add(
   u.outcomes[s.encoded] =
     case outcome
     of ikEligible:
-      Inspection(
+      ValueInspection(
         kind: ikEligible,
         identity:
           if claims.len > 0:
@@ -130,9 +133,9 @@ proc add(
         provides: provided(providing(provides)),
       )
     of ikIneligible:
-      Inspection(kind: ikIneligible, error: packageError(code, "test: " & $code))
+      ValueInspection(kind: ikIneligible, error: packageError(code, "test: " & $code))
     of ikUnavailable:
-      Inspection(kind: ikUnavailable, reason: "test: the source is unreachable")
+      ValueInspection(kind: ikUnavailable, reason: "test: the source is unreachable")
 
 proc publicKey(fill: byte): PublicKey =
   for i in 0 ..< PublicKeyBytes:
@@ -177,15 +180,21 @@ proc trust(u: Universe): TrustInput =
     names.add(p.identity.package)
   doAssert result.addAnchor(b("universe"), acceptedKey, names).isOk
 
-proc inspector(u: Universe): Inspector =
+proc valueInspector(u: Universe): ValueInspector =
+  ## [G482] The universe's answers as values (the oracle's), logging each source asked for.
   let outcomes = u.outcomes
   result = proc(
       s: PackageSource, trust: TrustInput
-  ): Inspection {.gcsafe, raises: [].} =
+  ): ValueInspection {.gcsafe, raises: [].} =
     u.log.add(str(s.objectLocator))
     outcomes.getOrDefault(
-      s.encoded, Inspection(kind: ikUnavailable, reason: "test: no such source")
+      s.encoded, ValueInspection(kind: ikUnavailable, reason: "test: no such source")
     )
+
+proc inspector(u: Universe): Inspector =
+  ## [G482] The same answers `held`, as the resolver holds them, each checked against its
+  ## values.
+  resolverInspector(u.valueInspector)
 
 proc retained(u: Universe): RetainedCheck =
   result = proc(p: InstalledPackage): Result[void, string] {.gcsafe, raises: [].} =
@@ -521,7 +530,15 @@ suite "pkg.catalog: inspection records (PM §6)":
     let i = inspection(v, v.manifest.modules)
     check i.kind == ikEligible
     check i.identity == ident("app@1.0.0")
-    check i.dependencies == @[dep("lib ^1.0.0")]
+    check i.matches(
+      ValueInspection(
+        kind: ikEligible,
+        identity: ident("app@1.0.0"),
+        commitment: v.commitment,
+        dependencies: @[dep("lib ^1.0.0")],
+        provides: provided(v.manifest.modules),
+      )
+    )
     check v.manifest.modules[0].requires.len == 1
     check v.manifest.variants.len == 2
 
@@ -922,7 +939,7 @@ suite "pkg.resolver: dependency resolution (PM §11)":
       check (if r.isOk: "ok" else: $r.error.code) == outcome
       let i = inspect(source("lib", "1.0.0"), anchors)
       check i.kind == ikEligible
-      check i.provides.len == (if host == darwinHost: 1 else: 0)
+      check i.providedCount == (if host == darwinHost: 1 else: 0)
 
   test "[PKG-0318] an installed record satisfies a dependency without being materialized":
     let u = Universe()
@@ -1474,69 +1491,1028 @@ suite "pkg.resolver: dependency resolution (PM §11)":
     check satisfies(rkExact, "1.0.0-rc.1", "1.0.0-rc.1")
     check not satisfies(rkExact, "1.0.0", "1.0.0-rc.1")
 
-  test "[IMPL] one cycle walk per bind gives the per-dependency walks' results, counters and inspections (the ruling of 2026-11-22, 7.2)":
-    # Seeded catalogs with cycles, self-requirements, exact pins, ineligible
-    # records and tight limits, each resolved twice: with 5-3b-1's check (one
-    # walk per bound dependency, the test hook) and with the one walk.
-    var rng = initRand(0x5_3B_2)
-    const names = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"]
-    const versions = ["1.0.0", "1.1.0", "1.2.0", "2.0.0"]
-    var outcomes: CountTable[string]
-    for round in 0 ..< 400:
-      let u = Universe()
-      let n = rng.rand(2 .. names.len)
-      for i in 0 ..< n:
-        for v in versions[0 ..< rng.rand(1 .. versions.len)]:
-          var deps: seq[string]
-          for _ in 0 ..< rng.rand(0 .. 4):
-            let target = names[rng.rand(0 ..< n)]
-            let req = versions[rng.rand(0 ..< versions.len)]
-            deps.add(target & (if rng.rand(0 .. 3) == 0: " =" else: " ^") & req)
-          if rng.rand(0 .. 9) == 0:
-            u.add(names[i], v, deps, outcome = ikIneligible)
-          else:
-            u.add(names[i], v, deps)
-      let lim = limits(
-        names = rng.rand(1 .. 16),
-        depth = rng.rand(1 .. 15),
-        candidates = rng.rand(1 .. 6),
-        attempts = rng.rand(1 .. 30),
+# The frozen oracle (Tier 5 step 5-3c; DECISIONS G454) ---------------------------------
+
+proc commitmentText(c: ManifestCommitment): string =
+  toHex(encodeCbor(c.toCbor))
+
+proc described(r: Result[Resolution, PackageError], c: ResolverCounters): seq[string] =
+  ## Everything one resolution reports, a line per item, to compare two resolvers by.
+  if r.isErr:
+    result.add("error " & $r.error.code & ": " & r.error.msg)
+  else:
+    let s = r.get
+    result.add("root " & $s.root & " unchanged=" & $s.unchanged)
+    for p in s.packages:
+      result.add(
+        $p.identity & " " & commitmentText(p.commitment) & " installed=" & $p.installed &
+          " source=" & (if p.source.isSome: toHex(p.source.get.encoded)
+        else: "none") & " depth=" & $p.depth & " edges=" &
+          p.resolvedDependencies
+          .mapIt($it.identity & "/" & commitmentText(it.commitment))
+          .join(",")
       )
-      let root = RootReference(package: Opt.some(names[rng.rand(0 ..< n)]))
-      checkpoint "round " & $round
-      perDependencyWalk = true
-      let before = u.resolveRoot(root, lim)
-      let beforeLog = u.log
-      perDependencyWalk = false
-      let after = u.resolveRoot(root, lim)
-      check after.picked == before.picked
-      check u.log == beforeLog
-      check after.counters.names == before.counters.names
-      check after.counters.depth == before.counters.depth
-      check after.counters.considered == before.counters.considered
-      check after.counters.attempts == before.counters.attempts
-      check after.counters.limit == before.counters.limit
-      if after.res.isOk:
-        check after.res.get.packages.mapIt(it.depth) ==
-          before.res.get.packages.mapIt(it.depth)
-      outcomes.inc(after.code & "/" & after.counters.limit)
-    checkpoint $outcomes
-    # The rounds reach both outcomes and every limit.
-    check outcomes.len >= 5
-    var resolved, failed = 0
-    for k, c in outcomes:
-      if k.startsWith("ok/"):
-        resolved += c
+    let k = s.counters
+    result.add(
+      "its counters " & $k.names & " " & $k.depth & " " & $k.considered & " " &
+        $k.attempts & " " & k.limit
+    )
+  result.add(
+    "counters names=" & $c.names & " depth=" & $c.depth & " considered=" & $c.considered &
+      " attempts=" & $c.attempts & " limit=" & c.limit
+  )
+
+proc resolveBy(
+    u: Universe, root: RootReference, lim: ResolverLimits, oracle: bool
+): seq[string] =
+  ## One resolution by the resolver or by the oracle: what it reports, then the sources it
+  ## inspected and the installed records whose retained bytes it checked, in order.
+  u.log.setLen(0)
+  u.checked.setLen(0)
+  var c: ResolverCounters
+  let input = ResolverInput(
+    installed: u.installed,
+    catalog: u.catalog,
+    limits: lim,
+    trust: u.trust,
+    inspect: u.inspector,
+    retained: u.retained,
+  )
+  let r =
+    if oracle:
+      oracleResolve(input, u.valueInspector, root, c)
+    else:
+      resolve(input, root, c)
+  result = described(r, c)
+  result.add("inspected " & u.log.join(" "))
+  result.add("checked " & u.checked.join(" "))
+
+type
+  Feature = enum
+    gfIneligible = "an ineligible record"
+    gfUnsupported = "a record with an unsupported schema"
+    gfPlatform = "a record for another platform"
+    gfUnavailable = "an unavailable record"
+    gfClaims = "a record whose manifest names another identity"
+    gfPrerelease = "a pre-release"
+    gfExact = "an exact requirement"
+    gfContracts = "a requirement listing a contract"
+    gfProvides = "a record providing contracts"
+    gfSelf = "a self-dependency"
+    gfBackEdge = "a dependency on an earlier name (a possible cycle)"
+    gfSources = "an identity with two equivalent sources"
+    gfTwoCommitments = "an identity with two commitments (G74)"
+    gfUnavailableSecond = "an identity whose second source is unavailable"
+    gfInstalled = "an installed record"
+    gfPinned = "an installed record with recorded edges"
+    gfPinConflict = "a recorded edge naming another commitment"
+    gfAltered = "an installed record with altered retained bytes"
+    gfWithdrawn = "an installed record whose signer is withdrawn"
+    gfB7 = "a withdrawn signer whose commitment the catalog lists (B7)"
+    gfInstalledConflict =
+      "an installed identity the catalog lists with another commitment"
+    gfInstalledUnsupported = "an installed record with an unsupported schema"
+    gfRetainedUnlisted =
+      "an installed record whose retained source the catalog does not list"
+    gfRootName = "a root by name"
+    gfRootVersion = "a root by name and version"
+    gfRootSource = "a root by source"
+    gfRootSourceName = "a root by source and name"
+    gfRootUpdate = "a root by update"
+    gfRootUpdateTarget = "an update with a target version or source"
+    gfSmallLimits = "small limits"
+
+  Round = object
+    u: Universe
+    root: RootReference
+    limits: ResolverLimits
+
+const
+  oracleNames = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"]
+  oracleVersions = ["0.1.0", "1.0.0", "1.1.0", "1.2.0-rc.1", "1.2.0", "2.0.0"]
+
+proc anyVersion(rng: var Rand): string =
+  oracleVersions[rng.rand(0 ..< oracleVersions.len)]
+
+proc requirement(
+    rng: var Rand, target: int, versionsOf: seq[seq[string]], seen: var set[Feature]
+): string =
+  ## Mostly a version the target has, so that most requirements can be met.
+  let v =
+    if rng.rand(0 .. 7) > 0:
+      versionsOf[target][rng.rand(0 ..< versionsOf[target].len)]
+    else:
+      rng.anyVersion
+  if '-' in v:
+    seen.incl gfPrerelease
+  if rng.rand(0 .. 4) == 0:
+    seen.incl gfExact
+    result = oracleNames[target] & " =" & v
+  else:
+    result = oracleNames[target] & " ^" & v
+  if rng.rand(0 .. 11) == 0:
+    seen.incl gfContracts
+    result.add(if rng.rand(0 .. 1) == 0: " +x" else: " +y")
+
+proc dependencies(
+    rng: var Rand, self: int, versionsOf: seq[seq[string]], seen: var set[Feature]
+): seq[string] =
+  ## As a verified manifest has them: each name once, in name order (`manifest.nim`). Mostly one
+  ## of the next three names, so closures grow deep; any name, an earlier one or itself, one time
+  ## in ten.
+  let n = versionsOf.len
+  var targets: seq[int]
+  for _ in 0 ..< (if self + 1 >= n: rng.rand(0 .. 2) else: rng.rand(1 .. 4)):
+    let t =
+      if rng.rand(1 .. 10) == 1 or self + 1 >= n:
+        rng.rand(0 ..< n)
       else:
-        failed += c
-    check resolved > 20 and failed > 20
+        rng.rand(self + 1 .. min(n - 1, self + 3))
+    if t == self and rng.rand(0 .. 3) > 0:
+      continue # a self-dependency, but rarely
+    if t notin targets:
+      targets.add(t)
+  targets.sort()
+  for t in targets:
+    if t == self:
+      seen.incl gfSelf
+    elif t < self:
+      seen.incl gfBackEdge
+    result.add(rng.requirement(t, versionsOf, seen))
+
+proc generated(rng: var Rand, seen: var set[Feature]): Round =
+  ## One seeded catalog, installed state, root and limits.
+  let u = Universe()
+  let n = rng.rand(2 .. oracleNames.len)
+  var versionsOf: seq[seq[string]]
+  for i in 0 ..< n:
+    var vs = @oracleVersions
+    rng.shuffle(vs)
+    versionsOf.add(vs[0 ..< rng.rand(1 .. vs.len)])
+  var listed: seq[(int, string, seq[string], seq[string])]
+    ## eligible records: name index, version, dependencies, provided contracts
+  for i in 0 ..< n:
+    let name = oracleNames[i]
+    for v in versionsOf[i]:
+      if '-' in v:
+        seen.incl gfPrerelease
+      let deps = rng.dependencies(i, versionsOf, seen)
+      var provides: seq[string]
+      case rng.rand(0 .. 3)
+      of 0:
+        provides = @["x"]
+      of 1:
+        provides = @["y"]
+      of 2:
+        provides = @["x", "y"]
+      else:
+        discard
+      if provides.len > 0:
+        seen.incl gfProvides
+      case rng.rand(0 .. 119)
+      of 0 .. 5:
+        seen.incl gfIneligible
+        u.add(name, v, deps, outcome = ikIneligible)
+      of 6, 7:
+        seen.incl gfUnsupported
+        u.add(name, v, deps, outcome = ikIneligible, code = pecUnsupportedManifest)
+      of 8, 9:
+        seen.incl gfPlatform
+        u.add(name, v, deps, outcome = ikIneligible, code = pecIncompatiblePlatform)
+      of 10:
+        seen.incl gfUnavailable
+        u.add(name, v, deps, outcome = ikUnavailable)
+      of 11:
+        seen.incl gfClaims
+        u.add(name, v, deps, claims = name & "@" & rng.anyVersion, provides = provides)
+      else:
+        u.add(name, v, deps, provides = provides)
+        listed.add((i, v, deps, provides))
+      case rng.rand(0 .. 59)
+      of 0 .. 3:
+        seen.incl gfSources
+        u.add(name, v, deps, n = 1, provides = provides)
+      of 4:
+        seen.incl gfTwoCommitments
+        u.add(name, v, deps, n = 1, seed = "other", provides = provides)
+      of 5:
+        seen.incl gfUnavailableSecond
+        u.add(name, v, deps, n = 1, outcome = ikUnavailable)
+      else:
+        discard
+  # Installed state: at most one record per name, its edges naming installed records where there
+  # are some.
+  type Kept = object
+    name, version, seed: string
+    deps, provides: seq[string]
+    withdrawn, supported: bool
+    n: int
+
+  var kept: seq[Kept]
+  if rng.rand(0 .. 1) == 0:
+    seen.incl gfInstalled
+    for _ in 0 ..< rng.rand(1 .. 4):
+      var k = Kept(supported: true)
+      var i: int
+      if listed.len > 0 and rng.rand(0 .. 2) > 0:
+        let l = listed[rng.rand(0 ..< listed.len)]
+        i = l[0]
+        k.version = l[1]
+        k.deps = l[2]
+        k.provides = l[3]
+      else:
+        i = rng.rand(0 ..< n)
+        k.version = rng.anyVersion
+        k.deps = rng.dependencies(i, versionsOf, seen)
+      k.name = oracleNames[i]
+      if kept.anyIt(it.name == k.name):
+        continue
+      case rng.rand(0 .. 15)
+      of 0, 1:
+        seen.incl gfInstalledConflict
+        k.seed = "installed"
+      of 2, 3:
+        seen.incl gfWithdrawn
+        k.withdrawn = true
+        if listed.anyIt(oracleNames[it[0]] == k.name and it[1] == k.version):
+          seen.incl gfB7
+      of 4:
+        seen.incl gfInstalledUnsupported
+        k.supported = false
+      else:
+        discard
+      if rng.rand(0 .. 4) == 0:
+        seen.incl gfRetainedUnlisted
+        k.n = 2
+      kept.add(k)
+  for k in kept:
+    var edges: seq[string]
+    if k.deps.len > 0 and rng.rand(0 .. 3) > 0:
+      seen.incl gfPinned
+      for d in k.deps:
+        let target = d.split(' ')[0]
+        var e = ""
+        for t in kept:
+          if t.name == target:
+            e = t.name & "@" & t.version & (if t.seed.len > 0: "/" & t.seed
+            else: "")
+        if e.len == 0:
+          e = target & "@" & rng.anyVersion
+        if rng.rand(0 .. 7) == 0:
+          seen.incl gfPinConflict
+          e = e.split('/')[0] & "/other"
+        edges.add(e)
+    u.install(
+      k.name,
+      k.version,
+      k.deps,
+      edges,
+      seed = k.seed,
+      provides = k.provides,
+      withdrawn = k.withdrawn,
+      supported = k.supported,
+      n = k.n,
+    )
+    if rng.rand(0 .. 5) == 0:
+      seen.incl gfAltered
+      u.altered.incl(k.name & "@" & k.version)
+  # The root.
+  var root: RootReference
+  let pick = rng.rand(0 .. 15)
+  if pick >= 13 and kept.len > 0:
+    seen.incl gfRootUpdate
+    let k = kept[rng.rand(0 ..< kept.len)]
+    root.newerThan = Opt.some(PackageIdentity(package: k.name, version: k.version))
+    if rng.rand(0 .. 3) == 0:
+      seen.incl gfRootUpdateTarget
+      root.version = Opt.some(rng.anyVersion)
+    if rng.rand(0 .. 3) == 0:
+      seen.incl gfRootUpdateTarget
+      root.source = Opt.some(source(k.name, rng.anyVersion, rng.rand(0 .. 1)))
+  elif pick >= 10:
+    # Mostly a source the catalog lists.
+    seen.incl gfRootSource
+    let i = rng.rand(0 ..< n)
+    let name = oracleNames[i]
+    if rng.rand(0 .. 3) > 0:
+      let e = u.catalog[rng.rand(0 ..< u.catalog.len)]
+      root.source = Opt.some(e.source)
+      root.package = Opt.some(e.identity.package)
+    else:
+      root.source = Opt.some(source(name, rng.anyVersion, rng.rand(0 .. 2)))
+      root.package = Opt.some(name)
+    if rng.rand(0 .. 1) == 0:
+      root.package = Opt.none(string)
+    else:
+      seen.incl gfRootSourceName
+      if rng.rand(0 .. 5) == 0:
+        root.package = Opt.some(oracleNames[rng.rand(0 ..< n)])
+  else:
+    seen.incl gfRootName
+    let i =
+      if rng.rand(0 .. 3) > 0:
+        rng.rand(0 .. min(2, n - 1))
+      else:
+        rng.rand(0 ..< n)
+    root.package = Opt.some(oracleNames[i])
+    if rng.rand(0 .. 3) == 0:
+      seen.incl gfRootVersion
+      root.version = Opt.some(
+        if rng.rand(0 .. 3) > 0:
+          versionsOf[i][rng.rand(0 ..< versionsOf[i].len)]
+        else:
+          rng.anyVersion
+      )
+  let lim =
+    if rng.rand(0 .. 2) == 0:
+      limits()
+    else:
+      seen.incl gfSmallLimits
+      limits(
+        names = rng.rand(1 .. 14),
+        depth = rng.rand(1 .. 12),
+        candidates = rng.rand(1 .. 6),
+        attempts = rng.rand(1 .. 24),
+      )
+  Round(u: u, root: root, limits: lim)
+
+proc dagRound(rng: var Rand): Round =
+  ## A seeded acyclic catalog for the depth bookkeeping: names required only by names of a lower
+  ## rank, a random order other than the names', so a name bound early is often required later
+  ## by a deeper one, which deepens it and what it requires. Some requirements no version meets
+  ## (`=2.0.0`), found only at the target's frame, so the search backtracks over binds that
+  ## deepened names, and their other versions require other names.
+  let u = Universe()
+  let n = rng.rand(5 .. oracleNames.len)
+  var rank: seq[int]
+  for i in 0 ..< n:
+    rank.add(i)
+  rng.shuffle(rank)
+  const series = ["1.0.0", "1.1.0", "1.2.0", "1.3.0"]
+  var versionsOf: seq[seq[string]]
+  for i in 0 ..< n:
+    var vs = @series
+    rng.shuffle(vs)
+    versionsOf.add(vs[0 ..< rng.rand(1 .. vs.len)])
+  for i in 0 ..< n:
+    var higher: seq[int]
+    for j in 0 ..< n:
+      if rank[j] > rank[i]:
+        higher.add(j)
+    for v in versionsOf[i]:
+      var targets: seq[int]
+      if higher.len > 0:
+        for _ in 0 ..< rng.rand(1 .. 3):
+          let t = higher[rng.rand(0 ..< higher.len)]
+          if t notin targets:
+            targets.add(t)
+      targets.sort()
+      var deps: seq[string]
+      for t in targets:
+        let name = oracleNames[t]
+        deps.add(
+          case rng.rand(0 .. 9)
+          of 0:
+            name & " =2.0.0"
+          of 1, 2:
+            name & " =" & versionsOf[t][rng.rand(0 ..< versionsOf[t].len)]
+          else:
+            name & " ^1.0.0"
+        )
+      u.add(oracleNames[i], v, deps)
+  let lim =
+    if rng.rand(0 .. 3) > 0:
+      limits()
+    else:
+      limits(
+        names = rng.rand(2 .. 12),
+        depth = rng.rand(1 .. 6),
+        candidates = rng.rand(1 .. 4),
+        attempts = rng.rand(2 .. 60),
+      )
+  Round(
+    u: u, root: RootReference(package: Opt.some(oracleNames[rank.find(0)])), limits: lim
+  )
+
+suite "pkg.resolver: the resolver gives the frozen oracle's results (G454)":
+  test "[IMPL-DECISION G454] seeded catalogs: the same outcome, closure, counters, inspections and retained checks":
+    # The oracle is the resolver as 5-3b-2 built it (`tests/support/oracle_resolver.nim`).
+    var rng = initRand(0x5_3C_1)
+    var seen: set[Feature]
+    var outcomes: CountTable[string]
+    for round in 0 ..< 2_000:
+      let g = rng.generated(seen)
+      checkpoint "round " & $round
+      let want = g.u.resolveBy(g.root, g.limits, oracle = true)
+      let got = g.u.resolveBy(g.root, g.limits, oracle = false)
+      check got == want
+      outcomes.inc(want[0].split(':')[0] & " / " & want[^3].split("limit=")[1])
+    checkpoint $outcomes
+    # Every feature occurs in some round, and so does every limit and the outcomes they lead to.
+    for f in Feature:
+      checkpoint $f
+      check f in seen
+    var keys: seq[string]
+    for k, _ in outcomes:
+      keys.add(k)
+    for want in [
+      "root", "error dependency-unavailable", "error package-unavailable",
+      "error artifact-integrity-failed", "error unsupported-manifest",
+      "error signature-verification-failed", "error incompatible-platform",
+      "error invalid-package",
+    ]:
+      checkpoint want
+      check keys.anyIt(it.startsWith(want & " "))
     for limit in [
       "partial_closure_names", "dependency_depth", "candidates_per_name",
       "assignment_attempts",
     ]:
-      var seen = false
-      for k, _ in outcomes:
-        if k.endsWith("/" & limit):
-          seen = true
       checkpoint limit
-      check seen
+      check keys.anyIt(it.endsWith("/ " & limit))
+
+  test "[IMPL-DECISION G454] seeded acyclic catalogs: names deepened by later binds, and backtracking over those binds":
+    var rng = initRand(0x5_3C_1_DA6)
+    var outcomes: CountTable[string]
+    for round in 0 ..< 1_000:
+      let g = rng.dagRound
+      checkpoint "round " & $round
+      let want = g.u.resolveBy(g.root, g.limits, oracle = true)
+      let got = g.u.resolveBy(g.root, g.limits, oracle = false)
+      check got == want
+      outcomes.inc(want[0].split(' ')[0] & " / " & want[^3].split("limit=")[1])
+    checkpoint $outcomes
+    var keys: seq[string]
+    for k, _ in outcomes:
+      keys.add(k)
+    for want in ["root / ", "error / "]:
+      checkpoint want
+      check keys.anyIt(it == want)
+    for limit in [
+      "partial_closure_names", "dependency_depth", "candidates_per_name",
+      "assignment_attempts",
+    ]:
+      checkpoint limit
+      check keys.anyIt(it.endsWith("/ " & limit))
+
+  test "[IMPL-DECISION G454] the bench's shapes, at the preset and at the maxima: the same outcome, closure and counters":
+    # `lift` binds and gives up names that deepen names bound before them.
+    let preset = resolverLimits(
+      int64(PresetPartialClosureNames),
+      int64(PresetDependencyDepth),
+      int64(PresetCandidatesPerName),
+      int64(PresetAssignmentAttempts),
+    ).get
+    for (name, size, parameter) in [
+      ("dense", 64, 0),
+      ("chain", 256, 0),
+      ("hub", 64, 4),
+      ("layered", 128, 16),
+      ("wide", 2_000, 6),
+      ("lift", 64, 4),
+    ]:
+      let s = shapeOf(name, size, parameter).get
+      for lim in [preset, MaxResolverLimits]:
+        checkpoint name & " " & $size & " limits " & $lim.names & "/" & $lim.depth & "/" &
+          $lim.candidates & "/" & $lim.attempts
+        var c, k: ResolverCounters
+        let input = s.inputOf(lim)
+        let want = described(oracleResolve(input, s.valueInspector, s.rootOf, k), k)
+        let got = described(resolve(input, s.rootOf, c), c)
+        check got == want
+
+# The resumable run (Tier 5 step 5-3c-2; DECISIONS G455) --------------------------------
+
+proc runBy(
+    u: Universe,
+    root: RootReference,
+    lim: ResolverLimits,
+    budget: int64,
+    work, turns, releaseTurns: var int64,
+): seq[string] =
+  ## [G455] One resolution as a resumable run of `budget` work units a turn, each need
+  ## answered when the run asks for it, as the driver does, then released turn by turn:
+  ## what `resolveBy` reports.
+  u.log.setLen(0)
+  u.checked.setLen(0)
+  let input = ResolverInput(
+    installed: u.installed,
+    catalog: u.catalog,
+    limits: lim,
+    trust: u.trust,
+    inspect: u.inspector,
+    retained: u.retained,
+  )
+  let run = startRun(input, root, budget)
+  turns = 0
+  while true:
+    var s = run.resume()
+    case s.kind
+    of suNeedSource:
+      run.supply(s.source, input.inspect(s.source, input.trust))
+    of suNeedRetained:
+      run.supplyRetained(s.record, input.retained(input.installed[s.record]))
+    of suTurn:
+      inc turns
+    of suDone:
+      work = run.work
+      result = described(s.outcome, run.counters)
+      break
+  releaseTurns = 1
+  while not run.release():
+    inc releaseTurns
+  result.add("inspected " & u.log.join(" "))
+  result.add("checked " & u.checked.join(" "))
+
+suite "pkg.resolver: the resumable run (G455)":
+  const Budgets = [1'i64, 2, 3, 17, 1_000, NoTurnBudget]
+
+  test "[IMPL-DECISION G455] seeded catalogs, under turn budgets of 1, 2, 3, 17 and 1,000 work units and none: the oracle's results, and one work total":
+    # The same retrievals in the same order as the oracle's synchronous run, whatever the
+    # budget; the work total and the turns are the same each time for one budget.
+    var rng = initRand(0x5_3C_2)
+    var seen: set[Feature]
+    var sliced, releasedInTurns = 0
+    for round in 0 ..< 2_000:
+      let g = rng.generated(seen)
+      checkpoint "round " & $round
+      let want = g.u.resolveBy(g.root, g.limits, oracle = true)
+      var total = -1'i64
+      var most = 0'i64
+      for budget in Budgets:
+        checkpoint "budget " & $budget
+        var work, turns, releaseTurns: int64
+        check g.u.runBy(g.root, g.limits, budget, work, turns, releaseTurns) == want
+        if total < 0:
+          total = work
+          most = turns
+        check work == total
+        check turns <= most
+        if budget == NoTurnBudget:
+          check turns == 0
+          check releaseTurns == 1
+        if budget == 1:
+          if work > 0:
+            check turns > 0
+            inc sliced
+          if releaseTurns > 1:
+            inc releasedInTurns
+        if budget == 17:
+          var work2, turns2, releaseTurns2: int64
+          check g.u.runBy(g.root, g.limits, budget, work2, turns2, releaseTurns2) == want
+          check work2 == work
+          check turns2 == turns
+          check releaseTurns2 == releaseTurns
+    check sliced > 1_000
+    check releasedInTurns > 1_000
+
+  test "[IMPL-DECISION G455] a run is resumed only until its outcome; what it holds is released after it, or instead of it":
+    let u = Universe()
+    u.add("a", "1.0.0", ["b ^1.0.0"])
+    u.add("b", "1.0.0")
+    let input = ResolverInput(
+      catalog: u.catalog,
+      limits: MaxResolverLimits,
+      trust: u.trust,
+      inspect: u.inspector,
+      retained: u.retained,
+    )
+    let root = RootReference(package: Opt.some("a"))
+    # Given up after its first need: no later answer reaches it.
+    let given = startRun(input, root, 1)
+    var first = given.resume()
+    while first.kind == suTurn: # the setup's turns
+      first = given.resume()
+    check first.kind == suNeedSource
+    var releases = 1
+    while not given.release():
+      inc releases
+    check releases > 1
+    given.supply(first.source, input.inspect(first.source, input.trust))
+    check given.supplied == 0
+    # Driven to its outcome: the same as the synchronous run's.
+    let run = startRun(input, root, 1)
+    var outcome: Result[Resolution, PackageError]
+    while true:
+      var s = run.resume()
+      case s.kind
+      of suNeedSource:
+        run.supply(s.source, input.inspect(s.source, input.trust))
+      of suNeedRetained:
+        run.supplyRetained(s.record, input.retained(input.installed[s.record]))
+      of suTurn:
+        discard
+      of suDone:
+        outcome = s.outcome
+        break
+    check outcome.get.packages.mapIt($it.identity) == @["a@1.0.0", "b@1.0.0"]
+    check resolve(input, root).get.packages.mapIt($it.identity) ==
+      @["a@1.0.0", "b@1.0.0"]
+    while not run.release():
+      discard
+
+# The operation bound (Tier 5 step 5-3c; DECISIONS G477) ---------------------------------
+
+var lastNumbered: tuple[records, contracts: int]
+  ## [G455] (5-3c-3) What `boundedBy`'s last run numbered.
+
+proc boundedBy(
+    u: Universe,
+    root: RootReference,
+    lim: ResolverLimits,
+    bound: Opt[int],
+    budget = NoTurnBudget,
+    counters: var ResolverCounters,
+): seq[string] =
+  ## [G477] One resolution as a run under the operation bound `bound`: what `resolveBy`
+  ## reports, and the run's counters.
+  u.log.setLen(0)
+  u.checked.setLen(0)
+  let input = ResolverInput(
+    installed: u.installed,
+    catalog: u.catalog,
+    limits: lim,
+    trust: u.trust,
+    inspect: u.inspector,
+    retained: u.retained,
+    operationEntries: bound,
+  )
+  let run = startRun(input, root, budget)
+  while true:
+    var s = run.resume()
+    case s.kind
+    of suNeedSource:
+      run.supply(s.source, input.inspect(s.source, input.trust))
+    of suNeedRetained:
+      run.supplyRetained(s.record, input.retained(input.installed[s.record]))
+    of suTurn:
+      discard
+    of suDone:
+      counters = run.counters
+      result = described(s.outcome, run.counters)
+      break
+  lastNumbered = run.numbered
+  while not run.release():
+    discard
+  result.add("inspected " & u.log.join(" "))
+  result.add("checked " & u.checked.join(" "))
+
+func isPrefixOf(a, b: seq[string]): bool =
+  a.len <= b.len and a == b[0 ..< a.len]
+
+suite "pkg.resolver: contracts and pins, numbered once (G455, 5-3c-3)":
+  test "[TXT-0485] [IMPL-DECISION G455] two recorded edges pinning one identity to two commitments allow none of its records, as the oracle's list of pins does":
+    let u = Universe()
+    u.install("C", "1.0.0")
+    u.install("B", "1.0.0", ["C ^1.0.0"], edges = ["C@1.0.0"])
+    u.install("D", "1.0.0", ["C ^1.0.0"], edges = ["C@1.0.0/other"])
+    u.add("C", "1.0.0", seed = "other")
+    u.add("R", "1.0.0", ["B ^1.0.0", "D ^1.0.0"])
+    check u.resolveName("R").code == "dependency-unavailable"
+    let root = RootReference(package: Opt.some("R"))
+    let want = u.resolveBy(root, limits(), oracle = true)
+    check u.resolveBy(root, limits(), oracle = false) == want
+    # One pin alone allows its commitment: the installed one.
+    let v = Universe()
+    v.install("C", "1.0.0")
+    v.install("B", "1.0.0", ["C ^1.0.0"], edges = ["C@1.0.0"])
+    v.install("D", "1.0.0", ["C ^1.0.0"], edges = ["C@1.0.0"])
+    v.add("C", "1.0.0", seed = "other")
+    v.add("R", "1.0.0", ["B ^1.0.0", "D ^1.0.0"])
+    check v.resolveName("R").picked == @["B@1.0.0", "C@1.0.0", "D@1.0.0", "R@1.0.0"]
+    check v.resolveBy(root, limits(), oracle = false) ==
+      v.resolveBy(root, limits(), oracle = true)
+
+  test "[IMPL-DECISION G455] a contract listed by several records and provided by another has one number; a requirement is met by a provider's numbers, not by an encoding":
+    let u = Universe()
+    u.add("A", "1.0.0", ["P ^1.0.0 +x +y"])
+    u.add("B", "1.0.0", ["P ^1.0.0 +y"])
+    u.add("P", "1.0.0", provides = ["y", "x", "z"])
+    u.add("R", "1.0.0", ["A ^1.0.0", "B ^1.0.0"])
+    let root = RootReference(package: Opt.some("R"))
+    var c: ResolverCounters
+    let got = u.boundedBy(root, limits(), Opt.none(int), counters = c)
+    check got[0] == "root R@1.0.0 unchanged=false"
+    check lastNumbered == (4, 3) # R, A, B and P; x, y and z
+    check got == u.boundedBy(root, limits(), Opt.none(int), 1, c)
+    check u.resolveBy(root, limits(), oracle = false) ==
+      u.resolveBy(root, limits(), oracle = true)
+
+  test "[IMPL-DECISION G455] [IMPL-DECISION G482] an inspection shared with a cache, as the verification cache's copies are (G403): a run takes the encodings of its own copy only, so a second operation over the same inspections gives the first's answer and the kept inspections stay whole":
+    # Each source is answered with a copy of the one inspection kept for it, as
+    # `VerificationCache.lookup` answers.
+    let u = Universe()
+    u.add("A", "1.0.0", ["P ^1.0.0 +x +y"])
+    u.add("B", "1.0.0", ["P ^1.0.0 +y"])
+    u.add("P", "1.0.0", provides = ["y", "x", "z"])
+    u.add("R", "1.0.0", ["A ^1.0.0", "B ^1.0.0"])
+    let kept = new Table[seq[byte], Inspection]
+    for k, v in u.outcomes:
+      kept[][k] = held(v)
+    let inspect: Inspector = proc(
+        s: PackageSource, trust: TrustInput
+    ): Inspection {.gcsafe, raises: [].} =
+      kept[].getOrDefault(
+        s.encoded, Inspection(kind: ikUnavailable, reason: "test: no such source")
+      )
+    let root = RootReference(package: Opt.some("R"))
+    proc once(): seq[string] =
+      var c: ResolverCounters
+      let input = ResolverInput(
+        installed: u.installed,
+        catalog: u.catalog,
+        limits: limits(),
+        trust: u.trust,
+        inspect: inspect,
+        retained: u.retained,
+      )
+      described(resolve(input, root, c), c)
+
+    proc whole(): bool =
+      result = true
+      for k, v in u.outcomes:
+        if not kept[].getOrDefault(k).matches(v):
+          return false
+
+    let first = once()
+    check first[0].startsWith("root R@1.0.0")
+    check kept[].getOrDefault(source("P", "1.0.0").encoded).contractCount == 3
+    check whole()
+    check once() == first
+    check whole()
+    check u.resolveBy(root, limits(), oracle = false) ==
+      u.resolveBy(root, limits(), oracle = true)
+
+suite "pkg.resolver: an inspection's encodings (G482)":
+  test "[IMPL-DECISION G482] the builder keeps each list as given, in order: each entry's contracts, then the provided ones, each a range of one buffer; only `inspection(v, modules)` deduplicates, as `provided` does":
+    let x = eligibleInspection(
+      ident("a@1.0.0"),
+      commitOf("a@1.0.0"),
+      @[dep("bb ^1.0.0 +x +y +x"), dep("c =2.0.0"), dep("d ^1.0.0 +z")],
+      @[contract("p"), contract("q"), contract("p")],
+    )
+    check x.dependencies.mapIt(it.package) == @["bb", "c", "d"]
+    check x.dependencies.mapIt(it.listedCount) == @[3, 0, 1]
+    check x.contractCount == 7
+    check x.providedCount == 3 # the repeat is kept
+    var at = 0
+    var got: seq[(int, seq[byte])]
+    var k = 0
+    for (entry, r) in x.contractRanges:
+      check r.a == at
+      check x.contractAt(k) == r
+      at = r.b + 1
+      inc k
+      got.add((entry, @(x.contractData.toOpenArrayByte(r.a, r.b))))
+    check at == x.contractData.len
+    check got ==
+      @[
+        (0, encodeCbor(contract("x"))),
+        (0, encodeCbor(contract("y"))),
+        (0, encodeCbor(contract("x"))),
+        (2, encodeCbor(contract("z"))),
+        (-1, encodeCbor(contract("p"))),
+        (-1, encodeCbor(contract("q"))),
+        (-1, encodeCbor(contract("p"))),
+      ]
+    # A record's: its selected declarations' contracts once each, in declaration order.
+    let v = verified(appManifest())
+    let modules = providing(["y", "x", "y"]) & providing(["x", "z"])
+    let i = inspection(v, modules)
+    check i.providedCount == 3
+    check valueinspection.encodings(i)[1] == provided(modules).mapIt(encodeCbor(it))
+    check i.matches(valueInspection(v, modules))
+    # None: no buffer, no range.
+    let none =
+      eligibleInspection(ident("e@1.0.0"), commitOf("e@1.0.0"), @[dep("f ^1.0.0")], [])
+    check none.contractCount == 0
+    check none.providedCount == 0
+    check none.contractData.len == 0
+    check none.inputCount == 2
+    for _ in none.contractRanges:
+      fail()
+
+  test "[IMPL-DECISION G482] the builder's guard: an inspection's encodings fit `int32` offsets (a test hook lowers the bound)":
+    when defined(lcnTestHooks):
+      let size = encodedSize(contract("x"))
+      inspectionBytesForTests = 2 * size
+      check eligibleInspection(
+        ident("a@1.0.0"), commitOf("a"), [], @[contract("x"), contract("y")]
+      ).contractCount == 2
+      expect AssertionDefect:
+        discard eligibleInspection(
+          ident("a@1.0.0"),
+          commitOf("a"),
+          @[dep("b ^1.0.0 +z")],
+          @[contract("x"), contract("y")],
+        )
+      inspectionBytesForTests = 0
+    else:
+      skip()
+
+  test "[IMPL-DECISION G482] a contract's range hashes as the same bytes in a `seq` of their own: every probe, and the work, is what it was":
+    let x = eligibleInspection(
+      ident("a@1.0.0"),
+      commitOf("a"),
+      @[dep("b ^1.0.0 +x +y"), dep("c ^1.0.0 +z")],
+      @[contract("p")],
+    )
+    for (_, r) in x.contractRanges:
+      let own = @(x.contractData.toOpenArrayByte(r.a, r.b))
+      check hash(x.contractData.toOpenArrayByte(r.a, r.b)) == hash(own)
+
+  test "[IMPL-DECISION G482] a catalog record's encodings leave its inspection when its walk starts (Fable's condition 1), and a run given up during the walk frees them":
+    when defined(lcnTestHooks):
+      var names: seq[string]
+      for i in 0 ..< 3000:
+        names.add("c" & $i)
+      let u = Universe()
+      u.add("R", "1.0.0", ["P ^1.0.0 +" & names.join(" +")])
+      u.add("P", "1.0.0", provides = names)
+      let input = ResolverInput(
+        catalog: u.catalog,
+        limits: limits(),
+        trust: u.trust,
+        inspect: u.inspector,
+        retained: u.retained,
+      )
+      let r = source("R", "1.0.0")
+      let run = startRun(input, RootReference(package: Opt.some("R")), 64)
+      var supplied, during = false
+      while not during:
+        let s = run.resume()
+        case s.kind
+        of suNeedSource:
+          run.supply(s.source, input.inspect(s.source, input.trust))
+          if s.source == r:
+            check run.heldContractsForTests(r) == 3000 # supplied, not walked yet
+            supplied = true
+        of suNeedRetained:
+          run.supplyRetained(s.record, Result[void, string].ok())
+        of suTurn:
+          # Within R's walk: its numbers are not done, and its inspection holds none.
+          if supplied and run.numbered.records == 0 and run.numbered.contracts > 0:
+            check run.heldContractsForTests(r) == 0
+            during = true
+        of suDone:
+          break
+      check during
+      when not (defined(asan) or defined(tsan) or defined(msan) or defined(useMalloc)):
+        GC_fullCollect()
+        let before = getOccupiedMem()
+        discard run.release() # the steps go, and with them the walk's encodings
+        GC_fullCollect()
+        check before - getOccupiedMem() >= 3000 * encodedSize(contract("c0"))
+      while not run.release():
+        discard
+      check run.supplied == 0
+    else:
+      skip()
+
+suite "pkg.resolver: the operation bound (G477)":
+  test "[IMPL-DECISION G477] one walk gives a record's input units: the record, each dependency entry and the contracts it lists, each provided contract":
+    let x = eligibleInspection(
+      ident("a@1.0.0"),
+      commitOf("a@1.0.0"),
+      @[dep("bb ^1.0.0 +x +y"), dep("c =2.0.0")],
+      @[contract("p")],
+    )
+    var walked: seq[InputUnit]
+    for u in x.inputUnits:
+      walked.add(u)
+    let expected: seq[InputUnit] = @[
+      (iuRecord, 6),
+      (iuDependency, 7),
+      (iuDependencyContract, encodedSize(contract("x"))),
+      (iuDependencyContract, encodedSize(contract("y"))),
+      (iuDependency, 6),
+      (iuProvided, encodedSize(contract("p"))),
+    ]
+    check walked == expected
+    check x.inputCount == 6
+    check Inspection(kind: ikUnavailable, reason: "gone").inputCount == 1
+    let u = Universe()
+    u.install("c", "2.0.0", deps = ["d ^1.0.0 +x"], provides = ["y", "z"])
+    walked.setLen(0)
+    for w in u.installed[0].inputUnits:
+      walked.add(w)
+    check walked.mapIt(it.kind) ==
+      @[iuRecord, iuDependency, iuDependencyContract, iuProvided, iuProvided]
+    check u.installed[0].inputCount == 5
+
+  test "[IMPL-DECISION G477] the inputs read: each record once, with its dependency entries, the contracts they list and its provided contracts; an installed one counted before its retained bytes are asked for; a count at the bound goes on, one over it stops":
+    let u = Universe()
+    u.add("a", "1.0.0", ["b ^1.0.0", "c ^1.0.0 +y"], provides = ["x"]) # 1 + 2 + 1 + 1
+    u.add("b", "1.1.0", outcome = ikIneligible) # 1
+    u.add("b", "1.0.0") # 1
+    u.install("c", "1.0.0", provides = ["y", "z"]) # 1 + 0 + 2
+    let root = RootReference(package: Opt.some("a"))
+    let lim = limits()
+    var c: ResolverCounters
+    let want = u.boundedBy(root, lim, Opt.none(int), counters = c)
+    check want[0] == "root a@1.0.0 unchanged=false"
+    check c.entries == 10
+    check c.bound == ""
+    check want[^2] == "inspected a@1.0.0#0 b@1.1.0#0 b@1.0.0#0"
+    check want[^1] == "checked c@1.0.0"
+    # [G455] (5-3c-3) The records read and used have their contracts numbered, each once:
+    # a@1.0.0, b@1.0.0 and the installed c, not the ineligible b@1.1.0; y, which a lists and
+    # c provides, has one number, with x and z.
+    check lastNumbered == (3, 3)
+    # The same count whatever the budget: an evaluation that waits for the retained bytes
+    # is made again, and the record is counted once.
+    for budget in [1'i64, 3, NoTurnBudget]:
+      checkpoint "budget " & $budget
+      check u.boundedBy(root, lim, Opt.none(int), budget, c) == want
+      check c.entries == 10
+      check lastNumbered == (3, 3)
+      # At the bound: the count equals it, and nothing stops.
+      check u.boundedBy(root, lim, Opt.some(10), budget, c) == want
+      check c.bound == ""
+      # Each stop is at the record whose inputs take the count over the bound, which is
+      # read and no more: one over the bound at 9, further over below.
+      # [G455] (5-3c-3) The record that takes the count over is not numbered.
+      for (bound, inspected, checked, numbered) in [
+        (9, "a@1.0.0#0 b@1.1.0#0 b@1.0.0#0", "", (2, 2)),
+        (6, "a@1.0.0#0 b@1.1.0#0 b@1.0.0#0", "", (1, 2)),
+        (5, "a@1.0.0#0 b@1.1.0#0", "", (1, 2)),
+        (4, "a@1.0.0#0", "", (0, 0)),
+        (1, "a@1.0.0#0", "", (0, 0)),
+      ]:
+        checkpoint "bound " & $bound
+        let got = u.boundedBy(root, lim, Opt.some(bound), budget, c)
+        check got[0] ==
+          "error package-unavailable: the operation reads more package records and entries than this deployment allows"
+        check $bound notin got[0]
+        check got[^2] == "inspected " & inspected
+        check got[^1] == "checked " & checked
+        check c.bound == "operation_entries"
+        check c.limit == ""
+        check c.entries > bound
+        check lastNumbered == numbered
+
+  test "[IMPL-DECISION G477] a source root is counted once, when its inspection is supplied":
+    let u = Universe()
+    u.add("a", "1.0.0", ["b ^1.0.0"]) # 1 + 1
+    u.add("b", "1.0.0") # 1
+    let root = RootReference(source: Opt.some(source("a", "1.0.0")))
+    var c: ResolverCounters
+    let want = u.boundedBy(root, limits(), Opt.none(int), counters = c)
+    check want[0] == "root a@1.0.0 unchanged=false"
+    check c.entries == 3
+    check u.boundedBy(root, limits(), Opt.some(3), counters = c) == want
+    check u.boundedBy(root, limits(), Opt.some(2), counters = c)[0].startsWith(
+      "error package-unavailable"
+    )
+    check c.bound == "operation_entries"
+
+  test "[IMPL-DECISION G477] seeded catalogs: each record's count is its walk's; at the inputs a run reads, the bound changes nothing; below them, the run ends package-unavailable after a prefix of the same retrievals, its counters no further than the unbounded run's":
+    var rng = initRand(0x5_3C_2_B0)
+    var seen: set[Feature]
+    var stopped = 0
+    for round in 0 ..< 1_000:
+      let g = rng.generated(seen)
+      checkpoint "round " & $round
+      # The count by lengths is the walk's, and [G482] the walk over the encodings is the walk
+      # over the values, unit by unit.
+      for v in g.u.outcomes.values:
+        let x = held(v)
+        var units: seq[InputUnit]
+        for w in x.inputUnits:
+          units.add(w)
+        check units == valueUnits(v)
+        check x.inputCount == units.len
+      for p in g.u.installed:
+        var n = 0
+        for _ in p.inputUnits:
+          inc n
+        check p.inputCount == n
+      var k: ResolverCounters
+      let want = g.u.boundedBy(g.root, g.limits, Opt.none(int), counters = k)
+      check want == g.u.resolveBy(g.root, g.limits, oracle = true)
+      check k.bound == ""
+      if k.entries == 0:
+        continue
+      var c: ResolverCounters
+      for budget in [1'i64, NoTurnBudget]:
+        checkpoint "budget " & $budget
+        check g.u.boundedBy(g.root, g.limits, Opt.some(k.entries), budget, c) == want
+        check c == k
+      if k.entries == 1:
+        continue
+      for bound in [k.entries - 1, rng.rand(1 .. k.entries - 1)]:
+        checkpoint "bound " & $bound
+        let got = g.u.boundedBy(g.root, g.limits, Opt.some(bound), counters = c)
+        check got[0].startsWith("error package-unavailable: the operation reads more")
+        check c.bound == "operation_entries"
+        check c.limit == ""
+        check c.entries > bound
+        check c.entries <= k.entries
+        check c.names <= k.names
+        check c.depth <= k.depth
+        check c.attempts <= k.attempts
+        check got[^2].splitWhitespace.isPrefixOf(want[^2].splitWhitespace)
+        check got[^1].splitWhitespace.isPrefixOf(want[^1].splitWhitespace)
+        inc stopped
+        # A budget of one unit stops at the same place.
+        check g.u.boundedBy(g.root, g.limits, Opt.some(bound), 1, c) == got
+    check stopped > 500

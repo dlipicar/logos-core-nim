@@ -5,11 +5,14 @@
 ## the typed harness drives through the shims in `sdk/tests/kit/calls_shims.c`, so
 ## every variant of the provider tests (`sdk/tests/test_kit.nim`) runs again
 ## through a route. Routes that break their side of the contract show what
-## the helpers reject.
+## the helpers reject. A route set materializes and releases handles over a
+## Runtime Control binding stand-in.
 
 import std/[strutils, typedthreads]
+from std/os import sleep
 import unittest2
 from logos_sdk/codegen/callrt import arenaBlocks, failArenaAllocation
+from logos_sdk/kit/routes import newRouteSet, materialize, close
 import logos_sdk/testing/testroute
 import ./support/typedharness
 import
@@ -435,6 +438,148 @@ suite "ifc.calls: what a helper rejects from its route (INTERFACE §2.7.2, §5.2
       check invoke(addr h, ShapesPingRequest()).failureOf.code == code
     check base.counts == (0, 0, 0)
     base.dispose()
+
+# Wrapped and materialized handles (DECISIONS G339) -------------------------------
+#
+# A test route under the vtable a consumer wraps: the route's own `call` and
+# `release_response`, end registrations that succeed, and a `release` that notes
+# what was still going on through the handle.
+
+var
+  heldRoute: ptr TestRoute ## the route whose state `wrappedVtable`'s handles carry
+  wrappedVtable: LogosRouteVtable
+  routeReleases: Atomic[int]
+  callsAtRelease, releasesAtRelease: Atomic[int]
+  outstandingAtRelease: Atomic[bool] ## a buffer the route handed over was unreleased
+  operationHeld: Atomic[bool] ## `holdOperation` was admitted
+  operationEnded: Atomic[bool] ## `holdOperation`'s call returned
+  endedAtRelease: Atomic[bool]
+
+proc noteRelease(route: ptr LogosRouteHandle) {.cdecl, gcsafe, raises: [].} =
+  routeReleases += 1
+  let r = heldRoute
+  let (c, n, _) = r.counts
+  callsAtRelease.store(c)
+  releasesAtRelease.store(n)
+  outstandingAtRelease.store(r.outstanding)
+  endedAtRelease.store(operationEnded.load)
+
+proc observeOk(
+    route: ptr LogosRouteHandle, handler: LogosRouteEndHandler, userData: pointer
+): LogosResult {.cdecl, gcsafe, raises: [].} =
+  LogosResult()
+
+proc observeSubscriptionsOk(
+    route: ptr LogosRouteHandle, handler: LogosSubscriptionEndHandler, userData: pointer
+): LogosResult {.cdecl, gcsafe, raises: [].} =
+  LogosResult()
+
+proc wrappable(r: ptr TestRoute): LogosRouteHandle =
+  ## `r`'s handle under `wrappedVtable`, its release noted.
+  heldRoute = r
+  wrappedVtable = r.handle.vtable[]
+  wrappedVtable.release = noteRelease
+  wrappedVtable.observeEnd = observeOk
+  wrappedVtable.observeSubscriptionEnd = observeSubscriptionsOk
+  routeReleases.store(0)
+  operationHeld.store(false)
+  operationEnded.store(false)
+  LogosRouteHandle(vtable: addr wrappedVtable, state: r.handle.state)
+
+proc holdOperation(h: RouteHandle) {.thread.} =
+  ## What a generated helper does through `h` (`beginOperation`, the call,
+  ## `endOperation`), paused once admitted, while the test releases `h`.
+  if h.beginOperation().isErr:
+    return
+  operationHeld.store(true)
+  sleep(50)
+  discard invoke(h.raw, MeterReadRequest(channel: 5))
+  operationEnded.store(true)
+  h.endOperation()
+
+var
+  materializeCalls, nullOnEntry: Atomic[int]
+  materializeCode: Atomic[int32] ## what `materialize_route` returns
+  handOut: LogosRouteHandle ## what a successful `materialize_route` writes
+
+proc materializeOp(
+    binding: ptr LogosRuntimeControlBinding,
+    routeId: cstring,
+    expectedContractRoot: ptr ContractRoot,
+    schemaCbor: ptr UncheckedArray[uint8],
+    schemaCborLen: csize_t,
+    outRoute: ptr LogosRouteHandle,
+): LogosResult {.cdecl, gcsafe, raises: [].} =
+  materializeCalls += 1
+  if outRoute.vtable == nil and outRoute.state == nil:
+    nullOnEntry += 1
+  let code = materializeCode.load
+  if code != 0:
+    return LogosResult(code: CErrorCode(code))
+  {.cast(gcsafe).}:
+    outRoute[] = handOut
+  LogosResult()
+
+var
+  materializeVtable = block:
+    var v = rcVtable # every other operation one the set must not call
+    v.materializeRoute = materializeOp
+    v
+  materializeBinding =
+    LogosRuntimeControlBinding(vtable: addr materializeVtable, state: addr rcState)
+
+suite "ifc.calls: wrapped and materialized route handles (INTERFACE §5.2; DECISIONS G339) [IMPL]":
+  test "[IFC-0513] a route set sets the output handle to null before each materialize_route":
+    let r = newRoute(rmGive, response = diag("{}"))
+    handOut = wrappable(r)
+    let s = newRouteSet(addr materializeBinding).get
+    var root: ContractRoot
+    root[0] = 1
+    materializeCode.store(int32(ord(ecNotAuthorised)))
+    let refused = s.materialize("route-1", root, diag("{}"))
+    check refused.isErr and refused.error.code == ecNotAuthorised
+    materializeCode.store(0)
+    check s.materialize("route-1", root, diag("{}")).isOk
+    check s.materialize("route-2", root, diag("{}")).isOk
+    check materializeCalls.load == 3
+    check nullOnEntry.load == 3
+    check s.close().isOk
+    check routeReleases.load == 2 # the two handles it held
+    check r.counts == (0, 0, 0)
+    r.dispose()
+
+  test "[IFC-0517] a wrapped handle is released after the operation in progress and after every buffer the route handed over, failures included":
+    let ctx = newInstance(meterModule)
+    let r = direct(meterModule, ctx)
+    let h = wrapRoute(wrappable(r)).get
+    check invoke(h, MeterReadRequest(channel: 4)).isOk
+    check invoke(h, MeterReadRequest(channel: 13)).failureOf.code == ecModule
+      # the provider's failure
+    check invoke(h, MeterReadRequest(channel: 14)).failureOf.code == ecModule
+      # its invalid response
+    check not r.outstanding
+    var t: Thread[RouteHandle]
+    createThread(t, holdOperation, h)
+    while not operationHeld.load:
+      sleep(1)
+    check h.release().isOk
+    joinThread(t)
+    check routeReleases.load == 1
+    check endedAtRelease.load # the operation admitted first had returned
+    check not outstandingAtRelease.load
+    check callsAtRelease.load == 4 and r.counts[0] == 4 # none after the release
+    check releasesAtRelease.load == r.counts[1] and r.counts[2] == 0
+    r.dispose()
+    destroy(meterModule, ctx)
+    # A success whose bytes are not a response: its buffer too was released
+    # before the handle.
+    let bad = newRoute(rmGive, response = diag("{\"x\": 1}"))
+    let b = wrapRoute(wrappable(bad)).get
+    check invoke(b, MeterReadRequest(channel: 1)).failureOf.code == ecModule
+    check b.release().isOk
+    check routeReleases.load == 1 and not outstandingAtRelease.load
+    check releasesAtRelease.load == 1 and bad.counts == (1, 1, 0)
+    bad.dispose()
 
 # Threads --------------------------------------------------------------------------
 

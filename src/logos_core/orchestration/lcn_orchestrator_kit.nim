@@ -67,7 +67,7 @@ template exportLcnOrchestrator*(T: typedesc) =
       destroyModule(instance)
     GC_unref(instance)
 
-  proc lcnOrchestratorKitName(): cstring {.exportc: "logos_lcn_orchestrator_MODULE_name", dynlib, cdecl, gcsafe, raises: [].} =
+  proc lcnOrchestratorKitName(): cstring {.exportc: "logos_lcn_orchestrator_MODULE_name", dynlib, cdecl, gcsafe, raises: [], lcnNoNimHeap: "a static string".} =
     system.cstring(moduleName)
 
   proc lcnOrchestratorKitInit(input: ptr LogosModuleInitInput, outContext: ptr ptr LogosModuleContext): LogosResult {.exportc: "logos_lcn_orchestrator_MODULE_init", dynlib, cdecl, gcsafe, raises: [].} =

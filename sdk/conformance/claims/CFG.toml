@@ -1,0 +1,24 @@
+# Claim status of each section of spec-module-configuration.md, for the SDK (`sdk/src/logos_sdk/`).
+# The spec's ledger and its main claims file are core's (conformance/). Each unit is claimed by the
+# package that implements its rule (restructure-in-place row 35, step R9): this file claims the units
+# sdk implements, and gives every other unit core's status, with `claimed` there as
+# `out-of-scope:core` here. `spectrace owners` checks that the two files agree and that each claimed
+# unit's evidence is in its owner's tree; tools/restructure/claim_split.tsv records the split.
+# The status vocabulary and the longest-match rule are as in the other file.
+
+default = "out-of-scope:core"
+
+[sections]
+"References" = "informative"
+"Copyright" = "informative"
+
+
+[units]
+# The units sdk implements (R9).
+"CFG-0068" = "claimed"
+"CFG-0069" = "claimed"
+"CFG-0070" = "claimed"
+"CFG-0071" = "claimed"
+"CFG-0096" = "claimed"
+"CFG-0097" = "claimed"
+"CFG-0098" = "claimed"
