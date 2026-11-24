@@ -73,12 +73,18 @@ testHooksMarker("hostsup")
 
 when defined(posix):
   {.compile: "hostspawn.c".}
-  proc lcnHostSpawn(
+  proc lcnHostSpawn*(
     path: cstring,
     argv, envp: cstringArray,
     carrier, listener, lock, system: cint,
     pid: ptr cint,
   ): cint {.importc: "lcn_host_spawn", cdecl.}
+    ## [DECISIONS I147] The one declaration of `hostspawn.c`'s spawn. The
+    ## remote listener's (`remotesup`), the key holder's (`daemon/remoteside`)
+    ## and the tests' spawns all use it. Each Nim `importc` emits its own C
+    ## prototype, so a second declaration that falls behind a change of the
+    ## parameters (G492's `system`) still compiles. The call then passes the
+    ## old list, the pid comes back unset, and the caller signals pid -1.
 
 const
   TickMs = 50 ## [IMPL; R2] the supervision tick

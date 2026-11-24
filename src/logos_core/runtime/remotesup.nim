@@ -58,13 +58,8 @@ from ./hostsup import nil # compiles hostspawn.c, whose spawn this module calls
 when defined(posix):
   import std/posix
   from std/os import `/`, createDir, setFilePermissions, FilePermission, getEnv
-
-  proc lcnSpawn(
-    path: cstring,
-    argv, envp: cstringArray,
-    carrier, listener, lock: cint,
-    pid: ptr cint,
-  ): cint {.importc: "lcn_host_spawn", cdecl.}
+  # [DECISIONS I147] hostsup's declaration, the only one.
+  from ./hostsup import lcnHostSpawn
 
   proc flock(fd: cint, op: cint): cint {.importc, header: "<sys/file.h>".}
 
@@ -371,13 +366,14 @@ when defined(posix):
     for i, v in env:
       envp[i] = cstring(v)
     var pid: cint = -1
-    let r = lcnSpawn(
+    let r = lcnHostSpawn(
       cstring(s.program),
       cast[cstringArray](addr argv[0]),
       cast[cstringArray](addr envp[0]),
       pair[1],
       p.listenFd,
       lockFd,
+      -1, # no system endpoint: that is a Module Host's (G492)
       addr pid,
     )
     discard posix.close(pair[1])

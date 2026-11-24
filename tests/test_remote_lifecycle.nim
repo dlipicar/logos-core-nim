@@ -26,17 +26,12 @@ when defined(posix):
   import ../src/logos_core/runtime/host
   from std/unicode import validateUtf8
   from ../src/logos_core/runtime/remotesup import cutMessage, ReplyMessageMax
-  from ../src/logos_core/runtime/hostsup import nil # compiles hostspawn.c
+  # [DECISIONS I147] hostspawn.c's spawn through hostsup's declaration, the only one: a copy here
+  # fell behind G492's `system` parameter, the pid came back unset and the harness signalled pid -1.
+  from ../src/logos_core/runtime/hostsup import lcnHostSpawn
   import ./support/[daemonbuild, daemonproc, rchannel, shortdir, slowdown, tls_fixtures]
 
   var environ {.importc.}: cstringArray
-
-  proc lcnSpawn(
-    path: cstring,
-    argv, envp: cstringArray,
-    carrier, listener, lock: cint,
-    pid: ptr cint,
-  ): cint {.importc: "lcn_host_spawn", cdecl.}
 
   proc flock(fd: cint, op: cint): cint {.importc, header: "<sys/file.h>".}
 
@@ -89,6 +84,7 @@ when defined(posix):
 
   proc gone(pid: Pid, ms: int): bool =
     ## `pid` no longer exists within `ms`. A child of this process is reaped.
+    doAssert pid > 0, "no pid: never wait on or signal pid " & $pid # [I147]
     let until = epochTime() + float(ms) / 1000
     while true:
       var status: cint
@@ -303,7 +299,7 @@ when defined(posix):
       let d = c.start([("LCN_REMOTE_TEST_WEDGE_MS", "600000")])
       check c.ready(d)
       let pid = c.listenerPid
-      check pid > 0
+      require pid > 0
       sleep(500) # the wedge holds the loop from 200 ms after listening
       killChild(d)
       check pid.gone(EndMs)
@@ -313,7 +309,7 @@ when defined(posix):
       let d = c.start()
       check c.ready(d)
       let pid = c.listenerPid
-      check pid > 0
+      require pid > 0
       check kill(pid, SIGSTOP) == 0
       killChild(d)
       check pid.gone(EndMs)
@@ -327,7 +323,7 @@ when defined(posix):
       let d = c.start()
       check c.ready(d)
       let pid = c.listenerPid
-      check pid > 0
+      require pid > 0
       check stopChild(d, StopMs) == 0
       check kill(pid, 0) != 0 and errno == ESRCH
       check checkRemoteLocks(c.s.workDir).isOk
@@ -344,11 +340,15 @@ when defined(posix):
     defer:
       deallocCStringArray(argv)
     var pid: cint = -1
-    doAssert lcnSpawn(cstring(rExe), argv, environ, carrier, listener, lock, addr pid) ==
-      0
+    doAssert lcnHostSpawn(
+      cstring(rExe), argv, environ, carrier, listener, lock, -1, addr pid
+    ) == 0
+    # [I147] Never a wait or a signal on pid -1, which reaches every process the user owns.
+    doAssert pid > 0, "the spawn reported no pid"
     Pid(pid)
 
   proc exitOf(pid: Pid, ms: int): int =
+    doAssert pid > 0, "no pid: never wait on or signal pid " & $pid # [I147]
     let until = epochTime() + float(ms) / 1000
     while true:
       var status: cint

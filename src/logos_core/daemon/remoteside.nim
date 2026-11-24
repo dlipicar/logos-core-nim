@@ -35,13 +35,8 @@ when defined(posix):
   import ../transport/tls/p256
   import ./logging
 
-  proc lcnSpawn(
-    path: cstring,
-    argv, envp: cstringArray,
-    carrier, listener, lock: cint,
-    pid: ptr cint,
-  ): cint {.importc: "lcn_host_spawn", cdecl.}
-    ## `runtime/hostspawn.c`, compiled with the Runtime (`hostsup`)
+  # [DECISIONS I147] `runtime/hostspawn.c`'s spawn, through hostsup's declaration, the only one.
+  from ../runtime/hostsup import lcnHostSpawn
 
   proc flock(fd: cint, op: cint): cint {.importc, header: "<sys/file.h>".}
 
@@ -133,13 +128,14 @@ when defined(posix):
     var argv = [cstring("logos_keyholder"), cstring(session), cstring(parent), nil]
     var envp = [cstring(nil)]
     var pid: cint = -1
-    let r = lcnSpawn(
+    let r = lcnHostSpawn(
       cstring(program),
       cast[cstringArray](addr argv[0]),
       cast[cstringArray](addr envp[0]),
       pair[1],
       -1,
       -1,
+      -1, # no system endpoint (G492)
       addr pid,
     )
     discard posix.close(pair[1])
