@@ -1166,10 +1166,14 @@ fields); --provider names an export of that listener."""
       return err(fail(ExitUsage, "the trust file: " & error))
     # [IMPL] Whether logosd was built with test hooks is logosd's to say at
     # start; the shell checks everything else, the development switch included.
-    prepareDaemon(s, bytes, t, hooksBuild = true, exe = getAppFilename()).mapErr(
-      proc(e: string): Fail =
-        fail(ExitUsage, e)
+    # [G491] So is whether it has the companion Package Manager library.
+    prepareDaemon(
+      s, bytes, t, hooksBuild = true, exe = getAppFilename(), pmCompanion = true
     )
+      .mapErr(
+        proc(e: string): Fail =
+          fail(ExitUsage, e)
+      )
 
   proc configTemplate(): string =
     ## [E3] `init --print-template`: a daemon-config in diagnostic notation

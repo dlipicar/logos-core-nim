@@ -2548,13 +2548,16 @@ proc callLoader(
   )
   id
 
-func systemBinding(st: State, rec: ModuleRecord): bool =
+func systemBinding(st: State, id: string, rec: ModuleRecord): bool =
   ## [IMPL] A static registration marked as a system module's (the Capability
-  ## Authority's) has its call surface accepted as such.
+  ## Authority's) has its call surface accepted as such. [G490] So has the
+  ## hosted instance the host configuration's `package_manager` marks.
   if rec.strategy == stDirectStatic:
     for reg in st.cfg.statics:
       if reg.binding == rec.binding:
         return reg.system
+  if rec.strategy == stHostedDynamic and st.cfg.packageManager == Opt.some(id):
+    return true
   false
 
 func classify(e: LoaderError, phase: Opt[FailedPhase]): Failure =
@@ -4612,6 +4615,9 @@ proc realizeThroughLoader(st: State, a: Attempt) =
     a.services.adoptHost(h)
     h.forwardSubscriptionEnds()
     host = h
+    if st.cfg.packageManager == Opt.some(x.id):
+      # [G490] The marked Package Manager's host accepts its reserved name.
+      h.setSystem()
     # [plan §2.8; part 4b-3.3] Every host's own loop connects its consumer's
     # handles with the Runtime's Transport limits.
     h.setTransport(st.shared.tport.config).isOkOr:
@@ -11382,7 +11388,7 @@ proc realized(st: State, a: Attempt, reply: LoaderReply) =
     var contracts: ModuleBinding
     if rec.callSurface.isSome:
       contracts = acceptSurface(
-        rec.callSurface.get, x.record.module, st.systemBinding(x.record)
+        rec.callSurface.get, x.record.module, st.systemBinding(x.id, x.record)
       ).valueOr:
         invalid("the call surface of " & x.id & " is not acceptable: " & error)
     # [SPEC LOADER §5.3, l.479-480] A hosted provider's record names the

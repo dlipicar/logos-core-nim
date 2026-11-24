@@ -766,11 +766,32 @@ module is a test build (`pmtest_module`), so a packaged deployment has none.
   cost. Since 5-3c-1 and 5-3c-2 (G454, G455) the resolution's longest hold measured is under 11 ms at the preset
   and at the maxima ("The resumable run"), and a large closure costs time in all, a turn at a time.
 
+### What Tier 5 step 5-6a-1 changes
+
+The Package Manager as the module `logos_package_manager`, which logosd composes as the reserved instance
+`package_manager` (DECISIONS I140; G490, G491, G494, G495, G496, G500; the owner's Q2, Q7 (b), Q11;
+`docs/PACKAGE-MANAGER.md` §14, `docs/DAEMON.md` §3, §5, `docs/HOST-CONFIG.md`).
+
+- **Claimed:** PKG-0003 to PKG-0008 (the Package Manager is the module the responsibility names, hosted, never in
+  logosd's or the Runtime's process; PKG-0005 and PKG-0006 also by inspection, `pm-never-co-located`), PKG-0366,
+  PKG-0367, PKG-0369 to PKG-0377, PKG-0379, PKG-0519 and PKG-0521 (the contract, its request and response rules
+  among it), PKG-0513 and PKG-0514 (the library logosd ships, checked against the hash it is built with, and its
+  override), and the 6cac8335 copies PKG-0630, PKG-0631, PKG-0633, PKG-0637, PKG-0639 to PKG-0647 and PKG-0649. 36
+  units. PKG 403/403.
+- **Limits of the claim:**
+  - `get_runtime_handoff` has no caller that may use it until 5-6a-2's system-service binding, and the observation
+    methods none until 5-6b's readers: until then each is `MODULE_ERROR` with no message or detail (G495).
+  - **Windows** hosts no Package Manager until 5-9 (no `logos.local.unix-stream`, so the Loader refuses a hosted request; "What Tier 5 step 5-4 changes"), and **mobile** none:
+    the mark refuses a direct instance (G490).
+  - The large-reply figures with the module's pre-encoded responses (G497) are not yet measured: they wait for 5-3c-4.
+    "The operations" keeps 5-5's figures until then.
+
 ## Properties not claimed
 
 - A complete Logos module system (BCP §5.1; owner decision 10 (a), K18; DECISIONS G310, I97): there
-  is no packaged Package Manager (the hosted one is a test build until step 5-6a, and it only resolves),
-  so no package is installed, selected or trusted for running, and BCP's units that bind the whole are
+  is a packaged Package Manager since step 5-6a-1, which installs packages, but nothing selects an
+  installed package for execution (package-backed creation is 5-8), so no package is selected or trusted
+  for running, and BCP's units that bind the whole are
   claimed only where `logosd` meets them on its own. `docs/DEPLOYMENT.md` answers each
   missing facility "None" or "Not supported", with the tier that changes it where one is planned.
 - The Credential Store (BCP l.287-289; owner row 38, 2026-11-18; DECISIONS G159): optional to
@@ -1492,10 +1513,11 @@ files after the start (Fable's design A). A commit's new snapshot shares every u
   the refetch by digest, the retained check, install, remove, update and inspect, failures at each step, signer
   replacement and C6, the request checks, the admission failure, `nix`, messages and the handoff. After each
   mutation kind and each failure point, the live snapshot equals the one a restart builds from disk.
-  `test_pm_hosted` "[IMPL-DECISION G449]" (3 cases) runs them in a hosted instance with the fake provider: across a
-  restart; during a paced extraction (the `LCN_TEST_EXTRACT_PACE_MS` hook, "Test hooks"), with a second operation
-  and a route renewal answered; and through two stops. `test_logosd_pm` keeps an installed record across logosd's
-  restart.
+  Since 5-6a-1 `test_pm_module` runs them through the module `logos_package_manager` in a hosted instance with the
+  fake provider: the four operations, a full queue, a consumer's cancel, during a paced extraction (the
+  `LCN_TEST_EXTRACT_PACE_MS` hook, "Test hooks") with a second operation and a route renewal answered, a stop with a
+  call in flight, and a deadline while the worker extracts. `test_pm_hosted` keeps the handoff through the test
+  module (G496), and `test_logosd_pm` keeps an installed record across logosd's restart.
 - **A stop** (G449, Fable's stop check `tier5-plans/fable-checks/step5-5-4-stop-drain.md`): the Runtime cancels the
   provider's admitted calls, the kit (with the asynchronous provider API) cancels the handler, the engine cancels the
   operation, the call ends, `_MODULE_destroy` follows, and the worker's stop flag ends its job within one piece.
@@ -1531,29 +1553,97 @@ files after the start (Fable's design A). A commit's new snapshot shares every u
   0.86-0.91 s end to end in a test build on the Mac, so about a minute for 1 GiB); a call cancelled after its last
   commit began ends cancelled while the commit goes on (INTERFACE l.2112); a worker that hangs in a write or a sync
   makes a stop end at the stop deadline.
-- **The exception: a large response's way out** (G447; planning's ruling of 2026-11-23; `tools/pmbench.nim
-  reply`; the Mac (an M1 Max), `-d:release`, CPU time, best of five, three runs each, at a load average of 60 to
-  80; and server.lan, a Ryzen 5 4500U, inside the bench's Nix build, at 2.6 to 3.8).
-  The worker encodes a response and the module thread carries the bytes (G447), but on their way out the bytes
-  still hold the module thread longer than a turn. A maximal `{installed}` (65,536 artifacts, a 16.0 MiB body,
-  the admission bound of PM l.824) holds it 98.6-99.1 ms under orc and 174.9-175.7 ms under refc in one turn
-  on the Mac, nine to sixteen times 5-3c's longest turn there (under 11 ms, "Resolver limits"), and
-  198.1-203.8 ms and 388.2-398.7 ms on server.lan; a 4 MiB one (one module's declaration of `implements`
-  commitments) 24.1-24.4 ms and 43.9-44.7 ms on the Mac, 50.9-51.3 ms and 95.1-95.5 ms on server.lan. Each
-  step, timed alone as the code runs it, in ms, the Mac / server.lan:
+- **The exception: a large response's way out**
+  - **Sources:** G447 and G497; planning's rulings of 2026-11-23 and 2026-11-24; the owner's choice of 2026-11-24,
+    "Merge, state the limit".
+  - **The cost follows the reply's nodes, not its bytes.** The check and the value root at both ends (TRANSPORT §4.1,
+    RUNTIME §4.1 l.838-840) validate and hash every map, field, leaf and choice as an object of its own.
+  - **A confined kit module's reply makes three passes over the whole value:**
+    1. the host's `checkResponse`, on the sender's module thread;
+    2. the transport's commitment again (`CalleeConn.respond`), on the sender's host I/O thread;
+    3. `acceptResponse`'s check, on the receiver's I/O thread.
+  - DEPLOYMENT §12, "A large reply's passes", states the limits that follow.
+  - **Measured** (`tools/pmbench.nim reply facade`; raw figures in `tier5-plans/evidence/step5-6a-1/`):
+    - the way out goes through the module `logos_package_manager` as 5-6a-1 built it;
+    - the record is checked and committed against PACKAGE MANAGER App A's `install_package`, its manifest
+      commitment carrying the pinned ids;
+    - CPU time, `-d:release`, three processes of five iterations each; every cell is best / median / max of the
+      15 samples, in ms;
+    - the Mac (an M1 Max) ran in a quiet slot, and server.lan (a Ryzen 5 4500U) inside the bench's Nix build at
+      load 1.0–3.3.
 
-  | Step | Thread | 16 MiB, orc | 16 MiB, refc | 4 MiB, orc | 4 MiB, refc |
+  | Host | 16 MiB: the module thread in all | 16 MiB: the I/O thread in all | 4 MiB: the module thread in all | 4 MiB: the I/O thread in all |
+  |---|---|---|---|---|
+  | the Mac, orc | 5,325 / 5,405 / 5,733 | 4,751 / 4,820 / 4,922 | 1,291 / 1,318 / 1,344 | 1,288 / 1,314 / 1,329 |
+  | the Mac, refc | 10,135 / 10,480 / 11,585 | 9,216 / 9,660 / 9,983 | 2,346 / 2,465 / 2,553 | 2,642 / 2,756 / 2,911 |
+  | server.lan, orc | 13,288 / 13,406 / 14,240 | 12,258 / 12,308 / 12,443 | 3,225 / 3,311 / 3,371 | 3,244 / 3,309 / 3,361 |
+  | server.lan, refc | 24,558 / 24,937 / 28,849 | 22,600 / 23,740 / 24,452 | 5,753 / 5,869 / 5,981 | 6,431 / 6,693 / 6,925 |
+
+  - **The shapes.** The 16 MiB record is 65,536 artifacts: 327,703 values and 262,166 keys, depth 5. The 4 MiB one
+    is one module's declaration: 110,412 values, depth 7.
+  - **Each step's median**, in ms. Columns: 16 MiB orc, the Mac / server.lan; 16 MiB refc, the Mac / server.lan;
+    4 MiB orc, the Mac / server.lan.
+
+    | Step | Thread | 16 MiB orc | 16 MiB refc | 4 MiB orc |
+    |---|---|---|---|---|
+    | the record's value and its encoding | worker | 72.5 / 183 | 144 / 408 | 19.1 / 48.5 |
+    | the facade's one copy (`answered`) | module | 1.8 / 6.1 | 4.8 / 22.6 | 0.5 / 1.4 |
+    | the route's `takeEncoded` | module | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 |
+    | the completion's block (`confinedrt.completeDeferred`) | module | 22.3 / 44.4 | 22.5 / 44.4 | 5.5 / 11.0 |
+    | the host's `checkResponse` | module | 5,380 / 13,349 | 10,394 / 24,732 | 1,312 / 3,297 |
+    | `respond`'s channel send | module | 0 / 0 | 56.3 / 128 | 0 / 0 |
+    | `decodeValue` | I/O | 58.7 / 122 | 544 / 1,417 | 17.0 / 34.2 |
+    | the transport's commitment (`CalleeConn.respond`) | I/O | 4,700 / 12,023 | 8,515 / 20,656 | 1,278 / 3,226 |
+    | the Response's encoding | I/O | 60.6 / 158 | 549 / 1,547 | 18.6 / 47.3 |
+
+  - **Per value** (the commitment's median over the values), 16 MiB / 4 MiB:
+
+    | Host | orc | refc |
+    |---|---|---|
+    | the Mac | 14.3 / 11.6 µs | 26.0 / 21.2 µs |
+    | server.lan | 36.7 / 29.2 µs | 63.0 / 50.3 µs |
+
+  - **Where the time goes** (the Mac, orc, 16 MiB; macOS `sample` every 1 ms over four iterations):
+    - `checkResponse` is `checkResult` (the decode and the result's schema) for 13% and `commitResponse` for 87%;
+    - `commitResponse` is its `validate` for 14%, `normalize` for 19%, and the layout for 62%. The layout is every
+      object's digest, and most of that is `hashinput.digestOf`.
+    - **By kind:**
+      - allocation, copy and free: 59–63%. A third of that is macOS's `_tlv_get_addr`, the thread-local lookup
+        Nim's allocator makes on every allocation and free;
+      - the CBOR encoding of each object's hash input: 22%;
+      - BLAKE3: 6.7%;
+      - the walk itself: about 6%.
+    - Each object's digest builds a fresh hash-input value with its payload copied, encodes it into a new buffer,
+      hashes it, then wipes and frees it.
+    - **Seen in passing:**
+      - `checkResponse` validates the schema twice: in `checkResult`, then in `commitResponse`'s `validate`.
+        Together that is about a quarter of it.
+      - The value root is computed three times on the way. The text requires the receiver's.
+  - **The one-string case.** These are 5-5-4's figures, kept (`tools/pmbench.nim reply`; the Mac at a load average
+    of 60 to 80; server.lan at 2.6 to 3.8):
+    - pmtest's `{response: bstr}` is one node however long, so its check and commitment are milliseconds;
+    - a maximal one holds the module thread 98.6-99.1 ms under orc and 174.9-175.7 ms under refc on the Mac, and
+      198.1-203.8 ms and 388.2-398.7 ms on server.lan;
+    - a 4 MiB one holds it 24.1-24.4 ms and 43.9-44.7 ms on the Mac, and 50.9-51.3 ms and 95.1-95.5 ms on
+      server.lan;
+    - on the same tree as the facade, the control (`pmbench reply`) gives them again. At 16 MiB, best / median /
+      max: 95.6 / 99.8 / 107.3 ms (orc) and 188.5 / 193.8 / 215.7 ms (refc) on the Mac; 200.2 / 208.0 / 241.5 ms
+      and 417.9 / 433.1 / 510.1 ms on server.lan.
+
+    Each step, timed alone as the code ran it, in ms, the Mac / server.lan:
+
+    | Step | Thread | 16 MiB, orc | 16 MiB, refc | 4 MiB, orc | 4 MiB, refc |
   |---|---|---|---|---|---|
-  | the record's value and its encoding (`wjStage`, `wjReply`) | worker | 76.6-77.2 / 185.0-187.2 | 125.7-129.0 / 343.1-344.2 | 19.7-19.8 / 48.1-48.5 | 32.5-33.4 / 87.0-87.6 |
-  | the kit's `encode`: pmtest's `{response: bstr}` encoded again | module | 19.3-19.6 / 35.6-36.9 | 24.5-26.2 / 56.3-57.0 | 4.8-4.9 / 9.0-9.3 | 5.1-5.2 / 7.8-7.9 |
-  | the completion's block, filled a byte at a time (the SDK's `confinedrt.completeDeferred`) | module | 21.7-21.8 / 37.3-42.3 | 21.7-22.0 / 44.3 | 5.4 / 12.8-12.9 | 5.4-5.5 / 11.0 |
-  | the host's `checkResponse`: the schema check and the response's commitment (`completeOp`) | module | 54.2-54.8 / 108.8-109.5 | 68.9-70.6 / 155.0-155.4 | 13.1-13.2 / 25.4-25.6 | 18.8-19.4 / 41.0-41.3 |
-  | `respond`'s channel send (refc copies the `IoCommand`) | module | 0 / 0 | 55.0-56.2 / 117.6-127.8 | 0 / 0 | 13.8-13.9 / 31.9-32.0 |
-  | the rest: the receive, pmtest's copy, the wipes, the host's copy, the block's release | module | 3.0-3.1 / 15.7-15.8 | 2.9-3.1 / 14.1-14.2 | 0.8 / 3.6 | 0.8 / 3.3 |
-  | **the module thread in all** | module | **98.6-99.1 / 198.1-203.8** | **174.9-175.7 / 388.2-398.7** | **24.1-24.4 / 50.9-51.3** | **43.9-44.7 / 95.1-95.5** |
-  | the transport's commitment, computed again (`CalleeConn.respond`) | I/O | 52.5-53.5 / 103.2-104.1 | 70.2-73.4 / 163.6-164.3 | 12.8-12.9 / 25.4 | 19.2-19.7 / 43.2-43.5 |
-  | the Response's encoding | I/O | 18.8-19.1 / 33.5-35.7 | 19.4 / 28.5-28.6 | 4.6-4.7 / 8.0-8.6 | 4.8 / 7.0-7.1 |
-  | the rest: the receive (refc copies), `decodeValue`, the frame | I/O | 0.7-0.8 / 3.2 | 53.4-54.1 / 116.7-125.9 | 0.2 / 0.9 | 13.2-13.6 / 31.5 |
+    | the record's value and its encoding (`wjStage`, `wjReply`) | worker | 76.6-77.2 / 185.0-187.2 | 125.7-129.0 / 343.1-344.2 | 19.7-19.8 / 48.1-48.5 | 32.5-33.4 / 87.0-87.6 |
+    | the kit's `encode`: pmtest's `{response: bstr}` encoded again | module | 19.3-19.6 / 35.6-36.9 | 24.5-26.2 / 56.3-57.0 | 4.8-4.9 / 9.0-9.3 | 5.1-5.2 / 7.8-7.9 |
+    | the completion's block, filled a byte at a time (the SDK's `confinedrt.completeDeferred`) | module | 21.7-21.8 / 37.3-42.3 | 21.7-22.0 / 44.3 | 5.4 / 12.8-12.9 | 5.4-5.5 / 11.0 |
+    | the host's `checkResponse`: the schema check and the response's commitment (`completeOp`) | module | 54.2-54.8 / 108.8-109.5 | 68.9-70.6 / 155.0-155.4 | 13.1-13.2 / 25.4-25.6 | 18.8-19.4 / 41.0-41.3 |
+    | `respond`'s channel send (refc copies the `IoCommand`) | module | 0 / 0 | 55.0-56.2 / 117.6-127.8 | 0 / 0 | 13.8-13.9 / 31.9-32.0 |
+    | the rest: the receive, pmtest's copy, the wipes, the host's copy, the block's release | module | 3.0-3.1 / 15.7-15.8 | 2.9-3.1 / 14.1-14.2 | 0.8 / 3.6 | 0.8 / 3.3 |
+    | **the module thread in all** | module | **98.6-99.1 / 198.1-203.8** | **174.9-175.7 / 388.2-398.7** | **24.1-24.4 / 50.9-51.3** | **43.9-44.7 / 95.1-95.5** |
+    | the transport's commitment, computed again (`CalleeConn.respond`) | I/O | 52.5-53.5 / 103.2-104.1 | 70.2-73.4 / 163.6-164.3 | 12.8-12.9 / 25.4 | 19.2-19.7 / 43.2-43.5 |
+    | the Response's encoding | I/O | 18.8-19.1 / 33.5-35.7 | 19.4 / 28.5-28.6 | 4.6-4.7 / 8.0-8.6 | 4.8 / 7.0-7.1 |
+    | the rest: the receive (refc copies), `decodeValue`, the frame | I/O | 0.7-0.8 / 3.2 | 53.4-54.1 / 116.7-125.9 | 0.2 / 0.9 | 13.2-13.6 / 31.5 |
 
   - **Its scope: confined kit modules, not the Package Manager alone** (RUNTIME §4.1 l.838-840: a response
     that does not validate and commit is not returned; Fable's check
@@ -1563,22 +1653,36 @@ files after the start (Fable's design A). A commit's new snapshot shares every u
     on that thread (`host/endpoint.nim:519-562`, `:443-468`; `runtime/callcheck.nim:81-98`). The Runtime's own
     completion, for a provider in its process, does the same (`runtime/asynccall.nim:562-597`). A confined kit
     without the API pays it on the host's call worker instead (`host/endpoint.nim:480-512`).
-  - **The wait** (read from the code, not run). The completing thread also waits with no bound of its own: the
-    host's `commit` sleeps while the I/O loop has no room (`host/endpoint.nim:222-238`), which happens once
-    64 MiB is submitted and not yet committed (`maxPendingOutputBytes`, `transport/io/loop.nim:379-408`). A
-    consumer that stops reading is closed only at the write stall timeout (`writeStallTimeout`, 30 s by
-    default). So a few maximal replies to a stalled consumer can hold a confined module's thread for up to 30 s.
-  - **The worker's encode** waits in the worker's queue, so another operation's file work waits behind it
-    (77 ms under orc for 16 MiB on the Mac, 186 ms on server.lan); it holds no turn.
-  - **What 5-6a's facade avoids** by carrying the worker's bytes: the kit's second encoding and pmtest's copy,
-    22-28 ms of the 16 MiB figure on the Mac and 45-63 ms on server.lan. The rest stays: about 77 ms under orc
-    and 148 ms under refc on the Mac, 153-158 ms and 325-336 ms on server.lan.
-  - **The fix is the core item "large-response completion"** (planning's ruling; designed with Fable after the
-    pause): the facade passing the bytes through (5-6a's part); completing off the module thread (INTERFACE
-    §2.9.2 lets a completion come from any thread); the SDK's completion copy; and the response's commitment,
-    computed twice, and its speed; the wait above goes with it. The item is held by the pause. Nothing is
-    changed in 5-5-4.
+  - **The wait** (read from the code, not run; corrected as the 5-6 plan's §5.8 says):
+    - the completing thread also waits with no bound of its own: the host's `commit` sleeps while the I/O loop's
+      output budget is full (`host/endpoint.nim:222-238`);
+    - that happens once 64 MiB is submitted and not yet committed (`maxPendingOutputBytes`,
+      `transport/io/loop.nim:379-408`);
+    - it takes a full budget of replies a consumer does not read: four maximal ones, or sixty-four of 1 MiB;
+    - operation and inspect replies to callers that are not readers fill it the same way, so it is not only
+      observation;
+    - the hold lasts until the stalled consumer is closed at the write stall timeout (`writeStallTimeout`, 30 s by
+      default).
+  - **The worker's encode** waits in the worker's queue, so another operation's file work waits behind it (72 ms
+    under orc for 16 MiB on the Mac, 183 ms on server.lan). It holds no turn.
+  - **What 5-6a's facade removed:** the kit's second encoding and pmtest's copy, as planned.
+    - Outside the check, the module thread now holds about 25 ms under orc on the Mac (the completion's block 22 ms,
+      the facade's one copy 1.8 ms), and about 57 ms on server.lan.
+    - The earlier prediction ("the rest stays: about 77 ms under orc") assumed the one-string check. The
+      structured record's check is the whole difference.
+  - **The fix is the core item "large-response completion":** held until after the pause, and needed before a
+    release (the owner's choice, 2026-11-24). Its pieces:
+    - the facade passing the bytes through (5-6a's part, done);
+    - completing off the module thread (INTERFACE §2.9.2 lets a completion come from any thread);
+    - the SDK's completion copy;
+    - the transport taking the host's root (the commitment is computed twice);
+    - a root-only path through the layout: no object kept, one reused buffer, and the present layout as its oracle
+      over the corpus and over generated values;
+    - the receiver's check off its I/O thread, `logosd`'s first;
+    - the schema validated twice;
+    - the wait above.
 
+    Nothing in the check or the layout is changed in 5-6a-1.
 ## Event output overflow
 
 TRANSPORT §5.2 (TRN-0309, TRN-0310) as built in `io/callee.nim` and `io/loop.nim`:
@@ -1703,7 +1807,7 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `
   for each MiB written. It is the one hook a variable selects, because it lives in the Module Host's
   process, which a test cannot call. The Runtime's host passes the variable only when its
   configuration's `module_host_env` names it, so the Runtime's host still selects it (rule 4). Only
-  `test_pm_hosted` does, to stop an instance inside a long extraction. A packaged build of the module
+  `test_pm_module` does, to stop an instance inside a long extraction. A packaged build of the module
   has no hook code, so the variable does nothing there.
 
 No deployment binary contains them.

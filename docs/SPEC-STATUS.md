@@ -61,7 +61,7 @@ table (each unit with its reason: the workspace's `tier5-plans/step5-0-pkg-recou
 | A4 | Signing-trust continuity in use (PM §4.1-§4.3) | PKG 30 | 5-3a 5, 5-3b 15, 5-5 7, 5-8 2, 5-7a 1 (PKG-0435, the TLS key) |
 | A2 | Sources, the catalog document and the Storage role (PM §2, §4, §4.4, §6, §13) | PKG 13 | 5-3b 10, 5-6a 2, 5-8 1 |
 | A3 | Installation and installed state (PM §1, §5, §7-§8, §10, §14; §15's inspect, install, remove and update) | PKG 63; BCP-0033, BCP-0035 | 5-5 |
-| A1 | The `logos_package_manager` service: contract, queries, watch, progress (PM Abstract, §15-§15.2) | PKG 77 | 5-6a 28, 5-6b 49 |
+| A1 | The `logos_package_manager` service: contract, queries, watch, progress (PM Abstract, §15-§15.2) | PKG 77 | 5-6a-1 20, 5-6a-2 2, 5-6b 55 |
 | B | Package-backed selection and the handoff's use (PM §4, §9, §11, §12; RUNTIME §9.3) | PKG 19; RUN 7 (RUN-0995 to RUN-0997, RUN-1000, RUN-1023 to RUN-1025) | 5-8 |
 | C | SLSA provenance (PM §4.5 and its §14 codes), droppable | PKG 75 | 5-3a 2, 5-3b 1, 5-11 72 |
 | D | Nix realization profile (PM §2, §7.3, §8), droppable | PKG 31; BCP-0034 | 5-10 |
@@ -84,9 +84,10 @@ The 308 PKG units by step (`PKG-` omitted):
 | 5-3b | C | 1 | 0167 |
 | 5-5 | A3 | 63 | 0011, 0012, 0172, 0177, 0178, 0181, 0182, 0189, 0190, 0192, 0204, 0219, 0222, 0271, 0274, 0291-0293, 0356, 0357, 0359-0363, 0389-0411, 0468-0471, 0487-0489, 0493, 0498-0500, 0534-0537 |
 | 5-5 | A4 | 7 | 0080, 0436-0441 |
-| 5-6a | A1 | 28 | 0003-0008, 0366-0380, 0388, 0519-0524 |
-| 5-6a | A2 | 2 | 0513, 0514 |
-| 5-6b | A1 | 49 | 0381, 0383-0387, 0525-0533, 0538-0542, 0544-0562, 0564-0573 |
+| 5-6a-1 | A1 | 20 | 0003-0008, 0366, 0367, 0369-0377, 0379, 0519, 0521 |
+| 5-6a-1 | A2 | 2 | 0513, 0514 |
+| 5-6a-2 | A1 | 2 | 0380, 0388 |
+| 5-6b | A1 | 55 | 0368, 0378, 0381, 0383-0387, 0520, 0522-0533, 0538-0542, 0544-0562, 0564-0573 |
 | 5-7a | A4 | 1 | 0435 |
 | 5-8 | B | 19 | 0060, 0287, 0289, 0335, 0337-0345, 0347-0351, 0512 (and TXT-0545, riding on 0351: G391) |
 | 5-8 | A2 | 1 | 0354 |
@@ -102,7 +103,9 @@ the sections state: ten are claimed and 28 are deferred by name with their twins
 that planning's rulings on step 5-3a's plan (2026-11-20, Q8, Q18, Q19) moved PKG-0083 from 5-3b to 5-3a,
 PKG-0166 and PKG-0169 from 5-11 to 5-3a, and PKG-0167 from 5-11 to 5-3b. Planning's ruling on step 5-5's plan
 (2026-11-22, Q-P1 (a)) and TIER5-PLAN's row 5-5 moved PKG-0060, PKG-0337, PKG-0339 to PKG-0344 and PKG-0348 from 5-8
-to 5-5, which builds and tests them; 5-8 keeps PKG-0338, PKG-0347 and PKG-0351 (G391), built at 5-5-1.
+to 5-5, which builds and tests them; 5-8 keeps PKG-0338, PKG-0347 and PKG-0351 (G391), built at 5-5-1. Step 5-6's
+plan (draft 3 §8, 2026-11-23) splits 5-6a into 5-6a-1 and 5-6a-2 and moves PKG-0368, PKG-0378, PKG-0520 and PKG-0522
+to PKG-0524 (list and watch responses, the events) from 5-6a to 5-6b.
 
 A dropped area's units that bind without it stay and are claimed in their own steps: TRN-0352, PKG-0190,
 PKG-0166, PKG-0167, PKG-0169, the `nix` and `quic` refusals (plan A1). At the close (5-13) every unit
@@ -128,7 +131,7 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-5 | NP-15 (G156), PKG-0275 | keep G156; PKG-0275 by reading | settled by PM l.1096-1101 at 6cac8335 (re-pin P7a): PKG-0275 is stale |
 | 5-5 | TF-12, TF-14 | keep I69's interims; exclude an installed candidate whose signer is no longer accepted | TF-12 settled by PM l.1304-1307 at 6cac8335 (G167); the signer exclusion built at re-pin P7b (I110) |
 | 5-5 | the no-op install and update while the retained signer is not accepted (TF-07's second point); a D9 stop | fail with `signature-verification-failed` | decided (C6: fail); built at re-pin P7b, the update half in the resolver and the install half at resolution (G166) |
-| 5-6a | where the Package Manager runs | hosted in its own process, the engine's binding over TRANSPORT §8.1.2 | open (C1) |
+| 5-6a | where the Package Manager runs | hosted in its own process, the engine's binding over TRANSPORT §8.1.2 | decided (C1; the owner's Q2, 2026-11-23: logosd composes it); hosted built in 5-6a-1 (G490, G491): the reserved instance `package_manager`, marked in the host configuration; the binding is 5-6a-2's |
 | 5-6b | package record observation | deny by default; the grant is protected deployment input | open (C4) |
 | 5-7a | the remote trust input: its own input and revision, apart from the package trust file | — | decided (C2); built 2026-11-22 by 5-7a-1 (G408): `remote/trust.cbor` and its mark, `logosctl remote trust` |
 | 5-7a | NF-06 (G81), the authority part | G81 (a) narrowed | decided (B5); compared with CA l.77-78 at 6cac8335 (re-pin P6a): the enrolled half of TXT-0359 (claimed for the half with no Runtime enrolled) and TXT-0360 (riding RUN-1125) are 5-7a's; built 2026-11-22 by 5-7a-2 (G415), TXT-0359's enrolled half tested, TXT-0360 with 5-7a-4 |
@@ -739,7 +742,8 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   - The worker encodes each response, and the module thread carries the bytes (G447). Their way out is a stated
     exception, a confined kit module's: a 16 MiB `{installed}` holds the module thread 99 ms under orc and 175 ms
     under refc on the Mac, about 200 ms and 390 ms on server.lan (the host's check and commitment, the SDK's
-    completion copy, the kit's second encoding), left to the core item "large-response completion".
+    completion copy, the kit's second encoding), left to the core item "large-response completion". Those are the
+    one-string case: 5-6a-1's structured record takes seconds (G497).
 
   Claimed: PKG-0080, PKG-0189, PKG-0190, PKG-0389 to PKG-0410, PKG-0436, PKG-0437, PKG-0439, PKG-0440, PKG-0470,
   PKG-0534 to PKG-0537, PKG-0608 and PKG-0609 by test; PKG-0222, PKG-0363, PKG-0441 and PKG-0493 by inspection;
@@ -762,6 +766,38 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
     contracts; none now).
 
   No unit changes status. PKG 367/367.
+
+- 2026-11-23, Tier 5 step 5-6a-1 (I140; G490, G491, G494, G495, G496, G500; G399 revised, G405 amended; the owner's
+  Q2, Q7 (b), Q11), the Package Manager instance:
+  - The module `logos_package_manager` on a kit generated from the pinned contract, its requests mapped onto the
+    engine's operations and its responses handed to the kit pre-encoded (G494: `KitOptions.encodedResponses`,
+    lcn-gen `--encoded-response`; the boundary still checks them).
+  - The mark (G490): the host configuration's top-level `package_manager`; only that instance's Module Host accepts
+    the reserved name and the `logos.` rules, and the Runtime binds it as a system service. logosd refuses operator
+    modules and declarations named `logos_…`.
+  - The composition (G491): the reserved instance `package_manager`, `hosted_dynamic`, its state
+    `package_manager.state`, the library logosd ships (its hash compiled in, `pmLib` in the flake) or
+    `package_manager.artifact`; started after the operator's list; S12. The old `instance` field is refused.
+    logosctl's checks compose a stand-in for the companion library (`pmCompanion`), found while building.
+  - What ordinary routes reach (G495): the four operations; the observation methods and an ordinary caller's
+    `get_runtime_handoff` are `MODULE_ERROR` with no message or detail. `list_packages`' selection and order
+    (G500). `pmtest_module` keeps `status`, `resolve`, `install` and `handoff` (G496).
+  - Suites `test_pm_module` and `test_listing`; `test_logosd_pm` rewritten; cases in `test_host`,
+    `test_daemon_config`, `test_deployment`, `test_pm_hosted`, `test_kit` and `test_nimgen`.
+
+  Claimed: PKG-0003 to PKG-0008 (PKG-0005 and PKG-0006 also by inspection), PKG-0366, PKG-0367, PKG-0369 to PKG-0377,
+  PKG-0379, PKG-0513, PKG-0514, PKG-0519 and PKG-0521, and the App A copies PKG-0630, PKG-0631, PKG-0633, PKG-0637,
+  PKG-0639 to PKG-0647 and PKG-0649, which leave the re-pin's deferred list. 36 units. PKG 403/403.
+  - G497's figures (measured 2026-11-24 after 5-3c-4; the owner's choice, "Merge, state the limit"):
+    - a reply's way out costs per node, in three passes: the module thread, its host's I/O thread, the receiver's
+      I/O thread;
+    - a maximal `{installed}` holds the module thread 5.4 s under orc on the Mac and 24.9 s under refc on server.lan
+      (medians);
+    - the limits are stated in DEPLOYMENT §12, "A large reply's passes": a Hello times out, the Package Manager
+      answers nothing else, a stop waits, the receiver's host stalls, `logosctl`'s default `--timeout` is missed,
+      and the write stall is close;
+    - the fix is the core item "large-response completion", held until after the pause and needed before a
+      release.
 
 ## Tiers at f4f83471 (the original plan)
 

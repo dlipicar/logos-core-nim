@@ -47,6 +47,11 @@ suite "core.nim-types: core's generated modules (D29)":
     check generatedOrchConfigTypes().get == readFile(orchConfigTypesPath)
     check generatedOrchKit().get == readFile(orchKitPath)
     check generatedOrchStateTypes().get == readFile(orchStateTypesPath)
+    check generatedPmTypes().get == readFile(pmTypesPath)
+    check generatedPmKit().get == readFile(pmKitPath)
+    for kind in ExportListKind:
+      checkpoint pmExportsPath(kind)
+      check generatedPmExports(kind).get == readFile(pmExportsPath(kind))
     for f in coreNimFixtures:
       checkpoint f.module
       check f.generated.get == readFile(f.fixturePath)
@@ -66,7 +71,7 @@ suite "core.nim-types: core's generated modules (D29)":
       daemonConfigTypesPath, trustTypesPath, remoteTrustTypesPath,
       remoteExposureTypesPath, trustdocTypesPath, pmInputTypesPath, evstoreTypesPath,
       ctlTypesPath, logosctlTypesPath, logosctlKitPath, cliTypesPath, lcnCallTypesPath,
-      lcnCallConfigTypesPath, lcnCallKitPath,
+      lcnCallConfigTypesPath, lcnCallKitPath, pmTypesPath, pmKitPath,
     ]:
       checkpoint path
       check stamp in readFile(path)

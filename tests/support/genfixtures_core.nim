@@ -83,6 +83,22 @@ const
       primary: "tests/kit/pmtest_module.cddl",
       calls: true,
     ),
+    # [DECISIONS G494] A pre-encoded response through the Module Host's boundary
+    # (Tier 5 step 5-6a-1): `reply` answers the request's bytes as they are.
+    NimFixture(
+      home: coreGeneratedDir,
+      module: "rawreply_module_types.nim",
+      primary: "tests/kit/rawreply_module.cddl",
+    ),
+    NimFixture(
+      home: coreGeneratedDir,
+      module: "rawreply_module_kit.nim",
+      primary: "tests/kit/rawreply_module.cddl",
+      kit: true,
+      confined: true,
+      asyncApi: true,
+      encodedResponses: @["reply"],
+    ),
   ]
   coreHeaderFixtures* = [
     HeaderFixture(
@@ -723,3 +739,79 @@ proc generatedOrchStateTypes*(): Result[string, string] =
     )
   except IOError as e:
     err(e.msg)
+
+const
+  pmPrimary* = "spec/mirrors/PKG/app-a.contract.cddl"
+    ## [SPEC PM App A] the Package Manager contract, mirrored
+  pmSupporting* =
+    ["spec/mirrors/PKG/4.manifest.cddl", "spec/mirrors/CFG/9.configuration-types.cddl"]
+    ## the package manifest's rules and the Module Configuration types it names
+  pmTypesPath* = "src/logos_core/pm/logos_package_manager_types.nim"
+  pmKitPath* = "src/logos_core/pm/logos_package_manager_kit.nim"
+  PmEncodedResponses* = [
+    "inspect_package", "install_package", "remove_package", "update_package",
+    "get_runtime_handoff",
+  ]
+    ## [G494] the methods whose response bytes the engine encodes once (PM §15), and
+    ## the facade passes through
+
+proc pmKitParts(): Result[(ContractSet, KitOptions), string] =
+  ## [G490, G494; C1] The Package Manager's kit: a system contract, confined, with
+  ## the asynchronous provider API (G338) and the engine's encoded responses.
+  try:
+    let set = ?acceptContractSet(
+      readFile(pmPrimary),
+      [],
+      pmSupporting.mapIt(readFile(it)),
+      AcceptOptions(system: true),
+    )
+    ok(
+      (
+        set,
+        KitOptions(
+          importPrefix: SdkImportRoot,
+          confined: true,
+          asyncApi: true,
+          encodedResponses: @PmEncodedResponses,
+        ),
+      )
+    )
+  except IOError as e:
+    err(e.msg)
+
+proc generatedPmTypes*(): Result[string, string] =
+  ## The Package Manager contract's types (PM App A), for `pm/facade.nim`.
+  let (set, _) = ?pmKitParts()
+  nimModule(
+    set,
+    NimOptions(
+      importPrefix: SdkImportRoot,
+      schemaAccessor: "pmContractSchema",
+      documentsAccessor: "pmContractDocuments",
+    ),
+    true,
+  )
+
+proc generatedPmKit*(): Result[string, string] =
+  ## Its module kit, for `logos_package_manager.nim` (G490).
+  let (set, opts) = ?pmKitParts()
+  kitModule(set, opts, true)
+
+const pmExportsDir* = "src/logos_core/pm"
+
+func pmExportsPath*(kind: ExportListKind): string =
+  ## [DECISIONS G341] Where its export list for `kind` is committed.
+  pmExportsDir & "/logos_package_manager_kit." & (
+    case kind
+    of elDarwin: "exports"
+    of elGnu: "map"
+  )
+
+proc generatedPmExports*(kind: ExportListKind): Result[string, string] =
+  ## [DECISIONS G341] The export list `liblogos_package_manager` links with: the
+  ## module ABI and nothing else.
+  let (set, opts) = ?pmKitParts()
+  let name = exportListName(set, kind)
+  if pmExportsDir & "/" & name != pmExportsPath(kind):
+    return err("lcn-gen names it " & name)
+  ok(exportList(name, ?kitSymbols(set, opts, true), kind))

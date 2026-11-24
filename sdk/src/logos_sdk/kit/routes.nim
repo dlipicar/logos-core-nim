@@ -271,7 +271,9 @@ proc materialize*(
 ): Result[RouteHandle, InvocationFailure] =
   ## [SPEC INTERFACE §5.2; RUNTIME l.3033-3034] Materializes a ready route as
   ## a handle, wraps it and holds it. `root` is the contract the caller
-  ## expects and `schema` its construction input.
+  ## expects and `schema` its construction input. With no dispatcher,
+  ## `onRouteEnd` may run before this returns, and also when it then fails
+  ## (INTERFACE l.1450, l.1467).
   ?s.admit()
   if schema.len == 0:
     return err(failure(ecInvalidParams, "an empty schema"))

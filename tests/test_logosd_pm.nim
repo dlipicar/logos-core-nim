@@ -1,37 +1,43 @@
-## logosd with a `package_manager` section (Tier 5 step 5-3b-2; DECISIONS G399, G400, G402,
-## G405; docs/DAEMON.md §3 and §5, docs/PACKAGE-MANAGER.md §4). `pmtest_module`
-## (`tests/kit/pmtest_impl.nim`, the shell under a test name) is the Package Manager. The
-## reference fake (`fetch_fake_module`) is its one storage provider, serving a catalog and signed
-## archives from its state directory (`fetch-fake/state/<name>`). Both are `hosted_dynamic`
-## operator instances that the orchestrator starts, under `capability-authority`.
+## logosd with a `package_manager` section (Tier 5 steps 5-3b-2 and 5-6a-1; DECISIONS
+## G399, G400, G402, G405, G490, G491; docs/DAEMON.md §3 and §5,
+## docs/PACKAGE-MANAGER.md §4). logosd composes the Package Manager itself: the reserved
+## instance `package_manager` of `logos_package_manager`, hosted in its own process (C1),
+## from `package_manager.artifact` (`support/pmbuild.nim`'s library, since a test logosd
+## has no companion library's hash) or, in the companion case, from the library beside a
+## logosd built with that hash. The reference fake (`fetch_fake_module`) is its one
+## storage provider, serving a catalog and signed archives from its state directory
+## (`fetch-fake/state/<name>`), an operator instance the orchestrator starts.
 ##
-## The test drives the fake and asks the probe as an operator would, with `logosctl call` through
-## `lcn_call` (DAEMON.md §7a); an operator rule grants `lcn_call` both providers. No operator rule
-## grants the Package Manager or the fake anything. Its `list_modules` lookup and its route (S9),
-## its readiness subscription (S10) and the fake's event (S11) pass on logosd's derived rules
-## alone: the catalog is acquired only on the fake's `fetch_readiness_changed`. The package-signing
-## trust is the session's trust file, written with `logosctl trust`. A change to it applies at the
-## next start.
+## The test drives the fake and calls the Package Manager as an operator would, with
+## `logosctl call` through `lcn_call` (DAEMON.md §7a); an operator rule grants `lcn_call`
+## both providers. No operator rule grants the Package Manager or the fake anything, and
+## no operator entry names the Package Manager: its start passes on rule S2, its
+## `list_modules` lookup and its route (S9), its readiness subscription (S10) and the
+## fake's event (S11) on logosd's derived rules alone, and S12 keeps the shell from
+## retiring or reconfiguring it. The catalog is acquired only once the fake is ready. The
+## package-signing trust is the session's trust file, written with `logosctl trust`; a
+## change to it applies at the next start.
 ##
-## The children are built for the suite's variant (`daemonbuild.nim`), as in `test_logosd.nim`.
-## Every case leaves no Module Host of this build behind.
+## The children are built for the suite's variant (`daemonbuild.nim`), as in
+## `test_logosd.nim`. Every case leaves no Module Host of this build behind.
 
 when defined(posix):
   import std/[json, monotimes, os, sequtils, strutils, times]
   import unittest2
   import logos_sdk/cbor
   import logos_sdk/crypto/blake3
-  from logos_sdk/base/hex import nil
   import ../src/logos_core/daemon/[config, daemon_config_types, session, sessioninit]
+  import ../src/logos_core/pins as core_pins
+  from ../src/logos_core/daemon/compose import PmLibrary
   from ../src/logos_core/authority/scopes import sortSet
-  from ../src/logos_core/durable import ensurePrivateDir
+  from ../src/logos_core/durable import ensurePrivateDir, writeAtomic
   from ../src/logos_core/runtime/protinput import ProtectedInputName
-  from logos_sdk/iface/accept import acceptContractSet
+  from logos_sdk/iface/accept import acceptContractSet, AcceptOptions
   from logos_sdk/contracts/generated/lcn_storage_fetch_root import LcnStorageFetchRoot
   import
     ./support/[
-      clibuild, daemonbuild, daemonproc, modulehostbuild, pmfixture, sanitizerenv,
-      shortdir, slowdown,
+      childbuild, clibuild, daemonbuild, daemonproc, modulehostbuild, pmbuild,
+      pmfixture, sanitizerenv, shortdir, slowdown,
     ],
     logos_sdk/testing/kitbuild
 
@@ -43,10 +49,15 @@ when defined(posix):
     StopDeadlineMs = 10_000 * Slow
     StopMs = 3 * StopDeadlineMs
     HostsGoneMs = 10_000 * Slow
+    RestartInitialMs = 200
+      ## [IMPL] The operator's restart policy in the override case: an instance it
+      ## covers is started again within this.
+    NoRestartMs = 3_000 * Slow
+      ## [IMPL] How long the override case watches the Package Manager stay down: many
+      ## times `RestartInitialMs`.
     FakeInstance = "fetch-1"
-    PmInstance = "pm-1"
     FakeState = "fetch-1"
-    PmState = "pm-1"
+    PmState = "pm"
     CatalogName = "catalog"
     Hosts = [
       ("linux-x86_64", "linux", "x86_64"),
@@ -62,7 +73,7 @@ when defined(posix):
     hostExe = moduleHostProgram()
     cliArt = cliArtifact()
     fakeLib = buildKitLibrary("fetch_fake_impl.nim", "lpmfake")
-    pmLib = buildKitLibrary("pmtest_impl.nim", "lpmpm")
+    pmLib = pmLibrary()
     fakeRoot = @(
       acceptContractSet(
         readFile(repo / "sdk/src/logos_sdk/testing/fixtures/fetch_fake_module.cddl"),
@@ -70,9 +81,18 @@ when defined(posix):
       )
       .expect("the fetch_fake_module contract set").primary.root
     )
+    # [SPEC PM App A; G490] The Package Manager's contract, from the pinned documents.
     pmRoot = @(
-      acceptContractSet(readFile(repo / "tests/kit/pmtest_module.cddl"))
-      .expect("the pmtest_module contract set").primary.root
+      acceptContractSet(
+        core_pins.PackageManagerContractDocument,
+        [],
+        [
+          core_pins.PackageManifestDocument,
+          readFile(repo / "spec/mirrors/CFG/9.configuration-types.cddl"),
+        ],
+        AcceptOptions(system: true),
+      )
+      .expect("the Package Manager contract set").primary.root
     )
     # The packages, signed once (each signature takes about a second).
     (orgKey, orgPub) = testKey(1)
@@ -89,6 +109,7 @@ when defined(posix):
 
   var cases = 0
   var children: seq[Child]
+  var companionD = ""
 
   func hexOf(bytes: openArray[byte]): string =
     for b in bytes:
@@ -98,6 +119,19 @@ when defined(posix):
     let bytes = readFile(path)
     @(blake3(bytes.toOpenArrayByte(0, bytes.high)))
 
+  proc companionLogosd(): string =
+    ## [G491] A test logosd built with the BLAKE3-256 of this suite's Package Manager
+    ## library compiled in (`pmArtifactHash`), as the flake builds the packaged one; it
+    ## shares the test logosd's nimcache, so only the composition is compiled again.
+    if companionD.len == 0:
+      companionD = buildChild(
+        "src/logosd.nim",
+        "logosd-pm",
+        "logosd",
+        @["lcnTestHooks", "pmArtifactHash=" & hexOf(digestOfFile(pmLib))],
+      )
+    companionD
+
   type Case = object
     dir: string ## the case's directory: the session is `dir/s`
     s: Session
@@ -106,7 +140,7 @@ when defined(posix):
     inc cases
     result.dir = makeShortBase(
       "lpm" & $cases,
-      deepest = "/s/run/ep/12345678/logos_fetch_fake_module.sock",
+      deepest = "/s/run/ep/12345678/logos_logos_package_manager.sock",
       perCase = true,
     )
     result.s = Session(dir: result.dir / "s")
@@ -120,7 +154,8 @@ when defined(posix):
     )
 
   proc call(c: Case, args: varargs[string]): JsonNode =
-    ## `logosctl call` through `lcn_call`: its JSON (stdout is a file, G89), or null.
+    ## `logosctl call` through `lcn_call`: its JSON envelope (stdout is a file, G89), or
+    ## null.
     let r = runOnce(
       ctlExe,
       @["--session-dir", c.s.dir, "call"] & @args,
@@ -134,10 +169,60 @@ when defined(posix):
       result = newJNull()
     if r.code != 0:
       checkpoint(
-        "logosctl call " & args.join(" ") & ": exit " & $r.code & ": " & r.stderr
+        "logosctl call " & args.join(" ") & ": exit " & $r.code & ": " & r.stdout &
+          r.stderr
       )
 
-  proc hosted(
+  proc pm(c: Case, meth: string, args: varargs[string]): JsonNode =
+    ## A Package Manager method through `lcn_call`: its envelope.
+    c.call(@[PmModule, meth] & @args)
+
+  func codeOf(j: JsonNode): string =
+    ## The response's `package_error` code; empty for a success.
+    j{"result"}{"error"}{"code"}.getStr
+
+  func installedOf(j: JsonNode): string =
+    ## `{installed: record}`'s identity, as `package@version`.
+    let id = j{"result"}{"installed"}{"identity"}
+    if id.isNil:
+      ""
+    else:
+      id{"package"}.getStr & "@" & id{"version"}.getStr
+
+  proc identityRequest(field, package, version: string): seq[string] =
+    @["--request", $(%*{field: {"package": package, "version": version}})]
+
+  proc moduleOf(c: Case, instance: string): JsonNode =
+    ## The instance's record in `logosctl --json module ls`, or nil.
+    let r = runOnce(
+      ctlExe,
+      @["--session-dir", c.s.dir, "--json", "module", "ls"],
+      c.dir,
+      timeoutMs = 120_000 * Slow,
+    )
+    try:
+      for m in parseJson(r.stdout){"result"}{"modules"}.getElems:
+        if m{"instance"}.getStr == instance:
+          return m
+    except CatchableError:
+      discard
+    nil
+
+  proc stateOf(c: Case, instance: string): string =
+    c.moduleOf(instance){"state"}.getStr
+
+  proc failureOf(c: Case, instance: string): string =
+    c.moduleOf(instance){"failure"}.getStr
+
+  proc routed(c: Case): bool =
+    ## `logosctl route ls` shows the Package Manager's route to the fake, `ready`.
+    for line in c.ctl("route", "ls").stdout.splitLines:
+      let f = line.splitWhitespace
+      if f.len == 5 and f[2] == PmInstance and f[3] == FakeInstance and f[4] == "ready":
+        return true
+    false
+
+  proc hostedEntry(
       instance, module, lib: string,
       root: seq[byte],
       state: string,
@@ -191,10 +276,25 @@ when defined(posix):
       ),
     )
 
-  proc pmConfig(): LcnDaemonConfig =
-    ## The default configuration with the fake and the Package Manager, both started by the
-    ## orchestrator, the `package_manager` section with logosd's preset, `lcn_call` granted both
-    ## providers, and nothing granted to the two instances.
+  proc pmSection(
+      artifact = Opt.some(pmArtifact(pmLib)), storageInstance = FakeInstance
+  ): LcnDcPackageManager =
+    LcnDcPackageManager(
+      state: PmState,
+      artifact: artifact,
+      storage:
+        @[daemon_config_types.LcnPmBinding(binding: "main", instance: storageInstance)],
+      catalog: daemon_config_types.LcnPmCatalogRef(
+        storage: "main",
+        `object`: bytesOf("fetch-fake/state/" & CatalogName),
+        digest: @(blake3(document)),
+      ),
+    )
+
+  proc pmConfig(section = pmSection()): LcnDaemonConfig =
+    ## The default configuration with the fake, which the orchestrator starts, the
+    ## `package_manager` section (logosd composes and starts the instance), `lcn_call`
+    ## granted both providers, and nothing granted to the two instances.
     result = defaultDaemonConfig("assigned-by-init")
     result.runtime.module_host = Opt.some(hostExe)
     result.runtime.module_host_env = Opt.some(@SanitizerEnv)
@@ -203,32 +303,20 @@ when defined(posix):
       result.runtime.shutdown_grace_ms = Opt.some(uint32(StopDeadlineMs))
     result.modules = Opt.some(
       @[
-        hosted(
+        hostedEntry(
           FakeInstance,
           "fetch_fake_module",
           fakeLib,
           fakeRoot,
           FakeState,
           implements = @[@LcnStorageFetchRoot],
-        ),
-        hosted(PmInstance, "pmtest_module", pmLib, pmRoot, PmState),
+        )
       ]
     )
     var o = result.orchestration.get(LcnDcOrchestration())
-    o.start = Opt.some(@[FakeInstance, PmInstance])
+    o.start = Opt.some(@[FakeInstance])
     result.orchestration = Opt.some(o)
-    result.package_manager = Opt.some(
-      LcnDcPackageManager(
-        instance: PmInstance,
-        storage:
-          @[daemon_config_types.LcnPmBinding(binding: "main", instance: FakeInstance)],
-        catalog: daemon_config_types.LcnPmCatalogRef(
-          storage: "main",
-          `object`: bytesOf("fetch-fake/state/" & CatalogName),
-          digest: @(blake3(document)),
-        ),
-      )
-    )
+    result.package_manager = Opt.some(section)
     result.policy.arm_Capability_authority.rules = @[
       callerRule(fakeRoot),
       callerRule(@LcnStorageFetchRoot, discoverOnly = true),
@@ -237,10 +325,19 @@ when defined(posix):
     sortSet(result.policy.arm_Capability_authority.rules)
     result.cli = Opt.some(LcnDcCli(artifact: Opt.some(cliArt)))
 
-  proc initPm(c: Case): Ran =
+  proc initWith(c: Case, bytes: seq[byte], extra: varargs[string]): Ran =
     let path = c.dir / "config.cbor"
-    writeFile(path, cast[string](pmConfig().encode.expect("an encoding")))
-    c.ctl("init", "--config", "@" & path)
+    writeFile(path, textOf(bytes))
+    c.ctl(@["init", "--config", "@" & path] & @extra)
+
+  proc initPm(c: Case, dc = pmConfig(), extra: varargs[string]): Ran =
+    c.initWith(dc.encode.expect("an encoding"), extra)
+
+  proc editConfig(c: Case, edit: proc(dc: var LcnDaemonConfig)) =
+    ## Offline, as `daemon config set` would: the session's configuration, changed.
+    var (dc, _) = readDaemonConfig(c.s).expect("the daemon-config")
+    edit(dc)
+    check writeAtomic(c.s.dir, DaemonConfigName, dc.encode.expect("bytes")).isOk
 
   proc stock(c: Case) =
     ## The fake's `objects/`: the catalog and the archives, written before the start, each
@@ -252,8 +349,14 @@ when defined(posix):
     for (name, bytes) in objects:
       writeFile(fake / "objects" / name, textOf(bytes))
 
-  proc start(c: Case, name = "logosd"): Child =
-    result = spawnChild(dExe, ["--session-dir", c.s.dir], c.dir, name)
+  proc anchor(c: Case) =
+    check c.ctl(
+      "trust", "anchor", "add", "--kid", "org", "--key", hexOf(orgPub), "app", "lib"
+    ).code == 0
+
+  proc start(c: Case, exe = dExe): Child =
+    result =
+      spawnChild(exe, ["--session-dir", c.s.dir], c.dir, "logosd" & $children.len)
     children.add(result)
 
   proc stopped(d: Child): int =
@@ -281,21 +384,19 @@ when defined(posix):
     checkpoint("waited for " & what & "; logosd stderr:\n" & d.errText)
     false
 
-  proc status(c: Case): JsonNode =
-    c.call("pmtest_module", "status"){"result"}
+  proc reaches(c: Case, d: Child, instance, state: string): bool =
+    eventually(
+      instance & " to be " & state,
+      d,
+      proc(): bool =
+        c.stateOf(instance) == state,
+    )
 
-  proc firstBinding(status: JsonNode): JsonNode =
-    ## The status's one binding, or nil while it has none: early in a start, or when
-    ## the call failed. `{}` and `getStr` accept nil; `len` and `[]` do not.
-    let b = status{"bindings"}
-    if b != nil and b.kind == JArray and b.len == 1:
-      b[0]
-    else:
-      nil
-
-  proc readinessOf(c: Case): string =
-    ## The one binding's readiness as the Package Manager last learned it.
-    c.status().firstBinding{"readiness"}.getStr
+  proc ready(c: Case, exe = dExe): Child =
+    ## logosd started on the case's session, answering, with the Package Manager `ready`.
+    result = c.start(exe)
+    c.expectReady(result)
+    check c.reaches(result, PmInstance, "ready")
 
   proc setReadiness(c: Case, to: string): bool =
     let j = c.call(
@@ -306,71 +407,29 @@ when defined(posix):
     )
     j{"status"}.getStr == "ok"
 
-  proc resolveReply(c: Case, name, version: string): JsonNode =
-    c.call("pmtest_module", "resolve", "name=" & name, "version=" & version)
+  proc acquired(c: Case, d: Child, line: string): bool =
+    ## The catalog line `line` is in logosd's log and `app`'s inspection succeeds.
+    eventually(
+      "the catalog",
+      d,
+      proc(): bool =
+        line in d.errText and
+          not c.pm("inspect_package", "package=app", "version=1.0.0"){"result"}{
+            "inspection"
+          }.isNil,
+    )
 
-  proc resolved(c: Case, name, version: string): JsonNode =
-    ## The resolve's result, or nil when the call failed: for a wait, which asks again.
-    c.resolveReply(name, version){"result"}
-
-  type NoResult = object of CatchableError
-    ## [IMPL] A call without a `result` where its case reads one: raised to fail and stop
-    ## the case, whose teardown still stops logosd. unittest2's `require` would quit the
-    ## process without it.
-
-  proc resolution(c: Case, name, version: string): JsonNode =
-    ## The resolve's result, read once and logged. With none, as under load (about 120 on
-    ## the Mac), the case fails naming the call and its reply, and stops. `$` of the nil
-    ## crashed the process instead, which skipped the teardown, and the orphaned logosd
-    ## kept respawning its Module Hosts.
-    let reply = c.resolveReply(name, version)
-    result = reply{"result"}
-    if result.isNil:
-      raise newException(
-        NoResult,
-        "pmtest_module resolve name=" & name & " version=" & version &
-          ": no result; the reply: " & $reply,
-      )
-    checkpoint($result)
-
-  proc answer(c: Case, args: varargs[string]): CborValue =
-    ## [5-5-4] A pmtest operation's response: `result.response`, a byte string in hex (G89),
-    ## decoded; an empty map when the call failed.
-    result = cborMap()
-    let bytes =
-      hex.fromHex(c.call(@["pmtest_module"] & @args){"result"}{"response"}.getStr)
-    check bytes.isOk
-    if bytes.isOk:
-      let v = decodeCbor(bytes.get)
-      check v.isOk
-      if v.isOk:
-        result = v.get
-
-  func codeOf(v: CborValue): string =
-    ## The response's `package_error` code; empty for a success.
-    let e = v.lookup("error")
-    if e.isSome:
-      let code = e.get.lookup("code")
-      if code.isSome:
-        return code.get.getText.get("")
-
-  func identityOf(v: CborValue): string =
-    ## `{installed: record}`'s identity, as `package@version`.
-    let r = v.lookup("installed")
-    if r.isSome:
-      let id = r.get.lookup("identity")
-      if id.isSome:
-        return
-          id.get.lookup("package").get(cbor("")).getText.get("") & "@" &
-          id.get.lookup("version").get(cbor("")).getText.get("")
+  proc catalogLine(kind: string): string =
+    "package-manager: the " & kind & " catalog is in use: sequence 1, 2 entries, digest " &
+      hexOf(blake3(document))
 
   proc records(c: Case): int =
     ## The record directories below the Package Manager's `install/r/`.
-    toSeq(walkDir(c.s.modulesDir / PmState / "install" / "r")).len
-
-  proc packagesOf(r: JsonNode): seq[string] =
-    for p in r{"packages"}.getElems:
-      result.add(p{"package"}.getStr & "@" & p{"version"}.getStr)
+    let d = c.s.modulesDir / PmState / "install" / "r"
+    if dirExists(d):
+      toSeq(walkDir(d)).len
+    else:
+      0
 
   proc hostsGone(): bool =
     let until = getMonoTime() + initDuration(milliseconds = HostsGoneMs)
@@ -386,20 +445,12 @@ when defined(posix):
       ", candidates_per_name " & $PresetCandidatesPerName & ", assignment_attempts " &
       $PresetAssignmentAttempts & " (logosd's preset)"
 
-  proc ready(c: Case): Child =
-    ## logosd started on the case's session, answering, with the Package Manager `ready` and
-    ## its binding's readiness learned.
-    result = c.start("logosd" & $children.len)
-    c.expectReady(result)
-    let d = result
-    check eventually(
-      "the Package Manager's binding to have a readiness",
-      d,
-      proc(): bool =
-        c.readinessOf().len > 0,
-    )
+  proc refusedWith(r: Ran, text: string): bool =
+    ## The command failed and its stderr holds `text`.
+    checkpoint("exit " & $r.code & ": " & r.stdout & r.stderr)
+    r.code != 0 and text in r.stderr
 
-  suite "daemon.logosd_pm: logosd with a package_manager section (DAEMON.md §3, §5) [IMPL-DECISION G399] [IMPL-DECISION G400] [IMPL-DECISION G402] [IMPL-DECISION G405]":
+  suite "daemon.logosd_pm: logosd composes the Package Manager from its package_manager section (DAEMON.md §3, §5) [IMPL-DECISION G399] [IMPL-DECISION G400] [IMPL-DECISION G402] [IMPL-DECISION G405] [IMPL-DECISION G490] [IMPL-DECISION G491]":
     teardown:
       for ch in children:
         if ch.alive:
@@ -415,117 +466,77 @@ when defined(posix):
       # if it failed (`shortdir`).
       endCaseBases(testStatusIMPL == TestStatus.FAILED)
 
-    test "[PKG-0353] [IMPL-DECISION G402] the Package Manager starts on the session's trust, acquires the catalog on the fake's event (S9 to S11 under capability-authority), and resolves":
+    test "[PKG-0004] [PKG-0353] [PKG-0513] [IMPL-DECISION G491] [IMPL-DECISION G402] [IMPL-DECISION G449] under capability-authority, with no operator entry for it: the Package Manager is started (S2), acquires the catalog once the fake is ready (S9 to S11), the operations run end to end, and the records are kept across logosd's restart":
       let c = newCase()
       check c.initPm().code == 0
       c.stock()
-      check c.ctl(
-        "trust", "anchor", "add", "--kid", "org", "--key", hexOf(orgPub), "app", "lib"
-      ).code == 0
-      let d = c.ready()
+      c.anchor()
+      let first = c.ready()
+      let pmRec = c.moduleOf(PmInstance)
+      check pmRec{"module"}.getStr == PmModule
+      check pmRec{"state_assignment"}.getStr == PmState
       # [G399; ruling C3] The limits and their origin, in the operator's log.
-      check presetLine() in d.errText
+      check presetLine() in first.errText
       # [G400] The protected input was read during `_MODULE_init` and removed after it.
       check not fileExists(c.s.modulesDir / PmState / ProtectedInputName)
-      let before = c.status()
-      check before{"catalog"}.isNil
-      check c.readinessOf() == "starting"
-      check before.firstBinding{"state"}.getStr == "ready"
-      check before.firstBinding{"established"}.getInt == 1
-      check c.resolved("app", "1.0.0"){"error"}.getStr == "package-unavailable"
-      # [S10, S11] The fake publishes `fetch_readiness_changed`; the Package Manager acquires
-      # the catalog on it, since it asks `fetch_readiness` only once per route.
-      check c.setReadiness("ready")
+      # [S9] Its route to the fake, on logosd's rules alone.
       check eventually(
-        "the catalog",
-        d,
-        proc(): bool =
-          not c.status(){"catalog"}.isNil,
-      )
-      let now = c.status()
-      check now{"catalog"}{"entries"}.getInt == 2
-      check now{"catalog"}{"sequence"}.getInt == 1
-      check "package-manager: the configured catalog is in use: sequence 1, 2 entries, digest " &
-        hexOf(blake3(document)) in d.errText
-      check "no readiness subscription" notin d.errText
-      # The archives verify against the session's anchor.
-      let r = c.resolution("app", "1.0.0")
-      check r.packagesOf == @["app@1.0.0", "lib@1.2.0"]
-      check c.status(){"pending"}.getInt == 0
-      check d.stopped == 0
-      check hostsGone()
-
-    test "[IMPL-DECISION G399] [BCP-0049] a trust change applies at the next start: a name removed from the anchor is withdrawn, and the kept catalog is in use at once":
-      let c = newCase()
-      check c.initPm().code == 0
-      c.stock()
-      check c.ctl(
-        "trust", "anchor", "add", "--kid", "org", "--key", hexOf(orgPub), "app", "lib"
-      ).code == 0
-      let first = c.ready()
-      check c.setReadiness("ready")
-      check eventually(
-        "the first resolve",
+        "the Package Manager's route to the fake",
         first,
         proc(): bool =
-          c.resolved("app", "1.0.0").packagesOf == @["app@1.0.0", "lib@1.2.0"],
+          c.routed(),
       )
-      check first.stopped == 0
-      # Offline, under the session lock (DAEMON.md §6): `lib` leaves the anchor.
-      let change = c.ctl("trust", "anchor", "remove-names", "--kid", "org", "lib")
-      checkpoint(change.stdout & change.stderr)
-      check change.code == 0
-      check "it applies at the next start" in change.stdout
-      let second = c.ready()
-      check "package-manager: the kept catalog is in use: sequence 1, 2 entries, digest " &
-        hexOf(blake3(document)) in second.errText
-      check c.status(){"catalog"}{"entries"}.getInt == 2
+      # No catalog yet: the fake is `starting`.
+      check c.pm("inspect_package", "package=app", "version=1.0.0").codeOf ==
+        "package-unavailable"
+      # [S10, S11] The fake becomes ready; the Package Manager acquires the catalog.
       check c.setReadiness("ready")
-      check eventually(
-        "the fake's readiness",
-        second,
-        proc(): bool =
-          c.readinessOf() == "ready",
-      )
-      # `lib`'s archive is signed by `org`, whose anchor no longer authorizes the name: `app`
-      # has no closure, and `lib` as a root is refused.
-      let r = c.resolution("app", "1.0.0")
-      check r.packagesOf.len == 0
-      check r{"error"}.getStr == "dependency-unavailable"
-      let l = c.resolution("lib", "1.2.0")
-      check l{"error"}.getStr == "signature-verification-failed"
-      check second.stopped == 0
-      check hostsGone()
-
-    test "[IMPL-DECISION G449] an installed record is kept across logosd's restart: the next start reads the records back from the index, a remove sees the dependency, and the removed records are collected":
-      let c = newCase()
-      check c.initPm().code == 0
-      c.stock()
-      check c.ctl(
-        "trust", "anchor", "add", "--kid", "org", "--key", hexOf(orgPub), "app", "lib"
-      ).code == 0
-      let first = c.ready()
-      check c.setReadiness("ready")
-      check eventually(
-        "the catalog",
-        first,
-        proc(): bool =
-          not c.status(){"catalog"}.isNil,
-      )
-      let a = c.answer("install", "package=app", "version=1.0.0")
-      checkpoint("the install: " & a.identityOf & " " & a.codeOf)
-      check a.identityOf == "app@1.0.0"
+      check c.acquired(first, catalogLine("configured"))
+      check "no readiness subscription" notin first.errText
+      # With a catalog in use (without one, any resolution is package-unavailable first),
+      # an update of a package not installed.
+      check c.pm("update_package", identityRequest("current", "app", "1.0.0")).codeOf ==
+        "package-not-installed"
+      let a = c.pm("install_package", "package=app", "version=1.0.0")
+      checkpoint("the install: " & $a)
+      check a.installedOf == "app@1.0.0"
       check c.records == 2
       # [G449] The operation's log line: its time and the archive bytes it retrieved.
       check "package-manager: install_package ended after " in first.errText
       check "archive bytes retrieved: committed" in first.errText
+      # [G495; Q7 (b)] An observation is not served before 5-6b: MODULE_ERROR with no
+      # message, and the operator's log line.
+      let listed = c.pm("list_installed_packages")
+      check listed{"status"}.getStr == "error"
+      check listed{"code"}.getStr == "MODULE_ERROR"
+      check listed{"message"}.isNil
+      check eventually(
+        "the refusal's log line",
+        first,
+        proc(): bool =
+          "package-manager: list_installed_packages refused for module instance " &
+            CliInstance & " of Runtime " in first.errText,
+      )
       check first.stopped == 0
-      # The next start: the fake is not made ready, so nothing is retrieved; the records
-      # come from the index.
+      # The next start: the fake is not made ready, so nothing is retrieved; the
+      # catalog and the records come from what the Package Manager kept.
       let second = c.ready()
-      check c.answer("remove", "package=lib", "version=1.2.0").codeOf == "package-in-use"
-      check c.answer("remove", "package=app", "version=1.0.0").codeOf == ""
-      check c.answer("remove", "package=lib", "version=1.2.0").codeOf == ""
+      check eventually(
+        "the kept catalog",
+        second,
+        proc(): bool =
+          catalogLine("kept") in second.errText,
+      )
+      check c.pm("remove_package", identityRequest("identity", "lib", "1.2.0")).codeOf ==
+        "package-in-use"
+      let removed = c.pm("remove_package", identityRequest("identity", "app", "1.0.0"))
+      # The status first: a failed call has no `result`, and is reported, not read.
+      check removed{"status"}.getStr == "ok"
+      if removed{"status"}.getStr == "ok":
+        let res = removed{"result"}
+        check res != nil and res.kind == JObject and res.len == 0
+      check c.pm("remove_package", identityRequest("identity", "lib", "1.2.0")).codeOf ==
+        ""
       check eventually(
         "the removed records to be collected",
         second,
@@ -533,4 +544,250 @@ when defined(posix):
           c.records == 0,
       )
       check second.stopped == 0
+      check hostsGone()
+
+    test "[IMPL-DECISION G399] [BCP-0049] a trust change applies at the next start: a name removed from the anchor is withdrawn, and the kept catalog is in use at once":
+      let c = newCase()
+      check c.initPm().code == 0
+      c.stock()
+      c.anchor()
+      let first = c.ready()
+      check c.setReadiness("ready")
+      check c.acquired(first, catalogLine("configured"))
+      check first.stopped == 0
+      # Offline, under the session lock (DAEMON.md §6): `lib` leaves the anchor.
+      let change = c.ctl("trust", "anchor", "remove-names", "--kid", "org", "lib")
+      checkpoint(change.stdout & change.stderr)
+      check change.code == 0
+      check "it applies at the next start" in change.stdout
+      let second = c.ready()
+      check c.setReadiness("ready")
+      # `lib`'s archive is signed by `org`, whose anchor no longer authorizes the name:
+      # `lib` is refused, and `app` has no closure.
+      check eventually(
+        "lib's inspection to be refused",
+        second,
+        proc(): bool =
+          c.pm("inspect_package", "package=lib", "version=1.2.0").codeOf ==
+            "signature-verification-failed",
+      )
+      check catalogLine("kept") in second.errText
+      let r = c.pm("install_package", "package=app", "version=1.0.0")
+      checkpoint($r)
+      check r.codeOf == "dependency-unavailable"
+      check c.records == 0
+      check second.stopped == 0
+      check hostsGone()
+
+    test "[IMPL-DECISION G491] [IMPL-DECISION G402] ordering and overrides may name package_manager and take effect; the shell may stop, start and recover it, and may not retire or reconfigure it (S12)":
+      let c = newCase()
+      var dc = pmConfig()
+      # The Package Manager after the fake; the operator's restart policy for every
+      # instance but the Package Manager.
+      dc.ordering =
+        Opt.some(@[LcnAppOrdering(prerequisite: FakeInstance, dependent: PmInstance)])
+      var o = dc.orchestration.get
+      o.restart = Opt.some(
+        LcnDcRestart(
+          kind: LcnDcRestartKind.Backoff,
+          arm_Backoff: LcnDcRestartARBackoffMap(
+            initial_delay_ms: RestartInitialMs,
+            max_delay_ms: 2 * RestartInitialMs,
+            multiplier: 2,
+            stable_ms: 1000,
+          ),
+        )
+      )
+      o.overrides = Opt.some(
+        @[
+          LcnDcOverride(
+            instance: PmInstance, restart: LcnDcRestart(kind: LcnDcRestartKind.Disabled)
+          )
+        ]
+      )
+      dc.orchestration = Opt.some(o)
+      check c.initPm(dc).code == 0
+      c.stock()
+      c.anchor()
+      let d = c.ready()
+      check c.reaches(d, FakeInstance, "ready")
+      # [S12] Target-denied for the shell: retire, a staged value, an apply.
+      check c.ctl("module", "retire", PmInstance).refusedWith("NOT_AUTHORISED")
+      let value = c.dir / "value.cbor"
+      writeFile(value, "\xA0")
+      check c
+        .ctl(
+          "config",
+          "stage",
+          PmInstance,
+          "@" & value,
+          "--revision",
+          "0",
+          "--schema",
+          repeat('0', 128),
+        )
+        .refusedWith("NOT_AUTHORISED")
+      check c.ctl("config", "apply", PmInstance, "--revision", "1").refusedWith(
+        "NOT_AUTHORISED"
+      )
+      check c.stateOf(PmInstance) == "ready"
+      # [S12] The shell may stop and start it; the ordering holds for it: with the fake
+      # stopped, its start waits for a prerequisite.
+      check c.ctl("module", "stop", PmModule, "--instance", PmInstance).code == 0
+      check c.reaches(d, PmInstance, "unloaded")
+      check c.ctl("module", "stop", "fetch_fake_module", "--instance", FakeInstance).code ==
+        0
+      check c.reaches(d, FakeInstance, "unloaded")
+      check c.ctl("module", "start", PmModule, "--instance", PmInstance).refusedWith(
+        "NOT_READY"
+      )
+      check c.failureOf(PmInstance) == "prerequisite-unavailable"
+      check c.ctl("module", "start", "fetch_fake_module", "--instance", FakeInstance).code ==
+        0
+      check c.reaches(d, FakeInstance, "ready")
+      # Its intent is `requested`: the orchestrator may start it as well, so either
+      # start may be the one that runs.
+      let again = c.ctl("module", "start", PmModule, "--instance", PmInstance)
+      checkpoint(again.stdout & again.stderr)
+      check c.reaches(d, PmInstance, "ready")
+      # Its host, found as the one a start of it adds (no `logosctl call` here, so
+      # lcn_call is not started meanwhile).
+      check c.ctl("module", "stop", PmModule, "--instance", PmInstance).code == 0
+      check c.reaches(d, PmInstance, "unloaded")
+      let before = hostPids()
+      check c.ctl("module", "start", PmModule, "--instance", PmInstance).code == 0
+      check c.reaches(d, PmInstance, "ready")
+      let pmHost = hostPids().filterIt(it notin before)
+      check pmHost.len == 1
+      if pmHost.len == 1:
+        # The override: its host ends, and nothing starts it again.
+        check kill(Pid(pmHost[0]), SIGKILL) == 0
+        check c.reaches(d, PmInstance, "error")
+        sleep(NoRestartMs)
+        check c.stateOf(PmInstance) == "error"
+        # [S12] The shell may recover it.
+        let r = c.ctl("module", "recover", PmInstance)
+        checkpoint(r.stdout & r.stderr)
+        check r.code == 0
+        check c.reaches(d, PmInstance, "ready")
+      check d.stopped == 0
+      check hostsGone()
+
+    test "[IMPL-DECISION G491] under allow-all, with the development switch, the Package Manager is started with no operator entry for it":
+      let c = newCase()
+      var dc = pmConfig()
+      dc.policy = LcnDcPolicy(kind: LcnDcPolicyKind.Allow_all)
+      check c.initPm(dc, "--development").code == 0
+      c.stock()
+      c.anchor()
+      let d = c.ready()
+      check "development switch" in d.errText
+      check c.pm("inspect_package", "package=app", "version=1.0.0").codeOf ==
+        "package-unavailable"
+      check c.setReadiness("ready")
+      check c.acquired(d, catalogLine("configured"))
+      check d.stopped == 0
+      check hostsGone()
+
+    test "[PKG-0513] [PKG-0514] [IMPL-DECISION G491] the companion library: composed from it when the section gives no artifact, refused at realization once its bytes differ from the compiled digest; package_manager.artifact overrides it, and its own digest is checked":
+      let c = newCase()
+      # The packaged layout: logosd in `bin/`, the library in `lib/logos-core/`.
+      let pkg = c.dir / "pkg"
+      createDir(pkg / "bin")
+      createDir(pkg / "lib" / "logos-core")
+      let exe = pkg / "bin" / "logosd"
+      copyFileWithPermissions(companionLogosd(), exe)
+      let companion = pkg / "lib" / "logos-core" / PmLibrary
+      copyFile(pmLib, companion)
+      check c.initPm(pmConfig(pmSection(artifact = Opt.none(LcnAppArtifact)))).code == 0
+      c.stock()
+      c.anchor()
+      let first = c.ready(exe)
+      check c.setReadiness("ready")
+      check c.acquired(first, catalogLine("configured"))
+      check first.stopped == 0
+      # [PKG-0514] Its bytes no longer match the compiled digest.
+      block:
+        var f = open(companion, fmAppend)
+        f.write("\0")
+        f.close()
+      let second = c.start(exe)
+      c.expectReady(second)
+      check eventually(
+        "the integrity refusal",
+        second,
+        proc(): bool =
+          c.failureOf(PmInstance) == "loader-artifact-integrity-failed",
+      )
+      check second.stopped == 0
+      # The section's artifact wins over the companion library.
+      c.editConfig(
+        proc(dc: var LcnDaemonConfig) =
+          dc.package_manager.get.artifact = Opt.some(pmArtifact(pmLib))
+      )
+      let third = c.ready(exe)
+      check third.stopped == 0
+      # [PKG-0514] And its own digest is checked, at realization. On a session of its own:
+      # here, where the instance is retained, a changed digest is a changed declaration fact,
+      # which the start refuses before anything runs (G160's reconcile; G491's open item).
+      let d = newCase()
+      var a = pmArtifact(pmLib)
+      a.hash = digestOfFile(fakeLib)
+      check d.initPm(pmConfig(pmSection(artifact = Opt.some(a)))).code == 0
+      d.stock()
+      d.anchor()
+      let fourth = d.start(exe)
+      d.expectReady(fourth)
+      check eventually(
+        "the integrity refusal",
+        fourth,
+        proc(): bool =
+          d.failureOf(PmInstance) == "loader-artifact-integrity-failed",
+      )
+      check fourth.stopped == 0
+      check hostsGone()
+      removeDir(pkg)
+
+    test "[IMPL-DECISION G491] [IMPL-DECISION G490] refused before anything starts: the old package_manager.instance, orchestration.start naming package_manager, a Storage binding to package_manager, a logos_ operator module; a section with no artifact passes the shell's checks and this logosd, with no companion library, refuses it at start":
+      # The old field, named with its replacements (raw CBOR: the type no longer has it).
+      block:
+        let c = newCase()
+        var v = decodeCbor(pmConfig().encode.expect("an encoding")).expect("CBOR")
+        for e in v.entries.mitems:
+          if e.key.getText.get("") == "package_manager":
+            e.value.entries.add((cbor("instance"), cbor("pm-1")))
+        check c.initWith(encodeCbor(v)).refusedWith(
+          "--config: package_manager.instance is no longer a field: logosd composes the " &
+            "Package Manager itself as the instance package_manager; give " &
+            "package_manager.state (its state assignment) and, to override the " &
+            "companion library, package_manager.artifact"
+        )
+      block:
+        let c = newCase()
+        var dc = pmConfig()
+        dc.orchestration.get.start = Opt.some(@[FakeInstance, PmInstance])
+        check c.initPm(dc).refusedWith(
+          "orchestration.start: package_manager is started by logosd itself; it is not " &
+            "listed here"
+        )
+      block:
+        let c = newCase()
+        check c.initPm(pmConfig(pmSection(storageInstance = PmInstance))).refusedWith(
+          "package_manager.storage: binding main names the Package Manager's own instance"
+        )
+      block:
+        let c = newCase()
+        var dc = pmConfig()
+        dc.modules.get.add(hostedEntry("mine", "logos_mine", fakeLib, fakeRoot, "mine"))
+        check c.initPm(dc).refusedWith(
+          "modules: instance mine uses the reserved module-name prefix logos_"
+        )
+      # [G491] The shell cannot know which logosd starts: it composes a stand-in.
+      let c = newCase()
+      check c.initPm(pmConfig(pmSection(artifact = Opt.none(LcnAppArtifact)))).code == 0
+      check c.ctl("daemon", "config", "check").code == 0
+      let d = c.start()
+      check waitExit(d, ReadyMs) == 1
+      check "package_manager: this logosd has no Package Manager library; give " &
+        "package_manager.artifact" in d.errText
       check hostsGone()

@@ -50,11 +50,16 @@ type NimFixture* = object
     ## the kit
   confined*: bool ## a thread-confined kit (DECISIONS G335)
   asyncApi*: bool ## that also exports `_MODULE_async_api` (DECISIONS G338)
+  encodedResponses*: seq[string]
+    ## the methods whose handlers answer pre-encoded bytes (DECISIONS G494)
 
 proc kitOptionsOf(f: NimFixture): Result[KitOptions, string] =
   try:
     var opts = KitOptions(
-      importPrefix: fixturePrefix, confined: f.confined, asyncApi: f.asyncApi
+      importPrefix: fixturePrefix,
+      confined: f.confined,
+      asyncApi: f.asyncApi,
+      encodedResponses: f.encodedResponses,
     )
     if f.configuration.len > 0:
       let cfgSet = ?configurationSet(readFile(f.configuration))

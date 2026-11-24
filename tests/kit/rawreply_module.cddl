@@ -1,0 +1,18 @@
+; -- metadata --
+_module = "rawreply_module"
+
+; Input for tests/generated/rawreply_module_*: a confined provider with the
+; asynchronous API whose `reply` answers pre-encoded bytes (Tier 5 step 5-6a-1;
+; DECISIONS G494). Its handler answers the request's `bytes` as they are, so a
+; test chooses what reaches the Module Host's boundary, which checks a response
+; against the method's schema (tests/kit/rawreply_impl.nim, test_pm_module).
+
+rawreply.reply_request = {
+  bytes: bstr .size (0..4096),
+}
+
+rawreply.reply_response = {
+  value: uint64,
+} / {
+  error: tstr .size (1..64),
+}

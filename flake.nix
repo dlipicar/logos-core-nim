@@ -416,16 +416,42 @@
             '';
           };
 
+          # The Package Manager module's library (Tier 5 step 5-6a-1; DECISIONS G491, G340,
+          # G341): as liblcn_call, and its kit is confined, so it imports hostsignals first
+          # (G340, P5). logosd composes it as the reserved instance `package_manager`.
+          pmLib = nimDerivation {
+            pname = "liblogos_package_manager";
+            version = daemonVersion;
+            src = nimSources;
+            buildPhase = ''
+              runHook preBuild
+              nim c --mm:orc -d:release -d:noSignalHandler --app:lib \
+                --import:logos_sdk/base/hostsignals \
+                --nimMainPrefix:liblogos_package_manager ${
+                  if pkgs.stdenv.hostPlatform.isDarwin then
+                    "--passL:-Wl,-exported_symbols_list,src/logos_core/pm/logos_package_manager_kit.exports"
+                  else
+                    "--passL:-Wl,--version-script=src/logos_core/pm/logos_package_manager_kit.map"
+                } -o:build/lib/liblogos_package_manager${sharedLib} src/logos_package_manager.nim
+              runHook postBuild
+            '';
+            installPhase = ''
+              install -Dm444 build/lib/liblogos_package_manager${sharedLib} \
+                $out/lib/logos-core/liblogos_package_manager${sharedLib}
+            '';
+          };
+
           # logosd and logosctl (Tier 4b step 4b-6; DECISIONS I95; docs/DAEMON.md): orc
           # release builds without test hooks (R5, D27). logosd finds the Module Host, the key
           # holder and the remote program at ../libexec/logos-core and liblcn_call at
           # ../lib/logos-core, where its package puts them. [G343] logosd is built with the BLAKE3-256 of liblcn_call's final
           # store file, and the library is copied after the fixup, so no strip or patchelf
-          # changes the bytes the Module Loader checks against that digest.
+          # changes the bytes the Module Loader checks against that digest. [G491] The same
+          # for liblogos_package_manager (`pmArtifactHash`).
           daemonVersion = coreVersion;
           # [DECISIONS G409] logosd's switches, which the flake check `logosd-no-ssl` builds its
           # probe with, so the same BoringSSL objects compile under the same nimcache names.
-          # logosd adds only `lcnVersion` and `lcnCallArtifactHash`, constants of its own Nim
+          # logosd adds only `lcnVersion`, `lcnCallArtifactHash` and `pmArtifactHash`, constants of its own Nim
           # code. The binding reads platform defines, BORINGSSL_USE_ASM and
           # BORINGSSL_ZERO_RECORD_BUFFERS, and neither of these.
           logosdSwitches = "--mm:orc -d:release";
@@ -437,8 +463,10 @@
               runHook preBuild
               nim c -d:release --outdir:build/bin tools/artifact_hash.nim
               cliHash=$(build/bin/artifact_hash ${lcnCallLib}/lib/logos-core/liblcn_call${sharedLib})
+              pmHash=$(build/bin/artifact_hash ${pmLib}/lib/logos-core/liblogos_package_manager${sharedLib})
               nim c ${logosdSwitches} -d:lcnVersion=${daemonVersion} \
-                -d:lcnCallArtifactHash=$cliHash --outdir:build/bin src/logosd.nim
+                -d:lcnCallArtifactHash=$cliHash -d:pmArtifactHash=$pmHash \
+                --outdir:build/bin src/logosd.nim
               runHook postBuild
             '';
             installPhase = ''
@@ -450,6 +478,8 @@
             postFixup = ''
               install -Dm444 ${lcnCallLib}/lib/logos-core/liblcn_call${sharedLib} \
                 $out/lib/logos-core/liblcn_call${sharedLib}
+              install -Dm444 ${pmLib}/lib/logos-core/liblogos_package_manager${sharedLib} \
+                $out/lib/logos-core/liblogos_package_manager${sharedLib}
             '';
             meta.mainProgram = "logosd";
           };
@@ -518,6 +548,9 @@
                 # first CLI command; the build sandbox's store ownership does not matter
                 # to an artifact, only its digest does.
                 test -f ${logosd}/lib/logos-core/liblcn_call${sharedLib}
+                # [G491] The companion Package Manager library, composed only with a
+                # `package_manager` section (none here).
+                test -f ${logosd}/lib/logos-core/liblogos_package_manager${sharedLib}
                 ctl --json describe logos_capability_authority > describe.json \
                   || { echo "describe failed"; cat describe.json logosd.err; exit 1; }
                 grep -q '"status":"ok"' describe.json

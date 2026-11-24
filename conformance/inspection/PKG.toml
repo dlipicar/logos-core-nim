@@ -59,3 +59,8 @@ reason = "A MAY the Package Manager takes, internally: the verification cache (s
 [[item]]
 ids = ["PKG-0441"]
 reason = "No kid is retained, so none can stand in for the key identity: the installed record's and the inspection record's signer is App A's package_signer, the profile and the 48-byte public key only (spec/mirrors/PKG/app-a.contract.cddl; src/logos_core/package/signing.nim signerRecord), and every check of a retained signer compares that key under the accepted anchors (src/logos_core/package/resolver.nim, src/logos_core/pm/handoff.nim; tests [PKG-0080] and [PKG-0440] in tests/test_pm_install.nim)."
+
+# pm-never-co-located (step 5-6a-1, DECISIONS G490, G491, C1, I140)
+[[item]]
+ids = ["PKG-0005", "PKG-0006"]
+reason = "A permission not taken (PM l.31, PKG-0005) and a duty whose condition never arises (PKG-0006). The Package Manager is never co-located or statically linked: by the owner's C1 it is hosted in its own process, the module logos_package_manager realized hosted_dynamic with placement process. The host configuration's mark accepts only such an instance and refuses a direct_static or direct_dynamic entry (runtime/host_config.nim; test [PKG-0003] in tests/test_host.nim), and logosd composes it only that way (compose.nim pmRecord; DECISIONS G491). So no Package Manager code runs in the Runtime's process, and no direct-mode instance of it exists to represent."
