@@ -544,7 +544,8 @@ when defined(posix):
 
   proc newCase(): Case =
     inc cases
-    result.dir = makeShortBase("lrt" & $cases, deepest = "/s/run/logosctl.sock")
+    result.dir =
+      makeShortBase("lrt" & $cases, deepest = "/s/run/logosctl.sock", perCase = true)
     result.s = Session(dir: result.dir / "s")
 
   proc ctl(c: Case, args: varargs[string]): Ran =
@@ -606,6 +607,8 @@ when defined(posix):
       # under orc its exit procedure would free it a second time
       # (build/scratch/upstream/ISSUES.md 194).
       killAll()
+      # The case's directories: kept if it failed (`shortdir`).
+      endCaseBases(testStatusIMPL == TestStatus.FAILED)
 
     test "[IMPL-DECISION G407] [IMPL-DECISION G408] [RUN-0500] logosd reads no remote input without remote.enabled; with it, a start without a mark is refused until remote trust init, a stale record refuses the start and a conflict is logged while the start goes on":
       let c = newCase()

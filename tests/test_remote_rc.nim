@@ -311,7 +311,8 @@ when defined(posix):
     ## ports, a capability-authority policy of `rules`, a TLS credential and
     ## `a` enrolled.
     inc cases
-    result.dir = makeShortBase("lrc" & $cases, deepest = "/s/run/logosctl.sock")
+    result.dir =
+      makeShortBase("lrc" & $cases, deepest = "/s/run/logosctl.sock", perCase = true)
     result.s = Session(dir: result.dir / "s")
     result.ports = freePorts(ls.len)
     let dc = result.configOf(rules, ls, meter)
@@ -672,6 +673,8 @@ when defined(posix):
       # under orc its exit procedure would free it a second time
       # (build/scratch/upstream/ISSUES.md 194).
       killAll()
+      # The case's directories: kept if it failed (`shortdir`).
+      endCaseBases(testStatusIMPL == TestStatus.FAILED)
 
     test "[RUN-0339] [RUN-0340] [RUN-0342] [TRN-0206] [RUN-0343] [RUN-0344] [RUN-0849] [RUN-0508] [RUN-0513] [IMPL-DECISION G413] the token is one deterministic consumer address owned by the authenticated Runtime: missing, empty, malformed, non-deterministic, trailing-byte and mismatched ones are ProtocolError NOT_AUTHORISED with no session and no method run; another module NOT_AUTHORISED, another contract VERSION_MISMATCH; the accepted Hello is answered with the Runtime Control contract and an empty token":
       let c = newCase(@[rcAllow(ListenerMethods)])
@@ -749,6 +752,8 @@ when defined(posix):
   suite "remote: inbound Runtime Control, authority [RUNTIME l.1824-1835; CA; G415, O1]":
     teardown:
       killAll()
+      # The case's directories: kept if it failed (`shortdir`).
+      endCaseBases(testStatusIMPL == TestStatus.FAILED)
 
     test "[RUN-1124] [RUN-0338] [IMPL-DECISION G413] a method is authorized before its payload is decoded or validated: refused, a bad payload is NOT_AUTHORISED and the session stays; allowed, the same payload is INVALID_PARAMS, and a commitment for another type closes the session":
       let c = newCase(@[rcAllow(["list_provider_exports"])])
@@ -802,6 +807,8 @@ when defined(posix):
   suite "remote: inbound Runtime Control, forwarded discovery [RUNTIME l.2750-2767; G413]":
     teardown:
       killAll()
+      # The case's directories: kept if it failed (`shortdir`).
+      endCaseBases(testStatusIMPL == TestStatus.FAILED)
 
     test "[RUN-0092] [RUN-0514] [RUN-0516] [RUN-0517] [RUN-0518] [RUN-0622] [RUN-0618] [RUN-0985] [RUN-0510] [IMPL-DECISION G413] a provider is shown to a forwarded consumer only while an enabled export through an enabled listener names it, and a configured provider and an allowed discover export nothing; an export of no listener record or of another Runtime's provider is INVALID_PARAMS, of an unknown provider NOT_AUTHORISED":
       let c = newCase(
@@ -872,6 +879,8 @@ when defined(posix):
   suite "remote: listener and export records through remote Runtime Control [RUNTIME l.3289-3322; G412, Q4]":
     teardown:
       killAll()
+      # The case's directories: kept if it failed (`shortdir`).
+      endCaseBases(testStatusIMPL == TestStatus.FAILED)
 
     test "[RUN-0509] [RUN-0616] [RUN-0617] [RUN-0595] [RUN-0596] [IMPL-DECISION G412] turning Runtime Control off on a listener ends its Runtime Control sessions and refuses new ones; disabling it stops new connections; both stay off across a SIGKILL right after the answer and a restart; an enable through Runtime Control lifts them":
       let c = newCase(@[rcAllow(ListenerMethods)])
@@ -1131,10 +1140,13 @@ when defined(posix):
       # Leaves daemonproc's list of children without a payload before the
       # program ends, as each suite here does (ISSUES.md 194).
       killAll()
+      # The case's directories: kept if it failed (`shortdir`).
+      endCaseBases(testStatusIMPL == TestStatus.FAILED)
 
     test "[RUN-0621] [IMPL-DECISION G412] a configuration record is refused as Runtime Control refuses the same record: a tls-tcp address naming another profile":
       inc cases
-      let dir = makeShortBase("lrc" & $cases, deepest = "/s/run/logosctl.sock")
+      let dir =
+        makeShortBase("lrc" & $cases, deepest = "/s/run/logosctl.sock", perCase = true)
       let s = Session(dir: dir / "s")
       var dc = defaultDaemonConfig(IdB) # a UUIDv4, as remote.enabled needs
       dc.runtime.remote_program = Opt.some(rExe)

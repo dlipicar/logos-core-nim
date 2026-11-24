@@ -146,7 +146,8 @@ when defined(posix):
     ## A session with remote on, one enabled tls-tcp listener on a free
     ## loopback port, a TLS credential and `a` enrolled.
     inc cases
-    result.dir = makeShortBase("lrl" & $cases, deepest = "/s/run/logosctl.sock")
+    result.dir =
+      makeShortBase("lrl" & $cases, deepest = "/s/run/logosctl.sock", perCase = true)
     result.s = Session(dir: result.dir / "s")
     result.port = freePort()
     var dc = defaultDaemonConfig("assigned-by-init")
@@ -237,6 +238,8 @@ when defined(posix):
     teardown:
       # As below (ISSUES.md 194).
       killAll()
+      # The case's directories: kept if it failed (`shortdir`).
+      endCaseBases(testStatusIMPL == TestStatus.FAILED)
 
     test "[TRN-0227] [IMPL-DECISION G411] [IMPL-DECISION G410] logosd starts an enabled listener's process, which serves an enrolled peer with logosd's certificate and signer; SIGKILL of logosd ends it and the peer's connection within 2 s and frees its lock; a restart with the peer revoked refuses its handshake":
       let c = newCase()
@@ -366,12 +369,14 @@ when defined(posix):
       # under orc its exit procedure would free it a second time
       # (build/scratch/upstream/ISSUES.md 194).
       killAll()
+      # The case's directories: kept if it failed (`shortdir`).
+      endCaseBases(testStatusIMPL == TestStatus.FAILED)
 
     test "[plan §3.1 item 1] the control channel closed (fd 3): the process exits at once and its peer's connection ends":
       let server = newParty(IdB)
       let (mine, theirs) = socketPair()
       let (lfd, port) = boundListener()
-      let work = makeShortBase("lrh")
+      let work = makeShortBase("lrh", perCase = true)
       let lockFd =
         open(cstring(work / "l.lock"), O_RDWR or O_CREAT or O_CLOEXEC, Mode(0o600))
       let pid = spawnRemote(["listener", ParentFlag & $getpid()], theirs, lfd, lockFd)
@@ -429,7 +434,7 @@ when defined(posix):
         waitFor s.get.close()
 
     test "[plan §3.1, the macOS order] a parent already gone when the process starts: it exits at once; started without its descriptors or role, it exits 2":
-      let work = makeShortBase("lrg")
+      let work = makeShortBase("lrg", perCase = true)
       # A pid that existed and ended: a child of this process, reaped.
       let child = spawnChild("/bin/sh", ["-c", "exit 0"], work, "gone")
       check waitExit(child, EndMs) == 0
