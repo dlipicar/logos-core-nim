@@ -814,7 +814,7 @@ suite "dc.compose: the derived host configuration [IMPL-DECISION G294] [IMPL-DEC
       )
       .replace(
         "{\"runtime_instance_id\": \"rt-1\"}",
-        "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & host & "\"}",
+        "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & dq(host) & "\"}",
       )
     for (trust, deployment) in [
       (prod, LcnCallSettingsDeploymentChoiceKind.Production),
@@ -854,12 +854,12 @@ suite "dc.compose: the derived host configuration [IMPL-DECISION G294] [IMPL-DEC
           "\"overrides\": [{\"instance\": \"logosctl\", \"restart\": {\"kind\": \"disabled\"}}], \"resync_ms\": 2000}, " &
           "\"permissions\": {\"initial\": [{\"module\": \"other\", \"permissions\": [{\"permission\": \"logos-core-nim.host-ambient\", \"constraints\": h'a0'}]}]}, " &
           "\"call_audit\": {\"call_records\": 64, \"evidence\": {\"kid\": h'" &
-          k.binding.kid.toHex & "', \"secret_key_file\": \"" & k.keyFile &
+          k.binding.kid.toHex & "', \"secret_key_file\": \"" & dq(k.keyFile) &
           "\"}, \"store\": {}}"
       )
       .replace(
         "{\"runtime_instance_id\": \"rt-1\"}",
-        "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & host & "\"}",
+        "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & dq(host) & "\"}",
       )
     let p = prepareDaemon(s, dcBytes(text), prod).get
     let app = p.composition.appConfig
@@ -891,7 +891,7 @@ suite "dc.compose: the derived host configuration [IMPL-DECISION G294] [IMPL-DEC
       )
         .replace(
           "{\"runtime_instance_id\": \"rt-1\"}",
-          "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & host & "\"}",
+          "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & dq(host) & "\"}",
         )
 
     let p = prepareDaemon(s, dcBytes(text("move")), prod).get
@@ -909,7 +909,7 @@ suite "dc.compose: the derived host configuration [IMPL-DECISION G294] [IMPL-DEC
     let s = Session(dir: freshDir())
     let missing = dcText().replace(
         "{\"runtime_instance_id\": \"rt-1\"}",
-        "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & work / "no-host" &
+        "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & dq(work / "no-host") &
           "\"}",
       )
     check prepareDaemon(s, dcBytes(missing), prod).error ==
@@ -1381,7 +1381,8 @@ proc withHost(text: string): string =
   ## `text` with a `module_host`, which a composed hosted instance needs.
   text.replace(
     "{\"runtime_instance_id\": \"rt-1\"}",
-    "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & getAppFilename() & "\"}",
+    "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & dq(getAppFilename()) &
+      "\"}",
   )
 
 func presetLine(instance: string): string =
@@ -2627,8 +2628,8 @@ suite "dc.init: logosctl init's session [IMPL-DECISION G192] [batch E 19] [U8]":
       )
         .replace(
           "{\"runtime_instance_id\": \"rt-1\"}",
-          "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & getAppFilename() &
-            "\"}",
+          "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" &
+            dq(getAppFilename()) & "\"}",
         )
     )
     let r = initSession(s, InitOptions(config: Opt.some(cfg), development: true)).get
