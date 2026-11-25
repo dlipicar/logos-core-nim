@@ -30,6 +30,39 @@ when defined(posix):
   include ./support/lcncall_live
   import ./support/signals
 
+  # How long this host takes for the stack [IMPL] ------------------------------------------
+
+  var stackMeasured = -1'i64 ## `stackCostMs`'s, once per process; -1: not yet
+
+  proc stackCostMs(l: var Live): int64 =
+    ## [IMPL] What this host takes, in ms, for `lcn_call`'s first command (its
+    ## start and a route's establishment) and then six commands at once on
+    ## that route, measured once per process in a session of its own, which
+    ## `l` holds and is finished. L-10 and L-11 need commands to fit inside a
+    ## decision's validity, and a sanitizer's slowdown of this stack on a
+    ## loaded runner is far past `Slow`: in big CI run 1 (ubuntu-latest)
+    ## L-10's twelve commands took 170 s under MemorySanitizer, 67-122 s under
+    ## AddressSanitizer and 2 s under orc-release, against `Slow` = 3. So their
+    ## validity follows this measure, never below the fixed one.
+    if stackMeasured < 0:
+      l = boot(newSession(Shape(providers: @[MeterInstance])))
+      let began = getMonoTime()
+      check l.run(meterRead(7)).exit == 0
+      var threads: array[6, Thread[(ptr Live, int)]]
+      for i in 0 ..< threads.len:
+        concurrent[i].store(-1)
+        createThread(threads[i], reader, (addr l, i))
+      joinThreads(threads)
+      for i in 0 ..< threads.len:
+        check concurrent[i].load == 0
+      stackMeasured = msSince(began)
+      finish(l)
+      stderr.writeLine(
+        "lcn_call stack: " & $stackMeasured &
+          " ms for its start, a route and seven commands"
+      )
+    stackMeasured
+
   # Cases ---------------------------------------------------------------------------------
 
   suite "cli.lcn_call: the CLI module in logosd (DAEMON.md §7a) [IMPL-DECISION G343] [IMPL-DECISION G344] [IMPL-DECISION G348] [IMPL-DECISION G349]":
@@ -408,8 +441,14 @@ when defined(posix):
     test "L-10: calls past a short decision validity, concurrent calls on one route, an idle close, and a call after the provider restarted":
       # [IMPL] A decision takes up to about 1.5 s on a loaded host (refc, or a
       # load of 100), and its validity runs from it. A refc build takes `Load`
-      # times as long for a decision and a renewal.
-      let validity = 8_000 * Slow * Load
+      # times as long for a decision and a renewal. On a slower host the
+      # validity is four times `stackCostMs`, which measures this case's first
+      # command and its six at once: after them three quarters of the decision
+      # are left, `idle` is twice their cost, and the renewal window (a tenth)
+      # is two fifths of it. MemorySanitizer on a CI runner took 28 s for the
+      # first command and 19 s for the six, past a validity of 24 s and an
+      # idle of 12 s, so the six were given a new route.
+      let validity = max(8_000 * Slow * Load, int(4 * stackCostMs(l)))
       # Unused for half the validity, the route closes; `callsUntil` keeps it
       # in use until the case lets it close.
       let idle = validity div 2
@@ -661,11 +700,21 @@ when defined(posix):
     test "L-11: a stream lasts one route session: under a short decision_validity_ms it ends with its route's session (6) [IMPL-DECISION G349]":
       # [P5; R l.3337-3338] A renewal does not extend a session; nothing
       # renews the stream's route, so it ends at the decision's valid_until.
-      let validity = 8_000 * Slow
+      # [IMPL] The stream starts `lcn_call` and its route, and an event must
+      # reach it before the decision ends: on a slower host the validity is
+      # four times `stackCostMs` (MemorySanitizer on a CI runner ended a 24 s
+      # session before the first event).
+      let validity = max(8_000 * Slow, int(4 * stackCostMs(l)))
       l = boot(newSession(Shape(validityMs: validity, providers: @[MeterInstance])))
       l.stream(subscribeOf("meter_module", "changed"), text = true)
       check within("meter.changed_event" in streamOutput(), l.publish())
-      check within(streamEnded(), sleep(10))
+      # The decision was made before the event came: the stream ends within
+      # `validity` of now, and the bound past it.
+      let ending =
+        getMonoTime() + initDuration(milliseconds = validity + Patience * 1000)
+      while not streamEnded() and getMonoTime() < ending:
+        sleep(10)
+      check streamEnded()
       check endStream() == 6
       checkpoint saidStream()
       check "the route's session ended; run the command again" in streamErrors()
