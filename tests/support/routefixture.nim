@@ -580,6 +580,15 @@ proc relayHandle(
   rc.materialize(made.routesOf.routes[0].route, root, relaySchema(root))
 
 proc raw(h: var LogosRouteHandle, name: string, params: openArray[byte]): RcResult =
+  ## `name` invoked through `h`. [IMPL] An empty handle, one whose route was not made (its
+  ## `check` already failed), is not called through: it answers NOT_READY, not invoked, so
+  ## the case fails on and the suite's later cases still run (big CI run 1: a call through a
+  ## nil vtable ended `test_pm_module` under UBSan).
+  if h.vtable == nil:
+    return RcResult(
+      code: ecNotReady,
+      message: "the route handle is empty (no route was made): not invoked",
+    )
   var buf: ptr UncheckedArray[uint8]
   var len: csize_t
   let r = h.vtable.call(
