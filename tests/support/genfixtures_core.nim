@@ -137,7 +137,7 @@ func cddlRules*(doc: string): seq[(string, string)] =
   ## and its text, from its first line to the line before the next rule, a
   ## comment or a metadata line at the start of a line.
   var name = ""
-  var text: seq[string]
+  var text: seq[string] = @[] # firstwrite: `flush()` after the loop writes it
   template flush() =
     if name.len > 0:
       while text.len > 0 and text[^1].strip.len == 0:

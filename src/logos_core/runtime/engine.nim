@@ -7262,7 +7262,10 @@ proc describeProvider(st: State, q: Request, x: Inst) =
   if p.runtime_instance_id.isSome and p.runtime_instance_id.get != st.runtimeId:
     q.reply.answerError(ecInvalidParams, "the provider names another Runtime")
     return
-  var owner: Inst
+  # [IMPL] An initializer: without one, the `nil` below is a plain store under
+  # ORC and the provider's instance keeps the reference the loop gave `owner`
+  # (nim-lang/Nim#26725; upstream ISSUES.md 131).
+  var owner: Inst = nil
   for y in st.instances.values:
     if y.providerId.len > 0 and y.providerId == p.provider:
       owner = y

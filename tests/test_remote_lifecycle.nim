@@ -331,7 +331,10 @@ when defined(posix):
       check checkRemoteLocks(c.s.workDir).isOk
       let d2 = c.start()
       check c.ready(d2)
-      check c.dial().isOk
+      let s = c.dial()
+      check s.isOk
+      if s.isOk:
+        waitFor s.get.close()
       check stopChild(d2, StopMs) == 0
 
   # logos_remote under a harness ---------------------------------------------------------------
@@ -433,6 +436,7 @@ when defined(posix):
       if s.isOk:
         check s.get.closedWithin(EndMs)
         waitFor s.get.close()
+      server.free()
 
     test "[plan §3.1, the macOS order] a parent already gone when the process starts: it exits at once; started without its descriptors or role, it exits 2":
       let work = makeShortBase("lrg", perCase = true)
@@ -473,3 +477,7 @@ when defined(posix):
       let fits = repeat('a', 509) & euro
       check cutMessage(fits) == fits
       check cutMessage(fits & "b").len == 512
+
+  # The fixtures' keys and contexts, which only `free` releases.
+  freeContexts()
+  a.free()

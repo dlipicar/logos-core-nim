@@ -257,7 +257,10 @@ when defined(posix):
       let c = process.clientOn(tlsClient)
       let faults = new int
       asyncSpawn process.pumpAnswers(c, faults)
-      asyncSpawn logosd.serveService(svc, tlsClient)
+      # The limit's clock held still: the burst below is exact however slowly
+      # this build serves it (under MemorySanitizer the bucket refilled as fast
+      # as the burst drained it).
+      asyncSpawn logosd.serveService(svc, tlsClient, frozenNs = monoNs())
       let sig = c.signer
       let x = cvInput(tlsClient)
       let ok = waitFor sig(tlsClient, EcdsaP256, x)
@@ -281,13 +284,13 @@ when defined(posix):
         check (waitFor sig(tlsClient, alg, input)).status == ssRefused
       check svc.count.signed == 2
       check svc.count.refused == 4
-      # [IMPL] logosd's limit per process: a burst over it is refused.
+      # [IMPL] logosd's limit per process: a burst over it is refused. The six
+      # requests above each took a token, refused or not.
       let rs = signAll(sig, tlsClient, newSeqWith(260, x))
       let (signedN, refusedN, unavailableN) = statuses(rs)
       check unavailableN == 0
-      check signedN >= ProcessBurst - 6
-      check signedN < 260
-      check refusedN > 0
+      check signedN == ProcessBurst - 6
+      check refusedN == 260 - (ProcessBurst - 6)
       # No key crossed the channel: the process's end read answers only, and
       # logosd's end wrote answers only.
       check process.got.allIt(it in {lcn_Rch_signed, lcn_Rch_sign_refused})
@@ -373,7 +376,10 @@ when defined(posix):
         check not dirExists(s.remoteDir / OldCredentialName)
         check loadCredentialKey(credentialDir(s)).isErr
         setFilePermissions(keyPath(credentialDir(s)), {fpUserRead, fpUserWrite})
-        check loadCredentialKey(credentialDir(s)).isOk
+        let loaded = loadCredentialKey(credentialDir(s))
+        check loaded.isOk
+        if loaded.isOk:
+          loaded.get.free()
 
     test "[IMPL-DECISION G410] the key holder ends on anything but holder_sign, and needs its arguments":
       let (s, _) = withCredential("holder-ends")

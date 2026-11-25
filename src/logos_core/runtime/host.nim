@@ -751,6 +751,10 @@ proc runtimeDestroy*(rt: ptr LogosRuntimeHandle): LogosResult =
     deallocShared(h.config)
   deinitCond(h.cond)
   deinitLock(h.lock)
+  # [IMPL] `deallocShared` frees the object's own bytes only: the managed fields
+  # (the remote hooks' certificate and test key) are destroyed first, as
+  # `closeRemoteSupervisor` does with its copy. The engine is nil by now.
+  `=destroy`(h[])
   deallocShared(h)
   answer(ecOk)
 

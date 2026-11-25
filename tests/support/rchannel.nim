@@ -108,16 +108,25 @@ proc pumpAnswers*(e: RchEnd, c: SignClient, faults: ref int) {.async: (raises: [
 
 # logosd's end ------------------------------------------------------------------------------
 
-proc serveService*(e: RchEnd, svc: SignService, role: TlsRole) {.async: (raises: []).} =
+proc serveService*(
+    e: RchEnd, svc: SignService, role: TlsRole, frozenNs = -1'i64
+) {.async: (raises: []).} =
   ## logosd's end in the default mode: each sign request answered by `svc`
   ## for a process of `role`, until the channel ends or carries anything else.
+  ## With `frozenNs` set, every answer is at that monotonic time: the limit
+  ## never refills, so a burst's count does not depend on how fast it is served.
   var p = newProcessSigning(role)
   while true:
     let m = (await e.receive()).valueOr:
       break
     if m.kind != LcnRchMessageKind.lcn_Rch_sign:
       break
-    if not await e.send(svc.answer(p, m.arm_lcn_Rch_sign)):
+    let now =
+      if frozenNs >= 0:
+        frozenNs
+      else:
+        monoNs()
+    if not await e.send(svc.answer(p, m.arm_lcn_Rch_sign, now)):
       break
 
 proc serveRelay*(

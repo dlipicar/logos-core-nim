@@ -2298,13 +2298,13 @@ suite "pkg.resolver: an inspection's encodings (G482)":
       check eligibleInspection(
         ident("a@1.0.0"), commitOf("a"), [], @[contract("x"), contract("y")]
       ).contractCount == 2
+      # Held here: a Defect skips the destructors of the call's temporaries.
+      let
+        who = ident("a@1.0.0")
+        deps = @[dep("b ^1.0.0 +z")]
+        provides = @[contract("x"), contract("y")]
       expect AssertionDefect:
-        discard eligibleInspection(
-          ident("a@1.0.0"),
-          commitOf("a"),
-          @[dep("b ^1.0.0 +z")],
-          @[contract("x"), contract("y")],
-        )
+        discard eligibleInspection(who, commitOf("a"), deps, provides)
       inspectionBytesForTests = 0
     else:
       skip()
