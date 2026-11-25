@@ -1180,3 +1180,8 @@ when defined(posix):
       checkpoint(r.stdout & r.stderr)
       check r.code != 0
       check "profile" in (r.stdout & r.stderr)
+
+  # The fixtures' keys and contexts, which only `free` releases.
+  freeContexts()
+  for p in [a, stranger]:
+    p.free()

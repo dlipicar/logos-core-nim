@@ -228,8 +228,10 @@ suite "cbor: encoder":
     let nested =
       cborArray(cbor("x"), cborArray(cbor(@[1'u8])), cborMap((cbor(1), cborArray())))
     check enc(nested) == "836178814101a10180"
+    # Held here: a Defect skips the destructors of the call's temporaries.
+    let duplicate = cborMap((cbor(1), cbor(1)), (cbor(1), cbor(2)))
     expect AssertionDefect:
-      discard encodeCbor(cborMap((cbor(1), cbor(1)), (cbor(1), cbor(2))))
+      discard encodeCbor(duplicate)
 
   test "[IMPL] the generic data model encodes floats in the shortest width":
     check enc(cborFloat(0.0)) == "f90000"
