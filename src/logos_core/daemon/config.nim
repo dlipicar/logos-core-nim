@@ -20,6 +20,7 @@ from ../pm/input import
 from ../runtime/authscopes import AuthorityModule
 from ../orchestration/settings import OrchestratorModule
 from ../runtime/host_config import checkProgramFile, PackageManagerModule
+from ../cli/callsettings import LcnCallArtifactId
 import ./[daemon_config_types, evkey, session, trustfile]
 
 export results, daemon_config_types
@@ -322,6 +323,13 @@ proc checkPackageManager(
     byId[m.instance] = m
   if p.artifact.isSome and not isAbsolute(p.artifact.get.local_path):
     return err("package_manager.artifact.local_path must be an absolute path")
+  if p.artifact.isSome and p.artifact.get.id != PmModule:
+    # [IMPL-DECISION G505] An override is the same library at another place or
+    # build: the Runtime adopts a new hash for the composed instance, never a
+    # new id.
+    return err(
+      "package_manager.artifact.id must be " & PmModule & ", the companion library's id"
+    )
   if p.storage.len == 0:
     return err("package_manager.storage holds no binding")
   var names = initHashSet[string]()
@@ -426,6 +434,12 @@ proc checkCli(dc: LcnDaemonConfig): Result[CliSettings, string] =
   if x.artifact.isSome:
     if not isAbsolute(x.artifact.get.local_path):
       return err("cli.artifact.local_path must be an absolute path")
+    if x.artifact.get.id != LcnCallArtifactId:
+      # [IMPL-DECISION G505] As for `package_manager.artifact`: a new hash is
+      # adopted, a new id never.
+      return err(
+        "cli.artifact.id must be " & LcnCallArtifactId & ", the companion library's id"
+      )
     c.artifact = x.artifact
   if x.socket_dir.isSome:
     if not isAbsolute(x.socket_dir.get):

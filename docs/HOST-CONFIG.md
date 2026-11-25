@@ -41,8 +41,8 @@ from a source only the host's owner can change.
 ;
 ; An array that is present is non-empty, and the checks the schema cannot
 ; express (unique ids, ordering, the orchestration instance, the authority
-; instance, the package manager instance) are applied at logos_runtime_create
-; (runtime/host_config.nim).
+; instance, the package manager instance, the artifact adoption list) are
+; applied at logos_runtime_create (runtime/host_config.nim).
 ; lcn.authority_policy is the Capability Authority's policy input,
 ; authority/policy.cddl (docs/AUTHORITY-POLICY.md).
 
@@ -64,6 +64,11 @@ lcn.app_config = {
   ; l.293): the hosted_dynamic logos_package_manager, the one hosted module
   ; whose reserved name the Module Host accepts.
   ? package_manager: lcn.app_instance_id,
+  ; [G505] Instances whose retained record may take a new artifact hash at a
+  ; start, all other facts equal: the host's assertion that the instance keeps
+  ; its state, grants and settings across a new library. logosd lists its own
+  ; composed instances (package_manager, lcn_call), never an operator's.
+  ? artifact_adoption: [* lcn.app_instance_id],
 }
 
 lcn.app_runtime = {
@@ -624,6 +629,28 @@ instance's Module Host (the carrier's `init` has `system: true`), the host accep
 accepts the reserved call surface. Without the mark a hosted module with a reserved name is refused
 by its host, as before. logosd writes the mark for the instance it composes ([DAEMON.md](DAEMON.md)
 §3, "The derived host configuration").
+
+### `artifact_adoption`
+
+The instances whose retained record may take a new artifact hash at a `start` (DECISIONS G505).
+Optional; when present, not empty. Each id is listed once and names a `direct_dynamic` or
+`hosted_dynamic` instance in `modules` that is neither the orchestration nor the authority
+instance; otherwise `create` refuses with "artifact_adoption is present but empty", "artifact_adoption
+names … twice", "… which is not in modules", "… which is not a dynamic instance", or
+"artifact_adoption names the orchestration instance" / "… the authority instance".
+
+Listing an instance is the host's assertion that a new library under the same artifact id keeps that
+instance's state, grants and settings: any embedding host may make it, not only logosd. At `start`,
+a listed instance whose retained declaration differs from the configured one only in the artifact's
+`hash` keeps its id, state assignment, state, settings and grants; its record takes the new hash
+(and, as for any instance, the configured `local_path` and permission reasons) in one durable write
+before anything runs, and a diagnostic names the instance, the artifact id and both digests. The
+Module Loader then checks the bytes against the new hash at each realization, as for any artifact.
+Every other fact still has to be equal: a changed artifact id, `hash_suite`, strategy, placement,
+contract, `requires`, permission or configuration declaration is refused as for an unlisted instance
+("Persistent Runtime state", below), with "the configured artifact id is …, the retained one …" or
+"… this session cannot be upgraded in place (G505)". logosd lists the instances it composes itself,
+`lcn_call` and `package_manager`, and never an operator's ([DAEMON.md](DAEMON.md) §3).
 
 ### `protected_inputs`
 
@@ -1379,6 +1406,8 @@ identity, and every configured instance is new.
   - For a `direct_dynamic` or `hosted_dynamic` instance, different facts still make `start` return
     `LOGOS_ERR_INVALID_PARAMS` naming the instance, before anything runs (DECISIONS G160, interim):
     give the changed module a new instance id, and retire the old one once it is no longer configured.
+    The one exception is an instance the host lists in `artifact_adoption` whose facts differ only
+    in the artifact's hash: its record takes the new hash (DECISIONS G505; above).
   - An id that was retired cannot be configured again, and a state assignment a retired instance
     keeps cannot be given to another instance (`LOGOS_ERR_INVALID_PARAMS`).
   - An instance dropped from the configuration stays known, with its state, until it is retired.

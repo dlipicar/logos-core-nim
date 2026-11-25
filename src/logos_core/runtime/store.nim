@@ -264,6 +264,15 @@ proc factBytes*(r: ModuleRecord): seq[byte] =
     p.reason = Opt.none(string)
   recordBytes(x)
 
+proc adoptionBytes*(r: ModuleRecord): seq[byte] =
+  ## [IMPL-DECISION G505] `factBytes` without the artifact's `hash` as well:
+  ## what must stay equal for an instance the host lists in
+  ## `artifact_adoption` to take a new library. The artifact id and its
+  ## `hash_suite` stay facts.
+  var x = r
+  x.artifact.hash = default(typeof(x.artifact.hash))
+  factBytes(x)
+
 const ConfigSide* = "cfg" ## [I87] the side-record kind of an instance's configuration
 
 proc configBytes*(s: ConfigState): Result[seq[byte], string] =

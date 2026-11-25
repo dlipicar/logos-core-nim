@@ -81,6 +81,12 @@ proc privateDir*(base: string): Result[string, string] =
     except OSError, IOError:
       err("cannot create the artifact directory")
 
+func hexOf(b: openArray[byte]): string =
+  const digits = "0123456789abcdef"
+  for x in b:
+    result.add(digits[int(x shr 4)])
+    result.add(digits[int(x and 0x0F)])
+
 proc fail(kind: StageFailure, msg: string): Result[string, StageError] =
   err(StageError(kind: kind, msg: msg))
 
@@ -162,7 +168,13 @@ proc stage*(a: ArtifactRecord, dir, name: string): Result[string, StageError] =
     return fail(sfControls, error)
   if d != a.hash:
     discard tryRemoveFile(dest)
-    return fail(sfIntegrity, "the artifact bytes do not match the accepted digest")
+    # [IMPL-DECISION G505] Both digests, so a start that adopted a new hash
+    # and then failed here says which bytes it expected.
+    return fail(
+      sfIntegrity,
+      "the artifact bytes do not match the accepted digest " & hexOf(a.hash) &
+        "; they hash to " & hexOf(d),
+    )
   ok(dest)
 
 proc mapLibrary*(path: string): LibHandle =

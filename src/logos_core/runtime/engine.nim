@@ -2494,6 +2494,14 @@ proc failAttempt(st: State, a: Attempt, f: Failure) =
   x.endAttempted()
   x.state = msError
   x.failure = Opt.some(f)
+  if f.kind == fkLoader and f.loader == lecArtifactIntegrityFailed and f.reason.len > 0:
+    # [IMPL-DECISION G505] The bytes the record expected, for the host's log: after an
+    # adoption it says why the new library did not start. The reason stays internal.
+    let by = (if st.ldr.inst.isNil: LoaderModuleName else: st.ldr.inst.id)
+    st.diagnose(
+      "the realization of " & x.id & " failed: " & f.classification & ": " &
+        f.diagnosticReason(by)
+    )
   x.exec = Opt.none(ExecAuth)
   inc x.execSerial
   x.provider = false
@@ -8207,6 +8215,11 @@ func registered(st: State): HashSet[string] =
   for reg in st.cfg.statics:
     result.incl(reg.binding)
 
+func digestText(d: openArray[byte]): string =
+  ## A digest's lowercase hex, for a diagnostic line.
+  for b in d:
+    result.add(toHex(int(b), 2).toLowerAscii)
+
 proc reconcile(st: State, configured: seq[BootstrapInstance]): Opt[EngineError] =
   ## [IMPL-DECISION G160 (TF-08)] The configured instances against the
   ## retained ones, all checked before any is changed. A retired id is
@@ -8217,6 +8230,9 @@ proc reconcile(st: State, configured: seq[BootstrapInstance]): Opt[EngineError] 
   ## (`staticMismatches`; SPEC RUNTIME l.1319-1322 settle the static path);
   ## any other is refused, naming it, and the host names a new id (the
   ## interim, P5 reading B4: l.1319-1322 name static bindings only).
+  ## [IMPL-DECISION G505] Except an instance the host lists in
+  ## `artifact_adoption` whose facts differ only in the artifact's hash
+  ## (`store.adoptionBytes`): `bootstrap`'s equal-facts write adopts it.
   ## [IMPL-DECISION S4 changed] A configured instance not yet retained that
   ## names a static binding never registered is refused here, as the host
   ## did before the store was open; a retained one is mismatched instead
@@ -8248,13 +8264,33 @@ proc reconcile(st: State, configured: seq[BootstrapInstance]): Opt[EngineError] 
         )
     elif x.record.strategy != stDirectStatic and
         factBytes(x.record) != factBytes(b.record):
-      return Opt.some(
-        engineError(
-          ecInvalidParams,
-          "the configured declaration of instance " & b.instance &
-            " differs from the retained one",
+      let differs =
+        "the configured declaration of instance " & b.instance &
+        " differs from the retained one"
+      if b.instance notin st.cfg.artifactAdoption:
+        return Opt.some(engineError(ecInvalidParams, differs))
+      if adoptionBytes(x.record) != adoptionBytes(b.record) or
+          x.record.artifact.hashSuite != b.record.artifact.hashSuite:
+        # [IMPL-DECISION G505] A listed instance takes a new hash only; any
+        # other changed fact is refused as before, saying so. The suite is
+        # compared on its own: the stored form names the one suite there is.
+        if x.record.artifact.id != b.record.artifact.id:
+          return Opt.some(
+            engineError(
+              ecInvalidParams,
+              differs & ": the configured artifact id is " & b.record.artifact.id &
+                ", the retained one " & x.record.artifact.id,
+            )
+          )
+        return Opt.some(
+          engineError(
+            ecInvalidParams,
+            differs &
+              " beyond its artifact hash; this session cannot be upgraded in place (G505)",
+          )
         )
-      )
+      # [IMPL-DECISION G505] Equal but for the hash: adopted by bootstrap's
+      # equal-facts write below, before anything runs.
     if b.record.stateAssignment.isSome:
       let holder = st.assignmentInUse(b.record.stateAssignment.get, b.instance)
       if holder.isSome:
@@ -8730,13 +8766,23 @@ proc bootstrap(st: State, q: Request) =
     elif not x.mismatched and recordBytes(x.record) != recordBytes(b.record):
       # [IMPL-DECISION G160] Equal facts: the retained record takes the
       # configured artifact path and permission reasons. A mismatched one
-      # keeps its retained record (l.1319).
+      # keeps its retained record (l.1319). [IMPL-DECISION G505] An instance
+      # the host lists in `artifact_adoption` takes a new artifact hash in the
+      # same write (`reconcile` refused any other change), before the Loader
+      # stages the bytes and before anything runs.
+      let was = x.record.artifact.hash
       let saved = x.save
       x.record = b.record
       let failed = st.accept(x, saved, exempt = true)
       if failed.isSome:
         q.reply.answerError(failed.get.code, failed.get.message)
         return
+      if was != b.record.artifact.hash:
+        st.diagnose(
+          "instance " & b.instance & " adopted artifact " & b.record.artifact.id &
+            " with digest " & digestText(b.record.artifact.hash) & " in place of " &
+            digestText(was)
+        )
     x.configured = true
     if b.instance == q.instance:
       x.orchestration = true

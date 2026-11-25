@@ -147,6 +147,19 @@ Items 1, 5b, 5c, 10b, 12b and 16a.
   the operator installs again. The old state directory is the operator's to keep or delete. There is no
   migration code. A module still comes from daemon-config as an artifact path with
   its digest (§10). `lcn-pkg`, the LGX parser and the resolver are also tools (DECISIONS I49, I69).
+- **Upgrading logosd** (DECISIONS G505). An upgrade whose companion libraries only change bytes keeps
+  the session: logosd lists `package_manager` and `lcn_call` for artifact adoption, so the next start
+  gives their retained records the new hashes, and both keep their state (the installed packages, the
+  kept catalog) and grants. The start log names each library's source, and the Runtime's line both
+  digests. A re-pinned Package Manager contract, or a new `lcn_call` settings schema, is a changed fact:
+  such a logosd cannot start an existing session ("… cannot be upgraded in place (G505)"), which then
+  needs a replacement, still on the end list. An override (`package_manager.artifact`, `cli.artifact`)
+  must carry its companion's id; over a kept session it keeps the state and grants too, and the
+  Package Manager's contract check still applies. An `lcn_call` override expecting other settings fails
+  at its own init.
+- **The installed-files format** (DECISIONS G505). The Package Manager's `install/` has one format number,
+  in its index. A newer library writes its format only at a commit, never at opening; after that an
+  older library refuses the root at start, naming both numbers, and changes nothing.
 - **Source kinds** (BCP l.343-349): `lgx` is realized, from a Storage binding's object (PM §7.1, §13);
   `nix` is not, and a request that selects it is answered `unsupported-source` (PKG-0190). No
   provenance profile is selected (below).

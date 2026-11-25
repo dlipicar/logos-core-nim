@@ -10,6 +10,7 @@ import ./support/lgxbuild
 
 when defined(posix):
   import std/posix
+  import logos_sdk/cbor
   import ../src/logos_core/pm/store
 
   const Linux = "linux-x86_64"
@@ -433,6 +434,50 @@ when defined(posix):
       check r.error.fault == sfDamaged
       check "no index" in r.error.detail
       check dirExists(dir / "install" / "r" / i.rid)
+
+    test "[IMPL-DECISION G505] the state's number is higher than the library's: sfFormat naming both, and the root is left exactly as it was, no lock file made":
+      let dir = fresh("format-higher")
+      createDir(dir / "install")
+      let index = cborMap(
+        (cbor("format"), cbor(FileFormat + 1)),
+        (cbor("sequence"), cbor(0'u64)),
+        (cbor("records"), CborValue(kind: ckArray)),
+      )
+      writeFile(dir / "install" / "index", cast[string](encodeCbor(index)))
+      let before = treeOf(dir)
+      let r = openStore(dir)
+      check r.isErr
+      if r.isErr:
+        check r.error.fault == sfFormat
+        check (
+          "is installed-files format " & $(FileFormat + 1) &
+          "; this library reads format " & $FileFormat & "; nothing was changed"
+        ) in r.error.detail
+      check treeOf(dir) == before
+      check entries(dir / "install") == @["index"]
+
+    test "[IMPL-DECISION G505] the state's number is lower than the library's: refused today, like any other number, and the root is left exactly as it was":
+      # A library that brings the next format must still read this one, so this case
+      # changes then; the hook stands in for that library's number.
+      let dir = fresh("format-lower")
+      var s = openStore(dir).get
+      discard s.installed(plain)
+      s.close()
+      let before = treeOf(dir)
+      libraryFormatForTests = FileFormat + 1
+      let r = openStore(dir)
+      libraryFormatForTests = FileFormat
+      check r.isErr
+      if r.isErr:
+        check r.error.fault == sfFormat
+        check (
+          "is installed-files format " & $FileFormat & "; this library reads format " &
+          $(FileFormat + 1) & "; nothing was changed"
+        ) in r.error.detail
+      check treeOf(dir) == before
+      var again = openStore(dir).get
+      check again.records.len == 1
+      again.close()
 
     test "[R3] an index naming a missing or invalid record stops the start, naming its identity":
       let dir = fresh("missing")

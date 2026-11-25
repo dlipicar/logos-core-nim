@@ -1726,7 +1726,7 @@ proc failStore(
     e.failModule(request, "a required result does not fit the admission bound", cmds)
   of sfIndexBound:
     e.failModule(request, "the installed index would pass its bound", cmds)
-  of sfDamaged, sfInUse:
+  of sfDamaged, sfInUse, sfFormat:
     e.failModule(request, "the installed state needs a restart", cmds)
 
 func indexOf(s: Snapshot, identity: PackageIdentity): int =

@@ -4,8 +4,8 @@
 ;
 ; An array that is present is non-empty, and the checks the schema cannot
 ; express (unique ids, ordering, the orchestration instance, the authority
-; instance, the package manager instance) are applied at logos_runtime_create
-; (runtime/host_config.nim).
+; instance, the package manager instance, the artifact adoption list) are
+; applied at logos_runtime_create (runtime/host_config.nim).
 ; lcn.authority_policy is the Capability Authority's policy input,
 ; authority/policy.cddl (docs/AUTHORITY-POLICY.md).
 
@@ -27,6 +27,11 @@ lcn.app_config = {
   ; l.293): the hosted_dynamic logos_package_manager, the one hosted module
   ; whose reserved name the Module Host accepts.
   ? package_manager: lcn.app_instance_id,
+  ; [G505] Instances whose retained record may take a new artifact hash at a
+  ; start, all other facts equal: the host's assertion that the instance keeps
+  ; its state, grants and settings across a new library. logosd lists its own
+  ; composed instances (package_manager, lcn_call), never an operator's.
+  ? artifact_adoption: [* lcn.app_instance_id],
 }
 
 lcn.app_runtime = {
