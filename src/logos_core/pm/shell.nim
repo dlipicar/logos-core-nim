@@ -53,6 +53,12 @@
 ##   payload.
 ## - **The worker's jobs** (`cmWork`, G447) are queued for its thread; its
 ##   answers come back through the kit's `post` and are queued as events.
+## - **The read-only worker** (5-6b-1; G500): a second worker thread, started after the
+##   first with the installation root's path and its own trust copy, runs the page jobs
+##   (`cmPage`): `list_installed_packages` pages and readers' handoffs. It is stopped and
+##   joined after the first. Test builds take the page byte budget from
+##   `LCN_TEST_PM_PAGE_BUDGET`, and append a line to the file `LCN_TEST_HANDOFF_JOBS`
+##   names for each `wjHandoff` the first worker gets.
 ## - **`closeShell`** (`_MODULE_destroy`): the engine stops (no command
 ##   follows, G437), timers are cancelled, outstanding calls are cancelled and
 ##   awaited (bounded), the route set is closed, and a root operation still
@@ -74,6 +80,7 @@ import ../durable
 import ../runtime/protinput
 import ../package/[errors, resolver]
 import ./[engine, worker]
+from ./listing import PageBudget
 
 when defined(posix):
   import ./store
@@ -126,6 +133,7 @@ type
     nextRequest: uint64
     closed: bool
     worker: Worker ## [G447]
+    reader: Worker ## [5-6b-1; G500] the read-only worker
     when defined(posix):
       store: InstalledStore ## [G444] held from `_init` to `_destroy`
 
@@ -489,6 +497,30 @@ proc continueSoon(arg: pointer) {.gcsafe, raises: [].} =
     t.shell.run(t.shell.engine.handle(continued(t.operation)))
   GC_unref(t)
 
+when defined(lcnTestHooks):
+  from std/strutils import parseInt
+
+  proc testPageBudget(): int =
+    ## [IMPL] A test build's page byte budget, from `LCN_TEST_PM_PAGE_BUDGET`.
+    try:
+      let v = parseInt(getEnv("LCN_TEST_PM_PAGE_BUDGET", "0"))
+      if v > 0: v else: PageBudget
+    except ValueError:
+      PageBudget
+
+  proc noteHandoffJob() =
+    ## [IMPL; plan §10.3, ruling A] One line for each `wjHandoff`, in the file
+    ## `LCN_TEST_HANDOFF_JOBS` names.
+    let path = getEnv("LCN_TEST_HANDOFF_JOBS")
+    if path.len == 0:
+      return
+    try:
+      let f = open(path, fmAppend)
+      f.write("wjHandoff\n")
+      f.close()
+    except CatchableError:
+      discard
+
 proc exec(s: Shell, c: var Command) =
   ## `c`'s outcome, if it has one, is moved out: a closure can be large.
   case c.kind
@@ -520,7 +552,12 @@ proc exec(s: Shell, c: var Command) =
     GC_ref(t)
     callSoon(continueSoon, cast[pointer](t))
   of cmWork:
+    when defined(lcnTestHooks):
+      if c.job.kind == wjHandoff:
+        noteHandoffJob()
     s.worker.submit(move c.job)
+  of cmPage:
+    s.reader.submit(move c.job)
   of cmAnswer:
     var f: Future[OperationAnswer].Raising([CancelledError])
     if s.answers.pop(c.answerTo, f):
@@ -596,11 +633,26 @@ proc openShell*(
     when defined(posix):
       store.close()
     refuse(error)
+  let budget =
+    when defined(lcnTestHooks):
+      testPageBudget()
+    else:
+      PageBudget
   var (e, notes) = initEngine(
-    input, kept, freshKey, platform, pathRules = pathRules, turnWork = turnWork
+    input,
+    kept,
+    freshKey,
+    platform,
+    pathRules = pathRules,
+    turnWork = turnWork,
+    pageBudget = budget,
   )
   let s = Shell(engine: move e, routeSet: routeSet, stateDir: dir, log: log)
   var config = s.engine.workerConfig(spoolDir)
+  # [G500] The read-only worker's own copy, with the root's path and no store files.
+  var readConfig = config
+  readConfig.readOnly = true
+  readConfig.root = dir / InstallDir
   when defined(posix):
     s.store = move store
     s.engine.setSnapshot(snapshotOf(s.store))
@@ -616,6 +668,15 @@ proc openShell*(
       s.store.close()
     refuse(moduleError(started.error))
   s.worker = started.get
+  let reading =
+    startWorker(init.services.poster, cast[pointer](s), onWorkerResult, move readConfig)
+  if reading.isErr:
+    discard s.routeSet.close()
+    abandonWorker(s.worker)
+    when defined(posix):
+      s.store.close()
+    refuse(moduleError(reading.error))
+  s.reader = reading.get
   s.run(move notes)
   GC_ref(s)
   callSoon(startSoon, cast[pointer](s))
@@ -697,6 +758,41 @@ proc handoff*(
       e.handoff(id, identity, module)
   )
 
+proc listPackages*(
+    s: Shell, origin: Origin, filter, cursor: Opt[string], limit: Opt[uint16]
+): Future[OperationAnswer].Raising([CancelledError]) =
+  ## [G500] One `list_packages` page for the reader `origin`.
+  s.ask(
+    proc(e: var Engine, id: uint64): seq[Command] {.gcsafe, raises: [].} =
+      e.listPackages(id, origin, filter, cursor, limit)
+  )
+
+proc listInstalled*(
+    s: Shell, origin: Origin, filter, cursor: Opt[string], limit: Opt[uint16]
+): Future[OperationAnswer].Raising([CancelledError]) =
+  ## [G500] One `list_installed_packages` page for the reader `origin`.
+  s.ask(
+    proc(e: var Engine, id: uint64): seq[Command] {.gcsafe, raises: [].} =
+      e.listInstalled(id, origin, filter, cursor, limit)
+  )
+
+proc readerHandoff*(
+    s: Shell, origin: Origin, identity: PackageIdentity, module: string
+): Future[OperationAnswer].Raising([CancelledError]) =
+  ## [G500, ruling A] A reader's `get_runtime_handoff`, a page job.
+  s.ask(
+    proc(e: var Engine, id: uint64): seq[Command] {.gcsafe, raises: [].} =
+      e.readerHandoff(id, origin, identity, module)
+  )
+
+func readers*(s: Shell): seq[string] =
+  ## [G498] The protected input's readers.
+  s.engine.input.readers
+
+func runtimeInstanceId*(s: Shell): string =
+  ## [G498] The Runtime the readers' calls come from.
+  s.engine.input.runtimeInstanceId
+
 proc shellStatus*(s: Shell): ShellStatus =
   ## The catalog in use, each binding's route, and the running operations.
   result.catalog = s.engine.catalogInUse
@@ -777,6 +873,9 @@ proc closeShell*(s: Shell): Future[void] {.async: (raises: []).} =
   # [G447] The worker after the engine: no job follows; it deletes its spool files.
   await stopWorker(s.worker)
   s.worker = nil
+  if not s.reader.isNil:
+    await stopWorker(s.reader)
+    s.reader = nil
   when defined(posix):
     s.store.close()
 

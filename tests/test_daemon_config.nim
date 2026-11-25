@@ -1525,7 +1525,7 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
         $PresetDependencyDepth & ", \"assignment_attempts\": " &
         $PresetAssignmentAttempts & ", \"candidates_per_name\": " &
         $PresetCandidatesPerName & ", \"partial_closure_names\": " &
-        $PresetPartialClosureNames & "}}"
+        $PresetPartialClosureNames & "}, \"runtime_instance_id\": \"rt-1\"}"
     )
     check app.protected_inputs.isSome
     check app.protected_inputs.get.len == 1
@@ -1574,6 +1574,69 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
       prod,
     ).get
     check plain.composition.appConfig.protected_inputs.isNone
+
+  test "[IMPL-DECISION G498] [PKG-0529] compose: the input's readers are package_manager.readers, else lcn_call when this start composes it, else none, with the Runtime's id; a reader named twice, the Package Manager itself or an instance this start does not run is refused":
+    proc inputOf(text: string): CborValue =
+      result = cborMap()
+      let p = prepareDaemon(Session(dir: freshDir()), dcBytes(text), prod)
+      check p.isOk
+      if p.isErr:
+        checkpoint p.error
+        return
+      let ins = p.get.composition.appConfig.protected_inputs
+      check ins.isSome and ins.get.len == 1
+      if ins.isSome and ins.get.len == 1:
+        result = decodeCbor(ins.get[0].input).get(cborMap())
+
+    proc withCli(text: string): string =
+      text.replace(
+        "\"package_manager\": ",
+        "\"cli\": {\"artifact\": {\"id\": \"lcn_call\", \"local_path\": " &
+          "\"/opt/lib/liblcn_call.so\", \"hash\": " & Zero32 &
+          ", \"hash_suite\": \"logos.hash-suite.blake3-256\"}}, \"package_manager\": ",
+      )
+
+    func names(xs: varargs[string]): Opt[CborValue] =
+      var items: seq[CborValue]
+      for x in xs:
+        items.add(cbor(x))
+      Opt.some(CborValue(kind: ckArray, items: items))
+
+    proc readersOf(section: string): string =
+      withHost(pmText(pmSection(extra = "\"readers\": " & section)))
+
+    let plain = inputOf(withHost(pmText()))
+    check plain.lookup("readers").isNone
+    check plain.lookup("runtime_instance_id") == Opt.some(cbor("rt-1"))
+    check inputOf(withCli(withHost(pmText()))).lookup("readers") == names(CliInstance)
+    check inputOf(withCli(readersOf("[\"st\"]"))).lookup("readers") == names("st")
+    check inputOf(withCli(readersOf("[\"st\", \"" & CliInstance & "\"]"))).lookup(
+      "readers"
+    ) == names("st", CliInstance)
+    # An empty list: no reader, though lcn_call is composed.
+    check inputOf(withCli(readersOf("[]"))).lookup("readers").isNone
+    for (given, refusal) in [
+      ("[\"st\", \"st\"]", "package_manager.readers names st twice"),
+      (
+        "[\"" & PmInstance & "\"]",
+        "package_manager.readers names the Package Manager's own instance",
+      ),
+      (
+        "[\"zz\"]",
+        "package_manager.readers names zz, which is not an instance this start runs",
+      ),
+      (
+        "[\"" & CliInstance & "\"]",
+        "package_manager.readers names " & CliInstance &
+          ", which is not an instance this start runs",
+      ),
+    ]:
+      checkpoint given
+      let r = prepareDaemon(Session(dir: freshDir()), dcBytes(readersOf(given)), prod)
+      check r.isErr
+      if r.isErr:
+        checkpoint r.error
+        check r.error.endsWith(refusal)
 
   posixTest "[IMPL-DECISION G491] [PKG-0513] the composed Package Manager: from package_manager.artifact, host-ambient, started by the orchestrator after the operator's list; this logosd, with no compiled hash, refuses a section without the artifact, naming the field; logosctl's checks compose a stand-in":
     # A test logosd is built without the companion library's hash (`pmArtifactHash`):

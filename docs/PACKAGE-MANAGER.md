@@ -12,7 +12,7 @@ installation: 5-5-1 the installed records, the responses, the handoff's construc
 bound (§8, §12, §13); 5-5-2 the store's root and extraction (§8, §9); 5-5-3 the worker and the spool
 (§10); the operations (§11) follow. Step 5-6a-1 makes it the module `logos_package_manager`, which
 logosd composes as the reserved instance `package_manager` (§14); 5-6a-2 binds it as the Runtime's
-system service, which `get_runtime_handoff` serves, and 5-6b `list_packages`.
+system service, which `get_runtime_handoff` serves; 5-6b-1 serves the readers and the two lists (§15).
 
 ## 1. Placement and the data path
 
@@ -52,11 +52,13 @@ one Logos deterministic-CBOR value, `lcn.pm_input` (`src/logos_core/pm/input.cdd
 | `catalog` | the protected catalog: `{storage, object, digest}` (§3) |
 | `resolver_limits` | the four resolver limits (PM §11), required: the Package Manager has no default |
 | `limits` | optional bounds, below |
+| `readers` | optional: the module instances whose observation calls are answered, each named once (§15; G498) |
+| `runtime_instance_id` | optional: the Runtime the readers' calls come from; required with `readers` |
 
 The Package Manager checks the input itself, whoever wrote it, and refuses all of it on the first
 failure: the format, an empty `storage`, a binding named twice, a `catalog.storage` that is no
-binding, a bound or a resolver limit out of range (CONFORMANCE, "Resolver limits"), and trust bytes
-that `trustdoc` refuses. A trust file that selects a
+binding, a bound or a resolver limit out of range (CONFORMANCE, "Resolver limits"), a reader named
+twice or readers without `runtime_instance_id`, and trust bytes that `trustdoc` refuses. A trust file that selects a
 catalog or a provenance profile is refused here as at logosd's start (G398, G404), so the Package
 Manager does not start with one.
 
@@ -82,7 +84,8 @@ failed: lcn.pm_input is refused: …").
 
 **In logosd** the value comes from daemon-config's `package_manager` section ([DAEMON.md](DAEMON.md)
 §3; G399): the bindings, the catalog and the bounds as the operator wrote them, the resolver limits
-it names or logosd's preset, and the trust file's bytes as that start accepted them. logosd runs the
+it names or logosd's preset, the trust file's bytes as that start accepted them, the readers
+(`package_manager.readers`, else `lcn_call` when logosd composes it) and its Runtime's id. logosd runs the
 Package Manager's own decoder on the value before it starts anything, so the instance's check is the
 second one. A trust change therefore reaches the Package Manager at the next start.
 
@@ -576,11 +579,11 @@ Step 5-6a-1 (DECISIONS G490, G491, G494, G495, G500; the owner's Q2, Q7 (b), Q11
 - **What each caller reaches.** Any caller with a route may call `inspect_package`,
   `install_package`, `remove_package` and `update_package`, subject to the authority policy.
   `get_runtime_handoff` is served to a SYSTEM_SERVICE caller only, the Runtime's own binding (below),
-  and the observation methods (`list_packages`, `list_installed_packages`, `watch_installed_packages`)
-  are for readers (Q7 (b); 5-6b). An ordinary caller's `get_runtime_handoff`, and until 5-6b the
-  observation methods, are answered `MODULE_ERROR` with no message or detail, the only refusal a
-  provider may answer (INTERFACE l.3308-3311); the operator's log has "package-manager: <method>
-  refused for <caller>: not a reader" (G495).
+  and to a reader on an ordinary route; the observation methods (`list_packages`,
+  `list_installed_packages`, `watch_installed_packages`) are for readers (Q7 (b); §15). Anyone else
+  is answered `MODULE_ERROR` with no message or detail, the only refusal a provider may answer
+  (INTERFACE l.3308-3311); the operator's log has "package-manager: <method> refused for <caller>:
+  not a reader" (G495, G498). `watch_installed_packages` is refused for everyone until 5-6b-2.
 - **The Runtime's binding** (G492, G493; TRANSPORT §8.1.2). The instance's Module Host serves a second
   listener, the system-service endpoint (fd 6, in a private directory of its own), from the primary
   contract alone. It accepts only a Hello with a system-service ticket the Runtime issued for this
@@ -594,4 +597,51 @@ Step 5-6a-1 (DECISIONS G490, G491, G494, G495, G500; the owner's Q2, Q7 (b), Q11
   binding of package_manager is ready", each failed attempt and its next delay. Nothing in logosd
   asks for a handoff before 5-8.
 - **`list_packages`** (G500; `pm/listing.nim`): the `lgx` entries of the catalog in use, in its
-  canonical order, optionally one package's; 5-6b serves the method.
+  canonical order, optionally one package's (§15).
+
+## 15. Readers and the lists
+
+Step 5-6b-1 (DECISIONS G498, G499, G500, I143; C4; the owner's Q7 (b)).
+
+- **Readers** (G498; PM l.1636-1648). The protected input names them (§2): in logosd,
+  `package_manager.readers` ([DAEMON.md](DAEMON.md) §3), else `lcn_call` when logosd composes it, else
+  none; an empty list is none. A caller is a reader when it is an ordinary module caller of the named
+  Runtime whose module instance is listed; a SYSTEM_SERVICE caller never is. The facade checks it on
+  every call, before any filter, snapshot or cursor (PKG-0529), and on every page (PKG-0385). A reader
+  sees every record and a non-reader none (PKG-0530). The list is fixed for the realization: a change
+  applies at the next start. Which methods a reader may call at all stays the Runtime's authority:
+  logosd grants `lcn_call`'s, and another reader needs the operator's grants.
+- **`limit`.** Absent, 100; 1 to 1000; 0 or more than 1000 is `invalid-request` (l.1640).
+- **`list_packages`** (l.1656-1657): the catalog's `lgx` entries (§14) in its canonical order, each
+  page answered on the module thread from the entries' encodings, made once when the catalog goes in
+  use. With no catalog in use the answer is `package-unavailable`, never an empty list.
+- **`list_installed_packages`** (l.1659-1660): one snapshot of the installed set, ordered by package
+  name bytes, then descending SemVer precedence, then the manifest commitment's bytes. Each page is a
+  job on a second, read-only worker thread that reads the records below `install/r/` and encodes
+  them; it holds the snapshot until it is answered. The first worker (§10), which runs the binding's
+  handoffs and the operations' stages, never waits behind a page.
+- **A page** is `{packages, ? next_cursor}`, at most `limit` records and no more than 256 KiB of them,
+  but always one record, however large (PKG-0383). `next_cursor` is there exactly when another record
+  of the snapshot matches after the page (PKG-0378).
+- **Cursors and their retention policy** (G499; l.1645-1654, l.1729-1734). A cursor is 32 random
+  bytes in base64url, keying a record of its origin (the caller's Runtime and module instance), the
+  method, the filter, the snapshot it began on and its place in it. It holds no snapshot: once a
+  commit (for the installed list) or another catalog in use (for the catalog list) has superseded the
+  snapshot, the cursor has expired; within a realization the catalog in use never changes (§3), so a
+catalog listing's cursor ends by age. A continuation is answered when its origin, method and filter are
+  the cursor's and its snapshot is still current; otherwise it is `invalid-request`, "the cursor is
+  not valid for this query, or has expired: start the listing again", the same for every cause. A
+  cursor is spent by the page it continues. Per origin 8 are held, in all 256; a cursor expires 60 s
+  after its last use and 10 min after it was made, and expired ones are reclaimed on every query and
+  each second. An origin at 8 loses its own least recently used cursor, never another's (PKG-0540);
+  with 256 held and none of the asking origin's, the call is `MODULE_ERROR` (PKG-0541). Nothing is
+  persisted: a realization's cursors end with it.
+- **Page jobs** are bounded (PKG-0558): 2 in flight per origin and 8 in all. Past either the call is
+  `MODULE_ERROR` with no detail, and the log names the bound: "package-manager:
+  list_installed_packages refused for <caller>: at the page-job bound: 2 in flight for this caller".
+- **A reader's `get_runtime_handoff`** is a page job on the read-only worker, under the same bounds,
+  built by the same code as the binding's (§13) with that worker's own trust copy: the same bytes for
+  the same identity and module. It never queues on the first worker. Its reply is one value, so the
+  page budget does not apply to it.
+- **What `MODULE_ERROR` from a query means.** Not a reader, a bound, or a fault reading the installed
+  state; the Package Manager's log line says which.

@@ -130,8 +130,6 @@ default = "deferred:tier-5"
 "PKG-0634" = "deferred:tier-5"
 "PKG-0635" = "deferred:tier-5"
 "PKG-0636" = "deferred:tier-5"
-"PKG-0638" = "deferred:tier-5"
-"PKG-0648" = "deferred:tier-5"
 # Step 5-6a-2, the system-service binding (DECISIONS G492, G493; I141): `get_runtime_handoff` answers the
 # Runtime's own binding, its response `{handoff}` or `{error}` (PKG-0380 and its copy PKG-0650), and
 # `package-not-installed` for an identity not installed (PKG-0388); tests/test_system_binding.nim.
@@ -178,6 +176,38 @@ default = "deferred:tier-5"
 "PKG-0645" = "claimed"
 "PKG-0646" = "claimed"
 "PKG-0647" = "claimed"
+# Step 5-6b-1, readers, cursors and the lists (DECISIONS G498, G499, G500; I143; C4): the facade
+# answers list_packages and list_installed_packages to the readers the protected input names, checked
+# on every call against the Runtime-authenticated caller (tests/test_pm_queries.nim); a reader's
+# get_runtime_handoff is told from the binding's (tests/test_system_binding.nim). Visibility is all or
+# nothing (PKG-0530), so a cursor or a count hides nothing (PKG-0386) and a retained record needs no
+# fact beyond the reader list (PKG-0542). The retention policy is pm/cursors.nim's (PKG-0538..0541),
+# stated in docs/PACKAGE-MANAGER.md §15. PKG-0638 and PKG-0648 are App A's copies of the two responses
+# (PKG-0368, PKG-0378). The page-job half of PKG-0558 is built; the unit waits for 5-6b-2's watch bounds.
+"PKG-0368" = "claimed"
+"PKG-0378" = "claimed"
+"PKG-0381" = "claimed"
+"PKG-0383" = "claimed"
+"PKG-0384" = "claimed"
+"PKG-0385" = "claimed"
+"PKG-0386" = "claimed"
+"PKG-0387" = "claimed"
+"PKG-0525" = "claimed"
+"PKG-0526" = "claimed"
+"PKG-0527" = "claimed"
+"PKG-0528" = "claimed"
+"PKG-0529" = "claimed"
+"PKG-0530" = "claimed"
+"PKG-0531" = "claimed"
+"PKG-0532" = "claimed"
+"PKG-0533" = "claimed"
+"PKG-0538" = "claimed"
+"PKG-0539" = "claimed"
+"PKG-0540" = "claimed"
+"PKG-0541" = "claimed"
+"PKG-0542" = "claimed"
+"PKG-0638" = "claimed"
+"PKG-0648" = "claimed"
 "PKG-0649" = "claimed"
 # §15.2: progress phases; TXT-0497 and TXT-0498 ride it to 5-6b (G362).
 "PKG-0568" = "deferred:tier-5"

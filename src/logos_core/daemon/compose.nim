@@ -764,12 +764,55 @@ proc cliRecord(
     )
   )
 
-func protectedInputsOf(c: DaemonConfig): Opt[seq[LcnAppProtectedInput]] =
+proc pmInputOf(
+    c: DaemonConfig, cliComposed: bool, modules: openArray[LcnAppModule]
+): Result[seq[byte], string] =
+  ## [IMPL-DECISION G399, G498] The composed `lcn.pm_input`: the checked section's,
+  ## with its readers (C4) and the Runtime their calls come from. Without
+  ## `package_manager.readers` the reader is `lcn_call` when this start composes it,
+  ## and there is none when it does not; a listed reader is an instance this start
+  ## runs, never the Package Manager itself.
+  let dc = c.value
+  let given = dc.package_manager.get.readers
+  var readers: seq[string]
+  if given.isSome:
+    var running = initHashSet[string]()
+    for m in modules:
+      running.incl(m.instance)
+    var seen = initHashSet[string]()
+    for r in given.get:
+      if seen.containsOrIncl(r):
+        return err("package_manager.readers names " & r & " twice")
+      if r == PmInstance:
+        return err("package_manager.readers names the Package Manager's own instance")
+      if r notin running:
+        return err(
+          "package_manager.readers names " & r &
+            ", which is not an instance this start runs"
+        )
+      readers.add(r)
+  elif cliComposed:
+    readers = @[CliInstance]
+  let v = decodeCbor(c.pm.get.input).valueOr:
+    return err("package_manager: the composed input does not decode: " & $error)
+  var entries = v.entries
+  if readers.len > 0:
+    var items: seq[CborValue]
+    for r in readers:
+      items.add(cbor(r))
+    entries.add((cbor("readers"), CborValue(kind: ckArray, items: items)))
+  entries.add((cbor("runtime_instance_id"), cbor(dc.runtime.runtime_instance_id)))
+  ok(encodeCbor(cborMap(entries)))
+
+proc protectedInputsOf(
+    c: DaemonConfig, cliComposed: bool, modules: openArray[LcnAppModule]
+): Result[Opt[seq[LcnAppProtectedInput]], string] =
   ## [IMPL-DECISION G399, G400] With `package_manager`, its instance's
   ## `lcn.pm_input`, the one protected realization input logosd writes.
   if c.pm.isNone:
-    return Opt.none(seq[LcnAppProtectedInput])
-  Opt.some(@[LcnAppProtectedInput(instance: c.pm.get.instance, input: c.pm.get.input)])
+    return ok(Opt.none(seq[LcnAppProtectedInput]))
+  let input = ?pmInputOf(c, cliComposed, modules)
+  ok(Opt.some(@[LcnAppProtectedInput(instance: c.pm.get.instance, input: input)]))
 
 # Composition ------------------------------------------------------------------------
 
@@ -887,7 +930,7 @@ proc compose*(
   var remoteProgram = r.remote_program
   if c.remote.enabled and remoteProgram.isNone:
     remoteProgram = defaultRemoteProgram(exe)
-  let protectedInputs = protectedInputsOf(c)
+  let protectedInputs = ?protectedInputsOf(c, cliArt.isSome, modules)
   var app = LcnAppConfig(
     runtime: LcnAppRuntime(
       work_dir: s.workDir,

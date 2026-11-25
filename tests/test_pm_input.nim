@@ -310,3 +310,29 @@ suite "PM protected input: the resolver limits (G399, planning 2026-11-22)":
     e.add((cbor("zz_extra"), cbor(1)))
     let why = limitsBytes(cborMap(e)).refusal
     check why.len > 0
+
+suite "PM protected input: the readers (G498)":
+  test "[IMPL-DECISION G498] readers and the Runtime id read as given, absent as none; toValue writes them back":
+    var v = pmValue(defaultTrust(), document())
+    let none = decodePmInput(v.encoded).get
+    check none.readers.len == 0 and none.runtimeInstanceId == ""
+    check none.toValue.readers.isNone and none.toValue.runtime_instance_id.isNone
+    # logosd always names its Runtime; the readers may be none.
+    v.runtime_instance_id = Opt.some("rt-1")
+    check decodePmInput(v.encoded).get.runtimeInstanceId == "rt-1"
+    v.readers = Opt.some(@["lcn_call", "w"])
+    let i = decodePmInput(v.encoded).get
+    check i.readers == @["lcn_call", "w"]
+    check i.runtimeInstanceId == "rt-1"
+    let again = decodePmInput(i.toValue.encoded).get
+    check again.readers == i.readers
+    check again.runtimeInstanceId == "rt-1"
+
+  test "[IMPL-DECISION G498] a reader named twice, or readers without the Runtime id, is refused":
+    var v = pmValue(defaultTrust(), document())
+    v.readers = Opt.some(@["w", "w"])
+    v.runtime_instance_id = Opt.some("rt-1")
+    check v.refusal == "readers names \"w\" twice"
+    v.readers = Opt.some(@["w"])
+    v.runtime_instance_id = Opt.none(string)
+    check v.refusal == "readers needs runtime_instance_id"

@@ -783,6 +783,7 @@ The Package Manager as the module `logos_package_manager`, which logosd composes
 - **Limits of the claim:**
   - `get_runtime_handoff` has no caller that may use it until 5-6a-2's system-service binding (below), and the
     observation methods none until 5-6b's readers: until then each is `MODULE_ERROR` with no message or detail (G495).
+    5-6b-1 serves the readers (below).
   - **Windows** hosts no Package Manager until 5-9 (no `logos.local.unix-stream`, so the Loader refuses a hosted request; "What Tier 5 step 5-4 changes"), and **mobile** none:
     the mark refuses a direct instance (G490).
   - The large-reply figures with the module's pre-encoded responses (G497) are not yet measured: they wait for 5-3c-4.
@@ -804,6 +805,27 @@ The Package Manager's system-service binding (DECISIONS I141; G492, G493; `docs/
   - Nothing in `logosd` asks for a handoff yet: package-backed creation (5-8) is the requester. The engine's
     request queue (one Request in flight, 64 parked, each with its own end) is reached by the tests' hook alone.
   - The reply's output room is the held large-reply item's (ruling B): PKG-0559 stays not met (§5.8 of the plan).
+
+### What Tier 5 step 5-6b-1 changes
+
+The Package Manager's readers, cursors and lists (DECISIONS I143; G498, G499, G500; C4; the owner's Q7 (b);
+`docs/PACKAGE-MANAGER.md` §15, `docs/DAEMON.md` §3).
+
+- **Claimed:** PKG-0368, PKG-0378, PKG-0381, PKG-0383 to PKG-0387 (the lists, `limit`, pages, continuation and
+  expiry), PKG-0525 to PKG-0533 (the observation integration: readers named in protected input, the caller the
+  Runtime authenticated, an ordinary route told from the binding, a non-reader refused without records or cursor
+  state, `next_cursor` exactly), PKG-0538 to PKG-0542 (the retention policy: per-origin and aggregate counts, ages,
+  reclamation and overload), and App A's copies PKG-0638 and PKG-0648. 24 units.
+- **Limits of the claim:**
+  - **Visibility is all or nothing** (PKG-0530): a reader sees every record. The reader list is fixed for the
+    realization; a change applies at the next start.
+  - **A refusal is opaque to the caller** (PKG-0531, G495): not a reader, a page-job or cursor bound, and a fault
+    reading the installed state are each `MODULE_ERROR` with no detail, told apart only by the Package Manager's log
+    line.
+  - **A page is at most 256 KiB of records** but always one; a reader's handoff is one value of up to about
+    14 MiB and is a large reply (G497): its passes on the module thread and the host's I/O thread are G497's.
+  - **PKG-0558** waits for 5-6b-2's watch bounds (its page-job half is built); **PKG-0559** stays not met (G504).
+  - **Windows** hosts no Package Manager until 5-9, and **mobile** none, as in 5-6a-1.
 
 ## Properties not claimed
 

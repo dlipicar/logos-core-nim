@@ -750,10 +750,10 @@ const
   pmKitPath* = "src/logos_core/pm/logos_package_manager_kit.nim"
   PmEncodedResponses* = [
     "inspect_package", "install_package", "remove_package", "update_package",
-    "get_runtime_handoff",
+    "get_runtime_handoff", "list_packages", "list_installed_packages",
   ]
-    ## [G494] the methods whose response bytes the engine encodes once (PM §15), and
-    ## the facade passes through
+    ## [G494, G500] the methods whose response bytes the engine encodes once (PM §15),
+    ## and the facade passes through: 5-6b adds the two lists' pages
 
 proc pmKitParts(): Result[(ContractSet, KitOptions), string] =
   ## [G490, G494; C1] The Package Manager's kit: a system contract, confined, with

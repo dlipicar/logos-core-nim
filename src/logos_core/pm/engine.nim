@@ -88,6 +88,17 @@
 ## naming is retired and collected on the worker once no held snapshot names
 ## it. Each operation's time and archive bytes go to the operator's log.
 ## `handoff` is a query: no slot, the snapshot held until the worker answers.
+##
+## **The queries** (5-6b-1; G499, G500; docs/PACKAGE-MANAGER.md §15): `listPackages`,
+## `listInstalled` and `readerHandoff`, for a reader the facade has already checked
+## (G498). `list_packages` is answered on this thread from each listed catalog entry's
+## encoding, made once when the catalog goes in use. A `list_installed_packages` page and
+## a reader's handoff are page jobs (`cmPage`) on the read-only worker, never on the first
+## worker, so an ordinary caller never queues in front of the binding's handoffs or an
+## operation's stages (ruling A): each holds the snapshot it read until its answer, and
+## at most `PagesPerOrigin` per origin and `PagesAggregate` in all run at once; past
+## either bound the call is `MODULE_ERROR`. Cursors and their retention policy are
+## `cursors.nim`'s; their records are reclaimed on each query and by a 1 s timer.
 
 {.push raises: [], gcsafe.}
 
@@ -96,12 +107,16 @@ import results
 import logos_sdk/base/hex
 import logos_sdk/cbor
 import ../package/[errors, manifest, records, resolver]
-import ./[input, catalog, fetcher, vcache, driver, jobs, slots, responses, installed]
+import
+  ./[
+    input, catalog, cursors, fetcher, vcache, driver, jobs, listing, slots, responses,
+    installed,
+  ]
 
 when defined(posix):
   import ./store
 
-export results, input, catalog, fetcher, vcache, driver, jobs, slots, responses
+export results, input, catalog, cursors, fetcher, vcache, driver, jobs, slots, responses
 
 const
   ReleaseOperation* = 0'u64
@@ -171,6 +186,7 @@ type
     cmCancelCall
       ## [G449] cancel the outstanding call `cancelled` through the Interface's
       ## cancel; its answer, if one still comes, is an `evAnswer`
+    cmPage ## [G500] hand `job` to the read-only worker; its answer is an `evWorked`
 
   Command* = object
     case kind*: CommandKind
@@ -198,7 +214,7 @@ type
       text*: string
     of cmContinue:
       operation*: uint64
-    of cmWork:
+    of cmWork, cmPage:
       job*: WorkerJob
     of cmAnswer:
       answerTo*: uint64
@@ -312,6 +328,7 @@ type
     tkJob ## a job's call deadline, wait bound or back-off
     tkAcquire ## the catalog's back-off
     tkDeadline ## [G449] an operation's `operation_deadline_ms`; `job` is its request
+    tkCursors ## [G499] the cursors' reclamation, each second while any is held
 
   TimerTarget = object
     kind: TimerKind
@@ -432,6 +449,23 @@ type
     ## current at its start.
     sequence*: uint64 ## the commit it reflects
     records*: seq[SnapRecord] ## in index order
+    order: seq[int]
+      ## [G500] `records`' places in `list_installed_packages`' order, made at its first
+      ## page
+    ordered: bool
+
+  PageKind = enum
+    pkInstalled ## [G500] a `list_installed_packages` page
+    pkHandoff ## [G500, ruling A] a reader's `get_runtime_handoff`
+
+  PageJob = object
+    ## [G500] A page job on the read-only worker, from admission to its answer.
+    kind: PageKind
+    origin: Origin
+    snapshot: Snapshot ## held until the answer (G451's R1)
+    filter: Opt[string]
+    token: string ## the cursor the page continues; empty for a first page
+    positions: seq[int] ## the candidates' places in the listing order
 
   BindingStatus* = object
     name*: string
@@ -480,6 +514,16 @@ type
       ## it read until its answer
     installedChanges*: int
       ## [plan §4.6] installed-state changes, a signer replacement included, for 5-6b's watch
+    cursors: Cursors ## [G499]
+    cursorTimer: uint64 ## [G499] the reclamation timer, while cursors are held
+    pages: Table[uint64, PageJob] ## [G500] by request
+    pageBudget: int ## [G500] `listing.PageBudget`; a test build's hook gives others
+    catalogEpoch: uint64
+      ## [G499] the catalog in use's: one more each time another document goes in use
+    epochDigest: Opt[Blake3Digest] ## the digest `catalogEpoch` counted
+    listedEntries: seq[(string, string)]
+      ## [G500] each listed entry of the catalog in use, in its order: its package name and
+      ## its `package_catalog_entry` encoding, made once per catalog
     clock: Clock
     next: uint64
     started: bool
@@ -490,6 +534,23 @@ type
 proc monotonicMs(): int64 {.gcsafe, raises: [].} =
   getMonoTime().ticks div 1_000_000
 
+proc catalogInUseChanged(e: var Engine) =
+  ## [G499, G500] Another document is in use: `list_packages`' cursors on the old one
+  ## expire, and its listed entries are encoded once, here. Within a realization the
+  ## digest changes once at most, from none: a kept catalog stands in only for the same
+  ## configured one (G401), so the configured one once read gives the same digest.
+  if e.catalog.inUse.isNone:
+    return
+  let d = e.catalog.inUse.get.digest
+  if e.epochDigest == Opt.some(d):
+    return
+  e.epochDigest = Opt.some(d)
+  inc e.catalogEpoch
+  e.listedEntries.setLen(0)
+  for x in e.catalog.inUse.get.entries:
+    if x.listed(Opt.none(string)):
+      e.listedEntries.add((x.identity.package, asText(encodeCbor(x.toCbor))))
+
 proc initEngine*(
     input: PmInput,
     keptBytes: Opt[seq[byte]],
@@ -499,6 +560,8 @@ proc initEngine*(
     turnWork = ResolverTurnWork,
     clock: Clock = nil,
     spoolBudgetArchives = SpoolBudgetArchives,
+    tokens: TokenSource = nil,
+    pageBudget = PageBudget,
 ): (Engine, seq[Command]) =
   ## The engine at `_init`, before any I/O: the catalog state from the kept
   ## file (`keptBytes`), and the log lines that start produced. The resolver
@@ -510,6 +573,7 @@ proc initEngine*(
   ## no outcome.
   doAssert turnWork > 0, "a turn spends some work"
   doAssert spoolBudgetArchives >= 1, "the budget holds one archive at least"
+  doAssert pageBudget >= 1, "a page holds some bytes"
   let lgxLimits = scaledLimits(DefaultLgxLimits, input.limits.archiveBytes)
   var e = Engine(
     input: input,
@@ -520,6 +584,13 @@ proc initEngine*(
       # `--os:linux` a bare `monotonicMs` stays `nimcall`, which a closure cannot join
     budgetArchives: spoolBudgetArchives,
     snapshot: Snapshot(),
+    cursors: initCursors(
+      if tokens.isNil:
+        TokenSource(randomToken)
+      else:
+        tokens
+    ),
+    pageBudget: pageBudget,
     cache:
       initVerificationCache(input.limits.cacheEntries, platform, lgxLimits, pathRules),
     catalogBinding: -1,
@@ -539,6 +610,7 @@ proc initEngine*(
           " entries, digest " & c.digest.toHex,
       )
     )
+    e.catalogInUseChanged()
   for i, b in input.bindings:
     e.bindings.add(Binding(name: b.name, instance: b.instance))
     if b.name == input.catalog.storage:
@@ -1024,6 +1096,7 @@ proc catalogDone(e: var Engine, step: FetchStep, cmds: var seq[Command]) =
       "the configured catalog is in use: sequence " & $c.sequence & ", " & $c.entries.len &
         " entries, digest " & c.digest.toHex
     )
+    e.catalogInUseChanged()
     if r.get.keptBytes.isSome:
       cmds.add(Command(kind: cmWriteKept, kept: r.get.keptBytes.get))
   of skUnavailable:
@@ -1378,6 +1451,9 @@ proc judged(
     sp.signer = signer
     sp.variant = variant
 
+proc onPage(e: var Engine, r: sink WorkerResult, cmds: var seq[Command])
+proc onReaderHandoff(e: var Engine, r: sink WorkerResult, cmds: var seq[Command])
+
 proc onWorked(e: var Engine, r: sink WorkerResult, cmds: var seq[Command]) =
   ## [G447] The worker's answer about spool file `r.file`; one the engine dropped is
   ## ignored. [G448] A retained check's answer resumes its operation's run, if that is
@@ -1390,7 +1466,13 @@ proc onWorked(e: var Engine, r: sink WorkerResult, cmds: var seq[Command]) =
     e.onCommitted(move r, cmds)
     return
   of wrReply:
-    e.onReply(move r, cmds)
+    if r.request in e.pages:
+      e.onReaderHandoff(move r, cmds)
+    else:
+      e.onReply(move r, cmds)
+    return
+  of wrPage:
+    e.onPage(move r, cmds)
     return
   of wrCollected:
     e.onCollected(move r, cmds)
@@ -1516,7 +1598,7 @@ proc onWorked(e: var Engine, r: sink WorkerResult, cmds: var seq[Command]) =
     let estimate = r.opened.inspection.estimatedBytes
     let x = e.cache.admit(digest, move r.opened, estimate)
     e.supplyTo(request, source, x, cmds)
-  of wrRetained, wrStaged, wrCommitted, wrReply, wrCollected:
+  of wrRetained, wrStaged, wrCommitted, wrReply, wrPage, wrCollected:
     discard # answered above
 
 proc deliver(
@@ -2534,7 +2616,8 @@ proc submit*(e: var Engine, request: uint64, op: sink OperationRequest): seq[Com
   if e.stopped:
     return
   let reserved = request == ReleaseOperation or request == DecodeOperation
-  if reserved or request in e.requests or request in e.operations or request in e.queries:
+  if reserved or request in e.requests or request in e.operations or request in e.queries or
+      request in e.pages:
     result.answer(
       request,
       responseOf(
@@ -2571,7 +2654,8 @@ proc handoff*(
   if e.stopped:
     return
   let reserved = request == ReleaseOperation or request == DecodeOperation
-  if reserved or request in e.requests or request in e.operations or request in e.queries:
+  if reserved or request in e.requests or request in e.operations or request in e.queries or
+      request in e.pages:
     result.answer(
       request,
       responseOf(
@@ -2605,6 +2689,375 @@ proc handoff*(
       module: module,
     )
   )
+
+# The queries (5-6b-1; G499, G500) ----------------------------------------------------
+
+const
+  PagesPerOrigin* = 2 ## [IMPL; G500; PKG-0558] page jobs in flight per origin
+  PagesAggregate* = 8 ## [IMPL; G500; PKG-0558] page jobs in flight in all
+  CursorTickMs = 1000'u32 ## [IMPL; G499] the reclamation timer
+
+func pagesHeld*(e: Engine, o: Origin): int =
+  ## [G500] The page jobs `o` has in flight.
+  for _, p in e.pages:
+    if p.origin == o:
+      inc result
+
+func pagesRunning*(e: Engine): int =
+  e.pages.len
+
+func cursorsHeld*(e: Engine): int =
+  e.cursors.len
+
+func cursorsIssued*(e: Engine): int =
+  e.cursors.issued
+
+proc ensureListing(s: Snapshot) =
+  ## [G500; SPEC PM l.1660] `s.order`: `s.records`' places in `list_installed_packages`'
+  ## order, sorted once per snapshot, on this thread.
+  if s.ordered:
+    return
+  s.order = newSeq[int](s.records.len)
+  for i in 0 ..< s.records.len:
+    s.order[i] = i
+  s.order.sort(
+    proc(a, b: int): int =
+      installedOrder(
+        s.records[a].package.identity,
+        s.records[a].package.commitment,
+        s.records[b].package.identity,
+        s.records[b].package.commitment,
+      )
+  )
+  s.ordered = true
+
+func matches(r: SnapRecord, filter: Opt[string]): bool =
+  filter.isNone or r.package.identity.package == filter.get
+
+proc reclaimCursors(e: var Engine, cmds: var seq[Command]) =
+  ## [G499] Expired and superseded records go; the timer runs while any is held.
+  e.cursors.reclaim(e.clock(), e.snapshot.sequence, e.catalogEpoch)
+  if e.cursors.len > 0 and e.cursorTimer == 0:
+    e.cursorTimer = e.timer(cmds, TimerTarget(kind: tkCursors), CursorTickMs)
+
+proc page(cmds: var seq[Command], job: sink WorkerJob) =
+  cmds.add(Command(kind: cmPage, job: job))
+
+proc refuseQuery(
+    e: var Engine, request: uint64, limit: Opt[uint16], cmds: var seq[Command]
+): Opt[int] =
+  ## The checks every list query makes first: a request id in use, and `limit`. Some:
+  ## the page's limit.
+  let reserved = request == ReleaseOperation or request == DecodeOperation
+  if reserved or request in e.requests or request in e.operations or request in e.queries or
+      request in e.pages:
+    cmds.answer(
+      request,
+      responseOf(
+        errorResult(
+          pecInvalidRequest,
+          if reserved: "the request id is reserved" else: "the request id is in use",
+        )
+      ),
+    )
+    return Opt.none(int)
+  let n = limitOf(limit)
+  if n.isNone:
+    cmds.answer(
+      request,
+      responseOf(errorResult(pecInvalidRequest, "limit must be 1 to " & $MaxLimit)),
+    )
+  n
+
+proc expiredCursor(request: uint64, cmds: var seq[Command]) =
+  ## [SPEC PM l.1654; G499] An unknown, foreign or expired cursor: `invalid-request`,
+  ## the same answer for each, so a token tells nothing about another origin's.
+  cmds.answer(
+    request,
+    responseOf(
+      errorResult(
+        pecInvalidRequest,
+        "the cursor is not valid for this query, or has expired: start the listing again",
+      )
+    ),
+  )
+
+proc admitPage(
+    e: var Engine, request: uint64, origin: Origin, cmds: var seq[Command]
+): bool =
+  ## [G500; PKG-0558] A page job within its bounds; past one, `MODULE_ERROR`, and the
+  ## facade logs the bound (Fable §11.2, point 1).
+  if e.pagesHeld(origin) >= PagesPerOrigin:
+    cmds.answer(
+      request,
+      moduleErrorOf(
+        "at the page-job bound: " & $PagesPerOrigin & " in flight for this caller"
+      ),
+    )
+    return false
+  if e.pages.len >= PagesAggregate:
+    cmds.answer(
+      request,
+      moduleErrorOf("at the page-job bound: " & $PagesAggregate & " in flight in all"),
+    )
+    return false
+  true
+
+proc nextCursor(
+    e: var Engine,
+    request: uint64,
+    origin: Origin,
+    meth: CursorMethod,
+    filter: Opt[string],
+    epoch: uint64,
+    position: int,
+    cmds: var seq[Command],
+): Result[Opt[string], void] =
+  ## [G499] The cursor of the page after this one; err: none could be made, and the
+  ## call is answered `MODULE_ERROR` (PKG-0541).
+  let (st, token) = e.cursors.issue(origin, meth, filter, epoch, position, e.clock())
+  case st
+  of ciIssued:
+    if e.cursorTimer == 0:
+      e.cursorTimer = e.timer(cmds, TimerTarget(kind: tkCursors), CursorTickMs)
+    ok(Opt.some(token))
+  of ciFull:
+    cmds.answer(
+      request, moduleErrorOf("at the cursor bound: " & $Aggregate & " held in all")
+    )
+    err()
+  of ciNoToken:
+    cmds.answer(request, moduleErrorOf("the random source failed"))
+    err()
+
+proc listPackages*(
+    e: var Engine,
+    request: uint64,
+    origin: Origin,
+    filter: Opt[string],
+    cursor: Opt[string],
+    limit: Opt[uint16],
+): seq[Command] =
+  ## [SPEC PM §15 l.1656-1657; G500] One `list_packages` page for a reader, answered on
+  ## this thread from the listed entries' encodings: memory reads, no file. With no
+  ## catalog in use the answer is `package-unavailable`, never an empty list
+  ## (PM l.1308-1309).
+  if e.stopped:
+    return
+  let n = e.refuseQuery(request, limit, result).valueOr:
+    return
+  if e.catalog.inUse.isNone:
+    result.answer(
+      request, responseOf(errorResult(pecPackageUnavailable, "no catalog is in use"))
+    )
+    return
+  e.reclaimCursors(result)
+  var start = 0
+  if cursor.isSome:
+    let r = e.cursors.take(
+      cursor.get, origin, cmListPackages, filter, e.catalogEpoch, e.clock()
+    )
+    if r.isErr:
+      expiredCursor(request, result)
+      return
+    start = r.get.position
+  var items = ""
+  var count = 0
+  var last = start - 1
+  var i = start
+  while i < e.listedEntries.len and count < n:
+    if filter.isNone or e.listedEntries[i][0] == filter.get:
+      if not fits(items.len, e.listedEntries[i][1].len, count, e.pageBudget):
+        break
+      items.add(e.listedEntries[i][1])
+      inc count
+      last = i
+    inc i
+  var more = false
+  for j in last + 1 ..< e.listedEntries.len:
+    if filter.isNone or e.listedEntries[j][0] == filter.get:
+      more = true
+      break
+  if cursor.isSome:
+    e.cursors.spend(cursor.get)
+  var next = Opt.none(string)
+  if more:
+    next = e.nextCursor(
+      request, origin, cmListPackages, filter, e.catalogEpoch, last + 1, result
+    ).valueOr:
+      return
+  result.answer(request, encodedOf(pageText(items, count, next)))
+
+proc listInstalled*(
+    e: var Engine,
+    request: uint64,
+    origin: Origin,
+    filter: Opt[string],
+    cursor: Opt[string],
+    limit: Opt[uint16],
+): seq[Command] =
+  ## [SPEC PM §15 l.1659-1660; G500] One `list_installed_packages` page for a reader: a
+  ## page job on the read-only worker over the current snapshot, which it holds until the
+  ## answer. A continuation reads the snapshot its cursor began on, which is the current
+  ## one, or the cursor has expired.
+  if e.stopped:
+    return
+  let n = e.refuseQuery(request, limit, result).valueOr:
+    return
+  e.reclaimCursors(result)
+  var start = 0
+  if cursor.isSome:
+    let r = e.cursors.take(
+      cursor.get, origin, cmListInstalled, filter, e.snapshot.sequence, e.clock()
+    )
+    if r.isErr:
+      expiredCursor(request, result)
+      return
+    start = r.get.position
+  let snap = e.snapshot
+  snap.ensureListing()
+  var positions: seq[int]
+  var entries: seq[PageEntry]
+  var i = start
+  while i < snap.order.len and positions.len < n:
+    let r = snap.records[snap.order[i]]
+    if r.matches(filter):
+      positions.add(i)
+      entries.add(
+        PageEntry(rid: r.rid, generation: r.generation, identity: r.package.identity)
+      )
+    inc i
+  if positions.len == 0:
+    # Nothing left to read: the empty page, with no cursor.
+    if cursor.isSome:
+      e.cursors.spend(cursor.get)
+    result.answer(request, encodedOf(pageText("", 0, Opt.none(string))))
+    return
+  when not defined(posix):
+    result.answer(request, moduleErrorOf("the installed state is POSIX only"))
+    return
+  if not e.admitPage(request, origin, result):
+    return
+  e.pages[request] = PageJob(
+    kind: pkInstalled,
+    origin: origin,
+    snapshot: snap,
+    filter: filter,
+    token: cursor.get(""),
+    positions: positions,
+  )
+  e.held[snap.sequence] = e.held.getOrDefault(snap.sequence) + 1
+  result.page(
+    WorkerJob(kind: wjPage, request: request, page: entries, budget: e.pageBudget)
+  )
+
+proc readerHandoff*(
+    e: var Engine,
+    request: uint64,
+    origin: Origin,
+    identity: PackageIdentity,
+    module: string,
+): seq[Command] =
+  ## [SPEC PM §12; G500, ruling A] A reader's `get_runtime_handoff`: a page job on the
+  ## read-only worker under the page-job bounds, never a `wjHandoff` on the first worker,
+  ## so it cannot queue in front of the binding's handoffs or an operation's stages. Its
+  ## answer is the bytes the binding's would be; the page byte budget does not apply.
+  if e.stopped:
+    return
+  let reserved = request == ReleaseOperation or request == DecodeOperation
+  if reserved or request in e.requests or request in e.operations or request in e.queries or
+      request in e.pages:
+    result.answer(
+      request,
+      responseOf(
+        errorResult(
+          pecInvalidRequest,
+          if reserved: "the request id is reserved" else: "the request id is in use",
+        )
+      ),
+    )
+    return
+  let at = e.snapshot.indexOf(identity)
+  if at < 0:
+    result.answer(
+      request,
+      responseOf(errorResult(pecPackageNotInstalled, $identity & " is not installed")),
+    )
+    return
+  when not defined(posix):
+    result.answer(request, moduleErrorOf("the installed state is POSIX only"))
+    return
+  if not e.admitPage(request, origin, result):
+    return
+  let snap = e.snapshot
+  let r = snap.records[at]
+  e.pages[request] = PageJob(kind: pkHandoff, origin: origin, snapshot: snap)
+  e.held[snap.sequence] = e.held.getOrDefault(snap.sequence) + 1
+  result.page(
+    WorkerJob(
+      kind: wjReaderHandoff,
+      request: request,
+      rid: r.rid,
+      generation: r.generation,
+      identity: identity,
+      module: module,
+    )
+  )
+
+proc onPage(e: var Engine, r: sink WorkerResult, cmds: var seq[Command]) =
+  ## [G500] A page job's answer: the page framed around the records' encodings, with the
+  ## next cursor exactly when another record of the snapshot matches after it
+  ## (PM l.1650). A cancelled job's answer is dropped.
+  var p: PageJob
+  if not e.pages.pop(r.request, p):
+    return
+  if r.hasFault or r.count == 0:
+    cmds.log(
+      "list_installed_packages: the installed state could not be read: " &
+        (if r.hasFault: $r.fault & ": " & r.failure else: "no record")
+    )
+    cmds.answer(r.request, moduleErrorOf("the installed state could not be read"))
+    e.releaseSnapshot(p.snapshot, cmds)
+    return
+  let last = p.positions[r.count - 1]
+  var more = false
+  for j in last + 1 ..< p.snapshot.order.len:
+    if p.snapshot.records[p.snapshot.order[j]].matches(p.filter):
+      more = true
+      break
+  if p.token.len > 0:
+    e.cursors.spend(p.token)
+  var next = Opt.none(string)
+  if more:
+    let made = e.nextCursor(
+      r.request,
+      p.origin,
+      cmListInstalled,
+      p.filter,
+      p.snapshot.sequence,
+      last + 1,
+      cmds,
+    )
+    if made.isErr:
+      e.releaseSnapshot(p.snapshot, cmds)
+      return
+    next = made.get
+  cmds.answer(r.request, encodedOf(pageText(r.reply, r.count, next)))
+  e.releaseSnapshot(p.snapshot, cmds)
+
+proc onReaderHandoff(e: var Engine, r: sink WorkerResult, cmds: var seq[Command]) =
+  ## [G500] A reader's handoff answered by the read-only worker, as `onReply` answers the
+  ## binding's.
+  var p: PageJob
+  if not e.pages.pop(r.request, p):
+    return
+  if r.failure.len > 0:
+    cmds.log("get_runtime_handoff: " & r.failure)
+  if r.hasFault:
+    cmds.answer(r.request, moduleErrorOf("the installed state needs a restart"))
+  else:
+    cmds.answer(r.request, encodedOf(move r.reply))
+  e.releaseSnapshot(p.snapshot, cmds)
 
 proc start*(e: var Engine): seq[Command] =
   ## On start: a route for every binding.
@@ -2757,6 +3210,10 @@ proc onTimer(e: var Engine, id: uint64, cmds: var seq[Command]) =
     if request notin e.operations or not op.started or op.deadline != id or op.lastCommit:
       return
     e.expire(request, cmds)
+  of tkCursors:
+    if e.cursorTimer == id:
+      e.cursorTimer = 0
+      e.reclaimCursors(cmds)
 
 proc handle*(e: var Engine, ev: sink Event): seq[Command] =
   ## One event; nothing after `stop`.
@@ -2811,6 +3268,11 @@ proc cancel*(e: var Engine, request: uint64): seq[Command] =
   if e.queries.pop(request, snap):
     e.releaseSnapshot(snap, result)
     return
+  var p: PageJob
+  if e.pages.pop(request, p):
+    # [G500] Its job still runs on the read-only worker, for nobody.
+    e.releaseSnapshot(p.snapshot, result)
+    return
   if request in e.operations:
     let op = e.operations.getOrDefault(request)
     if not op.started:
@@ -2847,6 +3309,8 @@ proc stop*(e: var Engine): seq[Command] =
     ops.add(id)
   for id in e.queries.keys:
     ops.add(id)
+  for id in e.pages.keys:
+    ops.add(id)
   ops.sort()
   for id in ops:
     result.answer(
@@ -2855,6 +3319,7 @@ proc stop*(e: var Engine): seq[Command] =
     )
   e.operations.clear()
   e.queries.clear()
+  e.pages.clear()
   for slot in e.slots.mitems:
     discard slot.clear()
   e.held.clear()

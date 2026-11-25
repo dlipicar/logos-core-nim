@@ -6,7 +6,7 @@
 import std/[os, sequtils, strutils, tables]
 import unittest2
 import logos_sdk/cbor
-import ../src/logos_core/package/[errors, lgx, records, resolver]
+import ../src/logos_core/package/[errors, lgx, manifest, records, resolver]
 import ../src/logos_core/pm/input_types as pm_input_types
 import ./support/[lgxbuild, pmworld]
 
@@ -1225,3 +1225,175 @@ when defined(posix):
         check s.w.e.heldSnapshots == 0
         s.w.worker.close()
         store.close()
+
+# The engine's page jobs (5-6b-1) ----------------------------------------------------------
+
+suite "the engine's page jobs (5-6b-1; G499, G500)":
+  let
+    a = Origin(runtime: "rt", instance: "a")
+    b = Origin(runtime: "rt", instance: "b")
+
+  proc record(package, version: string, rid: string): SnapRecord =
+    var c = ManifestCommitment(commitmentModel: "m", hashProfile: "p", hashSuite: "s")
+    c.valueRoot[0] = byte(rid.len)
+    SnapRecord(
+      package: InstalledPackage(
+        identity: PackageIdentity(package: package, version: version), commitment: c
+      ),
+      rid: rid,
+      generation: 1,
+    )
+
+  proc pageOf(a: Command): CborValue =
+    ## A `cmAnswer`'s page, decoded.
+    doAssert a.kind == cmAnswer and a.answer.kind == oaEncoded, $a.kind
+    let bytes = a.answer.encoded
+    decodeCbor(bytes.toOpenArrayByte(0, bytes.high)).get
+
+  func codeOf(a: Command): string =
+    ## The answer's `package_error` code; empty for any other answer.
+    if a.kind == cmAnswer and a.answer.kind == oaResponse:
+      let e = a.answer.response.lookup("error")
+      if e.isSome:
+        return e.get.lookup("code").get(cbor("")).getText.get("")
+
+  proc world(): World =
+    result = newWorld(catalogBytes(@[entryOf("app", "1.0.0")]))
+    result.emit(result.e.start())
+    result.e.setSnapshot(
+      Snapshot(
+        sequence: 1,
+        records: @[
+          record("app", "1.0.0", "r1"),
+          record("lib", "1.2.0", "r2"),
+          record("lib", "1.3.0", "r3"),
+        ],
+      )
+    )
+
+  proc last(w: var World): Command =
+    w.answers[^1]
+
+  test "[PKG-0558] [IMPL-DECISION G500] page jobs: 2 in flight per origin and 8 in all, readers' handoffs among them; past either bound MODULE_ERROR naming it; a cancel frees its place":
+    var w = world()
+    var id = 0'u64
+    proc list(w: var World, o: Origin): uint64 =
+      inc id
+      w.emit(
+        w.e.listInstalled(id, o, Opt.none(string), Opt.none(string), Opt.none(uint16))
+      )
+      id
+
+    discard w.list(a)
+    discard w.list(a)
+    check w.count({cmPage}) == 2
+    discard w.list(a)
+    check w.last.answer.kind == oaModuleError
+    check "2 in flight for this caller" in w.last.answer.reason
+    for i in 0 ..< 3:
+      let o = Origin(runtime: "rt", instance: "o" & $i)
+      discard w.list(o)
+      inc id
+      w.emit(
+        w.e.readerHandoff(id, o, PackageIdentity(package: "app", version: "1.0.0"), "m")
+      )
+    check w.e.pagesRunning == 8
+    check w.count({cmPage}) == 8
+    let held = w.e.heldSnapshots
+    let n = w.answers.len
+    discard w.list(b)
+    check w.answers.len == n + 1
+    check w.last.answer.kind == oaModuleError
+    check "8 in flight in all" in w.last.answer.reason
+    # A reader's handoff is refused at the bound too, and never reaches the first worker.
+    inc id
+    w.emit(
+      w.e.readerHandoff(id, b, PackageIdentity(package: "app", version: "1.0.0"), "m")
+    )
+    check w.last.answer.kind == oaModuleError
+    # Readers' handoffs went to the read-only worker, none to the first.
+    check w.queue.filterIt(it.kind == cmPage).countIt(it.job.kind == wjReaderHandoff) ==
+      3
+    w.emit(w.e.cancel(1))
+    check w.e.pagesRunning == 7
+    check w.e.heldSnapshots == held - 1
+    discard w.list(b)
+    check w.e.pagesRunning == 8
+
+  test "[PKG-0533] [PKG-0384] [PKG-0387] [IMPL-DECISION G499] [IMPL-DECISION G500] a page's answer: next_cursor exactly when a matching record remains; its continuation goes on; after a commit it is invalid-request":
+    var w = world()
+    w.emit(w.e.listInstalled(1, a, Opt.some("lib"), Opt.none(string), Opt.some(1'u16)))
+    let job = w.take({cmPage}).job
+    check job.kind == wjPage
+    check job.page.mapIt(it.identity.version) == @["1.3.0"]
+    w.handle(
+      worked(
+        WorkerResult(
+          kind: wrPage, request: 1, count: 1, reply: textOf(encodeCbor(cbor(3'u64)))
+        )
+      )
+    )
+    let first = w.answers[^1].pageOf
+    check first.lookup("packages").get.items == @[cbor(3'u64)]
+    let token = first.lookup("next_cursor").get.getText.get
+    check w.e.cursorsHeld == 1
+    check w.e.heldSnapshots == 0
+    # The continuation: the last lib, then no cursor.
+    w.emit(w.e.listInstalled(2, a, Opt.some("lib"), Opt.some(token), Opt.some(1'u16)))
+    let job2 = w.take({cmPage}).job
+    check job2.page.mapIt(it.identity.version) == @["1.2.0"]
+    w.handle(
+      worked(
+        WorkerResult(
+          kind: wrPage, request: 2, count: 1, reply: textOf(encodeCbor(cbor(2'u64)))
+        )
+      )
+    )
+    check w.answers[^1].pageOf.lookup("next_cursor").isNone
+    check w.e.cursorsHeld == 0
+    # Another origin, the same token: invalid-request, and nothing more said.
+    w.emit(w.e.listInstalled(3, a, Opt.none(string), Opt.none(string), Opt.some(1'u16)))
+    discard w.take({cmPage})
+    w.handle(
+      worked(
+        WorkerResult(
+          kind: wrPage, request: 3, count: 1, reply: textOf(encodeCbor(cbor(1'u64)))
+        )
+      )
+    )
+    let t3 = w.answers[^1].pageOf.lookup("next_cursor").get.getText.get
+    w.emit(w.e.listInstalled(4, b, Opt.none(string), Opt.some(t3), Opt.some(1'u16)))
+    check w.answers[^1].codeOf == "invalid-request"
+    # A commit supersedes the snapshot: the cursor has expired.
+    w.e.setSnapshot(Snapshot(sequence: 2, records: @[record("app", "1.0.0", "r1")]))
+    w.emit(w.e.listInstalled(5, a, Opt.none(string), Opt.some(t3), Opt.some(1'u16)))
+    check w.answers[^1].codeOf == "invalid-request"
+    check w.e.cursorsHeld == 0
+
+  test "[PKG-0387] [IMPL-DECISION G499] the 1 s timer reclaims expired cursors while any is held":
+    var w = world()
+    w.emit(w.e.listInstalled(1, a, Opt.none(string), Opt.none(string), Opt.some(1'u16)))
+    discard w.take({cmPage})
+    w.handle(
+      worked(
+        WorkerResult(
+          kind: wrPage, request: 1, count: 1, reply: textOf(encodeCbor(cbor(1'u64)))
+        )
+      )
+    )
+    check w.e.cursorsHeld == 1
+    let t = w.timerFor(1000)
+    w.clock.ms = IdleMs
+    w.handle(fired(t))
+    check w.e.cursorsHeld == 0
+    check not w.has({cmTimer})
+
+  test "[SPEC PM l.1640-1641] a list's limit outside 1 to 1000 is invalid-request, before anything is read":
+    var w = world()
+    w.emit(w.e.listInstalled(1, a, Opt.none(string), Opt.none(string), Opt.some(0'u16)))
+    check w.answers[^1].codeOf == "invalid-request"
+    w.emit(
+      w.e.listInstalled(2, a, Opt.none(string), Opt.none(string), Opt.some(1001'u16))
+    )
+    check w.answers[^1].codeOf == "invalid-request"
+    check not w.has({cmPage})

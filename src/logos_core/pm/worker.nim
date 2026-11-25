@@ -135,6 +135,17 @@ proc submit*(w: Worker, job: sink WorkerJob) =
   {.cast(raises: []).}:
     w.jobs.send(job)
 
+proc abandonWorker*(w: Worker) =
+  ## [G500] At a failed `_MODULE_init`: a worker that has answered nothing (only its
+  ## `wjStart` was queued) is stopped, joined and freed at once.
+  w.closing = true
+  w.stop.store(true)
+  {.cast(raises: []).}:
+    w.jobs.send(WorkerJob(kind: wjQuit))
+    joinThread(w.thread)
+  if not w.posted.load:
+    w.freeWorker()
+
 proc stopWorker*(w: Worker): Future[void] {.async: (raises: []).} =
   ## [G447] At `_MODULE_destroy`: the thread stops after its current job and is joined,
   ## its spool files deleted; then the drain the kit may still hold is waited for.

@@ -10,8 +10,8 @@
 ##   proc `get_runtime_handoff`(m: T, request: LogosNSPackageManagerGetRuntimeHandoffRequest): Result[PreEncoded, InvocationFailure]
 ##   proc `inspect_package`(m: T, request: LogosNSPackageManagerInspectPackageRequest): Result[PreEncoded, InvocationFailure]
 ##   proc `install_package`(m: T, request: LogosNSPackageManagerInstallPackageRequest): Result[PreEncoded, InvocationFailure]
-##   proc `list_installed_packages`(m: T, request: LogosNSPackageManagerListInstalledPackagesRequest): Result[LogosNSPackageManagerListInstalledPackagesResponse, InvocationFailure]
-##   proc `list_packages`(m: T, request: LogosNSPackageManagerListPackagesRequest): Result[LogosNSPackageManagerListPackagesResponse, InvocationFailure]
+##   proc `list_installed_packages`(m: T, request: LogosNSPackageManagerListInstalledPackagesRequest): Result[PreEncoded, InvocationFailure]
+##   proc `list_packages`(m: T, request: LogosNSPackageManagerListPackagesRequest): Result[PreEncoded, InvocationFailure]
 ##   proc `remove_package`(m: T, request: LogosNSPackageManagerRemovePackageRequest): Result[PreEncoded, InvocationFailure]
 ##   proc `update_package`(m: T, request: LogosNSPackageManagerUpdatePackageRequest): Result[PreEncoded, InvocationFailure]
 ##   proc `watch_installed_packages`(m: T, request: LogosNSPackageManagerWatchInstalledPackagesRequest): Result[LogosNSPackageManagerWatchInstalledPackagesResponse, InvocationFailure]
@@ -30,7 +30,7 @@
 ## invocation runs the same handler on the module thread, and its cancellation
 ## cancels an `async` handler's future.
 ##
-## Pre-encoded (DECISIONS G494): the handlers of `inspect_package`, `install_package`, `remove_package`, `update_package`, `get_runtime_handoff`
+## Pre-encoded (DECISIONS G494): the handlers of `inspect_package`, `install_package`, `remove_package`, `update_package`, `get_runtime_handoff`, `list_packages`, `list_installed_packages`
 ## answer `PreEncoded` response bytes (`preEncoded`), which the route passes
 ## through; the boundary that commits them checks them against the schema.
 ##
@@ -978,7 +978,7 @@ proc routeConfinedLogosPackageManager[T](instance: T, bare: string, params: ptr 
     return
   if bare == "list_installed_packages":
     var typed = fromChecked(LogosNSPackageManagerListInstalledPackagesRequest, request.unsafeGet)
-    var response: Result[LogosNSPackageManagerListInstalledPackagesResponse, InvocationFailure]
+    var response: Result[PreEncoded, InvocationFailure]
     when compiles(`list_installed_packages`(instance, typed, inv)):
       settleHandler(response, `list_installed_packages`(instance, typed, inv), inv)
     else:
@@ -988,11 +988,11 @@ proc routeConfinedLogosPackageManager[T](instance: T, bare: string, params: ptr 
     if response.isErr:
       result = Result[seq[byte], InvocationFailure].err(response.unsafeError)
       return
-    result = encodedResponse(encode(response.unsafeGet))
+    result = takeEncoded(response.get)
     return
   if bare == "list_packages":
     var typed = fromChecked(LogosNSPackageManagerListPackagesRequest, request.unsafeGet)
-    var response: Result[LogosNSPackageManagerListPackagesResponse, InvocationFailure]
+    var response: Result[PreEncoded, InvocationFailure]
     when compiles(`list_packages`(instance, typed, inv)):
       settleHandler(response, `list_packages`(instance, typed, inv), inv)
     else:
@@ -1002,7 +1002,7 @@ proc routeConfinedLogosPackageManager[T](instance: T, bare: string, params: ptr 
     if response.isErr:
       result = Result[seq[byte], InvocationFailure].err(response.unsafeError)
       return
-    result = encodedResponse(encode(response.unsafeGet))
+    result = takeEncoded(response.get)
     return
   if bare == "remove_package":
     var typed = fromChecked(LogosNSPackageManagerRemovePackageRequest, request.unsafeGet)

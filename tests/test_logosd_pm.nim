@@ -22,7 +22,7 @@
 ## `test_logosd.nim`. Every case leaves no Module Host of this build behind.
 
 when defined(posix):
-  import std/[json, monotimes, os, sequtils, strutils, times]
+  import std/[algorithm, json, monotimes, os, sequtils, strutils, times]
   import unittest2
   import logos_sdk/cbor
   import logos_sdk/crypto/blake3
@@ -467,7 +467,7 @@ when defined(posix):
       # if it failed (`shortdir`).
       endCaseBases(testStatusIMPL == TestStatus.FAILED)
 
-    test "[PKG-0004] [PKG-0353] [PKG-0513] [IMPL-DECISION G491] [IMPL-DECISION G402] [IMPL-DECISION G449] [IMPL-DECISION G493] under capability-authority, with no operator entry for it: the Package Manager is started (S2), acquires the catalog once the fake is ready (S9 to S11), the operations run end to end, and the records are kept across logosd's restart":
+    test "[PKG-0004] [PKG-0353] [PKG-0513] [IMPL-DECISION G491] [IMPL-DECISION G402] [IMPL-DECISION G449] [IMPL-DECISION G493] [IMPL-DECISION G498] under capability-authority, with no operator entry for it: the Package Manager is started (S2), acquires the catalog once the fake is ready (S9 to S11), the operations run end to end, lcn_call, the default reader, lists the installed records, and the records are kept across logosd's restart":
       let c = newCase()
       check c.initPm().code == 0
       c.stock()
@@ -512,19 +512,20 @@ when defined(posix):
       # [G449] The operation's log line: its time and the archive bytes it retrieved.
       check "package-manager: install_package ended after " in first.errText
       check "archive bytes retrieved: committed" in first.errText
-      # [G495; Q7 (b)] An observation is not served before 5-6b: MODULE_ERROR with no
-      # message, and the operator's log line.
+      # [G498; C4] `lcn_call` is logosd's default reader: the installed records, in name
+      # order, on one page.
       let listed = c.pm("list_installed_packages")
-      check listed{"status"}.getStr == "error"
-      check listed{"code"}.getStr == "MODULE_ERROR"
-      check listed{"message"}.isNil
-      check eventually(
-        "the refusal's log line",
-        first,
-        proc(): bool =
-          "package-manager: list_installed_packages refused for module instance " &
-            CliInstance & " of Runtime " in first.errText,
-      )
+      checkpoint("the list: " & $listed)
+      check listed{"status"}.getStr == "ok"
+      var names: seq[string]
+      for r in listed{"result"}{"packages"}.getElems:
+        names.add(
+          r{"identity"}{"package"}.getStr & "@" & r{"identity"}{"version"}.getStr
+        )
+      check names.len == 2 and "app@1.0.0" in names
+      check names == names.sorted
+      check listed{"result"}{"next_cursor"}.isNil
+      check "list_installed_packages refused" notin first.errText
       check first.stopped == 0
       # The next start: the fake is not made ready, so nothing is retrieved; the
       # catalog and the records come from what the Package Manager kept.

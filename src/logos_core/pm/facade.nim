@@ -16,14 +16,21 @@
 ## - **A cancellation** the Runtime sends reaches the handler as `CancelledError`: the
 ##   shell cancels the operation in the engine, the handler logs one line and ends
 ##   CANCELLED (G338, G449). What the caller sees is the boundary's code.
+## - **Readers** (5-6b-1; G498; C4): the protected input names them (`readers`, with the
+##   Runtime their calls come from). A caller is a reader when it is an ordinary caller of
+##   that Runtime and its module instance is listed; a SYSTEM_SERVICE caller never is.
+##   The check runs first, before any filter, snapshot or cursor (PKG-0529), on every
+##   call and page (PKG-0385). Visibility is all or nothing (PKG-0530): a reader sees
+##   every record, a non-reader none.
 ## - **`get_runtime_handoff`** is served to a SYSTEM_SERVICE caller, the Runtime's own
-##   binding (5-6a-2, G493). An ordinary caller is refused (Q7 (b): readers only, from
-##   5-6b).
-## - **The observation methods** (`list_packages`, `list_installed_packages`,
-##   `watch_installed_packages`) and an ordinary caller's `get_runtime_handoff` are
-##   refused in 5-6a with MODULE_ERROR and no message or detail: a provider cannot
-##   answer NOT_AUTHORISED (INTERFACE l.3308-3311; G495, Q6 (b)). The operator's log
-##   gets one line naming the caller, the method and why.
+##   binding (5-6a-2, G493), on the first worker; and to a reader (Q7 (b)) as a page job
+##   on the read-only worker (G500, ruling A). Anyone else is refused.
+## - **The lists** (`list_packages`, `list_installed_packages`; G499, G500) are served to
+##   readers; their pages' bytes pass through as the engine framed them.
+## - **Refusals** are MODULE_ERROR with no message or detail: a provider cannot answer
+##   NOT_AUTHORISED (INTERFACE l.3308-3311; G495, Q6 (b)). The operator's log gets one
+##   line naming the caller, the method and why: not a reader, or the bound it met
+##   (Fable §11.2, point 1), so the log tells the causes of an opaque MODULE_ERROR apart.
 ## - **The stop**: the Runtime cancels the calls in flight first; `destroyModule` then
 ##   runs `closeShell`, which stops the engine and the worker (§4.1 of the plan).
 
@@ -41,6 +48,8 @@ export logos_package_manager_kit
 type PackageManager* = ref object
   shell: Shell
   log: ShellLog
+  readers: seq[string] ## [G498] the protected input's
+  runtime: string ## [G498] the Runtime readers' calls come from
 
 when defined(lcnTestHooks):
   import std/os
@@ -101,6 +110,19 @@ func describe(c: Result[Caller, InvocationFailure]): string =
   of ckSystemService:
     "the system service of Runtime " & k.runtimeInstance
 
+proc readerOf(m: PackageManager, inv: Invocation): Opt[Origin] =
+  ## [G498; C4; PKG-0529] The caller as an origin, when it is a reader: an ordinary
+  ## caller of the readers' Runtime whose module instance is listed. A SYSTEM_SERVICE
+  ## caller never is.
+  let c = inv.caller()
+  if c.isErr:
+    return Opt.none(Origin)
+  let k = c.get
+  if k.kind != ckModule or k.moduleInstance.isNone or m.runtime.len == 0 or
+      k.runtimeInstance != m.runtime or k.moduleInstance.get notin m.readers:
+    return Opt.none(Origin)
+  Opt.some(Origin(runtime: k.runtimeInstance, instance: k.moduleInstance.get))
+
 proc refuse(m: PackageManager, inv: Invocation, meth, why: string): InvocationFailure =
   ## [G495] One operator log line naming the caller, the method and why; the caller
   ## gets MODULE_ERROR with nothing more.
@@ -109,6 +131,15 @@ proc refuse(m: PackageManager, inv: Invocation, meth, why: string): InvocationFa
       why
   )
   refused()
+
+proc queried(
+    m: PackageManager, inv: Invocation, meth: string, a: OperationAnswer
+): Result[PreEncoded, InvocationFailure] =
+  ## [G499, G500] A query's answer: a bound the engine met is MODULE_ERROR with no
+  ## detail, and the log names it.
+  if a.kind == oaModuleError:
+    return err(m.refuse(inv, meth, a.reason))
+  answered(a)
 
 proc operate(
     m: PackageManager, meth: string, op: OperationRequest
@@ -129,7 +160,11 @@ proc initModule*(
   ## [G405] The shell, from the protected input (G400); the engine starts once
   ## `_MODULE_init` returned.
   let s = ?openShell(init, log = stderrLog)
-  ok(PackageManager(shell: s, log: stderrLog))
+  ok(
+    PackageManager(
+      shell: s, log: stderrLog, readers: s.readers, runtime: s.runtimeInstanceId
+    )
+  )
 
 proc destroyModule*(m: PackageManager) {.async: (raises: []).} =
   ## [G437] After the Runtime ended the calls in flight: the engine and the worker stop.
@@ -175,9 +210,20 @@ proc `get_runtime_handoff`*(
     request: LogosNSPackageManagerGetRuntimeHandoffRequest,
     inv: Invocation,
 ): Future[Result[PreEncoded, InvocationFailure]] {.async: (raises: []).} =
-  ## [SPEC PM §12; G493, G495] Served to the Runtime's system-service binding; an
-  ## ordinary caller is refused until 5-6b serves readers (Q7 (b)).
+  ## [SPEC PM §12; G493, G495, G500] Served to the Runtime's system-service binding on
+  ## the first worker, and to a reader as a page job on the read-only worker (Q7 (b),
+  ## ruling A); anyone else is refused.
   let c = inv.caller()
+  if c.isOk and c.get.kind == ckModule:
+    let o = m.readerOf(inv).valueOr:
+      return err(m.refuse(inv, "get_runtime_handoff", "not a reader"))
+    let a =
+      try:
+        await m.shell.readerHandoff(o, identityOf(request.package), request.module)
+      except CancelledError:
+        m.log("package-manager: get_runtime_handoff cancelled by the Runtime")
+        return err(cancelled())
+    return m.queried(inv, "get_runtime_handoff", a)
   if c.isErr or c.get.kind != ckSystemService:
     return err(m.refuse(inv, "get_runtime_handoff", "not a reader"))
   let a =
@@ -194,21 +240,34 @@ proc `list_packages`*(
     m: PackageManager,
     request: LogosNSPackageManagerListPackagesRequest,
     inv: Invocation,
-): Future[Result[LogosNSPackageManagerListPackagesResponse, InvocationFailure]] {.
-    async: (raises: [])
-.} =
-  ## [G495] Refused in 5-6a: 5-6b serves readers (C4).
-  err(m.refuse(inv, "list_packages", "not a reader"))
+): Future[Result[PreEncoded, InvocationFailure]] {.async: (raises: []).} =
+  ## [SPEC PM §15 l.1656-1657; G498, G499, G500] The catalog's listed entries, a page
+  ## at a time, for a reader.
+  let o = m.readerOf(inv).valueOr:
+    return err(m.refuse(inv, "list_packages", "not a reader"))
+  let a =
+    try:
+      await m.shell.listPackages(o, request.package, request.cursor, request.limit)
+    except CancelledError:
+      return err(cancelled())
+  m.queried(inv, "list_packages", a)
 
 proc `list_installed_packages`*(
     m: PackageManager,
     request: LogosNSPackageManagerListInstalledPackagesRequest,
     inv: Invocation,
-): Future[Result[LogosNSPackageManagerListInstalledPackagesResponse, InvocationFailure]] {.
-    async: (raises: [])
-.} =
-  ## [G495] Refused in 5-6a: 5-6b serves readers (C4).
-  err(m.refuse(inv, "list_installed_packages", "not a reader"))
+): Future[Result[PreEncoded, InvocationFailure]] {.async: (raises: []).} =
+  ## [SPEC PM §15 l.1659-1660; G498, G499, G500] One internally consistent snapshot of
+  ## the installed set, a page at a time, for a reader: each page read on the read-only
+  ## worker.
+  let o = m.readerOf(inv).valueOr:
+    return err(m.refuse(inv, "list_installed_packages", "not a reader"))
+  let a =
+    try:
+      await m.shell.listInstalled(o, request.package, request.cursor, request.limit)
+    except CancelledError:
+      return err(cancelled())
+  m.queried(inv, "list_installed_packages", a)
 
 proc `watch_installed_packages`*(
     m: PackageManager,

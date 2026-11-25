@@ -42,10 +42,18 @@
 ##   artifacts against their signed digests for a resolution's `need retained` (G448),
 ##   and `wjHandoff` builds a selected module's `{handoff}` response from the record's
 ##   directory (G451), for a query that takes no slot.
+## - **The read-only worker** (5-6b-1; G500; Q10 (a)): a second worker thread runs this
+##   same code with a configuration of its own (`readOnly`, the installation root's path
+##   in `root`, no store files), and only two jobs: `wjPage`, one `list_installed_packages`
+##   page read from the records' `m/` directories, and `wjReaderHandoff`, a reader's
+##   `get_runtime_handoff` built as `wjHandoff` builds it. It makes its own trust copy
+##   once, at `wjStart`, from the same accepted bytes, and shares nothing with the first
+##   worker. Reading by path is sound while the engine holds the snapshot the job reads
+##   (G451's R1): no collect deletes what a held snapshot names.
 
 {.push raises: [].}
 
-import std/[macros, tables]
+import std/[atomics, macros, tables]
 import results
 import logos_sdk/cbor
 import logos_sdk/base/testhooks
@@ -57,6 +65,9 @@ import ./[installed, responses, spool, vcache]
 when defined(posix):
   import ./store
   export store
+
+when defined(lcnTestHooks):
+  import std/[os, strutils]
 
 export results, blake3, reffree, spool, vcache
 
@@ -82,6 +93,13 @@ type
     when defined(posix):
       store*: StoreFiles ## [5-5-4] the store's file half, the worker's from `wjStart`
       hasStore*: bool
+    readOnly*: bool ## [5-6b-1; G500] the read-only worker: `wjPage`, `wjReaderHandoff`
+    root*: string ## [G500] the read-only worker's: the installation root (`install/`)
+
+  PageEntry* = object ## [G500] One record a page job reads: what the index names it by.
+    rid*: string
+    generation*: uint64
+    identity*: PackageIdentity
 
   WorkerJobKind* = enum
     wjStart
@@ -97,6 +115,8 @@ type
     wjCollect ## [R1] delete retired items
     wjReply ## [5-5-4] a committed record's `{installed}` response
     wjHandoff ## [5-5-4; SPEC PM §12] a selected module's `{handoff}` response
+    wjPage ## [5-6b-1; G500] the read-only worker's `list_installed_packages` page
+    wjReaderHandoff ## [5-6b-1; G500, ruling A] a reader's `get_runtime_handoff`
     wjQuit
 
   WorkerJob* = object
@@ -134,7 +154,9 @@ type
     rootSource*: bool ## `wjOpen`: the archive is an inspection's root source
     items*: seq[RetiredItem] ## `wjCollect`
     inspect*: bool ## `wjReply`: the `{inspection}` response instead
-    module*: string ## `wjHandoff`'s
+    module*: string ## `wjHandoff`'s and `wjReaderHandoff`'s
+    page*: seq[PageEntry] ## `wjPage`'s candidates, in listing order, at most `limit`
+    budget*: int ## `wjPage`: the page's byte budget (`listing.fits`)
 
   WorkerResultKind* = enum
     wrAppended ## a `wjAppend` is done: `failure` if a write failed
@@ -144,7 +166,8 @@ type
     wrStaged ## `wjStage`, `wjStageSigner`: staged, or `fault`
     wrCommitted ## `wjCommit`: the new sequence and what it retired, or `fault`
     wrCollected ## `wjCollect`
-    wrReply ## `wjReply`: the response, or `fault`
+    wrReply ## `wjReply`: the response, or `fault`; also `wjHandoff`, `wjReaderHandoff`
+    wrPage ## [G500] `wjPage`: `count` record values encoded back to back, or `fault`
 
   WorkerResult* = object
     kind*: WorkerResultKind
@@ -175,6 +198,7 @@ type
     retired*: seq[RetiredItem] ## `wrCommitted`
     collected*: Collected ## `wrCollected`
     base*: string ## `wrStaged`: the record's `a/` directory
+    count*: int ## `wrPage`: the records in `reply`
 
   WorkerState* = object
     ## The worker's side: its copy of the inputs, and the spool files it holds.
@@ -207,7 +231,7 @@ requireRefFree(WorkerResult)
 
 # The staged record's dependencies, decoded ---------------------------------------------
 
-func asText(b: openArray[byte]): string =
+func asText*(b: openArray[byte]): string =
   result = newString(b.len)
   if b.len > 0:
     copyMem(addr result[0], unsafeAddr b[0], b.len)
@@ -391,6 +415,89 @@ when defined(posix):
       result.reply = asText(encodeCbor(installedResult(record, st.get.base)))
 
   when defined(lcnTestHooks):
+    # [IMPL] A hosted test's pause before each record a page job reads, in milliseconds
+    # (0: none), so that a suite can hold page jobs in flight (5-6b-1;
+    # `test_pm_queries`). Read once, when the library is loaded.
+    let pagePaceMs =
+      try:
+        parseInt(getEnv("LCN_TEST_PM_PAGE_PACE_MS", "0"))
+      except ValueError:
+        0
+
+  proc handoffJob(w: WorkerState, root: string, job: WorkerJob): WorkerResult =
+    ## [SPEC PM §12; G451] Built from the record's directory, its manifest read there
+    ## (Fable's check §1.3), under the worker's trust copy. A refusal with a package
+    ## error is the response; its detail is for the operator's log (`failure`). The
+    ## first worker's `wjHandoff` and the read-only worker's `wjReaderHandoff` (G500)
+    ## both run it, so a reader gets the bytes the binding gets.
+    result = WorkerResult(kind: wrReply, request: job.request)
+    let read = readRecordFiles(
+      root, IndexEntry(rid: job.rid, generation: job.generation, identity: job.identity)
+    )
+    if read.isErr:
+      result.faulted(read.error)
+      return
+    let (m, f) = read.get
+    let base = baseOf(root, job.rid)
+    let held = Installed(rid: job.rid, file: f, manifest: m, base: base)
+    let h = buildHandoff(
+      f.record, base, m, f.record.commitment, job.module, w.trust, held.reader
+    )
+    if h.isOk:
+      result.reply = asText(encodeCbor(handoffResult(h.get)))
+    else:
+      let code = h.error.refusal.code
+      result.failure = h.error.detail
+      if code.isSome:
+        result.reply = asText(encodeCbor(errorResult(code.get, h.error.msg)))
+      else:
+        result.faulted(
+          StoreError(
+            fault: sfDamaged,
+            identity: Opt.some(job.identity),
+            detail: h.error.msg & ": " & h.error.detail,
+          )
+        )
+
+  proc pageJob(w: WorkerState, job: WorkerJob, stop: LgxStop): WorkerResult =
+    ## [5-6b-1; G500] One `list_installed_packages` page: each candidate's record read
+    ## from its `m/` and encoded as `installed_package_record`, in order, until the
+    ## page's byte budget or the candidates end; at least one record.
+    result = WorkerResult(kind: wrPage, request: job.request)
+    var items: seq[byte]
+    for p in job.page:
+      if not stop.isNil and stop[].load(moRelaxed):
+        break
+      when defined(lcnTestHooks):
+        if pagePaceMs > 0:
+          sleep(pagePaceMs)
+      let read = readRecordFiles(
+        w.config.root,
+        IndexEntry(rid: p.rid, generation: p.generation, identity: p.identity),
+      )
+      if read.isErr:
+        result.faulted(read.error)
+        return
+      let bytes =
+        encodeCbor(recordValue(read.get[1].record, baseOf(w.config.root, p.rid)))
+      if result.count > 0 and items.len + bytes.len > job.budget:
+        break
+      items.add(bytes)
+      inc result.count
+    result.reply = asText(items)
+
+  proc readJob(w: var WorkerState, job: WorkerJob, stop: LgxStop): WorkerResult =
+    ## [5-6b-1; G500] The read-only worker's jobs, below `config.root`.
+    doAssert w.config.readOnly, "a read job on the first worker"
+    case job.kind
+    of wjPage:
+      w.pageJob(job, stop)
+    of wjReaderHandoff:
+      w.handoffJob(w.config.root, job)
+    else:
+      raiseAssert "not a read job"
+
+  when defined(lcnTestHooks):
     proc setCrashAt*(w: var WorkerState, at: CrashPoint) =
       ## A test's crash point on the worker's store half.
       w.store.crashAt = at
@@ -449,39 +556,7 @@ when defined(posix):
         WorkerResult(kind: wrCollected, collected: w.store.collectFiles(job.items))
       )
     of wjHandoff:
-      # [SPEC PM §12; G451] Built from the record's directory, its manifest read there
-      # (Fable's check §1.3), under the worker's trust copy. A refusal with a package
-      # error is the response; its detail is for the operator's log (`failure`).
-      var r = WorkerResult(kind: wrReply, request: job.request)
-      let read = readRecordFiles(
-        w.store.root,
-        IndexEntry(rid: job.rid, generation: job.generation, identity: job.identity),
-      )
-      if read.isErr:
-        r.faulted(read.error)
-        return Opt.some(r)
-      let (m, f) = read.get
-      let base = baseOf(w.store.root, job.rid)
-      let held = Installed(rid: job.rid, file: f, manifest: m, base: base)
-      let h = buildHandoff(
-        f.record, base, m, f.record.commitment, job.module, w.trust, held.reader
-      )
-      if h.isOk:
-        r.reply = asText(encodeCbor(handoffResult(h.get)))
-      else:
-        let code = h.error.refusal.code
-        r.failure = h.error.detail
-        if code.isSome:
-          r.reply = asText(encodeCbor(errorResult(code.get, h.error.msg)))
-        else:
-          r.faulted(
-            StoreError(
-              fault: sfDamaged,
-              identity: Opt.some(job.identity),
-              detail: h.error.msg & ": " & h.error.detail,
-            )
-          )
-      return Opt.some(r)
+      return Opt.some(w.handoffJob(w.store.root, job))
     of wjReply:
       var r = WorkerResult(kind: wrReply, request: job.request)
       let read = readRecordFiles(
@@ -585,6 +660,11 @@ proc runJob*(
   of wjStage, wjStageSigner, wjAbandon, wjCommit, wjCollect, wjReply, wjHandoff:
     when defined(posix):
       return w.storeJob(job, stop)
+    else:
+      raiseAssert "the installed state is POSIX only"
+  of wjPage, wjReaderHandoff:
+    when defined(posix):
+      return Opt.some(w.readJob(job, stop))
     else:
       raiseAssert "the installed state is POSIX only"
   of wjQuit:
