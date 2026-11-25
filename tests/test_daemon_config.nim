@@ -814,7 +814,7 @@ suite "dc.compose: the derived host configuration [IMPL-DECISION G294] [IMPL-DEC
       )
       .replace(
         "{\"runtime_instance_id\": \"rt-1\"}",
-        "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & host & "\"}",
+        "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & dq(host) & "\"}",
       )
     for (trust, deployment) in [
       (prod, LcnCallSettingsDeploymentChoiceKind.Production),
@@ -854,12 +854,12 @@ suite "dc.compose: the derived host configuration [IMPL-DECISION G294] [IMPL-DEC
           "\"overrides\": [{\"instance\": \"logosctl\", \"restart\": {\"kind\": \"disabled\"}}], \"resync_ms\": 2000}, " &
           "\"permissions\": {\"initial\": [{\"module\": \"other\", \"permissions\": [{\"permission\": \"logos-core-nim.host-ambient\", \"constraints\": h'a0'}]}]}, " &
           "\"call_audit\": {\"call_records\": 64, \"evidence\": {\"kid\": h'" &
-          k.binding.kid.toHex & "', \"secret_key_file\": \"" & k.keyFile &
+          k.binding.kid.toHex & "', \"secret_key_file\": \"" & dq(k.keyFile) &
           "\"}, \"store\": {}}"
       )
       .replace(
         "{\"runtime_instance_id\": \"rt-1\"}",
-        "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & host & "\"}",
+        "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & dq(host) & "\"}",
       )
     let p = prepareDaemon(s, dcBytes(text), prod).get
     let app = p.composition.appConfig
@@ -891,7 +891,7 @@ suite "dc.compose: the derived host configuration [IMPL-DECISION G294] [IMPL-DEC
       )
         .replace(
           "{\"runtime_instance_id\": \"rt-1\"}",
-          "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & host & "\"}",
+          "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & dq(host) & "\"}",
         )
 
     let p = prepareDaemon(s, dcBytes(text("move")), prod).get
@@ -909,7 +909,7 @@ suite "dc.compose: the derived host configuration [IMPL-DECISION G294] [IMPL-DEC
     let s = Session(dir: freshDir())
     let missing = dcText().replace(
         "{\"runtime_instance_id\": \"rt-1\"}",
-        "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & work / "no-host" &
+        "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & dq(work / "no-host") &
           "\"}",
       )
     check prepareDaemon(s, dcBytes(missing), prod).error ==
@@ -1381,7 +1381,8 @@ proc withHost(text: string): string =
   ## `text` with a `module_host`, which a composed hosted instance needs.
   text.replace(
     "{\"runtime_instance_id\": \"rt-1\"}",
-    "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & getAppFilename() & "\"}",
+    "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & dq(getAppFilename()) &
+      "\"}",
   )
 
 func presetLine(instance: string): string =
@@ -1515,7 +1516,7 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
       "package_manager: package_manager gets resolver limits partial_closure_names 16, dependency_depth 15, " &
       "candidates_per_name 4, assignment_attempts 1000 (package_manager.resolver_limits)"
 
-  test "compose: the instance's lcn.pm_input, byte for byte, its only protected input":
+  posixTest "compose: the instance's lcn.pm_input, byte for byte, its only protected input":
     let s = Session(dir: freshDir())
     let p = prepareDaemon(s, dcBytes(withHost(pmText())), prod).get
     let app = p.composition.appConfig
@@ -1576,7 +1577,7 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
     ).get
     check plain.composition.appConfig.protected_inputs.isNone
 
-  test "[IMPL-DECISION G498] [PKG-0529] compose: the input's readers are package_manager.readers, else lcn_call when this start composes it, else none, with the Runtime's id; a reader named twice, the Package Manager itself or an instance this start does not run is refused":
+  posixTest "[IMPL-DECISION G498] [PKG-0529] compose: the input's readers are package_manager.readers, else lcn_call when this start composes it, else none, with the Runtime's id; a reader named twice, the Package Manager itself or an instance this start does not run is refused":
     proc inputOf(text: string): CborValue =
       result = cborMap()
       let p = prepareDaemon(Session(dir: freshDir()), dcBytes(text), prod)
@@ -1723,7 +1724,7 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
     ) ==
       "package_manager.artifact.id must be logos_package_manager, the companion library's id"
 
-  test "[G402] [IMPL-DECISION G491] [IMPL-DECISION G503] S9 to S13 with the section: seven rules, each provider once, in byte order; S14 with lcn_call too":
+  posixTest "[G402] [IMPL-DECISION G491] [IMPL-DECISION G503] S9 to S13 with the section: seven rules, each provider once, in byte order; S14 with lcn_call too":
     let orch = orchestratorValue(dcOf(pmText())).get
     let base = systemRules(orch).get
     let two = PmSettings(instance: PmInstance, providers: @["st", "a", "st"])
@@ -2627,8 +2628,8 @@ suite "dc.init: logosctl init's session [IMPL-DECISION G192] [batch E 19] [U8]":
       )
         .replace(
           "{\"runtime_instance_id\": \"rt-1\"}",
-          "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" & getAppFilename() &
-            "\"}",
+          "{\"runtime_instance_id\": \"rt-1\", \"module_host\": \"" &
+            dq(getAppFilename()) & "\"}",
         )
     )
     let r = initSession(s, InitOptions(config: Opt.some(cfg), development: true)).get

@@ -738,7 +738,8 @@ suite "pkg.lgx streaming: the extraction pass against a changed source (step 5-5
       check extracted(p).error.fault == xfDiffers
       check inspectLgx(fileSource(path), trust, linuxHost).error.code ==
         pecPackageUnavailable
-      removeFile(path)
+    # The file, or the link, gives way to a directory of its name on every host.
+    removeFile(path)
     createDir(path)
     check extracted(p).error.fault == xfDiffers
     removeDir(path)

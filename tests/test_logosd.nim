@@ -59,7 +59,8 @@ when defined(posix):
     ChatterLine = "chatter: beacon_module initialized in process "
       ## `tests/kit/chatter_impl.nim`'s line, which ends with the writer's pid
     ChatterInstance = "chatter-1"
-    ChatterDelayVar = "LCN_CHATTER_INIT_DELAY_MS" ## `chatter_impl`'s init delay
+    ChatterHoldVar = "LCN_CHATTER_INIT_HOLD_FILE"
+      ## `chatter_impl`'s init waits until this file exists
     ChatterShowEnvVar = "LCN_CHATTER_SHOW_ENV"
       ## [G442] names `chatter_impl` writes as `chatter: env <name>=<value>`
     ChatterEnvLine = "chatter: env "
@@ -1378,8 +1379,17 @@ when defined(posix):
       # where the Loader's reply arrives after shutdown began is test_hosted_routes
       # P-5b's.
       let c = newCase()
-      check c.initHosted(start = false, hostEnv = @[ChatterDelayVar]).code == 0
-      let d = c.start(env = [(ChatterDelayVar, $(1_500 * Slow))])
+      # `_MODULE_init` waits for a file this case makes only once it is over, so
+      # the realization is in flight at the state query and at SIGTERM however
+      # slow the runner (CI run 1, refc: a 1.5 s delay ran out first).
+      let hold = c.dir / "chatter-hold"
+      defer:
+        try:
+          writeFile(hold, "") # lets a host this case failed to end return
+        except IOError:
+          discard
+      check c.initHosted(start = false, hostEnv = @[ChatterHoldVar]).code == 0
+      let d = c.start(env = [(ChatterHoldVar, hold)])
       c.expectReady(d)
       let sh = spawnChild(
         ctlExe,
@@ -1391,7 +1401,8 @@ when defined(posix):
         "start",
       )
       children.add(sh)
-      # The line comes from `_MODULE_init`, which then waits: realize is in flight.
+      # The line comes from `_MODULE_init`, which then waits for `hold`: realize
+      # is in flight.
       check d.chatterLogged(1).len == 1
       check c.state(ChatterInstance) != "ready"
       check d.stopped == 0

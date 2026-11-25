@@ -4,9 +4,10 @@
 ## logosd's log unfiltered; realized in logosd's process instead, it would
 ## show there too, so a case that expects no realization expects no line.
 ##
-## With `LCN_CHATTER_INIT_DELAY_MS` in its environment (a case lists it in
-## `module_host_env`), `_MODULE_init` then waits that long before it returns,
-## so a case can act while the realization is still in flight.
+## With `LCN_CHATTER_INIT_HOLD_FILE` in its environment (a case lists it in
+## `module_host_env`), `_MODULE_init` then waits until the file it names exists,
+## so a case acts while the realization is still in flight for as long as it
+## needs, whatever the runner's speed (CI run 1: a timed wait ran out first).
 ##
 ## [DECISIONS G442] With `LCN_CHATTER_SHOW_ENV` (names, comma-separated), it
 ## first writes `chatter: env <name>=<value>` (or `chatter: env <name> unset`)
@@ -23,7 +24,7 @@ when defined(posix):
 
 const
   ChatterLine* = "chatter: beacon_module initialized in process "
-  ChatterDelayVar* = "LCN_CHATTER_INIT_DELAY_MS"
+  ChatterHoldVar* = "LCN_CHATTER_INIT_HOLD_FILE"
   ChatterShowEnvVar* = "LCN_CHATTER_SHOW_ENV"
   ChatterEnvLine* = "chatter: env "
   ChatterTraceVar* = "LCN_CHATTER_SANITIZER_TRACE"
@@ -47,12 +48,10 @@ proc initModule(_: type Chatter, init: ModuleInit): Result[Chatter, InvocationFa
   when defined(asan) or defined(tsan) or defined(msan):
     if getEnv(ChatterTraceVar).len > 0:
       sanitizerPrintStackTrace()
-  let delay = getEnv(ChatterDelayVar)
-  if delay.len > 0:
-    try:
-      sleep(parseInt(delay))
-    except ValueError:
-      discard
+  let hold = getEnv(ChatterHoldVar)
+  if hold.len > 0:
+    while not fileExists(hold):
+      sleep(5)
   ok(Chatter())
 
 exportBeaconModule(Chatter)
