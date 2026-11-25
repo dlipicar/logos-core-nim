@@ -373,7 +373,10 @@ when defined(posix):
         check not dirExists(s.remoteDir / OldCredentialName)
         check loadCredentialKey(credentialDir(s)).isErr
         setFilePermissions(keyPath(credentialDir(s)), {fpUserRead, fpUserWrite})
-        check loadCredentialKey(credentialDir(s)).isOk
+        let loaded = loadCredentialKey(credentialDir(s))
+        check loaded.isOk
+        if loaded.isOk:
+          loaded.get.free()
 
     test "[IMPL-DECISION G410] the key holder ends on anything but holder_sign, and needs its arguments":
       let (s, _) = withCredential("holder-ends")

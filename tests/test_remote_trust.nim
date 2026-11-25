@@ -50,6 +50,10 @@ when defined(posix):
     ).get
     Peer(id: id, key: key, cert: cert, spki: key.spkiDer().get)
 
+  proc free(p: Peer) =
+    ## The key is in BoringSSL's memory, which only `free` releases.
+    p.key.free()
+
   proc textOf(b: openArray[byte]): string =
     ## The bytes as a string, copied (a cast would alias the seq's payload).
     result = newString(b.len)
@@ -327,6 +331,8 @@ when defined(posix):
       )
       check LcnRemoteTrust()
         .withRemoteAnchor(LcnRemoteAnchor(id: @[1'u8], certificate: @[1'u8, 2, 3])).isErr
+      for p in [serverOnly, noSign, unused]:
+        p.free()
 
     test "[IMPL-DECISION G408] the writers: each change is written as revision + 1 only when it changes something and logosd would accept it; refusals write nothing":
       let s = newSession()
@@ -503,7 +509,10 @@ when defined(posix):
       other.free()
       check loadCredentialKey(s.credentialDir).error.contains("is not the key of")
       check writeAtomic(s.credentialDir, KeyName, saved.toOpenArrayByte(0, saved.high)).isOk
-      check loadCredentialKey(s.credentialDir).isOk
+      let loaded = loadCredentialKey(s.credentialDir)
+      check loaded.isOk
+      if loaded.isOk:
+        loaded.get.free()
       moveFile(keyFile, s.dir / "key.p8")
       createSymlink(s.dir / "key.p8", keyFile)
       check loadCredentialKey(s.credentialDir).error.contains("not a regular file")
@@ -777,3 +786,7 @@ when defined(posix):
       check j{"result", "credential", "certificate_sha256"}.getStr != sha
       if not ok:
         checkpoint(log)
+
+  # The fixtures' keys, which only `free` releases.
+  for p in [a, b, c3]:
+    p.free()
