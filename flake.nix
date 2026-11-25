@@ -157,7 +157,9 @@
               # On aarch64 a library loaded with dlopen reaches its thread-local variables
               # through TLS descriptors, which bypass the `__tls_get_addr` interceptor that
               # tells MemorySanitizer glibc initialized them: Nim's start-up in every such
-              # library reads as uninitialized. x86_64 runs these suites (DECISIONS I77).
+              # library reads as uninitialized. x86_64 runs these suites (DECISIONS I77). The
+              # list is every suite that loads a Nim library (tools/sanitizer/dlopen_suites.py),
+              # and the affected-suites check fails when it is out of date.
               # Beside them, test_hosted_routes' run.mixed cases and test_kit_mixed's
               # cases skip themselves under MemorySanitizer on every architecture (DECISIONS
               # G342): their refc module libraries are built without the sanitizer, and an
@@ -165,26 +167,8 @@
               skip =
                 file:
                 pkgs.stdenv.hostPlatform.isAarch64
-                && lib.elem (baseNameOf file) [
-                  "test_boundary_invariance.nim"
-                  "test_deployment.nim"
-                  "test_engine.nim"
-                  "test_host.nim"
-                  "test_host_dylib.nim"
-                  "test_hosted.nim"
-                  "test_hosted_permissions.nim"
-                  "test_hosted_routes.nim"
-                  "test_kit_dylib.nim"
-                  "test_kit_mixed.nim"
-                  "test_lcn_call.nim"
-                  "test_logosd.nim"
-                  "test_module_host.nim"
-                  "test_realizer.nim"
-                  "test_routes.nim"
-                  "test_storage_fetch.nim"
-                  "test_wipe_cli.nim"
-                  "test_wipe_routes.nim"
-                ];
+                && lib.elem (lib.removeSuffix ".nim" (baseNameOf file))
+                  (lib.importJSON ./nix/msan-dlopen-suites.json).suites;
             }
           ];
           testVariants = baseVariants ++ sanitizerVariants;
@@ -914,12 +898,16 @@
                 fileset = lib.fileset.unions [
                   ./tools/affected_suites.py
                   ./tools/lint/layers.py
+                  ./tools/sanitizer/dlopen_suites.py
                 ];
               };
             in
             s.pkgs.runCommand "affected-suites" { nativeBuildInputs = [ s.pkgs.python3 ]; } ''
               cd ${s.nimSources}
               python3 -I ${tool}/affected_suites.py --self-test --root .
+              # [DECISIONS I77 (8)] The aarch64 -msan skip list is this tree's library loaders.
+              python3 -I ${tool}/sanitizer/dlopen_suites.py --self-test --root .
+              python3 -I ${tool}/sanitizer/dlopen_suites.py --root . --check ${./nix/msan-dlopen-suites.json}
               touch $out
             '';
         }

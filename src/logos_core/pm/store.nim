@@ -52,7 +52,8 @@
 ##   `install/` raises the number, and opening never migrates.
 ## - **Test hooks** (`-d:lcnTestHooks` only): `LCN_TEST_EXTRACT_PACE_MS` pauses the extraction
 ##   sink that long for each MiB written, so the hosted tests can stop an instance mid-extraction;
-##   `libraryFormatForTests` stands in for the library's format number.
+##   `LCN_TEST_EXTRACT_HOLD_FILE` holds an extraction's first write until that file exists or
+##   the operation is stopped; `libraryFormatForTests` stands in for the library's format number.
 
 {.push raises: [].}
 
@@ -369,6 +370,7 @@ when defined(posix):
     failure: ExtractError
     when defined(lcnTestHooks):
       paced: int ## bytes written since the last pause
+      held: bool ## the hold, if any, is behind this extraction
 
   proc sinkBegin(k: var StoreSink, path: string): bool =
     let w = k.tree[].createFile(path, k.stop)
@@ -381,6 +383,17 @@ when defined(posix):
 
   proc sinkWrite(k: var StoreSink, data: openArray[byte]): bool =
     when defined(lcnTestHooks):
+      if not k.held:
+        # [IMPL] A hosted test's hold, `LCN_TEST_EXTRACT_HOLD_FILE` (unset: none): the
+        # extraction's first write waits until that file exists or its operation is stopped,
+        # so that a case can act while the worker is inside an extraction however long the
+        # retrieval before it took (big CI run 1: `test_pm_module`'s deadline case under
+        # ThreadSanitizer). Read here, on the worker, not into a global string.
+        k.held = true
+        let hold = getEnv("LCN_TEST_EXTRACT_HOLD_FILE")
+        if hold.len > 0:
+          while not k.stop.stopped and not fileExists(hold):
+            sleep(5)
       if extractPaceMs > 0:
         k.paced += data.len
         while k.paced >= 1 shl 20:

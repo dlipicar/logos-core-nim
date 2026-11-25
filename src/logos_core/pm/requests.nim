@@ -9,6 +9,10 @@
 ##   INVALID_PARAMS.
 ## - `update_package`'s `current` is the root's `newerThan`; its package is the root's.
 ## - A `progress_key` is accepted; nothing is published for it in 5-6a.
+## - [IMPL] A request's `Opt` fields are assigned to a root already built, not copied in its
+##   constructor: after the `?`, Nim 2.2.14 copies such a field through a temporary it never
+##   initializes, `=wasMoved` (which reads its discriminator) and then `=copy`.
+##   MemorySanitizer reported it (big CI run 1); `build/scratch/upstream/ISSUES.md` 7.
 
 {.push raises: [], gcsafe.}
 
@@ -60,25 +64,19 @@ func inspectOp*(
 ): Result[OperationRequest, InvocationFailure] =
   ## [SPEC PM §15 l.1667-1673]
   let source = ?optSource(r.source)
-  ok(
-    OperationRequest(
-      kind: opInspect,
-      root: RootReference(package: r.package, version: r.version, source: source),
-    )
-  )
+  var root = RootReference(source: source)
+  root.package = r.package
+  root.version = r.version
+  ok(OperationRequest(kind: opInspect, root: root))
 
 func installOp*(
     r: LogosNSPackageManagerInstallPackageRequest
 ): Result[OperationRequest, InvocationFailure] =
   ## [SPEC PM §15 l.1675-1690]
   let source = ?optSource(r.source)
-  ok(
-    OperationRequest(
-      kind: opInstall,
-      root:
-        RootReference(package: Opt.some(r.package), version: r.version, source: source),
-    )
-  )
+  var root = RootReference(package: Opt.some(r.package), source: source)
+  root.version = r.version
+  ok(OperationRequest(kind: opInstall, root: root))
 
 func removeOp*(r: LogosNSPackageManagerRemovePackageRequest): OperationRequest =
   ## [SPEC PM §15 l.1692-1699]
@@ -90,14 +88,10 @@ func updateOp*(
   ## [SPEC PM §15 l.1701-1707] The root is a version of `current`'s package strictly
   ## greater than `current`.
   let source = ?optSource(r.source)
-  ok(
-    OperationRequest(
-      kind: opUpdate,
-      root: RootReference(
-        package: Opt.some(r.current.package),
-        version: r.target_version,
-        source: source,
-        newerThan: Opt.some(identityOf(r.current)),
-      ),
-    )
+  var root = RootReference(
+    package: Opt.some(r.current.package),
+    source: source,
+    newerThan: Opt.some(identityOf(r.current)),
   )
+  root.version = r.target_version
+  ok(OperationRequest(kind: opUpdate, root: root))

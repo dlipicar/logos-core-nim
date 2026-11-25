@@ -1560,12 +1560,15 @@ when defined(lcnTestHooks):
 
   type WatchHook = object
     refreshMs: int ## > 0: in place of `WatchRefreshMs`
+    remakeMs: int
+      ## > 0: in place of `WatchRemakeMs` (a sanitizer's slower Package Manager restart)
     loseFirstHint: bool ## a watch command's first hint ends its watch, unlisted
     deaf: bool ## every other hint is ignored, as if it were lost
 
   proc watchHook(): WatchHook =
     ## [PKG-0555] A test build's watch, from `LCN_TEST_CLI_WATCH`: a comma list of
-    ## `refresh=MS`, `deaf` and `lose-first-hint`, read when a watch command starts.
+    ## `refresh=MS`, `remake=MS`, `deaf` and `lose-first-hint`, read when a watch command
+    ## starts.
     for item in getEnv("LCN_TEST_CLI_WATCH").split(','):
       let t = item.strip()
       if t == "deaf":
@@ -1575,6 +1578,11 @@ when defined(lcnTestHooks):
       elif t.startsWith("refresh="):
         try:
           result.refreshMs = parseInt(t["refresh=".len ..^ 1])
+        except ValueError:
+          discard
+      elif t.startsWith("remake="):
+        try:
+          result.remakeMs = parseInt(t["remake=".len ..^ 1])
         except ValueError:
           discard
 
@@ -1636,10 +1644,13 @@ proc runWatch(c: Ctx, cmd: LcnCliPackageCommand): Result[void, Stop] =
   var nc = c
   nc.deadline = Opt.none(int)
   var refreshMs = WatchRefreshMs
+  var remakeMs = WatchRemakeMs
   when defined(lcnTestHooks):
     let hook = watchHook()
     if hook.refreshMs > 0:
       refreshMs = hook.refreshMs
+    if hook.remakeMs > 0:
+      remakeMs = hook.remakeMs
     var lostOnce = false
   proc expired(): bool =
     forMs.isSome and int(inMilliseconds(getMonoTime() - started)) >= forMs.get
@@ -1661,10 +1672,10 @@ proc runWatch(c: Ctx, cmd: LcnCliPackageCommand): Result[void, Stop] =
           ""
       let msg =
         "the watch on the Package Manager was lost" & why &
-        "; it is made again for up to " & $(WatchRemakeMs div 1000) & " s"
+        "; it is made again for up to " & $(remakeMs div 1000) & " s"
       pres.notice(%*{"notice": msg}, "notice: " & msg).isOkOr:
         return err(outputStop(error))
-    elif int(inMilliseconds(now - lostAt.get)) >= WatchRemakeMs:
+    elif int(inMilliseconds(now - lostAt.get)) >= remakeMs:
       if s.isSome:
         return err(s.get)
       return err(
@@ -1673,7 +1684,7 @@ proc runWatch(c: Ctx, cmd: LcnCliPackageCommand): Result[void, Stop] =
           code: $ecNotReady,
           message:
             "the watch on the Package Manager was not made again within " &
-            $(WatchRemakeMs div 1000) & " s",
+            $(remakeMs div 1000) & " s",
         )
       )
     ok()

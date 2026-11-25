@@ -61,6 +61,9 @@ when defined(posix):
       ## [PKG-0555] lcn_call's watch hook
       ## [IMPL] the Package Manager's test hook: a page job's pause per record
     PaceMs = 400 * Slow
+    RemakeMs = 30_000 * Slow
+      ## [IMPL] lcn_call's `WatchRemakeMs`, its product value, scaled through the watch hook
+      ## (`remake=MS`) where a sanitizer slows the Package Manager's restart
     FakeInstance = "fetch-1"
     FakeState = "fetch-1"
     PmState = "pm"
@@ -360,9 +363,10 @@ when defined(posix):
       "trust", "anchor", "add", "--kid", "org", "--key", hexOf(orgPub), "app", "lib"
     ).code == 0
 
-  proc start(c: Case, exe = dExe): Child =
-    result =
-      spawnChild(exe, ["--session-dir", c.s.dir], c.dir, "logosd" & $children.len)
+  proc start(c: Case, exe = dExe, env: openArray[(string, string)] = []): Child =
+    result = spawnChild(
+      exe, ["--session-dir", c.s.dir], c.dir, "logosd" & $children.len, env = env
+    )
     children.add(result)
 
   proc stopped(d: Child): int =
@@ -398,9 +402,10 @@ when defined(posix):
         c.stateOf(instance) == state,
     )
 
-  proc ready(c: Case, exe = dExe): Child =
-    ## logosd started on the case's session, answering, with the Package Manager `ready`.
-    result = c.start(exe)
+  proc ready(c: Case, exe = dExe, env: openArray[(string, string)] = []): Child =
+    ## logosd started on the case's session, with `env` added to its environment,
+    ## answering, with the Package Manager `ready`.
+    result = c.start(exe, env)
     c.expectReady(result)
     check c.reaches(result, PmInstance, "ready")
 
@@ -871,10 +876,14 @@ when defined(posix):
 
     test "[PKG-0555] [IMPL-DECISION G503] a watch under a stop and a start of the Package Manager: the lost watch is made again, with one notice on stderr, and goes on writing the changes":
       let c = newCase()
-      check c.initPm(pmConfig()).code == 0
+      # lcn_call's remake window through its watch hook: 30 s, its product value, times
+      # `Slow` (big CI run 1: under ThreadSanitizer the restart took about 27 of the 30 s).
+      var dc = pmConfig()
+      dc.runtime.module_host_env = Opt.some(@SanitizerEnv & @[WatchHookVariable])
+      check c.initPm(dc).code == 0
       c.stock()
       c.anchor()
-      let d = c.ready()
+      let d = c.ready(env = [(WatchHookVariable, "remake=" & $RemakeMs)])
       check c.setReadiness("ready")
       check c.acquired(d, catalogLine("configured"))
       let watch = spawnChild(
@@ -897,7 +906,12 @@ when defined(posix):
           d.watchesAdmitted == 1,
       )
       # The stop ends the watch, a real loss; lcn_call says so, and makes it again until the
-      # Package Manager is back, within 30 s of the loss (Fable §17.1 point 3).
+      # Package Manager is back, for up to `RemakeMs` from the loss (`WatchRemakeMs`, Fable
+      # §17.1 point 3). lcn_call holds that bound itself: a watch not made again by then ends
+      # with "not made again within". So the case checks that it did not, not a time of its
+      # own: one taken from the stop command counts the command, the unload and the loss's
+      # detection too, which a sanitizer slows (big CI run 1: 40 s under ThreadSanitizer, the
+      # watch made again all the same).
       let stoppedAt = getMonoTime()
       check c.ctl("module", "stop", PmModule, "--instance", PmInstance).code == 0
       check c.reaches(d, PmInstance, "unloaded")
@@ -907,6 +921,7 @@ when defined(posix):
         proc(): bool =
           "the watch on the Package Manager was lost" in watch.errText,
       )
+      let noticedAt = getMonoTime()
       check watch.alive
       check c.ctl("module", "start", PmModule, "--instance", PmInstance).code == 0
       check c.reaches(d, PmInstance, "ready")
@@ -917,9 +932,12 @@ when defined(posix):
         proc(): bool =
           d.watchesAdmitted == 2,
       )
-      let remadeMs = inMilliseconds(getMonoTime() - stoppedAt)
-      checkpoint("made again " & $remadeMs & " ms after the stop")
-      check remadeMs < 30_000 # lcn_call's `WatchRemakeMs`
+      checkpoint(
+        "made again " & $inMilliseconds(getMonoTime() - stoppedAt) &
+          " ms after the stop, " & $inMilliseconds(getMonoTime() - noticedAt) &
+          " ms after its notice was seen"
+      )
+      check "not made again within" notin watch.errText
       check watch.alive
       # The same list after the start writes nothing; the next change is written.
       check watch.outText.linesOf.len == 1
