@@ -517,6 +517,10 @@ type
       ## [IMPL-DECISION G490] the hosted instance the host configuration's
       ## `package_manager` marks: its host accepts the reserved name, and the
       ## Runtime its reserved surface; none: no hosted module may use them
+    artifactAdoption*: seq[string]
+      ## [IMPL-DECISION G505] the host configuration's `artifact_adoption`:
+      ## dynamic instances whose retained record takes a new artifact hash at
+      ## bootstrap when every other fact is equal
     policy*: AuthzPolicy
       ## the internal policy (`allow-all`, with the test rules); unused under
       ## `authority`

@@ -41,9 +41,27 @@ proc cliLibrary*(): string =
       )
   built
 
-proc cliArtifact*(): LcnAppArtifact =
-  ## [G343] The library as `cli.artifact`, with its BLAKE3-256 hash.
-  let path = cliLibrary()
+var rebuilt: string
+
+proc cliLibraryRebuilt*(): string =
+  ## [G505] A second build of the same source with another `NimMain` prefix: other bytes,
+  ## the same module and export list. Built under `build/cli-lib-b/`, once per test process.
+  if rebuilt.len > 0:
+    return rebuilt
+  rebuilt = buildKitLibraryIn(
+    KitTree(
+      sources: @[cliRepo / "src"],
+      generated: @[cliRepo / "src" / "logos_core" / "cli"],
+      build: cliRepo / "build" / "cli-lib-b",
+    ),
+    "lcn_call.nim",
+    "lcn_call_b",
+    exports = "lcn_call",
+  )
+  rebuilt
+
+proc cliArtifact*(path = cliLibrary()): LcnAppArtifact =
+  ## [G343] The library at `path` as `cli.artifact`, with its BLAKE3-256 hash.
   var h: Blake3Hasher
   h.init()
   let bytes =

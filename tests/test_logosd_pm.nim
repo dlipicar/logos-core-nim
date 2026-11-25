@@ -32,6 +32,7 @@ when defined(posix):
   from ../src/logos_core/authority/scopes import sortSet
   from ../src/logos_core/durable import ensurePrivateDir, writeAtomic
   from ../src/logos_core/runtime/protinput import ProtectedInputName
+  from ../src/logos_core/pm/installed import FileFormat
   from logos_sdk/iface/accept import acceptContractSet, AcceptOptions
   from logos_sdk/contracts/generated/lcn_storage_fetch_root import LcnStorageFetchRoot
   import
@@ -710,6 +711,9 @@ when defined(posix):
       c.stock()
       c.anchor()
       let first = c.ready(exe)
+      # [G505] The start log names the library's source.
+      check ("/lib/logos-core/" & PmLibrary & " (installed with logosd)") in
+        first.errText
       check c.setReadiness("ready")
       check c.acquired(first, catalogLine("configured"))
       check first.stopped == 0
@@ -734,26 +738,146 @@ when defined(posix):
       )
       let third = c.ready(exe)
       check third.stopped == 0
-      # [PKG-0514] And its own digest is checked, at realization. On a session of its own:
-      # here, where the instance is retained, a changed digest is a changed declaration fact,
-      # which the start refuses before anything runs (G160's reconcile; G491's open item).
-      let d = newCase()
+      # [PKG-0514] And its own digest is checked, at realization. [G505] On the same session:
+      # the override's new hash (the same id) is adopted at the start, before anything runs,
+      # and the Loader then refuses the bytes, naming the hash the record now expects.
       var a = pmArtifact(pmLib)
       a.hash = digestOfFile(fakeLib)
-      check d.initPm(pmConfig(pmSection(artifact = Opt.some(a)))).code == 0
-      d.stock()
-      d.anchor()
-      let fourth = d.start(exe)
-      d.expectReady(fourth)
+      let override = a
+      c.editConfig(
+        proc(dc: var LcnDaemonConfig) =
+          dc.package_manager.get.artifact = Opt.some(override)
+      )
+      let fourth = c.start(exe)
+      c.expectReady(fourth)
       check eventually(
         "the integrity refusal",
         fourth,
         proc(): bool =
-          d.failureOf(PmInstance) == "loader-artifact-integrity-failed",
+          c.failureOf(PmInstance) == "loader-artifact-integrity-failed",
+      )
+      check eventually(
+        "the adoption and the refusal in the log",
+        fourth,
+        proc(): bool =
+          (
+            "runtime: instance " & PmInstance & " adopted artifact " & PmModule &
+            " with digest " & hexOf(override.hash) & " in place of " &
+            hexOf(digestOfFile(pmLib))
+          ) in fourth.errText and
+            (
+              "runtime: the realization of " & PmInstance &
+              " failed: loader-artifact-integrity-failed: "
+            ) in fourth.errText and
+            ("the accepted digest " & hexOf(override.hash)) in fourth.errText,
       )
       check fourth.stopped == 0
       check hostsGone()
       removeDir(pkg)
+
+    test "[IMPL-DECISION G505] [PKG-0513] a new build of logosd's own libraries: the Package Manager and lcn_call keep their state and grants, the start log names each library's source and the Runtime both digests; an installed-files format the library does not read changes nothing; an operator instance whose bytes changed is still refused":
+      let c = newCase()
+      check c.initPm().code == 0
+      c.stock()
+      c.anchor()
+      let pm1 = pmArtifact(pmLib)
+      let first = c.ready()
+      check (
+        "package_manager: the Package Manager library is " & pmLib &
+        " (package_manager.artifact)"
+      ) in first.errText
+      check ("lcn_call: the CLI module is " & cliArt.local_path & " (cli.artifact)") in
+        first.errText
+      check "adopted artifact" notin first.errText
+      check c.setReadiness("ready")
+      check c.acquired(first, catalogLine("configured"))
+      check c.pm("install_package", "package=app", "version=1.0.0").installedOf ==
+        "app@1.0.0"
+      check c.records == 2
+      check first.stopped == 0
+      # A second build of each: other bytes, the same ids, modules and contract.
+      let pm2 = pmArtifact(pmLibraryRebuilt())
+      let cli2 = cliArtifact(cliLibraryRebuilt())
+      check pm2.hash != pm1.hash and cli2.hash != cliArt.hash
+      c.editConfig(
+        proc(dc: var LcnDaemonConfig) =
+          dc.package_manager.get.artifact = Opt.some(pm2)
+          dc.cli = Opt.some(LcnDcCli(artifact: Opt.some(cli2)))
+      )
+      let second = c.ready()
+      check (
+        "package_manager: the Package Manager library is " & pm2.local_path &
+        " (package_manager.artifact)"
+      ) in second.errText
+      check ("lcn_call: the CLI module is " & cli2.local_path & " (cli.artifact)") in
+        second.errText
+      check eventually(
+        "the adoption lines",
+        second,
+        proc(): bool =
+          (
+            "runtime: instance " & PmInstance & " adopted artifact " & PmModule &
+            " with digest " & hexOf(pm2.hash) & " in place of " & hexOf(pm1.hash)
+          ) in second.errText and
+            (
+              "runtime: instance " & CliInstance &
+              " adopted artifact lcn_call with digest " & hexOf(cli2.hash) &
+              " in place of " & hexOf(cliArt.hash)
+            ) in second.errText,
+      )
+      # Its state: the kept catalog and the installed records. Its grants: lcn_call, a new
+      # build too, still reaches it, and it still reads the fake.
+      check eventually(
+        "the kept catalog",
+        second,
+        proc(): bool =
+          catalogLine("kept") in second.errText,
+      )
+      check c.records == 2
+      check c.pm("remove_package", identityRequest("identity", "lib", "1.2.0")).codeOf ==
+        "package-in-use"
+      check second.stopped == 0
+      # [G505] An installed-files format this library does not read: its init fails and
+      # nothing below install/ changes.
+      let install = c.s.modulesDir / PmState / "install"
+      let held = readFile(install / "index")
+      var v = decodeCbor(held.toOpenArrayByte(0, held.high)).expect("the index")
+      for e in v.entries.mitems:
+        if e.key.getText.get("") == "format":
+          e.value = cbor(FileFormat + 1)
+      removeFile(install / "index")
+      writeFile(install / "index", textOf(encodeCbor(v)))
+      let before = treeOf(install)
+      let third = c.start()
+      c.expectReady(third)
+      check eventually(
+        "the format refusal",
+        third,
+        proc(): bool =
+          (
+            "is installed-files format " & $(FileFormat + 1) &
+            "; this library reads format " & $FileFormat & "; nothing was changed"
+          ) in third.errText,
+      )
+      check third.stopped == 0
+      check hostsGone()
+      check treeOf(install) == before
+      removeFile(install / "index")
+      writeFile(install / "index", held)
+      # [G160] An operator instance keeps G160's refusal: logosd lists only its own.
+      c.editConfig(
+        proc(dc: var LcnDaemonConfig) =
+          dc.modules.get[0].implementation.arm_Process_hosted_dynamic.artifact.hash =
+            digestOfFile(pmLib)
+      )
+      let fourth = c.start()
+      check waitExit(fourth, ReadyMs) == 2
+      check (
+        "the configured declaration of instance " & FakeInstance &
+        " differs from the retained one"
+      ) in fourth.errText
+      check "cannot be upgraded in place" notin fourth.errText
+      check hostsGone()
 
     test "[IMPL-DECISION G491] [IMPL-DECISION G490] refused before anything starts: the old package_manager.instance, orchestration.start naming package_manager, a Storage binding to package_manager, a logos_ operator module; a section with no artifact passes the shell's checks and this logosd, with no companion library, refuses it at start":
       # The old field, named with its replacements (raw CBOR: the type no longer has it).

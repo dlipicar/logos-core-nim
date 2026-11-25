@@ -82,6 +82,8 @@ type
     sfSource = "the archive's source no longer gives the judged package"
       ## [G446] the extraction pass met a difference: `package-unavailable` (PM §8 l.1094)
     sfStopped = "stopped"
+    sfFormat = "the installed files are in a format this library does not read"
+      ## [G505] the index's `format` is not `FileFormat`: the start changes nothing
 
   StoreError* = object
     fault*: StoreFault

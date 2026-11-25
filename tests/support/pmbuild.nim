@@ -49,6 +49,32 @@ proc pmLibrary*(): string =
       )
   built
 
+var rebuilt: string
+
+proc pmLibraryRebuilt*(): string =
+  ## [G505] A second build of the same source with another `NimMain` prefix: other bytes,
+  ## the same module, contract and export list, as a new logosd's companion library would
+  ## be. Built under `build/pm-lib-b/`, once per test process.
+  if rebuilt.len > 0:
+    return rebuilt
+  const hooks: seq[string] =
+    when defined(lcnTestHooks):
+      @["lcnTestHooks"]
+    else:
+      @[]
+  rebuilt = buildKitLibraryIn(
+    KitTree(
+      sources: @[pmRepo / "src"],
+      generated: @[pmRepo / "src" / "logos_core" / "pm"],
+      build: pmRepo / "build" / "pm-lib-b",
+    ),
+    "logos_package_manager.nim",
+    "logos_package_manager_b",
+    exports = "logos_package_manager",
+    defines = hooks,
+  )
+  rebuilt
+
 proc pmArtifact*(path = pmLibrary()): LcnAppArtifact =
   ## [G491] The library at `path` as `package_manager.artifact`, with its BLAKE3-256
   ## hash.

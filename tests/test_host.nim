@@ -1131,6 +1131,65 @@ suite "run.host-config: logos-core-nim.app-config.v1 (RUNTIME §13.3; G76)":
       c.orchestration = "pm"
       check c.decoded.rejects("reserved logos_ prefix")
 
+  test "[IMPL-DECISION G505] artifact_adoption lists dynamic instances: refused when empty, on a duplicate, and on an unknown, static, orchestration or authority instance":
+    # Tier 5 step 5-6 G160. Refused at `logos_runtime_create`, whose decode this is.
+    when defined(posix):
+      let dir = work / "module-host-adoption"
+      createDir(dir)
+      let program = dir / "logos-module-host"
+      writeFile(program, "#!/bin/sh\nexit 2\n")
+      check chmod(cstring(program), Mode(0o755)) == 0
+      let artifact = LcnAppArtifact(
+        id: "probe", local_path: dir / "libprobe.so", hash: newSeq[byte](32)
+      )
+      var c = caConfig()
+      c.runtime.module_host = Opt.some(program)
+      c.modules.add(
+        LcnAppModule(
+          instance: "probe-1",
+          module: "probe_module",
+          implementation: LcnAppImplementation(
+            kind: LcnAppImplementationKind.Process_hosted_dynamic,
+            arm_Process_hosted_dynamic:
+              LcnAppImplementationARProcessHostedDynamicMap(artifact: artifact),
+          ),
+        )
+      )
+      c.modules.add(
+        LcnAppModule(
+          instance: "probe-2",
+          module: "probe_module",
+          implementation: LcnAppImplementation(
+            kind: LcnAppImplementationKind.Direct_dynamic,
+            arm_Direct_dynamic:
+              LcnAppImplementationARDirectDynamicMap(artifact: artifact),
+          ),
+        )
+      )
+      check c.decoded.isOk
+      check c.decoded.get.artifactAdoption.len == 0
+      c.artifact_adoption = Opt.some(@["probe-1", "probe-2"])
+      let listed = c.decoded
+      check listed.isOk
+      if listed.isOk:
+        check listed.get.artifactAdoption == @["probe-1", "probe-2"]
+      c.artifact_adoption = Opt.some(newSeq[string]())
+      check c.decoded.rejects("artifact_adoption is present but empty")
+      c.artifact_adoption = Opt.some(@["probe-1", "probe-1"])
+      check c.decoded.rejects("artifact_adoption names probe-1 twice")
+      c.artifact_adoption = Opt.some(@["nowhere"])
+      check c.decoded.rejects(
+        "artifact_adoption names nowhere, which is not in modules"
+      )
+      c.artifact_adoption = Opt.some(@["orch"])
+      check c.decoded.rejects("artifact_adoption names the orchestration instance")
+      c.artifact_adoption = Opt.some(@["ca"])
+      check c.decoded.rejects("artifact_adoption names the authority instance")
+      c.artifact_adoption = Opt.some(@["meter-1"])
+      check c.decoded.rejects(
+        "artifact_adoption names meter-1, which is not a dynamic instance"
+      )
+
   test "[RUN-0284] a hosted_dynamic implementation is an artifact in a placement, never a static binding":
     var c = baseConfig()
     c.runtime.module_host = Opt.some(work / "module-host" / "logos-module-host")

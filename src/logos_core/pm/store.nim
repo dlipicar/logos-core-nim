@@ -45,14 +45,21 @@
 ## - **The retained hash** (`checkRetained`, PKG-0181, PKG-0293): each artifact file of a record,
 ##   opened below `a/` with no link followed, against its signed digest. Nothing rewrites a
 ##   committed file (PKG-0500).
-## - **A test hook** (`-d:lcnTestHooks` only): `LCN_TEST_EXTRACT_PACE_MS` pauses the extraction
-##   sink that long for each MiB written, so the hosted tests can stop an instance mid-extraction.
+## - **The format** (G505): before anything is written, the lock included, the start reads the
+##   index's `format` from generic CBOR. A number other than `FileFormat` is `sfFormat`, naming
+##   both, and the root is left exactly as it was. Only the index's number is checked: one number
+##   serves both files, and record files keep their closed decode. Any change of layout under
+##   `install/` raises the number, and opening never migrates.
+## - **Test hooks** (`-d:lcnTestHooks` only): `LCN_TEST_EXTRACT_PACE_MS` pauses the extraction
+##   sink that long for each MiB written, so the hosted tests can stop an instance mid-extraction;
+##   `libraryFormatForTests` stands in for the library's format number.
 
 {.push raises: [].}
 
 import std/[algorithm, os, sets, strutils, sysrand, tables]
 import results
 import logos_sdk/base/[hex, testhooks]
+import logos_sdk/cbor
 import ../durable
 import ../package/[lgx, manifest, records, signing]
 import ./[admission, extract, handoff, installed]
@@ -150,6 +157,43 @@ func storeError(
     f: StoreFault, detail: string, identity = Opt.none(PackageIdentity)
 ): StoreError =
   StoreError(fault: f, identity: identity, detail: detail)
+
+when defined(lcnTestHooks):
+  var libraryFormatForTests* = FileFormat
+    ## [IMPL-DECISION G505] A test's stand-in for this library's installed-files format, so
+    ## that a state whose number is lower than the library's can be met without a second
+    ## format.
+
+func libraryFormat(): uint64 =
+  when defined(lcnTestHooks):
+    {.cast(noSideEffect).}:
+      libraryFormatForTests
+  else:
+    FileFormat
+
+func indexFormat(bytes: openArray[byte]): Opt[uint64] =
+  ## [IMPL-DECISION G505] The index's `format`, from generic CBOR; none when the bytes are not
+  ## a map with an unsigned `format`, which the closed decode then refuses as damage.
+  let v = decodeCbor(bytes).valueOr:
+    return Opt.none(uint64)
+  if v.kind != ckMap:
+    return Opt.none(uint64)
+  let f = v.lookup("format").valueOr:
+    return Opt.none(uint64)
+  f.getUint64()
+
+func formatError(root: string, bytes: openArray[byte]): Opt[StoreError] =
+  ## [IMPL-DECISION G505] `sfFormat` when the index's number is not this library's.
+  let found = indexFormat(bytes)
+  if found.isNone or found.get == libraryFormat():
+    return Opt.none(StoreError)
+  Opt.some(
+    storeError(
+      sfFormat,
+      root / IndexName & " is installed-files format " & $found.get &
+        "; this library reads format " & $libraryFormat() & "; nothing was changed",
+    )
+  )
 
 func toStore(e: ExtractError, identity: PackageIdentity): StoreError =
   let f =
@@ -489,6 +533,14 @@ when defined(posix):
     ## [G444, G445] Opens the installation root of the instance whose state directory is
     ## `stateDir`, as the Package Manager's start does before the instance is ready.
     let root = stateDir / InstallDir
+    # [IMPL-DECISION G505] The format number before any write, the lock included: the index
+    # is replaced by a rename, so this read sees a whole file. A read that fails here is
+    # reported by the read below, as before.
+    let before = readBounded(root / IndexName, MaxIndexBytes)
+    if before.isOk and before.get.isSome:
+      let refused = formatError(root, before.get.get)
+      if refused.isSome:
+        return err(refused.get)
     ensurePrivateDir(root).isOkOr:
       return err(storeError(sfWrite, error))
     var s = InstalledStore(stateDir: stateDir, files: StoreFiles(root: root, rFd: -1))
@@ -531,6 +583,10 @@ when defined(posix):
       writeAtomic(root, IndexName, empty).isOkOr:
         fail(storeError(sfWrite, error))
     else:
+      # [IMPL-DECISION G505] Again under the lock: another library may have committed since.
+      let refused = formatError(root, held.get)
+      if refused.isSome:
+        fail(refused.get)
       let index = decodeIndex(held.get).valueOr:
         fail(storeError(sfDamaged, root / IndexName & ": " & error))
       s.files.sequence = index.sequence

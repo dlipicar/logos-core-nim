@@ -1,7 +1,7 @@
 ## Fixtures for the Package Manager suites (Tier 5 step 5-3b): trust files,
 ## protected inputs and catalog entries.
 
-import std/sequtils
+import std/[algorithm, os, sequtils, times]
 import results
 import logos_sdk/cbor
 import logos_sdk/crypto/blake3
@@ -21,6 +21,19 @@ proc bytesOf*(s: string): seq[byte] =
 proc textOf*(b: openArray[byte]): string =
   for x in b:
     result.add(char(x))
+
+proc treeOf*(dir: string): seq[string] =
+  ## Every entry below `dir` with its kind, mode, size and modification time: what a
+  ## start that changes nothing leaves as it was (G505's format refusal).
+  for path in walkDirRec(
+    dir, yieldFilter = {pcFile, pcDir, pcLinkToFile, pcLinkToDir}, relative = true
+  ):
+    let i = getFileInfo(dir / path, followSymlink = false)
+    result.add(
+      path & " " & $i.kind & " " & $i.permissions & " " & $i.size & " " &
+        $i.lastWriteTime.toUnixFloat
+    )
+  result.sort()
 
 proc testKey*(fill: byte): (SecretKey, PublicKey) =
   ## A fixed SLH-DSA-SHA2-192s key pair (FIPS 205 `slh_keygen_internal`).

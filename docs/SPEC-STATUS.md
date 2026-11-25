@@ -836,6 +836,21 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   RUN-0319, RUN-0700, RUN-0851 to RUN-0855, TRN-0182 to TRN-0192, TRN-0194 and TRN-0349 for the binding. PKG-0559
   stays not met (the held large-reply item).
 
+- 2026-11-24, Tier 5 step 5-6 G160 (I145; G505, amending G160's dynamic half and closing G491's open item; the
+  owner's 2026-11-23 (a)), artifact adoption for logosd's own instances:
+  - The host configuration's `artifact_adoption` lists instances whose retained record may take a new artifact hash
+    at a start when every other fact is equal; logosd lists `lcn_call` and `package_manager` and nothing else, and
+    an override must carry its companion's id. The record takes the hash in bootstrap's equal-facts write, before
+    anything runs, and a diagnostic names both digests; any other change keeps G160's refusal, now saying "cannot
+    be upgraded in place (G505)" for a listed instance.
+  - The Loader's integrity refusal names the accepted digest and the one found, and reaches the host's log.
+  - The Package Manager reads its installed files' format number before any write and refuses another one,
+    changing nothing (`sfFormat`).
+  - Cases in `test_host`, `test_daemon_config`, `test_persist`, `test_pm_store` and `test_logosd_pm`; no new suite.
+
+  No unit changes status: RUNTIME l.1316-1322 name continuity for static bindings only, and G160's dynamic half
+  stays an interim (TF-08); PKG-0513 and PKG-0514 keep their evidence, the latter now on the same session.
+
 ## Tiers at f4f83471 (the original plan)
 
 | Tier | Area | Verdict |

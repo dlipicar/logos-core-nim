@@ -347,6 +347,16 @@ proc assembleDaemon*(
     # [G399; ruling C3] Which resolver limits this start composed, and where
     # they came from: the operator's log only (PM l.1514).
     logInfo(pmStartLine(c.pm.get))
+    # [IMPL-DECISION G505] Which library vouched for the instance's hash, as for
+    # lcn_call: the Runtime's adoption line names only the digests.
+    let pmArt = pmArtifact(c, opts.exe)
+    if pmArt.isSome:
+      logInfo(
+        "package_manager: the Package Manager library is " & pmArt.get.local_path & (
+          if c.pm.get.artifact.isSome: " (package_manager.artifact)"
+          else: " (installed with logosd)"
+        )
+      )
   # Step 9.
   let comp = prepared.composition
   var cfg = LogosRuntimeConfig(

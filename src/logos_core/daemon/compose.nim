@@ -871,6 +871,15 @@ proc compose*(
       return err("package_manager: the pinned Package Manager contract: " & error)
     modules.add(pmRecord(c.pm.get, art.get, contract.primary.root))
     pmMark = Opt.some(PmInstance)
+  # [IMPL-DECISION G505] logosd's own composed instances, never an operator's,
+  # may take a new library hash at a start (a logosd upgrade, an override):
+  # each keeps its state and grants. Their ids are checked (`checkCli`,
+  # `checkPackageManager`), and every other fact still has to be equal.
+  var adoption: seq[string]
+  if cliArt.isSome:
+    adoption.add(CliInstance)
+  if pmMark.isSome:
+    adoption.add(PmInstance)
   var moduleHost = dc.runtime.module_host
   if moduleHost.isNone:
     moduleHost = defaultModuleHost(exe)
@@ -908,6 +917,9 @@ proc compose*(
     # offline input, applied once at the next start (DAEMON.md §11).
     state_transfers: dc.state_transfers,
     package_manager: pmMark,
+    artifact_adoption:
+      (if adoption.len > 0: Opt.some(adoption)
+      else: Opt.none(seq[string])),
   )
   if dc.call_audit.isSome:
     let a = dc.call_audit.get

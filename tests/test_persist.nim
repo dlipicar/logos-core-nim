@@ -16,6 +16,7 @@ from logos_sdk/base/logtext import ForeignTextLimit
 from logos_sdk/pins import HashSuiteId
 import logos_sdk/abi/types
 import logos_sdk/cbor
+import logos_sdk/crypto/blake3
 import logos_sdk/commitment
 import logos_sdk/iface/[accept, outcome, surface]
 import logos_sdk/codegen/common_types
@@ -178,6 +179,49 @@ proc startOn(arg: (Engine, string)) {.thread.} =
     else:
       -1
   )
+
+func hexOf(d: array[32, byte]): string =
+  for b in d:
+    result.add(toHex(int(b), 2).toLowerAscii)
+
+func dynRecord(
+    hash: array[32, byte], id = "dyn", path = "/nonexistent/dyn.lib"
+): ModuleRecord =
+  ModuleRecord(
+    module: "dyn_module",
+    strategy: stDirectDynamic,
+    artifact:
+      ArtifactRecord(id: id, localPath: path, hash: hash, hashSuite: HashSuiteId),
+  )
+
+func hashOf(b: byte): array[32, byte] =
+  result[0] = b
+
+proc retainDyn(base: string, instances: openArray[(string, ModuleRecord)]) =
+  ## A store retaining each `(id, record)`, never started.
+  var kept: seq[StoredInstance]
+  for i, (id, r) in instances:
+    kept.add(
+      StoredInstance(
+        instance: id,
+        record: r,
+        state: msUnloaded,
+        revision: (5'u64 shl 32) + uint64(i + 1),
+        intent: inUninitialized,
+      )
+    )
+  writeSnapshot(base, Snapshot(runtimeInstanceId: "rt-g505", epoch: 5, instances: kept))
+
+proc adopting(base: string, listed: seq[string]): Engine =
+  ## [G505] An engine whose host lists `listed` in `artifact_adoption`.
+  var c = pconfig(base)
+  c.artifactAdoption = listed
+  openEngine(c).tryGet
+
+proc bootWith(
+    e: Engine, more: seq[BootstrapInstance]
+): Result[InstanceView, EngineError] =
+  e.bootstrap(@[BootstrapInstance(instance: "orch", record: client())] & more, "orch")
 
 func prefixOf(id: string): string =
   ## The random part of a Runtime-assigned name: `m-<32 hex>-<n>`.
@@ -590,6 +634,163 @@ suite "run.persist: execution state across a restart (RUNTIME §9.3 l.3500-3507)
       "instance d1" in r.error.message
     e.finish()
     check recordBytes(storedOf(base, "d1").record) == recordBytes(dyn)
+
+  test "[IMPL-DECISION G505] a listed dynamic instance whose facts differ only in the artifact hash is adopted: one write advancing its revision, one diagnostic naming both digests, an upgrade and a downgrade; a restart after it writes nothing":
+    let base = freshBase()
+    let (h1, h2) = (hashOf(1), hashOf(2))
+    retainDyn(base, [("d1", dynRecord(h1))])
+    let r0 = storedOf(base, "d1").revision
+    proc adopt(
+        hash: array[32, byte], path = "/nonexistent/dyn.lib"
+    ): (Result[InstanceView, EngineError], seq[string]) =
+      let e = adopting(base, @["d1"])
+      let r = e.bootWith(
+        @[BootstrapInstance(instance: "d1", record: dynRecord(hash, path = path))]
+      )
+      result = (r, e.diagnostics.filterIt("adopted" in it))
+      e.finish()
+
+    # An upgrade, with a new place too: the record takes both.
+    let (up, upLines) = adopt(h2, "/nonexistent/dyn-2.lib")
+    check up.isOk
+    let afterUp = storedOf(base, "d1")
+    check afterUp.record.artifact.hash == h2
+    check afterUp.record.artifact.localPath == "/nonexistent/dyn-2.lib"
+    check afterUp.revision > r0
+    check upLines ==
+      @[
+        "instance d1 adopted artifact dyn with digest " & hexOf(h2) & " in place of " &
+          hexOf(h1)
+      ]
+    # The same configuration again is a normal start: no line, and the record as it was
+    # (each open moves every revision past the earlier ones, RUN-0632).
+    let (again, againLines) = adopt(h2, "/nonexistent/dyn-2.lib")
+    check again.isOk and againLines.len == 0
+    check recordBytes(storedOf(base, "d1").record) == recordBytes(afterUp.record)
+    # A downgrade is the same assertion, the other way.
+    let (down, downLines) = adopt(h1)
+    check down.isOk
+    check storedOf(base, "d1").record.artifact.hash == h1
+    check storedOf(base, "d1").revision > afterUp.revision
+    check downLines ==
+      @[
+        "instance d1 adopted artifact dyn with digest " & hexOf(h1) & " in place of " &
+          hexOf(h2)
+      ]
+
+  test "[IMPL-DECISION G505] [IMPL-DECISION G160] adoption takes a new hash only: another changed fact, another artifact id, or an unlisted instance is refused, and the stored record is unchanged":
+    let base = freshBase()
+    let (h1, h2) = (hashOf(1), hashOf(2))
+    retainDyn(base, [("d1", dynRecord(h1)), ("d2", dynRecord(h1))])
+    let kept1 = recordBytes(storedOf(base, "d1").record)
+    let kept2 = recordBytes(storedOf(base, "d2").record)
+    proc refusal(instance: string, r: ModuleRecord): string =
+      let e = adopting(base, @["d1"])
+      let got = e.bootWith(@[BootstrapInstance(instance: instance, record: r)])
+      check got.isErr
+      if got.isErr:
+        check got.error.code == ecInvalidParams
+        result = got.error.message
+      check e.diagnostics.filterIt("adopted" in it).len == 0
+      e.finish()
+
+    let differs =
+      "the configured declaration of instance d1 differs from the retained one"
+    let inPlace =
+      differs &
+      " beyond its artifact hash; this session cannot be upgraded in place (G505)"
+    var contract = dynRecord(h2)
+    contract.primaryContract = Opt.some(meterRoot)
+    var requires = dynRecord(h2)
+    requires.requires =
+      @[ProviderRequirement(contract: meterRoot, cardinality: cardSingle)]
+    var permissions = dynRecord(h2)
+    permissions.requestedPermissions =
+      @[RequestedPermission(permission: "net", constraints: encodeCbor(cbor(1'u64)))]
+    var configured = dynRecord(h2)
+    var binding: Digest
+    binding[0] = 7
+    configured.configuration = Opt.some(binding)
+    var suite = dynRecord(h2)
+    suite.artifact.hashSuite = "logos.hash-suite.other"
+    var placement = dynRecord(h2)
+    placement.strategy = stHostedDynamic
+    placement.placement = "process"
+    for (what, r) in [
+      ("primary_contract", contract),
+      ("requires", requires),
+      ("requested_permissions", permissions),
+      ("the configuration binding", configured),
+      ("hash_suite", suite),
+      ("the strategy", placement),
+    ]:
+      checkpoint what
+      check refusal("d1", r) == inPlace
+      check recordBytes(storedOf(base, "d1").record) == kept1
+    # Another artifact id, with or without a new hash: both ids are named.
+    for hash in [h1, h2]:
+      check refusal("d1", dynRecord(hash, id = "dyn2")) ==
+        differs & ": the configured artifact id is dyn2, the retained one dyn"
+    check recordBytes(storedOf(base, "d1").record) == kept1
+    # An instance the host does not list keeps G160's refusal.
+    check refusal("d2", dynRecord(h2)) ==
+      "the configured declaration of instance d2 differs from the retained one"
+    check recordBytes(storedOf(base, "d2").record) == kept2
+
+  test "[IMPL-DECISION G505] [RUN-1030] an adopted consumer-only record gets no provider record from a library that exports a call surface, and a Loader refusal names the hash the record expects":
+    # lcn_call's shape: no contract fact, so the provider check passes over what
+    # the module exports (RUNTIME §8 l.1350-1351).
+    let lib = buildKitLibrary("sensor_impl.nim", "persensor")
+    let base = freshBase()
+    createDir(base)
+    let src = base / ("sensor" & LibraryExtension)
+    copyFile(lib, src)
+    proc digest(path: string): array[32, byte] =
+      var h: Blake3Hasher
+      h.init()
+      let bytes = readFile(path)
+      h.update(bytes.toOpenArrayByte(0, bytes.high))
+      h.finish()
+
+    proc sensor(hash: array[32, byte]): ModuleRecord =
+      ModuleRecord(
+        module: "sensor_module",
+        strategy: stDirectDynamic,
+        artifact: ArtifactRecord(
+          id: "sensor", localPath: src, hash: hash, hashSuite: HashSuiteId
+        ),
+      )
+
+    let real = digest(src)
+    retainDyn(base, [("s1", sensor(hashOf(3)))])
+    var e = adopting(base, @["s1"])
+    check e.bootWith(@[BootstrapInstance(instance: "s1", record: sensor(real))]).isOk
+    check e.diagnosed("instance s1 adopted artifact sensor with digest " & hexOf(real))
+    let v = e.start("s1").tryGet
+    check v.state == msReady
+    check not v.provider
+    check storedOf(base, "s1").providerId == ""
+    e.finish()
+    # The bytes change after the record took their hash: the Loader refuses them,
+    # naming the hash it expected.
+    let f = open(src, fmAppend)
+    f.write("x")
+    f.close()
+    e = adopting(base, @["s1"])
+    check e.bootWith(@[BootstrapInstance(instance: "s1", record: sensor(real))]).isOk
+    let failed = e.start("s1").tryGet
+    check failed.failure.isSome
+    if failed.failure.isSome:
+      check failed.failure.get.loader == lecArtifactIntegrityFailed
+      check (
+        "the accepted digest " & hexOf(real) & "; they hash to " & hexOf(digest(src))
+      ) in failed.failure.get.reason
+    # The host's log has it too.
+    check e.diagnosed(
+      "the realization of s1 failed: loader-artifact-integrity-failed: "
+    )
+    check e.diagnosed("the accepted digest " & hexOf(real))
+    e.finish()
 
   test "[RUN-0922] [RUN-0947] [RUN-0948] [RUN-0949] names made after a restart never repeat earlier ones":
     let base = freshBase()

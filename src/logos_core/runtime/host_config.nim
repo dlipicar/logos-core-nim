@@ -117,6 +117,10 @@ type
       ## holding the Package Manager responsibility (RUNTIME l.293), a
       ## `hosted_dynamic` `logos_package_manager`; its host accepts the reserved
       ## name and the Runtime its reserved surface
+    artifactAdoption*: seq[string]
+      ## [IMPL-DECISION G505] `artifact_adoption`: the dynamic instances whose
+      ## retained record may take a new artifact hash at a start, every other
+      ## fact equal; empty when the field is absent
 
   RemoteConfig* = object
     ## [G408, G412, G415; Tier 5 step 5-7a-2] `remote`, checked: the trust
@@ -452,6 +456,47 @@ func checkPackageManagerMark(
   if c.authority.isSome and c.authority.get.instance == id:
     return err(configError("package_manager names the authority instance"))
   c.packageManager = Opt.some(id)
+  ok()
+
+func checkArtifactAdoption(
+    c: var HostConfig, list: Opt[seq[string]]
+): Result[void, ConfigError] =
+  ## [IMPL-DECISION G505] The top-level `artifact_adoption` list: present, it is
+  ## not empty and names each instance once, and each is a listed dynamic
+  ## instance (`direct_dynamic` or `hosted_dynamic`) that is neither the
+  ## orchestration nor the authority instance. Listing one is the host's
+  ## assertion that it keeps its state, grants and settings across a new
+  ## library: reconcile then takes a new artifact hash for it at a start when
+  ## every other fact is equal.
+  if list.isNone:
+    return ok()
+  if list.get.len == 0:
+    return err(configError("artifact_adoption is present but empty"))
+  var ids: seq[string]
+  for id in list.get:
+    if id in ids:
+      return err(configError("artifact_adoption names " & id & " twice"))
+    ids.add(id)
+    var found = false
+    var r: ModuleRecord
+    for m in c.modules:
+      if m.instance == id:
+        found = true
+        r = m.record
+    if not found:
+      return
+        err(configError("artifact_adoption names " & id & ", which is not in modules"))
+    if id == c.orchestration:
+      return err(configError("artifact_adoption names the orchestration instance"))
+    if c.authority.isSome and c.authority.get.instance == id:
+      return err(configError("artifact_adoption names the authority instance"))
+    if r.strategy notin {stDirectDynamic, stHostedDynamic}:
+      return err(
+        configError(
+          "artifact_adoption names " & id & ", which is not a dynamic instance"
+        )
+      )
+  c.artifactAdoption = ids
   ok()
 
 proc checkPermissions(
@@ -1062,6 +1107,7 @@ proc decodeHostConfig*(
         )
       )
   ?checkPackageManagerMark(c, cfg.package_manager)
+  ?checkArtifactAdoption(c, cfg.artifact_adoption)
   if cfg.call_audit.isSome:
     ?checkCallAudit(c, cfg.call_audit.get)
   # [I90] Transported routes: the routing rules, the I/O thread's limits and

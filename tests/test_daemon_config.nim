@@ -1620,6 +1620,45 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
         check a.local_path == place
         check a.hash == newSeq[byte](32)
 
+  posixTest "[IMPL-DECISION G505] artifact_adoption: logosd lists exactly the instances it composes, an operator cannot set it, and an override must carry the companion's id":
+    # Tier 5 step 5-6 G160. The daemon config has no such key: unknown keys are refused.
+    let operator = dcBytes(dcText(extra = "\"artifact_adoption\": [\"lcn_call\"]"))
+    check "does not match lcn.daemon_config" in decodeDaemonConfig(operator).error
+    let cliArt =
+      "{\"id\": \"lcn_call\", \"local_path\": \"/opt/lib/liblcn_call.so\", \"hash\": " &
+      Zero32 & ", \"hash_suite\": \"logos.hash-suite.blake3-256\"}"
+    proc adoption(text: string): Opt[seq[string]] =
+      prepareDaemon(Session(dir: freshDir()), dcBytes(withHost(text)), prod).get.composition.appConfig.artifact_adoption
+
+    # Neither composed: no list. The operator's hosted entry `st` is never listed.
+    check adoption(dcText()).isNone
+    check adoption(dcText(extra = "\"cli\": {\"artifact\": " & cliArt & "}")) ==
+      Opt.some(@[CliInstance])
+    check adoption(pmText()) == Opt.some(@[PmInstance])
+    check adoption(
+      pmText().replace(
+        "\"package_manager\": ",
+        "\"cli\": {\"artifact\": " & cliArt & "}, \"package_manager\": ",
+      )
+    ) == Opt.some(@[CliInstance, PmInstance])
+    # [G505] An override is the same library under its companion's id.
+    check refusal(
+      dcText(
+        extra =
+          "\"cli\": {\"artifact\": " &
+          cliArt.replace("\"id\": \"lcn_call\"", "\"id\": \"my_call\"") & "}"
+      )
+    ) == "cli.artifact.id must be lcn_call, the companion library's id"
+    check refusal(
+      pmText(
+        pmSection(
+          artifact =
+            PmArtifact.replace("\"id\": \"logos_package_manager\"", "\"id\": \"my_pm\"")
+        )
+      )
+    ) ==
+      "package_manager.artifact.id must be logos_package_manager, the companion library's id"
+
   test "[G402] [IMPL-DECISION G491] S9 to S12 with the section: six rules, each provider once, in byte order":
     let orch = orchestratorValue(dcOf(pmText())).get
     let base = systemRules(orch).get
