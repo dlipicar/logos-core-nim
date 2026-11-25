@@ -897,7 +897,12 @@ when defined(posix):
           d.watchesAdmitted == 1,
       )
       # The stop ends the watch, a real loss; lcn_call says so, and makes it again until the
-      # Package Manager is back, within 30 s of the loss (Fable §17.1 point 3).
+      # Package Manager is back, for up to 30 s from the loss (`WatchRemakeMs`, Fable §17.1
+      # point 3). lcn_call holds that bound itself: a watch not made again by then ends with
+      # "not made again within 30 s". So the case checks that it did not, not a time of its
+      # own: one taken from the stop command counts the command, the unload and the loss's
+      # detection too, which a sanitizer slows (big CI run 1: 40 s under ThreadSanitizer, the
+      # watch made again all the same).
       let stoppedAt = getMonoTime()
       check c.ctl("module", "stop", PmModule, "--instance", PmInstance).code == 0
       check c.reaches(d, PmInstance, "unloaded")
@@ -907,6 +912,7 @@ when defined(posix):
         proc(): bool =
           "the watch on the Package Manager was lost" in watch.errText,
       )
+      let noticedAt = getMonoTime()
       check watch.alive
       check c.ctl("module", "start", PmModule, "--instance", PmInstance).code == 0
       check c.reaches(d, PmInstance, "ready")
@@ -917,9 +923,12 @@ when defined(posix):
         proc(): bool =
           d.watchesAdmitted == 2,
       )
-      let remadeMs = inMilliseconds(getMonoTime() - stoppedAt)
-      checkpoint("made again " & $remadeMs & " ms after the stop")
-      check remadeMs < 30_000 # lcn_call's `WatchRemakeMs`
+      checkpoint(
+        "made again " & $inMilliseconds(getMonoTime() - stoppedAt) &
+          " ms after the stop, " & $inMilliseconds(getMonoTime() - noticedAt) &
+          " ms after its notice was seen"
+      )
+      check "not made again within" notin watch.errText
       check watch.alive
       # The same list after the start writes nothing; the next change is written.
       check watch.outText.linesOf.len == 1
