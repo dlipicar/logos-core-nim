@@ -742,10 +742,12 @@ when defined(posix):
         check c == Opt.some(ecCancelled)
       let c = cancelled(running)
       check c == Opt.some(ecCancelled)
+      # One caller's 17 cancels: 8 lines in the window (G501's limit, `ReaderLineBurst`),
+      # the rest counted and written with their count as the Package Manager stops.
+      const cancelLine = "package-manager: install_package cancelled by the Runtime"
       check waitUntil(
         proc(): bool =
-          s.log.linesWith("package-manager: install_package cancelled by the Runtime").len ==
-            17
+          s.log.linesWith(cancelLine).len == 8
       )
       # The worker goes on extracting for nobody (G449's limit) until the stop.
       let stopped = s.e.stopTimed()
@@ -753,6 +755,15 @@ when defined(posix):
       check not extracting(s.pmDir)
       releaseAll()
       s.e.finish()
+      var noted = 0
+      for l in s.log.linesWith(cancelLine):
+        noted.inc
+        let i = l.rfind(" (")
+        if i >= 0 and l.endsWith(" more like it since its last line)"):
+          noted += parseInt(l[i + 2 ..< l.find(" ", i + 2)])
+      checkpoint $s.log.linesWith(cancelLine)
+      check s.log.linesWith(cancelLine).len == 9
+      check noted == 17
 
     test "[IMPL-DECISION G449] [IMPL-DECISION G402] during a long extraction the module thread answers: a second operation and a route renewal go through; a stop with the install's call in flight: the handler ends, its operation cancelled and one line logged; the caller's call fails; the stop ends inside its deadline, the record's directory deleted":
       # Were the extraction not stopped, it would run about 24 s, past the 10 s stop

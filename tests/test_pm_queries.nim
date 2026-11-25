@@ -28,7 +28,7 @@ import logos_sdk/testing/generated/meter_module_calls
 import logos_sdk/contracts/generated/lcn_storage_fetch_root
 import ../src/logos_core/pins as core_pins
 import ../src/logos_core/package/[manifest, records]
-import ../src/logos_core/pm/[cursors, listing, refusals]
+import ../src/logos_core/pm/[cursors, linelimit, listing]
 from ./support/pmfixture import textOf
 
 let
@@ -198,43 +198,89 @@ suite "the lists' pages (G500)":
     check not fits(11, PageBudget - 10, 1)
     check not fits(0, 2, 1, budget = 1)
 
-# The refusal lines (G495; Fable §17.3 point 3) --------------------------------------------
+# The lines a caller can repeat (G495, G501; Fable §17.3 point 3, §17.7) ------------------
 
-suite "the operator's refusal lines, limited for each caller (G495)":
-  test "[IMPL-DECISION G495] a refusal's line is written the first time; the same line within a minute is counted, and the first after it is written with the count; another method or cause is a line of its own":
-    let t0 = getMonoTime()
-    proc at(ms: int): MonoTime =
-      t0 + initDuration(milliseconds = ms)
+suite "the operator's lines a caller can repeat, limited (G495, G501)":
+  let t0 = getMonoTime()
+  proc at(ms: int): MonoTime =
+    t0 + initDuration(milliseconds = ms)
 
+  test "[IMPL-DECISION G495] a refusal's line (a burst of 1) is written the first time; the same line within a minute is counted, and the first after it is written with the count; another method or cause is a kind of its own; counts left are written at the stop":
     const
       x = "package-manager: list_packages refused for x: not a reader"
       y = "package-manager: list_installed_packages refused for x: not a reader"
-    var r: RefusalLog
-    check r.admit(x, at(0)) == @[x]
+    var r: LineLimit
+    check r.admit(x, x, 1, at(0)) == @[x]
     for i in 1 .. 4:
-      check r.admit(x, at(i * 1000)).len == 0
-    check r.admit(y, at(5000)) == @[y]
-    check r.admit(x, at(RefusalLogMs - 1)).len == 0
-    check r.admit(x, at(RefusalLogMs)) == @[x & " (5 more like it since its last line)"]
-    check r.admit(x, at(RefusalLogMs + 1)).len == 0
-    check r.admit(x, at(2 * RefusalLogMs + 1)) ==
+      check r.admit(x, x, 1, at(i * 1000)).len == 0
+    check r.admit(y, y, 1, at(5000)) == @[y]
+    check r.admit(x, x, 1, at(LineWindowMs - 1)).len == 0
+    check r.admit(x, x, 1, at(LineWindowMs)) ==
+      @[x & " (5 more like it since its last line)"]
+    check r.admit(x, x, 1, at(LineWindowMs + 1)).len == 0
+    check r.admit(x, x, 1, at(2 * LineWindowMs + 1)) ==
       @[x & " (1 more like it since its last line)"]
-    check r.admit(x, at(3 * RefusalLogMs + 1)) == @[x]
-    # A count not written yet is written as the Package Manager stops.
-    check r.admit(y, at(3 * RefusalLogMs + 2)) == @[y]
-    check r.admit(y, at(3 * RefusalLogMs + 3)).len == 0
-    check r.flush() == @[y & " (1 more like it since its last line)"]
+    check r.admit(x, x, 1, at(3 * LineWindowMs + 1)) == @[x]
+    check r.admit(y, y, 1, at(3 * LineWindowMs + 2)) == @[y]
+    check r.admit(y, y, 1, at(3 * LineWindowMs + 3)).len == 0
+    check r.flush() == @[y] # the one line held, no other
     check r.kinds == 0
 
-  test "[IMPL-DECISION G495] the kinds held are bounded: at the bound, kinds past their interval are given up, each with its count":
-    let t0 = getMonoTime()
-    var r: RefusalLog
-    for i in 0 ..< RefusalKinds:
-      check r.admit("k" & $i, t0).len == 1
-    check r.admit("k0", t0).len == 0
-    check r.kinds == RefusalKinds
-    let later = t0 + initDuration(milliseconds = RefusalLogMs)
-    check r.admit("new", later) == @["k0 (1 more like it since its last line)", "new"]
+  test "[IMPL-DECISION G501] a reader's line of one kind (a burst of 8): eight a window, the rest counted, and the first after the window written with the count; the count names the last line held":
+    const head = "package-manager: watch_installed_packages admitted for c"
+    var r: LineLimit
+    for i in 1 .. 8:
+      check r.admit(head, head & ": " & $i, 8, at(i)) == @[head & ": " & $i]
+    for i in 9 .. 12:
+      check r.admit(head, head & ": " & $i, 8, at(i)).len == 0
+    check r.kinds == 1 # the figures a line carries are not in its kind
+    check r.admit(head, head & ": 13", 8, at(LineWindowMs + 1)) ==
+      @[head & ": 13 (4 more like it since its last line)"]
+    check r.admit(head, head & ": 14", 8, at(LineWindowMs + 2)) == @[head & ": 14"]
+    check r.flush().len == 0
+    # At the stop: the last line held, with the number of the others.
+    for i in 15 .. 22:
+      discard r.admit(head, head & ": " & $i, 8, at(LineWindowMs + i))
+    check r.admit(head, head & ": 23", 8, at(LineWindowMs + 23)).len == 0
+    check r.admit(head, head & ": 24", 8, at(LineWindowMs + 24)).len == 0
+    check r.flush() == @[head & ": 24 (1 more like it since its last line)"]
+
+  test "[IMPL-DECISION G495] the kinds held are bounded: at the bound, kinds past their window are given up, each with its count; when none is, a new kind's line is counted into one overflow kind, itself a line a window, given up by the next sweep with its count":
+    var r: LineLimit
+    for i in 0 ..< LineKinds:
+      check r.admit("k" & $i, "k" & $i, 1, t0).len == 1
+    check r.admit("k0", "k0 again", 1, t0).len == 0
+    check r.kinds == LineKinds
+    # None past its window: a new kind goes to the overflow kind, never into the table.
+    check r.admit("new0", "new0", 1, at(1)) == @[OverflowLine]
+    for i in 1 .. 5:
+      check r.admit("new" & $i, "new" & $i, 1, at(1 + i)).len == 0
+    check r.kinds == LineKinds
+    check r.admit("new6", "new6", 1, at(LineWindowMs + 1)) ==
+      @["k0 again", OverflowLine & " (4 more like it since its last line)", "new6"]
+    check r.kinds == 1
+    check r.flush().len == 0
+
+  test "[IMPL-DECISION G495] full with nothing due: new kinds without end leave the table at its bound and write one overflow line a window; the sweep for kinds past their window runs at most once a window, so kinds that come due between sweeps wait for the next":
+    var r: LineLimit
+    for i in 0 ..< LineKinds:
+      discard r.admit("k" & $i, "k" & $i, 1, t0)
+    var written = 0
+    for i in 0 ..< 4 * LineKinds:
+      written += r.admit("n" & $i, "n" & $i, 1, at(1 + i)).len
+      check r.kinds == LineKinds
+    check written == 1
+    # Every kind is past its window at LineWindowMs, but the last sweep was at 1 ms: the
+    # new kind is counted into the overflow kind (its window, from 1 ms, not passed).
+    check r.admit("late", "late", 1, at(LineWindowMs)).len == 0
+    check r.kinds == LineKinds
+    # A window after that sweep: the next gives every kind up (none held a count) and the
+    # overflow kind with its count, and the new kind is held.
+    check r.admit("later", "later", 1, at(LineWindowMs + 1)) ==
+      @[
+        OverflowLine & " (" & $(4 * LineKinds - 1) & " more like it since its last line)",
+        "later",
+      ]
     check r.kinds == 1
 
 # The queries through the Module Host's boundary ------------------------------------------
@@ -1067,6 +1113,71 @@ when defined(posix):
       )
       releaseAll()
       s.e.finish()
+
+    test "[IMPL-DECISION G501] [IMPL-DECISION G495] a reader that opens and cancels watches in a loop: its admission lines and its cancel lines are written 8 times a minute each, the rest counted, and the counts written as the Package Manager stops":
+      let s = setup(hosted(), "watchloop")
+      let o = newOwner(fastConfig())
+      o.autoRelease = true
+      defer:
+        o.stop()
+      let conn = o.session(s.rc.directOf())
+      check o.subscribed(conn, InstalledEvent)
+      let head = "admitted for module instance c of Runtime " & RuntimeId
+      let cancels =
+        "cancelled by the Runtime for module instance c of Runtime " & RuntimeId
+      proc round(o: Owner, n: int) =
+        # Four watches, all admitted (seen by the log for the first two rounds, by one
+        # hint each for the third), then cancelled.
+        var tags: seq[uint64] = @[]
+        for _ in 1 .. 4:
+          tags.add(o.send(conn, "watch_installed_packages", cborMap()))
+        if n < 3:
+          check waitUntil(
+            proc(): bool =
+              s.log.linesWith(head).len == 4 * n,
+            Answer,
+          )
+        else:
+          o.settle(500 * Slow)
+          check installRecord("lib", "1.3.0").idOf == "lib@1.3.0" # one commit
+          check waitUntil(
+            proc(): bool =
+              o.heard(conn, InstalledEvent).len == 4,
+            Answer,
+          )
+        for t in tags:
+          o.cancel(conn, t)
+        for t in tags:
+          let tag = t
+          check waitUntil(
+            proc(): bool =
+              o.ended(conn, tag, ecCancelled),
+            Answer,
+          )
+        if n < 3:
+          check waitUntil(
+            proc(): bool =
+              s.log.linesWith(cancels).len == 4 * n,
+            Answer,
+          )
+
+      for n in 1 .. 3:
+        o.round(n)
+      # The third round's lines are counted, not written: 8 of each kind in the window.
+      o.settle(500 * Slow)
+      check s.log.linesWith(head).len == 8
+      check s.log.linesWith(cancels).len == 8
+      # At the stop, the counts: the last line held of each kind, with the 3 others.
+      releaseAll()
+      s.e.finish()
+      check s.log.linesWith(head).len == 9
+      check s.log
+        .linesWith(head)
+        .filterIt(it.endsWith(" (3 more like it since its last line)")).len == 1
+      check s.log.linesWith(cancels).len == 9
+      check s.log
+        .linesWith(cancels)
+        .filterIt(it.endsWith(" (3 more like it since its last line)")).len == 1
 
     test "[PKG-0558] [PKG-0561] [IMPL-DECISION G501] watches: past 4 for one reader, and past 16 in all, the call is MODULE_ERROR with no message and one operator line naming the bound; equivalent watches on one session each hint once for one change; a watch that ends gives its place back":
       let s = setup(hosted(readers = @["c", "d", "e", "f", "g"]), "watches")

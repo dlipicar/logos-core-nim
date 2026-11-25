@@ -1614,9 +1614,16 @@ items. `package watch` writes `{"installed": [{"package": NAME, "version": VERSI
   caller that is not one of `package_manager.readers`, and when it failed; `lcn_call` cannot tell these
   apart and says so (5): "the Package Manager refused the query: it is at its query bound (8 page calls
   or 16 watches in all), lcn_call is not one of its readers, or it failed; the Package Manager's log says
-  which". The log has one line naming the caller, the method and the cause. The same line again within a
-  minute is counted, not written; the first after that is written with the count (`… (12 more like it
-  since its last line)`), and a count not written yet is written as the Package Manager stops.
+  which". The log has one line naming the caller, the method and the cause, limited as the next item says.
+- **The Package Manager's lines a caller can repeat.** Each line of its log that a caller causes and can
+  repeat is limited for each caller and kind of line, in a window of a minute from the kind's first line:
+  a refusal is written once a window, and the other lines 8 times (a watch admitted, cancelled by the
+  Runtime or ended; an operation or a handoff cancelled by the Runtime; a reader's handoff that failed).
+  The rest are counted, and the kind's first line after the window carries the count (`… (12 more like it
+  since its last line)`); counts not written yet are written as the Package Manager stops. It holds at
+  most 1024 kinds: past that, with none whose window has passed, a line of a new kind is counted into one
+  line for all callers ("lines of a new kind are counted, not written: 1024 kinds of line are held"),
+  written at most once a minute (G495).
 - **Package errors.** The Package Manager's error arm (`package-not-installed`, `package-in-use`, …; PM
   §14) is exit 5 with its code and its declared text.
 - **Remove.** `remove_package` succeeds with `{}` whether or not the package was installed (PM §15

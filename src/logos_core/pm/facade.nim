@@ -42,20 +42,23 @@
 ##   NOT_AUTHORISED (INTERFACE l.3308-3311; G495, Q6 (b)). The operator's log gets one
 ##   line naming the caller, the method and why: not a reader, or the bound it met
 ##   (Fable §11.2, point 1), so the log tells the causes of an opaque MODULE_ERROR apart.
-##   The lines are limited for each caller (`refusals.nim`; Fable §17.3 point 3): the
-##   same line again within a minute is counted, and written with its count after that.
+##   The lines a caller can repeat are limited (`linelimit.nim`, held by the shell; Fable
+##   §17.3 point 3, §17.7): a refusal's line once a minute; a watch admitted, cancelled or
+##   ended, a call cancelled by the Runtime, and a reader's handoff that failed (the
+##   engine's line) `ReaderLineBurst` times a minute; each kind per caller, its figures
+##   apart; the rest is counted and written with the next line of its kind.
 ## - **The stop**: the Runtime cancels the calls in flight first; `destroyModule` then
 ##   runs `closeShell`, which stops the engine and the worker (§4.1 of the plan).
 
 {.push raises: [], gcsafe.}
 {.used.}
 
-import std/[monotimes, tables]
+import std/tables
 import results
 import logos_sdk/cbor
 from logos_sdk/base/logtext import oneLine
 import ../package/records
-import ./[logos_package_manager_kit, refusals, requests, shell]
+import ./[linelimit, logos_package_manager_kit, requests, shell]
 
 export logos_package_manager_kit
 
@@ -71,7 +74,6 @@ type
     runtime: string ## [G498] the Runtime readers' calls come from
     watches: Table[string, int] ## [G501] by origin (`keyOf`)
     watching: int ## [G501] in all
-    refusals: RefusalLog ## [G495; Fable §17.3 point 3] the refusal lines, limited
 
   Progress = ref object
     ## [G502] One operation's progress publications: one in flight, the latest report
@@ -158,14 +160,24 @@ proc readerOf(m: PackageManager, inv: Invocation): Opt[Origin] =
 func keyOf(o: Origin): string =
   o.runtime & "\0" & o.instance
 
+proc callerText(inv: Invocation): string =
+  if inv.isNil:
+    return "an unknown caller"
+  oneLine(describe(inv.caller()))
+
+proc noteCaller(m: PackageManager, inv: Invocation, meth, what, rest: string) =
+  ## [§17.7] A caller's line about `meth`: "package-manager: METH WHAT for CALLER" and
+  ## `rest`, of the kind of the method, `what` and the caller, so `rest`'s figures are
+  ## not in it (`linelimit.nim`).
+  let head = "package-manager: " & meth & " " & what & " for " & inv.callerText
+  m.shell.note(head, head & rest, ReaderLineBurst)
+
 proc refuse(m: PackageManager, inv: Invocation, meth, why: string): InvocationFailure =
   ## [G495] One operator log line naming the caller, the method and why, limited for
-  ## each caller (`refusals.nim`); the caller gets MODULE_ERROR with nothing more.
-  let line =
-    "package-manager: " & meth & " refused for " & oneLine(describe(inv.caller())) & ": " &
-    why
-  for l in m.refusals.admit(line, getMonoTime()):
-    m.log(l)
+  ## each caller and line (`linelimit.nim`); the caller gets MODULE_ERROR with nothing
+  ## more. `why` is fixed text, never request data: the line is its own kind.
+  let line = "package-manager: " & meth & " refused for " & inv.callerText & ": " & why
+  m.shell.note(line, line, RefusalBurst)
   refused()
 
 proc queried(
@@ -255,7 +267,7 @@ proc operate(
     except CancelledError:
       if not p.isNil:
         p.ended = true
-      m.log("package-manager: " & meth & " cancelled by the Runtime")
+      m.noteCaller(inv, meth, "cancelled by the Runtime", "")
       return err(cancelled())
   if not p.isNil:
     p.ended = true
@@ -276,10 +288,8 @@ proc initModule*(
   )
 
 proc destroyModule*(m: PackageManager) {.async: (raises: []).} =
-  ## [G437] After the Runtime ended the calls in flight: the engine and the worker stop.
-  ## The refusals counted and not written yet are written first.
-  for l in m.refusals.flush():
-    m.log(l)
+  ## [G437] After the Runtime ended the calls in flight: the engine and the worker stop;
+  ## the shell writes the limited lines' counts last.
   await m.shell.closeShell()
 
 proc `inspect_package`*(
@@ -333,7 +343,7 @@ proc `get_runtime_handoff`*(
       try:
         await m.shell.readerHandoff(o, identityOf(request.package), request.module)
       except CancelledError:
-        m.log("package-manager: get_runtime_handoff cancelled by the Runtime")
+        m.noteCaller(inv, "get_runtime_handoff", "cancelled by the Runtime", "")
         return err(cancelled())
     return m.queried(inv, "get_runtime_handoff", a)
   if c.isErr or c.get.kind != ckSystemService:
@@ -399,7 +409,7 @@ proc observe(
     try:
       await m.shell.changedSince(seen)
     except CancelledError:
-      m.log("package-manager: " & meth & " cancelled by the Runtime")
+      m.noteCaller(inv, meth, "cancelled by the Runtime", "")
       return err(cancelled())
     if m.shell.closing:
       return ok(watchEnded())
@@ -412,14 +422,16 @@ proc observe(
     try:
       discard await race(FutureBase(hint))
     except CancelledError:
-      m.log("package-manager: " & meth & " cancelled by the Runtime")
+      m.noteCaller(inv, meth, "cancelled by the Runtime", "")
       return err(cancelled())
     let sent = await hint
     if sent.isErr:
-      m.log(
-        "package-manager: " & meth & " for " & oneLine(describe(inv.caller())) &
-          " ended: a hint was not delivered: " & $sent.error.code & " " &
-          oneLine(sent.error.message.get(""))
+      m.noteCaller(
+        inv,
+        meth,
+        "ended",
+        ": a hint was not delivered: " & $sent.error.code & " " &
+          oneLine(sent.error.message.get("")),
       )
       return ok(watchEnded())
 
@@ -455,10 +467,12 @@ proc `watch_installed_packages`*(
   m.watches[k] = mine + 1
   inc m.watching
   # A watch is long-lived: the operator's log shows each, and what it holds of the bounds.
-  m.log(
-    "package-manager: " & meth & " admitted for " & oneLine(describe(inv.caller())) &
-      ": " & $(mine + 1) & " of " & $WatchesPerOrigin & " for this caller, " &
-      $m.watching & " of " & $WatchesAggregate & " in all"
+  m.noteCaller(
+    inv,
+    meth,
+    "admitted",
+    ": " & $(mine + 1) & " of " & $WatchesPerOrigin & " for this caller, " & $m.watching &
+      " of " & $WatchesAggregate & " in all",
   )
   let ended = await m.observe(inv)
   dec m.watching

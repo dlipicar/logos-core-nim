@@ -223,6 +223,9 @@ type
       outcome*: Result[Resolution, PackageError]
     of cmLog:
       text*: string
+      noteKind*: string
+        ## [§17.7] non-empty: a line a caller can repeat, limited by this kind
+        ## (`linelimit.nim`, `ReaderLineBurst`)
     of cmContinue:
       operation*: uint64
     of cmWork, cmPage:
@@ -3128,7 +3131,12 @@ proc onReaderHandoff(e: var Engine, r: sink WorkerResult, cmds: var seq[Command]
     e.releaseSnapshot(p.snapshot, cmds)
     return
   if r.failure.len > 0:
-    cmds.log("get_runtime_handoff: " & r.failure)
+    # [§17.7] A reader's line, carrying what it asked for: limited by its kind, which
+    # names the reader and not the request.
+    let head =
+      "get_runtime_handoff failed for module instance " & p.origin.instance &
+      " of Runtime " & p.origin.runtime
+    cmds.add(Command(kind: cmLog, text: head & ": " & r.failure, noteKind: head))
   if r.hasFault:
     cmds.answer(r.request, moduleErrorOf("the installed state needs a restart"))
   else:

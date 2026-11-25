@@ -72,7 +72,7 @@
 
 {.push raises: [], gcsafe.}
 
-import std/[algorithm, deques, os, tables]
+import std/[algorithm, deques, monotimes, os, tables]
 import results
 import logos_sdk/confined
 import logos_sdk/kit/routes
@@ -83,7 +83,7 @@ import
 import ../durable
 import ../runtime/protinput
 import ../package/[errors, resolver]
-import ./[engine, worker]
+import ./[engine, linelimit, worker]
 from ./listing import PageBudget
 
 when defined(posix):
@@ -131,6 +131,8 @@ type
     routeSet: RouteSet
     stateDir: string
     log: ShellLog
+    lines: LineLimit
+      ## [G495, G501; Fable §17.3 point 3, §17.7] the lines a caller can repeat, limited
     links: Table[string, Link] ## the current route of each binding
     retired: seq[Link] ## replaced routes, kept until the shell closes
     established: Table[string, int] ## routes established per binding
@@ -172,6 +174,12 @@ proc stderrLog*(line: string) {.nimcall, gcsafe, raises: [].} =
 
 proc say(s: Shell, text: string) =
   s.log("package-manager: " & oneLine(text))
+
+proc note*(s: Shell, kind, line: string, burst: int) =
+  ## [§17.7] A line a caller can repeat, through the limit (`linelimit.nim`): `kind` is
+  ## fixed text naming the caller, apart from what the line carries.
+  for l in s.lines.admit(kind, line, burst, getMonoTime()):
+    s.log(l)
 
 # The event queue ----------------------------------------------------------------------
 
@@ -561,7 +569,10 @@ proc exec(s: Shell, c: var Command) =
     if s.replies.pop(c.request, f):
       f.complete(move c.outcome)
   of cmLog:
-    s.say(c.text)
+    if c.noteKind.len > 0:
+      s.note(c.noteKind, "package-manager: " & oneLine(c.text), ReaderLineBurst)
+    else:
+      s.say(c.text)
   of cmContinue:
     # [G455; Fable F2] One poll later, never in this drain.
     let t = Turn(shell: s, operation: c.operation)
@@ -937,5 +948,8 @@ proc closeShell*(s: Shell): Future[void] {.async: (raises: []).} =
     s.reader = nil
   when defined(posix):
     s.store.close()
+  # [§17.7] The counts of the limited lines not written yet.
+  for l in s.lines.flush():
+    s.log(l)
 
 {.pop.}
