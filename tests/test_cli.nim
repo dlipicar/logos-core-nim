@@ -8,7 +8,8 @@
 ## `test_lcn_call` runs the module itself.
 
 when defined(posix):
-  import std/[algorithm, atomics, json, os, sequtils, strutils, tempfiles]
+  import std/[algorithm, atomics, json, monotimes, os, sequtils, strutils, tempfiles]
+  from std/times import inMilliseconds, initDuration
   import unittest2
   import logos_sdk/cbor
   import logos_sdk/hash
@@ -19,7 +20,9 @@ when defined(posix):
   import ../src/logos_core/transport/io/sock
   import ../src/logos_core/cli/[args, fdpass, markedout, present, wire]
   from ../src/logos_core/cli/commands import
-    Stop, classify, retryable, contractViews, projectView
+    Stop, classify, retryable, contractViews, projectView, PmGate, enter, leave,
+    listAll, packageStop, readerStop, opaque, PmRefusal, ListStarts, PmPageCalls,
+    PmWatches
   from ../src/logos_core/cli/rpc import CallResult, Failure
   from ../src/logos_core/cli/launcher import
     Act, ActKind, Answer, nextAct, answerOf, Launch, LaunchFailure, launch
@@ -1042,6 +1045,18 @@ cliargs.multi_response = {}
       check classify(failed(ecModule)).declared
       check not classify(failed(ecNotReady)).declared
 
+    test "[PKG-0573] an operation cancelled, timed out or cut off is the outcome unknown (exit 2), never a rollback: the provider may have run it; a cancel the launcher asked for is 130":
+      # `operate` answers from its call alone, through `pmAnswer` and so `classify`: a
+      # progress stream that ends only stops the progress lines (test_logosd_pm).
+      for c in [ecTransport, ecTimeout, ecCancelled]:
+        let s = classify(failed(c))
+        check s.exit == ExitUnreachable
+        check "the outcome is unknown: the provider may have run the call" in s.message
+        check "roll" notin s.message and "not installed" notin s.message
+        check not s.declared
+      let asked = classify(failed(ecCancelled, cancelled = true))
+      check asked.exit == ExitInterrupted and asked.silent
+
   # An extended contract view (R l.90-91), built in process as
   # sdk/tests/test_call_surface.nim does: no fixture carries `extends`.
   const
@@ -1096,3 +1111,186 @@ cliargs.multi_response = {}
       var other = oldRoot
       other[0] = other[0] xor 0xff
       check projectView(b.get, "demo_module", other).isErr
+
+  # The Package Manager through lcn_call (Tier 5 step 5-6b-3): the pure rules.
+  proc page(items: openArray[int], next = ""): CborValue =
+    ## A list page: `items` as numbers, and `next_cursor` unless empty.
+    var entries: seq[CborEntry] = @[
+      (cbor("packages"), CborValue(kind: ckArray, items: items.mapIt(cbor(uint64(it)))))
+    ]
+    if next.len > 0:
+      entries.add((cbor("next_cursor"), cbor(next)))
+    CborValue(kind: ckMap, entries: entries)
+
+  proc errorArm(code: string, message = ""): CborValue =
+    var e: seq[CborEntry] = @[(cbor("code"), cbor(code))]
+    if message.len > 0:
+      e.add((cbor("message"), cbor(message)))
+    cborMap((cbor("error"), CborValue(kind: ckMap, entries: e)))
+
+  proc numbers(xs: seq[CborValue]): seq[uint64] =
+    xs.mapIt(it.getUint64.get)
+
+  type Waiter = object
+    gate: ptr PmGate
+    entered: Atomic[bool]
+    tookMs: Atomic[int]
+
+  proc waiterMain(w: ptr Waiter) {.thread.} =
+    let t0 = getMonoTime()
+    let r =
+      enter(w.gate[].pages, PmPageCalls, -1, Opt.some(t0 + initDuration(seconds = 30)))
+    w.tookMs.store(int(inMilliseconds(getMonoTime() - t0)))
+    w.entered.store(r.isOk)
+
+  suite "cli.package: the Package Manager's lists, bounds and refusals through lcn_call (G503; PM §15) [IMPL]":
+    test "[IMPL-DECISION G503] a listing reads every page in order, its cursor as given":
+      var seen: seq[string] = @[]
+      proc fetch(cursor: Opt[string]): Result[CborValue, Stop] =
+        seen.add(cursor.get("-"))
+        if cursor.isNone:
+          return ok(page([1, 2], "c1"))
+        if cursor.get == "c1":
+          return ok(page([3], "c2"))
+        ok(page([]))
+
+      let r = listAll(fetch, "the installed packages")
+      check r.isOk
+      check r.get.numbers == @[1'u64, 2, 3]
+      check seen == @["-", "c1", "c2"]
+
+    test "[IMPL-DECISION G503] [IMPL-DECISION G499] a listing that meets a commit between pages starts over and succeeds":
+      var tries = 0
+      var seen: seq[string] = @[]
+      proc fetch(cursor: Opt[string]): Result[CborValue, Stop] =
+        seen.add(cursor.get("-"))
+        if cursor.isNone:
+          inc tries
+          return ok(page([tries], "c" & $tries))
+        if tries == 1:
+          return ok(errorArm("invalid-request"))
+        ok(page([10]))
+
+      let r = listAll(fetch, "the installed packages")
+      check r.isOk
+      # The first listing's page is dropped with it: only the second listing's items.
+      check r.get.numbers == @[2'u64, 10]
+      check seen == @["-", "c1", "-", "c2"]
+
+    test "[IMPL-DECISION G503] one that keeps meeting commits fails after starting over 3 times, with its message":
+      var firsts = 0
+      proc fetch(cursor: Opt[string]): Result[CborValue, Stop] =
+        if cursor.isNone:
+          inc firsts
+          return ok(page([1], "c"))
+        ok(errorArm("invalid-request", "the cursor is not valid"))
+
+      let r = listAll(fetch, "the installed packages")
+      check r.isErr
+      check firsts == 1 + ListStarts
+      if r.isErr:
+        check r.error.exit == ExitProvider
+        check r.error.code == "invalid-request"
+        check r.error.message ==
+          "the installed packages kept changing while lcn_call read them: it started over 3 times; run the command again"
+        check not r.error.declared
+
+    test "[IMPL-DECISION G503] an invalid-request without a cursor, and any other error arm, end the listing as answered":
+      for (c0, k0) in [("invalid-request", false), ("package-not-installed", true)]:
+        let (code, cursor) = (c0, k0) # copies: the closure below captures them
+        var calls = 0
+        proc fetch(c: Opt[string]): Result[CborValue, Stop] =
+          inc calls
+          if cursor and c.isNone:
+            return ok(page([1], "c"))
+          ok(errorArm(code, "said"))
+
+        let r = listAll(fetch, "the catalog's packages")
+        check r.isErr
+        check calls == (if cursor: 2 else: 1)
+        if r.isErr:
+          check r.error.exit == ExitProvider
+          check r.error.code == code
+          check r.error.message == "said"
+          check r.error.declared
+
+    test "[IMPL-DECISION G503] a failed page call ends the listing with its failure":
+      proc fetch(c: Opt[string]): Result[CborValue, Stop] =
+        err(Stop(exit: ExitUnreachable, code: "TIMEOUT", message: "late"))
+
+      let r = listAll(fetch, "the installed packages")
+      check r.isErr and r.error.code == "TIMEOUT"
+
+    test "[IMPL-DECISION G503] the error arm is exit 5 with the Package Manager's code and declared text; another arm is none":
+      let s = packageStop(errorArm("package-not-installed", "no such package"))
+      check s.isSome
+      check s.get.exit == ExitProvider and s.get.code == "package-not-installed"
+      check s.get.message == "no such package" and s.get.declared
+      check packageStop(cborMap((cbor("installed"), cborMap()))).isNone
+
+    test "[IMPL-DECISION G503] an opaque MODULE_ERROR names the three causes and the log; any other failure is kept":
+      let bare = classify(failed(ecModule))
+      check not bare.opaque # "m": a message
+      var o = bare
+      o.message = ""
+      check o.opaque
+      let r = readerStop(o)
+      check r.message == PmRefusal
+      check r.exit == ExitProvider and r.code == $ecModule and not r.declared
+      check "query bound" in PmRefusal and "not one of its readers" in PmRefusal and
+        "log" in PmRefusal
+      check readerStop(bare).message == "m"
+      let auth = classify(failed(ecNotAuthorised))
+      check readerStop(auth).message == auth.message
+
+    test "[IMPL-DECISION G503] lcn_call's page calls: with 2 in flight a third waits for one to end and is never sent early":
+      check PmPageCalls == 2 and PmWatches == 4
+      let g = cast[ptr PmGate](allocShared0(sizeof(PmGate)))
+      defer:
+        deallocShared(g)
+      for _ in 0 ..< PmPageCalls:
+        check enter(g[].pages, PmPageCalls, -1, Opt.none(MonoTime)).isOk
+      # A third past its deadline: exit 2, nothing sent.
+      let t0 = getMonoTime()
+      let late = enter(
+        g[].pages, PmPageCalls, -1, Opt.some(t0 + initDuration(milliseconds = 60))
+      )
+      check late.isErr
+      if late.isErr:
+        check late.error.exit == ExitUnreachable
+        check "nothing was sent" in late.error.message
+      check g[].pages.load == PmPageCalls
+      # A third that waits: it enters once one ends, not before.
+      var w = cast[ptr Waiter](allocShared0(sizeof(Waiter)))
+      defer:
+        deallocShared(w)
+      w.gate = g
+      var t: Thread[ptr Waiter]
+      createThread(t, waiterMain, w)
+      sleep(150)
+      check not w.entered.load
+      leave(g[].pages)
+      joinThread(t)
+      check w.entered.load
+      check w.tookMs.load >= 100
+      check g[].pages.load == PmPageCalls
+      # The watches have their own count.
+      for _ in 0 ..< PmWatches:
+        check enter(g[].watches, PmWatches, -1, Opt.none(MonoTime)).isOk
+      check enter(g[].watches, PmWatches, -1, Opt.some(getMonoTime())).isErr
+      check g[].pages.load == PmPageCalls
+
+    test "[IMPL-DECISION G503] a wait at the bound ends at the launcher's cancel (130, nothing written)":
+      var g: PmGate
+      for _ in 0 ..< PmWatches:
+        check enter(g.watches, PmWatches, -1, Opt.none(MonoTime)).isOk
+      let p = mkpipe()
+      defer:
+        closeFds(p[0], p[1])
+      var one = 1'u8
+      check posix.write(p[1], addr one, 1) == 1
+      let r = enter(g.watches, PmWatches, p[0], Opt.none(MonoTime))
+      check r.isErr
+      if r.isErr:
+        check r.error.exit == ExitInterrupted and r.error.silent
+      check g.watches.load == PmWatches

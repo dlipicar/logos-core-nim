@@ -125,21 +125,38 @@ when defined(posix):
       ]
     )
 
-  proc pmInputBytes(): seq[byte] =
-    pmValue(
+  const RuntimeId = "9d41c6f2-7b38-4e05-a1c9-3f62d8e0b417"
+    ## [G498] the Runtime id a case with readers names in the protected input
+
+  # [5-6b-1; plan §10.3, ruling A] The shell's hook: one line in this file for each handoff
+  # the first worker runs, in a case with readers.
+  let handoffJobs = work / "handoff-jobs"
+  putEnv("LCN_TEST_HANDOFF_JOBS", handoffJobs)
+
+  proc pmInputBytes(readers: bool): seq[byte] =
+    ## With `readers`: the input `logosd` composes with `readers = ["c"]` (G498).
+    var v = pmValue(
       trust,
       document,
       bindings = [("main", "hf")],
       catalogLocator = "fetch-fake/state/catalog",
-    ).encode.tryGet
+    )
+    if readers:
+      v.readers = Opt.some(@["c"])
+      v.runtime_instance_id = Opt.some(RuntimeId)
+    v.encode.tryGet
 
-  proc hosted(clock: Clock): EngineConfig =
+  proc hosted(clock: Clock, readers = false): EngineConfig =
     ## `config` with a state root, the Module Host program, a short endpoint directory, the
-    ## Package Manager's protected input, `pm` marked (G490), and `clock`.
+    ## Package Manager's protected input, `pm` marked (G490), and `clock`; with `readers`,
+    ## the Runtime id, `c` a reader and the handoff-job hook passed on.
     result = config()
     result.stateRoot = Opt.some(result.workDir / "state")
     result.moduleHost = Opt.some(hostProgram)
     result.moduleHostEnv = @SanitizerEnv & @["LCN_TEST_HANDOFF_GATE"]
+    if readers:
+      result.runtimeInstanceId = RuntimeId
+      result.moduleHostEnv.add("LCN_TEST_HANDOFF_JOBS")
     result.endpointDir = shortBase / ("e" & $engines)
     var t = fastConfig()
     t.helloTimeout = int64(Answer) * 1000 * Ms
@@ -147,7 +164,7 @@ when defined(posix):
     t.writeStallTimeout = 10_000 * Ms * Slow
     result.transport = Opt.some(t)
     result.shutdownGrace = initDuration(seconds = 10 * Slow)
-    result.protectedInputs = @[("pm", pmInputBytes())]
+    result.protectedInputs = @[("pm", pmInputBytes(readers))]
     result.packageManager = Opt.some("pm")
     result.clock = clock
 
@@ -483,14 +500,18 @@ when defined(posix):
     pmDir, log, meterDir: string
 
   proc setup(
-      name: string, clock = systemClock(), refuse = false, meter = false
+      name: string,
+      clock = systemClock(),
+      refuse = false,
+      meter = false,
+      readers = false,
   ): Setup =
     ## The fake and the marked Package Manager started (with `refuse`, every Hello on fd 6
     ## is refused from the first), the fake ready, the catalog in use; with `meter`, a
     ## hosted meter too. The Package Manager's host logs to `<work>/<name>.log`.
     openGate()
     removeFile(gate & ".held")
-    let cfg = hosted(clock)
+    let cfg = hosted(clock, readers)
     cfg.stock()
     result.clock = clock
     result.pmDir = cfg.stateDir("p")
@@ -618,7 +639,49 @@ when defined(posix):
       releaseAll()
       e.finish()
 
-    test "[TRN-0344] [TRN-0345] [TRN-0329] [RUN-0853] [IMPL-DECISION G492] a system-service session is get_runtime_handoff alone: the operations, the observations and a subscription are NOT_AUTHORISED from the Runtime; no route is made for it":
+    test "[PKG-0526] [PKG-0529] [IMPL-DECISION G498] [IMPL-DECISION G500] a reader's get_runtime_handoff: the bytes the binding gets, and the same package errors, built off the first worker (no handoff job on its queue); a module instance not named a reader is refused as before":
+      removeFile(handoffJobs)
+      let s = setup("reader-handoff", readers = true)
+      let e = s.e
+      discard install("logos.example", "1.0.0").field("installed")
+      check e.bindingReady()
+      let bound = e.answered(e.ask())
+      check bound.done and bound.ok
+      # The binding's handoff ran on the first worker: one line.
+      check waitUntil(
+        proc(): bool =
+          fileExists(handoffJobs) and readFile(handoffJobs).count('\n') == 1,
+        Answer,
+      )
+      proc request(package, version, module: string): CborValue =
+        cborMap(
+          (cbor("module"), cbor(module)), (cbor("package"), identity(package, version))
+        )
+
+      let r = pm.call(
+        "get_runtime_handoff", request("logos.example", "1.0.0", "alpha_module")
+      )
+      check r.code == ecOk
+      check r.response == bound.result
+      check pm.call(
+        "get_runtime_handoff", request("logos.example", "1.0.0", "no_such_module")
+      ).valueOf.codeOf == "invalid-request"
+      check pm.call("get_runtime_handoff", request("app", "1.0.0", "alpha_module")).valueOf.codeOf ==
+        "package-not-installed"
+      # None of the reader's three reached the first worker.
+      check readFile(handoffJobs).count('\n') == 1
+      # `d` is a module instance of the same Runtime that the input does not name.
+      var other = e.startClient("d")[1].open(pmRoot, pmSchema)
+      let refused = other.call(
+        "get_runtime_handoff", request("logos.example", "1.0.0", "alpha_module")
+      )
+      check refused.code == ecModule
+      check refused.message.len == 0
+      other.release()
+      releaseAll()
+      e.finish()
+
+    test "[TRN-0344] [TRN-0345] [TRN-0329] [RUN-0853] [PKG-0544] [IMPL-DECISION G492] a system-service session is get_runtime_handoff alone: the operations, the observations and a subscription are NOT_AUTHORISED from the Runtime; no route is made for it":
       let s = setup("scope")
       let e = s.e
       check e.bindingReady()

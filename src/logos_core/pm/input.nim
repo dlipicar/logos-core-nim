@@ -88,6 +88,10 @@ type
       ## [SPEC PM §11 l.1241-1254] the resolver limits: required, the embedding
       ## host's resolved values, never a default of the Package Manager's
     limits*: PmLimits
+    readers*: seq[string]
+      ## [G498; C4] the module instances whose ordinary calls observe: deny by default
+    runtimeInstanceId*: string
+      ## [G498] the Runtime a reader's calls come from; empty without readers
 
 func defaultLimits*(): PmLimits =
   PmLimits(
@@ -177,6 +181,15 @@ proc checkedValue*(v: LcnPmInput): Result[PmInput, string] =
   let resolver = decodeResolverLimits(toCbor(v.resolver_limits)).valueOr:
     return err("resolver_limits: " & error)
   let limits = ?limitsOf(v.limits)
+  # [G498] The readers: unique, and named with the Runtime their calls come from.
+  var readers: seq[string]
+  var seen = initHashSet[string]()
+  for r in v.readers.get(@[]):
+    if seen.containsOrIncl(r):
+      return err("readers names " & r.escape & " twice")
+    readers.add(r)
+  if readers.len > 0 and v.runtime_instance_id.isNone:
+    return err("readers needs runtime_instance_id")
   let file = decodeTrust(v.trust).valueOr:
     return err("trust: " & error)
   let signing = acceptedSigning(file).valueOr:
@@ -192,6 +205,8 @@ proc checkedValue*(v: LcnPmInput): Result[PmInput, string] =
       ),
       resolverLimits: resolver,
       limits: limits,
+      readers: readers,
+      runtimeInstanceId: v.runtime_instance_id.get(""),
     )
   )
 
@@ -253,6 +268,16 @@ func toValue*(i: PmInput): LcnPmInput =
         operation_deadline_ms: Opt.some(i.limits.operationDeadlineMs),
       )
     ),
+    readers:
+      if i.readers.len > 0:
+        Opt.some(i.readers)
+      else:
+        Opt.none(seq[string]),
+    runtime_instance_id:
+      if i.runtimeInstanceId.len > 0:
+        Opt.some(i.runtimeInstanceId)
+      else:
+        Opt.none(string),
   )
 
 {.pop.}

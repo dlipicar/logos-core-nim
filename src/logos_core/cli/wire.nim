@@ -250,6 +250,8 @@ func opName*(c: LcnCliCommand): string =
   of LcnCliCommandKind.lcn_Cli_subscribe_command: "subscribe"
   of LcnCliCommandKind.lcn_Cli_events_command: "events"
   of LcnCliCommandKind.lcn_Cli_rc_command: "rc"
+  of LcnCliCommandKind.lcn_Cli_package_command: "package"
+  of LcnCliCommandKind.lcn_Cli_catalog_command: "catalog"
 
 func checkMessage*(m: LcnCliMessage, received: int): Result[void, string] =
   ## [G344] The bounds cli.cddl gives in comments (G10 has no occurrence
@@ -299,7 +301,9 @@ func checkMessage*(m: LcnCliMessage, received: int): Result[void, string] =
     if m.fds.len != 2:
       return err("events takes no file")
   of LcnCliCommandKind.lcn_Cli_describe_command,
-      LcnCliCommandKind.lcn_Cli_subscribe_command, LcnCliCommandKind.lcn_Cli_rc_command:
+      LcnCliCommandKind.lcn_Cli_subscribe_command, LcnCliCommandKind.lcn_Cli_rc_command,
+      LcnCliCommandKind.lcn_Cli_package_command,
+      LcnCliCommandKind.lcn_Cli_catalog_command:
     if m.fds.len != 2:
       return err(c.opName & " takes no file")
   ok()

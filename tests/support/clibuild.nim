@@ -20,6 +20,14 @@ const cliRepo = currentSourcePath().parentDir.parentDir.parentDir
 
 var built: string
 
+# The source is in src/, which reads no tests/config.nims: the test hooks the suites use
+# (the watch's, `LCN_TEST_CLI_WATCH`, PKG-0555) are named here, as `pmbuild` does.
+const hooks: seq[string] =
+  when defined(lcnTestHooks):
+    @["lcnTestHooks"]
+  else:
+    @[]
+
 proc cliLibrary*(): string =
   ## The library's absolute path.
   if built.len > 0:
@@ -38,6 +46,7 @@ proc cliLibrary*(): string =
         "lcn_call.nim",
         "lcn_call",
         exports = "lcn_call",
+        defines = hooks,
       )
   built
 
@@ -57,6 +66,7 @@ proc cliLibraryRebuilt*(): string =
     "lcn_call.nim",
     "lcn_call_b",
     exports = "lcn_call",
+    defines = hooks,
   )
   rebuilt
 

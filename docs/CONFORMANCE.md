@@ -783,6 +783,7 @@ The Package Manager as the module `logos_package_manager`, which logosd composes
 - **Limits of the claim:**
   - `get_runtime_handoff` has no caller that may use it until 5-6a-2's system-service binding (below), and the
     observation methods none until 5-6b's readers: until then each is `MODULE_ERROR` with no message or detail (G495).
+    5-6b-1 serves the readers (below).
   - **Windows** hosts no Package Manager until 5-9 (no `logos.local.unix-stream`, so the Loader refuses a hosted request; "What Tier 5 step 5-4 changes"), and **mobile** none:
     the mark refuses a direct instance (G490).
   - The large-reply figures with the module's pre-encoded responses (G497) are not yet measured: they wait for 5-3c-4.
@@ -804,6 +805,79 @@ The Package Manager's system-service binding (DECISIONS I141; G492, G493; `docs/
   - Nothing in `logosd` asks for a handoff yet: package-backed creation (5-8) is the requester. The engine's
     request queue (one Request in flight, 64 parked, each with its own end) is reached by the tests' hook alone.
   - The reply's output room is the held large-reply item's (ruling B): PKG-0559 stays not met (§5.8 of the plan).
+
+### What Tier 5 step 5-6b-1 changes
+
+The Package Manager's readers, cursors and lists (DECISIONS I143; G498, G499, G500; C4; the owner's Q7 (b);
+`docs/PACKAGE-MANAGER.md` §15, `docs/DAEMON.md` §3).
+
+- **Claimed:** PKG-0368, PKG-0378, PKG-0381, PKG-0383 to PKG-0387 (the lists, `limit`, pages, continuation and
+  expiry), PKG-0525 to PKG-0533 (the observation integration: readers named in protected input, the caller the
+  Runtime authenticated, an ordinary route told from the binding, a non-reader refused without records or cursor
+  state, `next_cursor` exactly), PKG-0538 to PKG-0542 (the retention policy: per-origin and aggregate counts, ages,
+  reclamation and overload), and App A's copies PKG-0638 and PKG-0648. 24 units.
+- **Limits of the claim:**
+  - **Visibility is all or nothing** (PKG-0530): a reader sees every record. The reader list is fixed for the
+    realization; a change applies at the next start.
+  - **A refusal is opaque to the caller** (PKG-0531, G495): not a reader, a page-job or cursor bound, and a fault
+    reading the installed state are each `MODULE_ERROR` with no detail, told apart only by the Package Manager's log
+    line.
+  - **A page is at most 256 KiB of records** but always one; a reader's handoff is one value of up to about
+    14 MiB and is a large reply (G497): its passes on the module thread and the host's I/O thread are G497's.
+  - **PKG-0558** waits for 5-6b-2's watch bounds (its page-job half is built); **PKG-0559** stays not met (G504).
+  - **Windows** hosts no Package Manager until 5-9, and **mobile** none, as in 5-6a-1.
+
+### What Tier 5 step 5-6b-2 changes
+
+The Package Manager's watch and progress (DECISIONS I144; G501, G502, G504; the owner's Q11 and Q12 (a); ruling 4;
+`docs/PACKAGE-MANAGER.md` §15, `docs/HOST-CONFIG.md`).
+
+- **Claimed:** PKG-0520 and PKG-0522 to PKG-0524 (the events and the watch's response), PKG-0544 to PKG-0553,
+  PKG-0556 to PKG-0558 and PKG-0560 to PKG-0562 (the watch: ordinary routes only, scoped hints and their
+  admission, coalescing, no revision, its end, its bounds, the cancel seen independently), PKG-0564 to PKG-0572
+  (progress: only with a key, scoped, the key echoed, measured counters within their totals, nothing implied,
+  authorized at publication), and App A's copies PKG-0632 and PKG-0634 to PKG-0636. PKG-0547 to PKG-0549 and PKG-0560
+  are claimed by inspection. TXT-0497 and TXT-0498 leave the re-pin's list with PKG-0568. 33 units.
+- **Limits of the claim:**
+  - **Readers only** (Q12 (a), G498): a caller that is not a reader is refused the watch and gets no progress.
+  - **The call workers** (G501): each watch, operation and page call holds one of the Runtime's call workers while it
+    runs, so the Package Manager can hold 58 of the 128 at once, a stated limit with no lane of its own
+    (HOST-CONFIG, Runtime limits). Freeing a hosted call's worker is a core item held by the pause.
+  - **`installing` carries no counters** (G502): extraction is one worker job and measures nothing before its end.
+  - **A deadline is never seen by the provider:** a watch it ends ends `CANCELLED`, like any cancel.
+  - **PKG-0554, PKG-0555 and PKG-0573** are the consumer's duties, `lcn_call`'s, claimed in 5-6b-3 (below).
+  - **PKG-0559 is not met** (G504; the owner's Q11, "Record as not met"), deferred by name in
+    `conformance/claims/PKG.toml` with the five conditions it waits for. A handoff can wait behind replies a
+    consumer does not read: `commit` waits on the module thread while the Module Host's 64 MiB output budget is full
+    (four maximal replies, or sixty-four of 1 MiB, from any caller, operation and inspect replies included), until
+    the stalled consumer is closed at `write_stall_timeout_ms` (30 s by default); each reply's check and copies run
+    on the module thread too (G497). What it waits for is the held large-reply core item: piece (b), the commit's
+    wait and the response check off the module thread, and the system session's room in both output pools, the
+    submitted bytes and the committed output. Built meanwhile: the page byte budget, the binding's own worker and the
+    bound on ordinary handoffs.
+
+### What Tier 5 step 5-6b-3 changes
+
+`logosctl package` and `catalog` through `lcn_call` (DECISIONS I148; G503; the owner's Q14 (a); ruling 4;
+`docs/DAEMON.md` §5, §7a).
+
+- **Claimed:** PKG-0554 (a hint or a submitted watch is never taken for the state: `lcn_call` lists after each),
+  PKG-0555 (the refresh and the resynchronization: through the test hook `LCN_TEST_CLI_WATCH`, a lost watch is made
+  again and lists, and a change whose hint is ignored is written from a shortened refresh, each in its own case) and PKG-0573 (a cancel, a
+  timeout or a lost route is exit 2, the outcome unknown; an install goes on without progress). 3 units, by test.
+  At the merge (Fable §17), PKG-0555's hook case is split so each list is shown on its own (a loss with the refresh
+  out of reach, a refresh with no loss), and a real loss is added: a stop and a start of the Package Manager under a
+  watch, which goes on. PKG-0558 gains a list-and-cancel loop refused at the bound: a cancelled page job keeps its
+  place until its job has ended.
+- **Limits of the claim:**
+  - **`lcn_call` sees only its own calls:** it holds its page calls and watches within the Package Manager's
+    per-caller bounds (2 and 4), and a query refused at a bound in all (8 page calls, 16 watches) is reported with
+    the three causes it cannot tell apart; the Package Manager's log says which.
+  - **Progress is not every phase:** the Package Manager replaces a pending publication with the next and drops the
+    last at the answer.
+  - **A lost watch is made again for 30 s from the loss** (Fable §17.1 point 3): a Package Manager stopped or
+    restarting longer than that ends the watch with the last failure. Each loss writes a notice on stderr.
+  - **S14 includes the operations** (Q14 (a)): every process of logosd's user can install and remove packages.
 
 ## Properties not claimed
 

@@ -260,6 +260,10 @@ lcn.dc_package_manager = {
   catalog: lcn.pm_catalog_ref,
   ? resolver_limits: lcn.pm_resolver_limits,
   ? limits: lcn.pm_limits,
+  ; [G498] C4's readers: instances this start runs whose ordinary calls may
+  ; observe the installed set and the catalog. Absent: lcn_call when logosd
+  ; composes it, else none. Empty: none.
+  ? readers: [* tstr .size (1..128)],
 }
 
 ; Accepted only by a logosd built with lcnTestHooks, with the development
@@ -325,7 +329,7 @@ them ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) for the last).
 | `state_transfers` | As in the host configuration: an operator instance's replacement continues from its state, applied once at the next start (§11, "Replacing an instance"). Neither side may be a system instance. |
 | `ctl` | The socket (§7): `socket_dir` (absolute; default `<session>/run`), `workers` (1–32, default 4), `idle_timeout_ms` (100–600000, default 30000). |
 | `cli` | The CLI module (§7a): `artifact` (`lcn.app_artifact`, an absolute path; default the library installed with logosd, with the hash compiled into logosd), `socket_dir` (absolute, owner-only; default `<session>/run`), `workers` (1–32, default 8), `streams` (1–64, default 8), `idle_timeout_ms` (100–600000, default 30000), `route_idle_ms` (1000–86400000, default 600000). |
-| `package_manager` | The Package Manager (DECISIONS G399, G491; [PACKAGE-MANAGER.md](PACKAGE-MANAGER.md)). logosd composes it itself, as the reserved instance `package_manager` of the module `logos_package_manager`, `hosted_dynamic` with placement `process`, host-ambient, with PM App A as its `primary_contract` (from the pinned documents; with it the Runtime gives the instance a provider record, which callers find), and starts it after the operator's `orchestration.start` list. `state`: its state assignment. `artifact` (`lcn.app_artifact`, an absolute path, with the id `logos_package_manager`): a development or test override of its library; default the library installed with logosd at `<d>/../lib/logos-core/`, with the hash compiled into logosd. Each start logs which: `package_manager: the Package Manager library is <path> (package_manager.artifact)` or `(installed with logosd)`. A library with another hash under that id is adopted at the next start, keeping the instance's state and grants (DECISIONS G505; [DEPLOYMENT.md](DEPLOYMENT.md) §1). A logosd with neither refuses the section at start: "package_manager: this logosd has no Package Manager library; give package_manager.artifact" (`logosctl`'s checks cannot know which logosd starts, and leave that to the start). `storage`, its bindings, each a name and the operator instance that provides `lcn.storage_fetch` under it; `catalog`, the binding, object locator and BLAKE3-256 digest of the catalog it acquires; `resolver_limits`, all four limits or none; `limits`, its bounds. The former `instance` field is refused, naming `state` and `artifact`; an operator's old Package Manager entry and its installed state are not carried over ([DEPLOYMENT.md](DEPLOYMENT.md) §1). Absent `resolver_limits` is logosd's preset (DECISIONS G443): `partial_closure_names` 256, `dependency_depth` 32, `candidates_per_name` 256 and `assignment_attempts` 1024, the same on every platform and build and never computed from the machine (PM l.1279-1280). An operator may write up to the maxima ([CONFORMANCE.md](CONFORMANCE.md), "Resolver limits"), at the cost [DEPLOYMENT.md](DEPLOYMENT.md) §12 states. A changed preset changes the results of an unchanged configuration (PM l.1314-1315), so it comes with a recorded decision and a release note. Each start logs the limits it composed and their origin, as `package_manager: <instance> gets resolver limits partial_closure_names N, dependency_depth N, candidates_per_name N, assignment_attempts N (logosd's preset)`, or `(package_manager.resolver_limits)` when the section names them; `<instance>` is `package_manager`. |
+| `package_manager` | The Package Manager (DECISIONS G399, G491; [PACKAGE-MANAGER.md](PACKAGE-MANAGER.md)). logosd composes it itself, as the reserved instance `package_manager` of the module `logos_package_manager`, `hosted_dynamic` with placement `process`, host-ambient, with PM App A as its `primary_contract` (from the pinned documents; with it the Runtime gives the instance a provider record, which callers find), and starts it after the operator's `orchestration.start` list. `state`: its state assignment. `artifact` (`lcn.app_artifact`, an absolute path, with the id `logos_package_manager`): a development or test override of its library; default the library installed with logosd at `<d>/../lib/logos-core/`, with the hash compiled into logosd. Each start logs which: `package_manager: the Package Manager library is <path> (package_manager.artifact)` or `(installed with logosd)`. A library with another hash under that id is adopted at the next start, keeping the instance's state and grants (DECISIONS G505; [DEPLOYMENT.md](DEPLOYMENT.md) §1). A logosd with neither refuses the section at start: "package_manager: this logosd has no Package Manager library; give package_manager.artifact" (`logosctl`'s checks cannot know which logosd starts, and leave that to the start). `storage`, its bindings, each a name and the operator instance that provides `lcn.storage_fetch` under it; `catalog`, the binding, object locator and BLAKE3-256 digest of the catalog it acquires; `resolver_limits`, all four limits or none; `limits`, its bounds; `readers` (DECISIONS G498; C4), the instances whose ordinary calls observe the installed set and the catalog: absent, `lcn_call` when logosd composes it and none otherwise, and an empty list is none. Each reader is an instance this start runs, named once, never `package_manager` itself; otherwise the start is refused before anything runs: "package_manager.readers names X twice", "package_manager.readers names the Package Manager's own instance", "package_manager.readers names X, which is not an instance this start runs". The list says what the Package Manager answers, not who may call it: a reader other than `lcn_call` needs the operator's grants ([PACKAGE-MANAGER.md](PACKAGE-MANAGER.md) §15). The former `instance` field is refused, naming `state` and `artifact`; an operator's old Package Manager entry and its installed state are not carried over ([DEPLOYMENT.md](DEPLOYMENT.md) §1). Absent `resolver_limits` is logosd's preset (DECISIONS G443): `partial_closure_names` 256, `dependency_depth` 32, `candidates_per_name` 256 and `assignment_attempts` 1024, the same on every platform and build and never computed from the machine (PM l.1279-1280). An operator may write up to the maxima ([CONFORMANCE.md](CONFORMANCE.md), "Resolver limits"), at the cost [DEPLOYMENT.md](DEPLOYMENT.md) §12 states. A changed preset changes the results of an unchanged configuration (PM l.1314-1315), so it comes with a recorded decision and a release note. Each start logs the limits it composed and their origin, as `package_manager: <instance> gets resolver limits partial_closure_names N, dependency_depth N, candidates_per_name N, assignment_attempts N (logosd's preset)`, or `(package_manager.resolver_limits)` when the section names them; `<instance>` is `package_manager`. |
 | `test_hooks` | Refused by a packaged logosd (§6). `ctl_command_delay_ms` holds each socket command; `loader_failure_after_ms` has the Module Loader report its failure that long after the start, and `loader_failure_on_file` once the file it names exists, whichever comes first; `diagnostics` has the Runtime record `count` diagnostics holding `text`, as text it did not write, after the start's own are logged (§12). |
 
 ### The checks
@@ -360,7 +364,8 @@ reported with the field it concerns, and logosd exits 1.
 
 With `package_manager`, the value also carries the Package Manager's entry (G491), the top-level
 `package_manager` mark naming it (G490; [HOST-CONFIG.md](HOST-CONFIG.md)), and one `protected_inputs` entry:
-the instance and its `lcn.pm_input`, its protected realization input (G400). No other instance gets one.
+the instance and its `lcn.pm_input`, its protected realization input (G400), with the readers and this Runtime's
+id added (G498). No other instance gets one.
 
 logosd hands one `logos-core-nim.app-config.v1` value to `logos_runtime_create`. It supplies the bootstrap
 inputs through it: `work_dir`, `state_root`, `store_dir` and `endpoint_dir` from the session layout, the
@@ -403,8 +408,8 @@ open, not logosd's at assembly.
 Under `capability-authority`, logosd merges the operator's rules with its own system rules into one
 `logos-core-nim.authority-policy.v1` value for the `authority` instance. The system rules are derived
 from the reserved ids and the orchestrator's start list; they are not configurable. With `init`'s
-default configuration they are, one per line (S1–S5; S6–S8 below come with `lcn_call`; S9–S12 with
-`package_manager`):
+default configuration they are, one per line (S1–S5; S6–S8 below come with `lcn_call`; S9–S13 with
+`package_manager`, and S14 with both):
 
 ```text
 {"kind": "allow", "subject": {"modules": ["logos_capability_authority"]}, "scopes": [{"kind": "provider-access", "contract": "capability-authority", "actions": ["publish-event"], "access": {"publish_events": ["observed_change"]}}]}
@@ -452,8 +457,8 @@ When logosd composes the CLI module `lcn_call` (§7a), it adds four more:
   subscription. It may originate no execution, start or stop, on any target.
 - **S8**: `logosctl` may not retire or reconfigure `lcn_call`, whose configuration is daemon-config's; it
   may start, stop and recover it, which is the launcher's activation (§7a).
-- **What an operator rule can add.** The system rules give `lcn_call` no provider access: operator rules
-  grant it, provider by provider (§7a, "Grants"). An operator rule may also grant it more Runtime Control
+- **What an operator rule can add.** The system rules give `lcn_call` no provider access but S14's, to
+  the Package Manager: operator rules grant it the rest, provider by provider (§7a, "Grants"). An operator rule may also grant it more Runtime Control
   methods, but no rule can let it start or stop an instance, itself included: a start or stop also needs
   an execution decision for the requester, which S7 denies (so `lcn_call` never stops itself, G350). Nor
   can a rule give it another Runtime Control event: S7 denies `configuration_state_changed`,
@@ -468,8 +473,9 @@ When logosd composes the CLI module `lcn_call` (§7a), it adds four more:
   module, and neither `lcn_call` nor the `logosctl` instance calls a method outside its list.
 - **Codes:** S7 denies the consumer (`consumer-denied`), S8 protects its target (`target-denied`).
 
-With a `package_manager` section (§3), logosd adds six more, here for its instance `package_manager`
-with one binding to the instance `storage` (G402, G491):
+With a `package_manager` section (§3), logosd adds seven more, and an eighth when it also composes
+`lcn_call`, here for its instance `package_manager` with one binding to the instance `storage` (G402,
+G491, G503):
 
 ```text
 {"kind": "allow", "subject": {"instances": ["package_manager"]}, "scopes": [{"kind": "runtime-control", "methods": ["close_route", "establish_route", "list_modules", "renew_route"]}]}
@@ -478,6 +484,8 @@ with one binding to the instance `storage` (G402, G491):
 {"kind": "allow", "subject": {"instances": ["package_manager"]}, "scopes": [{"kind": "provider-access", "contract": {"commitment_model": "logos.commitment-model.2026-10", "schema_root": h'09f784c92559ee90dcbf3a47248fdaaf64abbfc29b766dc511edbd9587e72429', "hash_profile": "logos.hash-profile.2026-08.choice-index", "hash_suite": "logos.hash-suite.blake3-256"}, "actions": ["subscribe-event"], "providers": {"instances": ["storage"]}, "access": {"subscribe_events": [h'41073cd8d01b1dc9f3a6eca873f2b9e41969984b89163e2f5761d538435f3389']}}]}
 {"kind": "allow", "subject": {"instances": ["storage"]}, "scopes": [{"kind": "provider-access", "contract": {"commitment_model": "logos.commitment-model.2026-10", "schema_root": h'09f784c92559ee90dcbf3a47248fdaaf64abbfc29b766dc511edbd9587e72429', "hash_profile": "logos.hash-profile.2026-08.choice-index", "hash_suite": "logos.hash-suite.blake3-256"}, "actions": ["publish-event"], "access": {"publish_events": [h'41073cd8d01b1dc9f3a6eca873f2b9e41969984b89163e2f5761d538435f3389']}}]}
 {"kind": "deny", "subject": {"instances": ["logosctl"]}, "scopes": [{"kind": "runtime-control", "methods": ["retire_module", "update_configuration", "apply_configuration"], "targets": {"modules": ["logos_package_manager"]}}], "code": "target-denied"}
+{"kind": "allow", "subject": {"instances": ["package_manager"]}, "scopes": [{"kind": "provider-access", "contract": {"commitment_model": "logos.commitment-model.2026-10", "schema_root": h'be31982cba095863d44f541b2aa44869a34029f9d8a8c89244998a9176fca922', "hash_profile": "logos.hash-profile.2026-08.choice-index", "hash_suite": "logos.hash-suite.blake3-256"}, "actions": ["publish-event"]}]}
+{"kind": "allow", "subject": {"instances": ["lcn_call"]}, "scopes": [{"kind": "provider-access", "contract": {"commitment_model": "logos.commitment-model.2026-10", "schema_root": h'be31982cba095863d44f541b2aa44869a34029f9d8a8c89244998a9176fca922', "hash_profile": "logos.hash-profile.2026-08.choice-index", "hash_suite": "logos.hash-suite.blake3-256"}, "actions": ["discover"]}, {"kind": "provider-access", "contract": {"commitment_model": "logos.commitment-model.2026-10", "schema_root": h'be31982cba095863d44f541b2aa44869a34029f9d8a8c89244998a9176fca922', "hash_profile": "logos.hash-profile.2026-08.choice-index", "hash_suite": "logos.hash-suite.blake3-256"}, "actions": ["call", "establish-route", "renew-route", "subscribe-event"], "providers": {"instances": ["package_manager"]}}]}
 ```
 
 - **S9** (the first three): the Package Manager may call the three Runtime Control methods that hold
@@ -497,6 +505,16 @@ with one binding to the instance `storage` (G402, G491):
 - **S11**: the providers may publish that event (STORAGE-FETCH §8).
 - **S12** (G491): as S8 for `lcn_call`, `logosctl` may not retire or reconfigure the Package Manager,
   whose instance and configuration are logosd's composition; it may start, stop and recover it.
+- **S13** (G503): the Package Manager may publish its own contract's events: `installed_packages_changed`
+  to a watch and `operation_progress` to an operation, each in that call's own scope (PM §15; CA
+  l.244-247). Without it every hint and every progress publication would be skipped.
+- **S14** (G503; the owner's Q14 (a)), only when logosd composes `lcn_call`: `lcn_call` may discover the
+  Package Manager's contract, and hold routes to it, call every method of it, the operations included,
+  and subscribe to its events at the provider `package_manager` only. A discovery names a contract and
+  no provider, so a pattern with `providers` never covers one: the rule has a `discover` pattern of its
+  own, with none. This is what `logosctl package` and
+  `catalog` use (§7a); no operator rule is needed for them. Whether the Package Manager answers its
+  queries is its own decision: `lcn_call` is its default reader (`package_manager.readers`, §3).
 - **The providers** are the bindings' instances, each once and in byte order, in S9's and S10's
   `providers` and S11's subject; the contract is `lcn.storage_fetch`'s pinned
   commitment.
@@ -1146,7 +1164,7 @@ so the wait for it ends with that outcome or the command's deadline (I97).
 
 ## 7a. The `lcn_call` instance and its socket
 
-`logosctl call`, `describe`, `subscribe` and `events` are not logosctl instance commands. They go to `lcn_call`, the CLI module: a consumer-only system instance,
+`logosctl call`, `describe`, `subscribe`, `events`, `package` and `catalog` are not logosctl instance commands. They go to `lcn_call`, the CLI module: a consumer-only system instance,
 `hosted_dynamic` in a Module Host of its own, that makes the calls through its own binding and routes
 and writes the result to the user's terminal itself (DECISIONS G343–G350; Tier 5 plan A3, design (f)).
 The shell is its launcher: it hands over its stdout, stderr and each `@FILE`, names the command, and waits
@@ -1272,7 +1290,8 @@ lcn.cli_fd_role = "stdout" / "stderr" / "file"
 
 lcn.cli_command =
   lcn.cli_call_command / lcn.cli_describe_command /
-  lcn.cli_subscribe_command / lcn.cli_events_command / lcn.cli_rc_command
+  lcn.cli_subscribe_command / lcn.cli_events_command / lcn.cli_rc_command /
+  lcn.cli_package_command / lcn.cli_catalog_command
 
 ; A provider: the instance of a module, and the contract to use, an
 ; implemented interface by its root; absent, the primary contract.
@@ -1338,6 +1357,39 @@ lcn.cli_rc_command = {
   op: "rc",
   method: tstr .size (1..64),
   params: bstr .size (0..1048576),
+}
+
+; The Package Manager's methods (PACKAGE MANAGER §15; Tier 5 step 5-6b-3;
+; DECISIONS G503), on the composed logos_package_manager instance through
+; lcn_call's routes. action names the method: list (list_installed_packages,
+; every page), inspect (inspect_package), install, remove and update (their
+; *_package methods; progress follows operation_progress), handoff
+; (get_runtime_handoff for module), and watch (watch_installed_packages and
+; installed_packages_changed: a stream, ended as subscribe's is). package and
+; version name a package, or filter list; to is update's target version. The
+; bounds are the Package Manager's (PM §4, §15); its own rules check every
+; value again.
+lcn.cli_package_command = {
+  op: "package",
+  action: lcn.cli_package_action,
+  ? package: tstr .size (1..128),
+  ? version: tstr .size (1..128),
+  ? to: tstr .size (1..128),
+  ? module: tstr .size (1..64),
+  ? progress: bool,
+  ? count: uint32,
+  ? for_ms: uint32,
+}
+
+lcn.cli_package_action =
+  "list" / "inspect" / "install" / "remove" / "update" / "handoff" / "watch"
+
+; The Package Manager's catalog (list_packages, every page), package a
+; filter.
+lcn.cli_catalog_command = {
+  op: "catalog",
+  action: "list",
+  ? package: tstr .size (1..128),
 }
 
 lcn.cli_reply = {
@@ -1426,7 +1478,7 @@ lcn.cli_refused = {
 | 1 | refused before anything was called: usage, an unknown node, module, method or event, invalid arguments, a marked value on the command line, a marked method on another node, a refused frame |
 | 2 | no daemon, `lcn_call` not reachable or not started before `--timeout`, busy or closing past it, or **the outcome unknown**: a `TRANSPORT_ERROR`, `TIMEOUT` or a `CANCELLED` nobody asked for after the call was sent, or a lost `done`. The provider may have run the call. |
 | 4 | a Runtime Control failure: `NOT_AUTHORISED`, `NOT_READY`, an error arm, a continuation fault, with code and message |
-| 5 | the provider's error channel answered the call (`METHOD_NOT_FOUND`, `INVALID_PARAMS`, `MODULE_ERROR`): the code and the provider's declared text |
+| 5 | the provider's error channel answered the call (`METHOD_NOT_FOUND`, `INVALID_PARAMS`, `MODULE_ERROR`): the code and the provider's declared text; for `package` and `catalog`, also the Package Manager's error arm (below) |
 | 6 | a stream `lcn_call` or the Runtime ended: the route, its session or the subscription ended, the terminal did not keep up, or `lcn_call` is stopping (Streams, below) |
 | 130 | interrupted |
 
@@ -1438,7 +1490,8 @@ the call may have run. A route whose handle has ended is never used again.
 ### Grants
 
 The system rules give `lcn_call` the Runtime Control methods it needs and the three events `events`
-follows (S6, the events rule, §5); they give it no provider access. To call a provider, an operator rule
+follows (S6, the events rule, §5); of the providers they grant it only the Package Manager (S14; "Package
+and catalog commands", below). To call another provider, an operator rule
 allows `discover` on **every exact contract view** of that provider (`describe_provider` answers all of
 them or nothing; R l.413-416, l.428, l.90-91), and `establish-route`, `renew-route` and `call` (or
 `subscribe-event`) on the contract called (R l.1642):
@@ -1522,6 +1575,93 @@ the snapshot").
   MiB; when it is full, the stream ends (6) rather than lose events silently. The message goes to stderr
   whatever the output (in JSON, its envelope), since stdout waits for the same reader; `lcn_call` waits
   at most a second for room there.
+
+### Package and catalog commands (G503)
+
+`logosctl package` and `logosctl catalog` call the Package Manager logosd composes (§3) through
+`lcn_call`, on S14's grants (§5). `lcn_call` types each request from the contract the Package Manager
+describes, as `call` does (it imports none of the Package Manager's types), and checks it before
+sending: a value past a bound or a missing name is refused (1) with the request's fields.
+
+| Command | Method | Text output |
+|---|---|---|
+| `catalog list [PACKAGE]` | `list_packages`, every page | `NAME VERSION (KIND)` per entry, or `the catalog lists no packages` |
+| `package list [PACKAGE]` | `list_installed_packages`, every page | `NAME VERSION` per record, or `no packages installed` |
+| `package inspect PACKAGE [VERSION]` | `inspect_package` | the inspection, in diagnostic notation |
+| `package install PACKAGE [VERSION] [--progress]` | `install_package` | `installed NAME VERSION` |
+| `package remove PACKAGE VERSION [--progress]` | `remove_package` | `NAME VERSION is not installed` |
+| `package update PACKAGE VERSION [--to VERSION] [--progress]` | `update_package` | `installed NAME VERSION` |
+| `package handoff PACKAGE VERSION MODULE` | `get_runtime_handoff` | the handoff, in diagnostic notation |
+| `package watch [--count N] [--for DURATION]` | `watch_installed_packages`, with lists | a line at its start and at each change |
+
+In JSON the envelope's `result` is the response; a list's is `{"packages": [...]}` with every page's
+items. `package watch` writes `{"installed": [{"package": NAME, "version": VERSION}, ...]}` per line,
+`installed: NAME VERSION, ...` in text.
+
+- **Pages.** A list reads every page, in order. When the Package Manager no longer holds the listing
+  (`invalid-request` for its cursor: a commit or a catalog change between two pages), the listing starts
+  over, at most 3 times; then it fails (5) saying the list kept changing. So that a start over writes
+  nothing twice, `lcn_call` collects a list whole before it writes anything: what it holds is the
+  installed set, or the catalog's entries, all at once.
+- **`lcn_call`'s own bounds.** The Package Manager serves a reader at most 2 page calls (list pages and
+  handoffs) and 4 watches in flight, 8 and 16 in all (PACKAGE-MANAGER.md §15), and every logosctl
+  command is the one caller `lcn_call`. So `lcn_call` holds a third page call, or a fifth watch, until
+  one of its own ends, rather than send it to be refused; a held call past `--timeout` ends (2) with
+  nothing sent. A fifth watch says on stderr that it waits (`notice: lcn_call has 4 watches open: this
+  one waits for one of them to end`; in JSON `{"notice": ...}`), and its `--for` bounds the wait: past
+  it, it ends (2) with nothing sent. It cannot see the other readers' calls.
+- **A refusal.** A reader's method answers `MODULE_ERROR` with no message at a query bound in all, to a
+  caller that is not one of `package_manager.readers`, and when it failed; `lcn_call` cannot tell these
+  apart and says so (5): "the Package Manager refused the query: it is at its query bound (8 page calls
+  or 16 watches in all), lcn_call is not one of its readers, or it failed; the Package Manager's log says
+  which". The log has one line naming the caller, the method and the cause, limited as the next item says.
+- **The Package Manager's lines a caller can repeat.** Its lines for a refused call, a watch, a call the
+  Runtime cancels and a reader's handoff that fails are limited for each caller and kind of line, in a
+  window of a minute from the kind's first line: a refusal is written once a window, and the other lines 8
+  times (a watch admitted, cancelled by the Runtime or ended; an operation or a handoff cancelled by the
+  Runtime; a reader's handoff that failed).
+  The rest are counted, and the kind's first line after the window carries the count (`… (12 more like it
+  since its last line)`); counts not written yet are written as the Package Manager stops. It holds at
+  most 1024 kinds: past that, with none whose window has passed, a line of a new kind is counted into one
+  line for all callers ("lines of a new kind are counted, not written: 1024 kinds of line are held"),
+  written at most once a minute. An operation's own lines are not limited: at most one end line for each
+  `inspect_package`, `install_package`, `remove_package` or `update_package`, and its limit or fault
+  lines; so a module allowed to call those methods writes the log at the rate of its operations. Neither
+  is a reader's list's detail line when the installed state cannot be read (G495). A hosted module's own
+  stderr reaches this log unfiltered in any case.
+- **Package errors.** The Package Manager's error arm (`package-not-installed`, `package-in-use`, …; PM
+  §14) is exit 5 with its code and its declared text.
+- **Remove.** `remove_package` succeeds with `{}` whether or not the package was installed (PM §15
+  l.1693-1699), so `lcn_call` cannot tell the two apart. `package remove` prints what is true after
+  either, `NAME VERSION is not installed`, and exits 0.
+- **Progress.** With `--progress`, `lcn_call` subscribes to `operation_progress`, then sends the
+  operation with a fresh `progress_key`, and writes each publication for that key as it comes: on
+  stderr in either format, since stdout carries the one result (`progress: fetching 1024 of 34497
+  bytes`; in JSON `{"progress": {"phase": ..., "bytes_completed": ..., "bytes_total": ...}}`). The
+  Package Manager publishes it in the operation's own scope, which reaches only the session that carried
+  the request (TRANSPORT §5.2), so the subscription and the call share one route, whose access names
+  both. A pending publication is replaced by the next and the last is dropped at the answer, so not
+  every phase is shown. A progress stream that ends only stops the lines (PKG-0573): the outcome is the
+  call's, and a cancel, a timeout or a lost route after sending is exit 2, the outcome unknown, never a
+  rollback. Progress is a reader's: for another caller the operation runs with no lines.
+- **The watch.** A hint only says to look again, and a submitted watch proves no observation boundary
+  (PKG-0554), so `lcn_call` lists the installed packages when the watch starts, after each hint, every
+  30 s, and after a lost watch, which it makes again (PKG-0555); it writes a line when the list differs
+  from the last one it wrote. The hints come in the watch's own scope, so, as for progress, the watch and
+  its subscription share a route, and both end with that route's session ("One route session", above).
+- **A lost watch.** A watch that ended, whose route or hints were lost, or whose Package Manager stopped
+  or restarts (`NOT_READY`, a transport failure, a timeout, a cancel nobody asked for) is made again, on
+  the provider looked up again, every second for up to 30 s from the loss, and lists once it is. Each
+  loss writes one notice on stderr (`notice: the watch on the Package Manager was lost (…); it is made
+  again for up to 30 s`; in JSON `{"notice": ...}`). A Package Manager that is back within the 30 s
+  goes on being watched; one that is not ends the watch with the last failure.
+- **Its end.** As `subscribe`'s: `--count` lines or `--for` (0), the launcher's EOF (130), or a failure:
+  a refusal or a package error (5), a list that failed with anything else, a watch not made again within
+  30 s of its loss, or a failure before the watch was first made, as for `package list`. A watch counts
+  as a stream (`cli.streams`).
+- **Who can.** S14 includes the operations: every process of logosd's user can install, update and
+  remove packages through `lcn_call`, as it can stop modules through the logosctl instance (§7). Keep
+  the session directory to the users who may.
 
 ### Limits
 

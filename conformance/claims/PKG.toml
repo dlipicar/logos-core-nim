@@ -122,16 +122,10 @@ default = "deferred:tier-5"
 "PKG-0620" = "claimed"
 "PKG-0624" = "claimed"
 "PKG-0628" = "claimed"
-# Copies of rules that 5-8 (the Runtime handoff) and 5-6b (the lists, the watch and the events) build;
-# deferred by name with their twins.
+# Copies of rules that 5-8 (the Runtime handoff) builds; deferred by name with their twins. 5-6b's (the
+# lists, the watch and the events) are claimed with its parts below.
 "PKG-0626" = "deferred:tier-5"
 "PKG-0627" = "deferred:tier-5"
-"PKG-0632" = "deferred:tier-5"
-"PKG-0634" = "deferred:tier-5"
-"PKG-0635" = "deferred:tier-5"
-"PKG-0636" = "deferred:tier-5"
-"PKG-0638" = "deferred:tier-5"
-"PKG-0648" = "deferred:tier-5"
 # Step 5-6a-2, the system-service binding (DECISIONS G492, G493; I141): `get_runtime_handoff` answers the
 # Runtime's own binding, its response `{handoff}` or `{error}` (PKG-0380 and its copy PKG-0650), and
 # `package-not-installed` for an identity not installed (PKG-0388); tests/test_system_binding.nim.
@@ -178,9 +172,103 @@ default = "deferred:tier-5"
 "PKG-0645" = "claimed"
 "PKG-0646" = "claimed"
 "PKG-0647" = "claimed"
+# Step 5-6b-1, readers, cursors and the lists (DECISIONS G498, G499, G500; I143; C4): the facade
+# answers list_packages and list_installed_packages to the readers the protected input names, checked
+# on every call against the Runtime-authenticated caller (tests/test_pm_queries.nim); a reader's
+# get_runtime_handoff is told from the binding's (tests/test_system_binding.nim). Visibility is all or
+# nothing (PKG-0530), so a cursor or a count hides nothing (PKG-0386) and a retained record needs no
+# fact beyond the reader list (PKG-0542). The retention policy is pm/cursors.nim's (PKG-0538..0541),
+# stated in docs/PACKAGE-MANAGER.md §15. PKG-0638 and PKG-0648 are App A's copies of the two responses
+# (PKG-0368, PKG-0378). PKG-0558's page-job half is 5-6b-1's; it is claimed below with 5-6b-2's watches.
+"PKG-0368" = "claimed"
+"PKG-0378" = "claimed"
+"PKG-0381" = "claimed"
+"PKG-0383" = "claimed"
+"PKG-0384" = "claimed"
+"PKG-0385" = "claimed"
+"PKG-0386" = "claimed"
+"PKG-0387" = "claimed"
+"PKG-0525" = "claimed"
+"PKG-0526" = "claimed"
+"PKG-0527" = "claimed"
+"PKG-0528" = "claimed"
+"PKG-0529" = "claimed"
+"PKG-0530" = "claimed"
+"PKG-0531" = "claimed"
+"PKG-0532" = "claimed"
+"PKG-0533" = "claimed"
+"PKG-0538" = "claimed"
+"PKG-0539" = "claimed"
+"PKG-0540" = "claimed"
+"PKG-0541" = "claimed"
+"PKG-0542" = "claimed"
+"PKG-0638" = "claimed"
+"PKG-0648" = "claimed"
 "PKG-0649" = "claimed"
-# §15.2: progress phases; TXT-0497 and TXT-0498 ride it to 5-6b (G362).
-"PKG-0568" = "deferred:tier-5"
+# Step 5-6b-2, the watch and progress (DECISIONS G501, G502; I144): a reader's watch is one hint
+# (installed_packages_changed, {}) through its own invocation's scope per landed commit, coalesced while one is
+# in flight, at most 4 per caller and 16 in all, until the Runtime cancels it, its session ends, a hint is not
+# delivered or the Package Manager stops (tests/test_pm_queries.nim); a system-service session is refused it by
+# the Runtime (PKG-0544, tests/test_system_binding.nim). A reader's progress_key has operation_progress through
+# the operation's own scope, the key echoed; the engine's phases and counters, and TXT-0497 and TXT-0498 with
+# PKG-0568, are tests/test_pm_install.nim's. PKG-0520 and PKG-0522..0524 are §15's rules for the events and the
+# watch's response, PKG-0632 and PKG-0634..0636 App A's copies. PKG-0547..0549 and PKG-0560 are claimed by
+# inspection (conformance/inspection/PKG.toml). PKG-0554, PKG-0555 and PKG-0573 are the consumer's duties,
+# lcn_call's, claimed in 5-6b-3 (below). PKG-0559 is recorded as not met (G504, the owner's Q11): its own entry
+# defers it by name (below).
+"PKG-0520" = "claimed"
+"PKG-0522" = "claimed"
+"PKG-0523" = "claimed"
+"PKG-0524" = "claimed"
+"PKG-0544" = "claimed"
+"PKG-0545" = "claimed"
+"PKG-0546" = "claimed"
+"PKG-0547" = "claimed"
+"PKG-0548" = "claimed"
+"PKG-0549" = "claimed"
+"PKG-0550" = "claimed"
+"PKG-0551" = "claimed"
+"PKG-0552" = "claimed"
+"PKG-0553" = "claimed"
+"PKG-0556" = "claimed"
+"PKG-0557" = "claimed"
+"PKG-0558" = "claimed"
+"PKG-0560" = "claimed"
+"PKG-0561" = "claimed"
+"PKG-0562" = "claimed"
+"PKG-0564" = "claimed"
+"PKG-0565" = "claimed"
+"PKG-0566" = "claimed"
+"PKG-0567" = "claimed"
+"PKG-0568" = "claimed"
+"PKG-0569" = "claimed"
+"PKG-0570" = "claimed"
+"PKG-0571" = "claimed"
+"PKG-0572" = "claimed"
+"PKG-0632" = "claimed"
+"PKG-0634" = "claimed"
+"PKG-0635" = "claimed"
+"PKG-0636" = "claimed"
+# Step 5-6b-3, the consumer's duties in lcn_call (DECISIONS G503; I148): `logosctl package watch` lists after the
+# watch is made and after each hint, never taking a hint or a submission for the state (PKG-0554,
+# tests/test_logosd_pm.nim). PKG-0555 (the periodic refresh and the resynchronization) through the test hook
+# LCN_TEST_CLI_WATCH (tests/test_logosd_pm.nim); PKG-0573 (a cancel, a timeout or a lost route is the outcome
+# unknown, and an install goes on without progress) in tests/test_cli.nim and tests/test_logosd_pm.nim.
+"PKG-0554" = "claimed"
+"PKG-0555" = "claimed"
+"PKG-0573" = "claimed"
+# PKG-0559 (ordinary observation never blocks or consumes capacity reserved for Runtime-owned system-service
+# progress, the runtime handoff's retrieval included) is recorded as not met (DECISIONS G504, the owner's Q11,
+# 2026-11-23): while the host loop's 64 MiB output budget is full, `commit` waits on the module thread and no
+# reply of the Package Manager completes, the binding's handoff included. It is deferred by name until the held
+# large-reply core item lands after the pause, with Fable's five conditions (G493): (1) piece (b), the commit's
+# wait and the response check off the module thread; (2) the binding's own worker (built, G493); (3) room for
+# the system session in both output pools, submitted and committed (the held item's, with piece (b), ruling B);
+# (4) the bound on ordinary handoffs (built: a reader's handoff is a page job, G500); (5) the system session's
+# completions not starved of host workers under piece (b). Its claim's test is the held item's acceptance test:
+# both output pools held full (eight stalled connections), ordinary handoff calls waiting, and a handoff answered
+# within a bound.
+"PKG-0559" = "deferred:tier-5"
 # §2: the Nix profile comes with step 5-10. The catalog, Storage and backend metadata a
 # manifest must win over (PKG-0019, PKG-0021) are claimed through "§2" by step 5-3b-1:
 # tests/test_pm_driver.nim (DECISIONS G401, G405).

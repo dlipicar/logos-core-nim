@@ -151,6 +151,10 @@ lcn.dc_package_manager = {
   catalog: lcn.pm_catalog_ref,
   ? resolver_limits: lcn.pm_resolver_limits,
   ? limits: lcn.pm_limits,
+  ; [G498] C4's readers: instances this start runs whose ordinary calls may
+  ; observe the installed set and the catalog. Absent: lcn_call when logosd
+  ; composes it, else none. Empty: none.
+  ? readers: [* tstr .size (1..128)],
 }
 
 ; Accepted only by a logosd built with lcnTestHooks, with the development

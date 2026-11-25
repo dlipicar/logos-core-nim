@@ -11,6 +11,13 @@ lcn.pm_input = {
   catalog: lcn.pm_catalog_ref,
   resolver_limits: lcn.pm_resolver_limits,
   ? limits: lcn.pm_limits,
+  ; [G498] C4's readers: the module instances of this Runtime whose ordinary
+  ; calls may observe the installed set and the catalog (the two lists, the
+  ; watch, progress and get_runtime_handoff). Unique, by rule; with readers,
+  ; runtime_instance_id is required (the Runtime a reader's calls come from).
+  ; Absent: no reader. Fixed for the realization.
+  ? readers: [* tstr .size (1..128)],
+  ? runtime_instance_id: tstr .size (1..128),
 }
 
 ; One Storage binding: the name an LGX source's `storage` names

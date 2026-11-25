@@ -6,7 +6,7 @@
 import std/[os, sequtils, strutils, tables]
 import unittest2
 import logos_sdk/cbor
-import ../src/logos_core/package/[errors, lgx, records, resolver]
+import ../src/logos_core/package/[errors, lgx, manifest, records, resolver]
 import ../src/logos_core/pm/input_types as pm_input_types
 import ./support/[lgxbuild, pmworld]
 
@@ -1224,4 +1224,324 @@ when defined(posix):
         check s.resultOf(4).errorCode == "package-not-installed"
         check s.w.e.heldSnapshots == 0
         s.w.worker.close()
+        store.close()
+
+# The engine's page jobs (5-6b-1) ----------------------------------------------------------
+
+suite "the engine's page jobs (5-6b-1; G499, G500)":
+  let
+    a = Origin(runtime: "rt", instance: "a")
+    b = Origin(runtime: "rt", instance: "b")
+
+  proc record(package, version: string, rid: string): SnapRecord =
+    var c = ManifestCommitment(commitmentModel: "m", hashProfile: "p", hashSuite: "s")
+    c.valueRoot[0] = byte(rid.len)
+    SnapRecord(
+      package: InstalledPackage(
+        identity: PackageIdentity(package: package, version: version), commitment: c
+      ),
+      rid: rid,
+      generation: 1,
+    )
+
+  proc pageOf(a: Command): CborValue =
+    ## A `cmAnswer`'s page, decoded.
+    doAssert a.kind == cmAnswer and a.answer.kind == oaEncoded, $a.kind
+    let bytes = a.answer.encoded
+    decodeCbor(bytes.toOpenArrayByte(0, bytes.high)).get
+
+  func codeOf(a: Command): string =
+    ## The answer's `package_error` code; empty for any other answer.
+    if a.kind == cmAnswer and a.answer.kind == oaResponse:
+      let e = a.answer.response.lookup("error")
+      if e.isSome:
+        return e.get.lookup("code").get(cbor("")).getText.get("")
+
+  proc world(): World =
+    result = newWorld(catalogBytes(@[entryOf("app", "1.0.0")]))
+    result.emit(result.e.start())
+    result.e.setSnapshot(
+      Snapshot(
+        sequence: 1,
+        records: @[
+          record("app", "1.0.0", "r1"),
+          record("lib", "1.2.0", "r2"),
+          record("lib", "1.3.0", "r3"),
+        ],
+      )
+    )
+
+  proc last(w: var World): Command =
+    w.answers[^1]
+
+  test "[PKG-0558] [IMPL-DECISION G500] page jobs: 2 in flight per origin and 8 in all, readers' handoffs among them; past either bound MODULE_ERROR naming it; a cancel frees its place once the job has ended":
+    var w = world()
+    var id = 0'u64
+    proc list(w: var World, o: Origin): uint64 =
+      inc id
+      w.emit(
+        w.e.listInstalled(id, o, Opt.none(string), Opt.none(string), Opt.none(uint16))
+      )
+      id
+
+    discard w.list(a)
+    discard w.list(a)
+    check w.count({cmPage}) == 2
+    discard w.list(a)
+    check w.last.answer.kind == oaModuleError
+    check "2 in flight for this caller" in w.last.answer.reason
+    for i in 0 ..< 3:
+      let o = Origin(runtime: "rt", instance: "o" & $i)
+      discard w.list(o)
+      inc id
+      w.emit(
+        w.e.readerHandoff(id, o, PackageIdentity(package: "app", version: "1.0.0"), "m")
+      )
+    check w.e.pagesRunning == 8
+    check w.count({cmPage}) == 8
+    let held = w.e.heldSnapshots
+    let n = w.answers.len
+    discard w.list(b)
+    check w.answers.len == n + 1
+    check w.last.answer.kind == oaModuleError
+    check "8 in flight in all" in w.last.answer.reason
+    # A reader's handoff is refused at the bound too, and never reaches the first worker.
+    inc id
+    w.emit(
+      w.e.readerHandoff(id, b, PackageIdentity(package: "app", version: "1.0.0"), "m")
+    )
+    check w.last.answer.kind == oaModuleError
+    # Readers' handoffs went to the read-only worker, none to the first.
+    check w.queue.filterIt(it.kind == cmPage).countIt(it.job.kind == wjReaderHandoff) ==
+      3
+    # [Fable §17.3 point 1] A cancel: the job still runs on the read-only worker, so it
+    # keeps its place and its snapshot, and the bound still refuses.
+    w.emit(w.e.cancel(1))
+    check w.e.pagesRunning == 8
+    check w.e.heldSnapshots == held
+    discard w.list(b)
+    check w.last.answer.kind == oaModuleError
+    check "8 in flight in all" in w.last.answer.reason
+    # The worker answers it: nothing is answered for it, and its place is free.
+    let job = w.take({cmPage})
+    check job.job.request == 1
+    let n2 = w.answers.len
+    w.handle(
+      worked(
+        WorkerResult(
+          kind: wrPage, request: 1, count: 1, reply: textOf(encodeCbor(cbor(1'u64)))
+        )
+      )
+    )
+    check w.answers.len == n2
+    check w.e.pagesRunning == 7
+    check w.e.heldSnapshots == held - 1
+    discard w.list(b)
+    check w.e.pagesRunning == 8
+
+  test "[PKG-0558] [IMPL-DECISION G500] a reader that lists and cancels in a loop is refused once its places are full, and the read-only worker's queue holds no more of its jobs than its places":
+    var w = world()
+    var queued: seq[uint64]
+    var refused = 0
+    for id in 1'u64 .. 10'u64:
+      let n = w.count({cmPage})
+      w.emit(
+        w.e.listInstalled(id, a, Opt.none(string), Opt.none(string), Opt.none(uint16))
+      )
+      if w.count({cmPage}) > n:
+        queued.add(id)
+      else:
+        check w.last.answer.kind == oaModuleError
+        check "2 in flight for this caller" in w.last.answer.reason
+        inc refused
+      w.emit(w.e.cancel(id))
+    check queued == @[1'u64, 2]
+    check refused == 8
+    check w.count({cmPage}) == PagesPerOrigin
+    check w.e.pagesRunning == PagesPerOrigin
+    # The worker answers the first: dropped, and one place is free for the next list.
+    discard w.take({cmPage})
+    let n = w.answers.len
+    w.handle(
+      worked(
+        WorkerResult(
+          kind: wrPage, request: 1, count: 1, reply: textOf(encodeCbor(cbor(1'u64)))
+        )
+      )
+    )
+    check w.answers.len == n
+    check w.e.pagesRunning == 1
+    w.emit(
+      w.e.listInstalled(11, a, Opt.none(string), Opt.none(string), Opt.none(uint16))
+    )
+    check w.e.pagesRunning == 2
+    check w.count({cmPage}) == 2
+    check w.e.heldSnapshots == 2
+
+  test "[PKG-0533] [PKG-0384] [PKG-0387] [IMPL-DECISION G499] [IMPL-DECISION G500] a page's answer: next_cursor exactly when a matching record remains; its continuation goes on; after a commit it is invalid-request":
+    var w = world()
+    w.emit(w.e.listInstalled(1, a, Opt.some("lib"), Opt.none(string), Opt.some(1'u16)))
+    let job = w.take({cmPage}).job
+    check job.kind == wjPage
+    check job.page.mapIt(it.identity.version) == @["1.3.0"]
+    w.handle(
+      worked(
+        WorkerResult(
+          kind: wrPage, request: 1, count: 1, reply: textOf(encodeCbor(cbor(3'u64)))
+        )
+      )
+    )
+    let first = w.answers[^1].pageOf
+    check first.lookup("packages").get.items == @[cbor(3'u64)]
+    let token = first.lookup("next_cursor").get.getText.get
+    check w.e.cursorsHeld == 1
+    check w.e.heldSnapshots == 0
+    # The continuation: the last lib, then no cursor.
+    w.emit(w.e.listInstalled(2, a, Opt.some("lib"), Opt.some(token), Opt.some(1'u16)))
+    let job2 = w.take({cmPage}).job
+    check job2.page.mapIt(it.identity.version) == @["1.2.0"]
+    w.handle(
+      worked(
+        WorkerResult(
+          kind: wrPage, request: 2, count: 1, reply: textOf(encodeCbor(cbor(2'u64)))
+        )
+      )
+    )
+    check w.answers[^1].pageOf.lookup("next_cursor").isNone
+    check w.e.cursorsHeld == 0
+    # Another origin, the same token: invalid-request, and nothing more said.
+    w.emit(w.e.listInstalled(3, a, Opt.none(string), Opt.none(string), Opt.some(1'u16)))
+    discard w.take({cmPage})
+    w.handle(
+      worked(
+        WorkerResult(
+          kind: wrPage, request: 3, count: 1, reply: textOf(encodeCbor(cbor(1'u64)))
+        )
+      )
+    )
+    let t3 = w.answers[^1].pageOf.lookup("next_cursor").get.getText.get
+    w.emit(w.e.listInstalled(4, b, Opt.none(string), Opt.some(t3), Opt.some(1'u16)))
+    check w.answers[^1].codeOf == "invalid-request"
+    # A commit supersedes the snapshot: the cursor has expired.
+    w.e.setSnapshot(Snapshot(sequence: 2, records: @[record("app", "1.0.0", "r1")]))
+    w.emit(w.e.listInstalled(5, a, Opt.none(string), Opt.some(t3), Opt.some(1'u16)))
+    check w.answers[^1].codeOf == "invalid-request"
+    check w.e.cursorsHeld == 0
+
+  test "[PKG-0387] [IMPL-DECISION G499] the 1 s timer reclaims expired cursors while any is held":
+    var w = world()
+    w.emit(w.e.listInstalled(1, a, Opt.none(string), Opt.none(string), Opt.some(1'u16)))
+    discard w.take({cmPage})
+    w.handle(
+      worked(
+        WorkerResult(
+          kind: wrPage, request: 1, count: 1, reply: textOf(encodeCbor(cbor(1'u64)))
+        )
+      )
+    )
+    check w.e.cursorsHeld == 1
+    let t = w.timerFor(1000)
+    w.clock.ms = IdleMs
+    w.handle(fired(t))
+    check w.e.cursorsHeld == 0
+    check not w.has({cmTimer})
+
+  test "[SPEC PM l.1640-1641] a list's limit outside 1 to 1000 is invalid-request, before anything is read":
+    var w = world()
+    w.emit(w.e.listInstalled(1, a, Opt.none(string), Opt.none(string), Opt.some(0'u16)))
+    check w.answers[^1].codeOf == "invalid-request"
+    w.emit(
+      w.e.listInstalled(2, a, Opt.none(string), Opt.none(string), Opt.some(1001'u16))
+    )
+    check w.answers[^1].codeOf == "invalid-request"
+    check not w.has({cmPage})
+
+# The watch's hints and the operations' progress (5-6b-2) -------------------------------
+
+when defined(posix):
+  proc progressOf(s: Scene, request: uint64): seq[Command] =
+    s.w.queue.filterIt(it.kind == cmProgress and it.progressOf == request)
+
+  proc changed(s: Scene): int =
+    s.w.queue.countIt(it.kind == cmChanged)
+
+  suite "the watch's hints and the operations' progress (5-6b-2; G501, G502)":
+    test "[PKG-0564] [PKG-0568] [PKG-0569] [PKG-0570] [TXT-0497] [TXT-0498] [IMPL-DECISION G502] an install submitted with progress reports resolving first, then for each archive fetching (bytes read of the size stat_object gave), verifying (none, then all of its bytes) and installing (no counters); one submitted without reports nothing; [IMPL-DECISION G501] each landed commit is one cmChanged, and a no-op none":
+      withStore(
+        "progress",
+        scene([(entryOf("app", "1.0.0"), app100), (entryOf("lib", "1.0.0"), lib100)]),
+      ):
+        s.w.emit(s.w.e.submit(1, install("app"), progress = true))
+        s.w.serve(s.objects, s.calls)
+        check s.encodedOf(1).installedIdentity == ident("app", "1.0.0")
+        let p = s.progressOf(1)
+        checkpoint $p.mapIt((it.phase, it.completed, it.total))
+        check p.len > 0
+        if p.len > 0:
+          check p[0].phase == ppResolving
+          check p[0].completed.isNone and p[0].total.isNone
+        check p.allIt(it.phase in {ppResolving, ppFetching, ppVerifying, ppInstalling})
+        check p.countIt(it.phase == ppResolving) == 1
+        let sizes = [uint64(app100.len), uint64(lib100.len)]
+        let fetching = p.filterIt(it.phase == ppFetching)
+        check fetching.len >= 2
+        check fetching.allIt(
+          it.completed.isSome and it.total.isSome and it.total.get in sizes and
+            it.completed.get <= it.total.get
+        )
+        let verifying = p.filterIt(it.phase == ppVerifying)
+        check verifying.len == 4
+        for size in sizes:
+          check fetching.anyIt(it.total.get == size and it.completed.get == size)
+          check verifying.anyIt(
+            it.completed == Opt.some(0'u64) and it.total == Opt.some(size)
+          )
+          check verifying.anyIt(
+            it.completed == Opt.some(size) and it.total == Opt.some(size)
+          )
+        let installing = p.filterIt(it.phase == ppInstalling)
+        check installing.len == 2
+        check installing.allIt(it.completed.isNone and it.total.isNone)
+        check s.changed == 2
+        s.submit(2, install("app"))
+        s.w.serve(s.objects, s.calls)
+        check s.encodedOf(2).installedIdentity == ident("app", "1.0.0")
+        check s.progressOf(2).len == 0
+        check s.changed == 2
+        store.close()
+
+    test "[PKG-0564] [PKG-0568] [TXT-0498] [IMPL-DECISION G502] a remove submitted with progress reports removing, with no counters; [IMPL-DECISION G501] its commit is one cmChanged, and a remove of what is not installed none":
+      withStore(
+        "progress-remove",
+        scene([(entryOf("app", "1.0.0"), app100), (entryOf("lib", "1.0.0"), lib100)]),
+      ):
+        s.submit(1, install("app"))
+        s.w.serve(s.objects, s.calls)
+        check s.changed == 2
+        s.w.emit(s.w.e.submit(2, remove("app", "1.0.0"), progress = true))
+        s.w.serve(s.objects, s.calls)
+        check s.resultOf(2).errorCode == ""
+        let p = s.progressOf(2)
+        check p.mapIt(it.phase) == @[ppRemoving]
+        check p.allIt(it.completed.isNone and it.total.isNone)
+        check s.changed == 3
+        s.w.emit(s.w.e.submit(3, remove("app", "1.0.0"), progress = true))
+        s.w.serve(s.objects, s.calls)
+        check s.resultOf(3).errorCode == ""
+        check s.progressOf(3).len == 0
+        check s.changed == 3
+        store.close()
+
+    test "[IMPL-DECISION G502] a cancelled operation reports nothing more":
+      withStore(
+        "progress-cancel",
+        scene([(entryOf("app", "1.0.0"), app100), (entryOf("lib", "1.0.0"), lib100)]),
+      ):
+        s.w.emit(s.w.e.submit(1, install("app"), progress = true))
+        let before = s.progressOf(1).len
+        check before >= 1
+        s.w.emit(s.w.e.cancel(1))
+        s.w.serve(s.objects, s.calls)
+        check s.progressOf(1).len == before
+        check s.changed == 0
         store.close()

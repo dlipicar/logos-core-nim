@@ -7820,6 +7820,48 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   the route authority allows. `list_packages`, `list_installed_packages`, `watch_installed_packages` and
   `get_runtime_handoff` are refused to every ordinary caller until 5-6b's readers: `MODULE_ERROR` with no message
   and no detail, and one operator log line, "package-manager: METHOD refused for CALLER: not a reader".
+  - **The lines are limited for each caller [IMPL] (5-6b, Fable §17.3 point 3 and §17.7):** under `allow-all` any
+    module may call the observation methods, so a line was a write to the operator's log at the caller's own rate.
+    What the limit gives is narrower than §17.3 point 3 put it (Fable's correction, §17.8.4): it does not guard
+    logosd's log against a hosted module, whose stderr passes into it unfiltered (DAEMON.md); it keeps a caller the
+    Package Manager refuses from driving the Package Manager's own lines, and a remote caller (5-7a), which has no
+    stderr here, from writing through them.
+    Now (`pm/linelimit.nim`) each line a caller can repeat has a kind and a burst: in a window of 60 s
+    (`LineWindowMs`) from a kind's first line, `burst` lines of it are written and the rest counted; the first after
+    the window is written with the count ("… (N more like it since its last line)", N not written). A refusal's kind
+    is its whole line, with a burst of 1 (`RefusalBurst`), so one caller's methods and causes (not a reader, each
+    bound) stay apart (Fable §11.2, point 1). Every reason reaching `refuse` is fixed text, never request data: the
+    facade's literals and the engine's `MODULE_ERROR` reasons for a query (the bounds, the cursor bound, the random
+    source, the installed state's), so a caller cannot make kinds at will.
+  - **The lines a caller can repeat [IMPL] (§17.7):** each goes through the limiter, with a kind apart from the
+    line: the method, the event and the caller, so the figures a line carries are not in its kind. With a burst of 8
+    (`ReaderLineBurst`): a watch admitted ("…: N of 4 for this caller, M of 16 in all"), cancelled by the Runtime or
+    ended (a hint not delivered); an operation (install, remove, update) and a reader's handoff cancelled by the
+    Runtime, each naming the caller; and the engine's line when a reader's handoff fails, "get_runtime_handoff failed
+    for module instance I of Runtime R: …", whose kind leaves out what failed (it carries what the reader asked
+    for). The shell holds the limiter (`Shell.note`; the engine's `cmLog` with a `noteKind`), so the facade and the
+    engine share it.
+  - **What the limit covers, and what it does not [IMPL] (Fable §17.8):** it covers every line written for a call
+    the Package Manager refuses, for a watch (admitted, cancelled, ended), for a call the Runtime cancels, and for a
+    reader's handoff that fails. It does not cover an operation's own lines, written at most once for each
+    `inspect_package`, `install_package`, `remove_package` or `update_package` (one cancelled before it starts
+    writes none): its end line (G449), the resolver-limit and operation-bound lines (G399, G477), the
+    operation-deadline line, a missing inspection record, and a staging, commit or spool fault; nor a reader's list
+    while the installed state cannot be read (one detail line per call, beside its limited refusal line). So a
+    caller the route authority lets call one of those four methods can write the log at the rate of its operations;
+    under `allow-all` that is every module. This is a stated limit. Such a caller may already inspect or change the
+    packages; a hosted module writes logosd's log through its own stderr in any case (DAEMON.md); and the end line
+    stays whole for the figures G449 keeps it for. No spec asks for these lines: the required record of a call is
+    the Runtime's (RUNTIME l.1672). The lines of the Runtime's own session (the binding's handoff cancelled, or
+    failed) are plain too.
+  - **The kinds are bounded (§17.7):** at 1024 kinds (`LineKinds`), those whose window passed are given up first,
+    each with its count, by a sweep that runs at most once a window (`lastSweep`), so a new kind past the bound does
+    not walk the table each time. When none can be given up, a new kind's line is counted into one overflow kind for
+    all callers ("lines of a new kind are counted, not written: 1024 kinds of line are held"), itself a line a
+    window and given up by a sweep like the others, so the table never passes 1024 kinds however many callers there
+    are (remote callers may be without bound from 5-7a). One overflow kind per caller would be one more entry per
+    caller. The counts not written are written as the shell closes (`closeShell`, from `destroyModule`), each as the
+    last line held with the number of the others.
   - A provider cannot answer `NOT_AUTHORISED`, and the Runtime does not make it either: that would need a daemon rule
     denying the observations to every consumer not listed, which works under a Capability Authority policy and not
     under `allow-all`. Not built.
@@ -7827,8 +7869,17 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
     package is installed, where its files are, and its configuration schema and default. It is served to the system
     service caller from 5-6a-2.
   - The mutations' own results disclose the identity they touch to whoever may mutate; C4 is about the observations.
-- **Tests:** `test_pm_module` (each refusal and its line), `test_logosd_pm` (through `lcn_call`).
-- **Status:** built 5-6a-1 (I140).
+- **Tests:** `test_pm_module` (each refusal and its line); `test_logosd_pm` showed it through `lcn_call` until
+  5-6b-1 made `lcn_call` the default reader (G498), and now lists through it; `test_pm_queries` (the limit: the
+  limiter with its clock given: a burst of 1 and of 8, figures kept out of the kind, the kinds' bound, the overflow
+  kind written once a window with the table at its bound, and the sweep once a window; hosted, the same refusal five
+  more times writing no line, and a reader's open-and-cancel loop of 12 watches writing 8 admission and 8 cancel
+  lines, then each count at the stop, once another reader's watch admitted as 1 of 16 in all shows every cancel has
+  run); `test_pm_module` (9 installs and 8 removes waiting behind a running install, one refused at the full
+  queue, cancelled in steps that each wait for written lines or end lines, since the cancels reach the module in no
+  set order (Fable §17.9); then the lines at the stop account for all 17).
+- **Status:** built 5-6a-1 (I140). Readers are served from 5-6b-1 (the lists and a reader's handoff, I143) and 5-6b-2
+  (the watch, I144); everyone else is still refused as above.
 
 ### G496 — pmtest after the module
 - **Kind:** IMPL (planning's Q8 (a); plan draft 3 §4.8), with one deviation, reported to planning.
@@ -7899,15 +7950,326 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
 - **Status:** measured 2026-11-24 (5-6a-1). `logosctl`'s `--timeout` and the other limits are stated in
   DEPLOYMENT §12 and §13.
 
-### G500 — `list_packages`' selection and order
-- **Kind:** IMPL (plan draft 3 §5.3; Q10 (a)) · **Specs:** PACKAGE MANAGER l.1656-1657.
+### G498 — The Package Manager's readers (C4)
+- **Kind:** IMPL (plan draft 3.1 §5.1; C4, owner 2026-11-19; the owner's Q7 (b), 2026-11-23, "Accept all three", as
+  in G495) · **Specs:** PACKAGE MANAGER l.1636-1648 (PKG-0529, PKG-0530, PKG-0531, PKG-0385), l.1308-1309.
+- **Decision (the configuration):** `package_manager.readers: [* tstr .size (1..128)]` in the daemon configuration.
+  - Absent, the reader is `lcn_call` when this start composes it, and there is none when it does not.
+  - An empty list means no reader, `lcn_call` composed or not.
+  - Each entry is an instance this start runs, named once, and never the Package Manager's own; otherwise `logosd`
+    refuses the start before anything runs (`compose.pmInputOf`): "package_manager.readers names X twice", "… names
+    the Package Manager's own instance", "… names X, which is not an instance this start runs".
+- **Decision (carried to the Package Manager):** `lcn.pm_input` gains `? readers` and `? runtime_instance_id`
+  (`pm/input.cddl`), both protected input (G400), which `logosd` appends to the section's checked input at compose.
+  The input refuses a reader named twice and readers without the Runtime id. The list is fixed for the realization
+  [IMPL]: a change applies at the next start.
+- **Decision (the check, in the facade):** a caller is a reader when `inv.caller()` is `ckModule`, its Runtime is the
+  carried id, and its module instance is listed (`facade.readerOf`). A SYSTEM_SERVICE caller never is.
+  - The check runs on every call, before the engine sees the query: before the filter, the snapshot and any cursor
+    (PKG-0529), and on every page (PKG-0385).
+  - Visibility is all or nothing (PKG-0530): a reader sees every record, a non-reader none.
+- **Decision (a non-reader):** `MODULE_ERROR` with no message and no detail (PKG-0531, G495), and one operator line
+  "package-manager: METHOD refused for module instance I of Runtime R: not a reader". So for `list_packages`,
+  `list_installed_packages`, an ordinary caller's `get_runtime_handoff` (Q7 (b)), and, from 5-6b-2, watch and
+  progress (G501, G502).
+- **Decision (a reader's handoff):** a reader's `get_runtime_handoff` is a page job on the read-only worker (G500,
+  ruling A), never a job on the first worker's queue; its bytes are the binding's for the same identity and module.
+- **Method access stays the Runtime's:** the readers list says what the Package Manager answers, not who may call.
+  `logosd` composes `lcn_call`'s grants (G503); another reader needs the operator's.
+- **Tests:** `test_pm_queries` (the non-reader's refusal and log line, the readers answered), `test_system_binding`
+  (a reader's handoff: the binding's bytes, no first-worker job, another instance refused), `test_pm_input` (the
+  input's fields and refusals), `test_daemon_config` (the default, the list, the empty list, the refusals),
+  `test_pm_module` (G495's case: a client the input does not name).
+- **Status:** built 5-6b-1 (I143).
+
+### G499 — The Package Manager's cursors and their retention policy
+- **Kind:** IMPL (plan draft 3.1 §5.2; Q9 (A)) · **Specs:** PACKAGE MANAGER l.1636-1654, l.1729-1734 (PKG-0384,
+  PKG-0387, PKG-0538..0542).
+- **Decision (what a cursor is):** a record in the engine (`pm/cursors.nim`), keyed by a token, holding its origin
+  (the caller's Runtime id and module instance), the method, the `package` filter, the snapshot it began on (the
+  installed snapshot's sequence, or the catalog epoch), the next record's place in that snapshot's listing order, and
+  its times. A cursor holds no snapshot of its own.
+- **Decision (tokens):** 32 bytes from the operating system's random source (`std/sysrand.urandom`), base64url without
+  padding: 43 characters, within the method's 512. A failed random source is `MODULE_ERROR` ("the random source
+  failed" in the log).
+- **Decision (continuation):** a continuation names the same origin, method and filter, and its snapshot is still the
+  current one; then the page goes on from the cursor's place, and the cursor is spent: the next page has a token of
+  its own. Otherwise the answer is `invalid-request` with one message for every case ("the cursor is not valid for
+  this query, or has expired: start the listing again"), so a token says nothing about another origin's.
+  - A record presented by another origin, or for another method or filter, stays for its own.
+  - A page refused at a bound keeps its token, so the same page can be asked again.
+- **Decision (the retention policy, l.1731):**
+  - **superseded snapshots:** a commit supersedes an installed listing's cursors, and a catalog of another digest in
+    use would supersede a catalog listing's (`catalogEpoch`, bumped by `catalogInUseChanged`). Within a realization
+    the catalog in use never changes: it is acquired once per start, and a kept catalog stands in only for the same
+    configured one (G401; PACKAGE-MANAGER.md §3, "no refresh"), so today a catalog listing's cursor ends by age or
+    by the realization's end. A superseded snapshot is never retained for a cursor, so the storage charged is the
+    cursor record only;
+  - **count and age** [IMPL]: 8 cursors per origin, 256 in all; a cursor expires 60 s after its last use and 10 min
+    after it was made;
+  - **reclamation:** on every query, and by a 1 s timer on the module thread while any cursor is held;
+  - **overload:** an origin at 8 loses its own least recently used cursor (PKG-0540), never another origin's; with
+    256 held and none of the asking origin's to give up, nothing is issued and the call is `MODULE_ERROR` with no
+    detail, logged "at the cursor bound: 256 held in all" (PKG-0541);
+  - **a realization's cursors die with it:** nothing is persisted. PKG-0528 holds because a binding never queries.
+- **A catalog refresh** has no case to test at the boundary or in the engine, since none happens (above). The
+  policy's own cases supersede a catalog epoch on `cursors.nim`, and the hosted cases show a commit leaving a
+  catalog listing's cursor good.
+- **Tests:** `test_pm_queries` (the policy on a given clock: the LRU, the aggregate, idle and absolute expiry, the
+  binding, a superseded epoch, the token's form; hosted: another reader, the other list, another filter, a spent
+  token, a commit between pages), `test_pm_install` (the reclamation timer, continuation, another origin, a commit).
+- **Status:** built 5-6b-1 (I143).
+
+### G500 — The lists: selection, pages, the read-only worker and the page-job bounds
+- **Kind:** IMPL (plan draft 3.1 §5.3, §5.4; Q10 (a), Q11 (c), ruling A; Fable §11.2, §14.4) · **Specs:** PACKAGE
+  MANAGER l.1636-1660 (PKG-0368, PKG-0378, PKG-0381, PKG-0383, PKG-0384), l.1769 (PKG-0558), §12.
 - **Decision (5-6a-1, `pm/listing.nim`):** the entries of the catalog in use whose source kind this provider
   implements (`ListedSources`, `lgx`; a `nix` entry is omitted until 5-10's realization profile), with the optional
   `package` filter, in the catalog's canonical order (`entryOrder`), which a catalog in use already has.
-- **5-6b** completes this row: the pages and their byte budget, the read-only worker, the page-job bounds, the
-  handoff's stage wait at the worker, and a reader's `get_runtime_handoff` as a page job (ruling A).
-- **Tests:** `test_listing`.
-- **Status:** the selection built 5-6a-1 (I140); the method is served from 5-6b.
+- **Decision (`limit`, 5-6b-1):** absent, 100; 1 to 1000 accepted; 0 or above 1000 is `invalid-request` ("limit must
+  be 1 to 1000"). The contract types it `uint16`, so the engine checks the range.
+- **Decision (`list_packages`' pages):** answered on the module thread from the listed entries' encodings, made once
+  when a catalog goes in use (`Engine.listedEntries`): memory reads, no file. With no catalog in use the answer is
+  `package-unavailable` (l.1308-1309), never an empty list.
+- **Decision (`list_installed_packages`' pages):** a page job (`wjPage`) over the current snapshot, which it holds
+  until it is answered.
+  - The snapshot's listing order (l.1660: name bytes, descending SemVer precedence, then the commitment's bytes;
+    `listing.installedOrder`) is sorted once per snapshot on the module thread (`ensureListing`).
+  - The job reads each record by its path below `install/r/<rid>/` (`readRecordFiles`) and encodes its
+    `installed_package_record`; a fault ends the page, and a page that read nothing is `MODULE_ERROR` with a log
+    line.
+  - The module thread frames `{packages, ? next_cursor}` around the records' bytes (`listing.pageText`), with the
+    next cursor exactly when another record of the snapshot matches after the page (PKG-0378), and the facade
+    passes the bytes through (G494).
+  - Nothing to read (an empty selection, or a cursor at the end): the empty page, with no job.
+- **Decision (the read-only worker, Q10 (a)):** page jobs run on a second worker thread, `readOnly`, rooted at
+  `<state>/install` and holding no store (`WorkerConfig.readOnly`, `root`), so a page never waits in front of the first
+  worker's handoffs or an operation's stages. The module thread and the loop stay shared (G504).
+- **Decision (the page byte budget, Q11 (c); planning 2026-11-25, "take 256 KiB", which Fable §14.4 point 4
+  weighed) [IMPL]:**
+  - **the rule:** a page stops at `limit` or at the budget, whichever comes first, the budget being reached before a
+    record that would take the page's records past 256 KiB. A page always carries at least one record, however large
+    (PKG-0383);
+  - **one constant,** `listing.PageBudget`, and one rule, `listing.fits`, for both lists: `list_packages` on the
+    module thread and the read-only worker's `list_installed_packages` job. A test build's `LCN_TEST_PM_PAGE_BUDGET`
+    replaces the value, never the rule;
+  - **the figure per pass,** from G497's measured rate (the cost follows a page's values, about 27,000 a MiB in records
+    as dense as the measured ones): about 80–90 ms on the Mac under orc and about 0.36 s on server.lan under refc. It
+    is paid three times: by the module thread, the host's I/O thread and the reader's I/O thread;
+  - **why not the plan's 1 MiB:** about 330 ms a pass on the Mac under orc and about 1.46 s on server.lan under refc,
+    four times as long in each of the three passes;
+  - **a record larger than the budget** goes alone in its page. That page's bound is the largest record the store
+    admits, whose one-record page must fit the 16 MiB Transport body (G452, `admission.admits`). At the same rate it
+    is about 5.3 s a pass on the Mac under orc and about 23 s on server.lan under refc; G497 measured 5.4 s and
+    24.9 s on the module thread for the maximal `{installed}`. A `list_packages` entry is within the 4 MiB catalog
+    (G401): about 1.3 s and 5.8 s;
+  - **a reader's handoff** stays outside the budget (ruling A, below).
+- **Decision (the page-job bounds, PKG-0558) [IMPL]:** 2 page jobs in flight per origin and 8 in all; past either the
+  call is `MODULE_ERROR` with no detail, and the facade writes one line naming the caller, the method and the bound
+  ("at the page-job bound: 2 in flight for this caller", "… 8 in all"; Fable §11.2, point 1).
+  - **A cancelled page job keeps its place until the worker answers it (Fable §17.3 point 1):** its job is already on
+    the read-only worker's queue and runs for nobody, so the engine marks it cancelled and keeps it, and its snapshot,
+    in the bounds; the worker's answer is dropped and gives the place back (`engine.cancel`, `onPage`,
+    `onReaderHandoff`). A reader that lists and cancels in a loop meets the bound like any other, and the worker's
+    queue holds no more of its jobs than its places. At the stop, a cancelled job is answered by nobody.
+- **Decision (a reader's handoff, ruling A):** `wjReaderHandoff`, a page job on the read-only worker under the same
+  bounds, built by the same code as the binding's (`jobs.handoffJob`) with the read-only worker's own trust copy,
+  made once when it starts from the same accepted bytes. It never posts a `wjHandoff` to the first worker. It is not
+  a page: its reply is one value of up to about 14 MiB, so the byte budget does not apply, and its cost on the module
+  thread is a large reply's (G497, G504).
+- **Test hooks** (`-d:lcnTestHooks`): `LCN_TEST_PM_PAGE_BUDGET` (the budget), `LCN_TEST_PM_PAGE_PACE_MS` (a pause per
+  record a page job reads), `LCN_TEST_HANDOFF_JOBS` (a line per first-worker handoff).
+- **Tests:** `test_listing`; `test_pm_queries` (the order, `next_cursor`, continuation, the filter, the limits, the
+  budget: a page cut by it before `limit`, one cut by `limit` before it, a record over it alone in its page and the
+  next page going on after it; the bounds and their log line, the first worker not behind the pages, PKG-0167); `test_pm_install` (the
+  engine's bounds, a reader's handoff counted, a cancel freeing its place once its job has ended; a list-and-cancel
+  loop refused at the bound with no more jobs queued than the places); `test_system_binding` (a reader's handoff).
+- **Status:** the selection built 5-6a-1 (I140); the pages, the worker, the bounds and a reader's handoff 5-6b-1
+  (I143).
+
+### G501 — The watch: hints, its end, its bounds and the call workers it holds
+- **Kind:** IMPL (plan draft 3.1 §5.5; ruling 4, draft 3; Fable §11.2, point 1) · **Specs:** PACKAGE MANAGER §15.1
+  l.1736-1774 (PKG-0544..0562), App A (PKG-0634, PKG-0635); RUNTIME l.1176, l.1200; INTERFACE §2.9.3.
+- **Decision (admission):** `watch_installed_packages` is a reader's (G498): the facade's `readerOf` refuses any other
+  caller, a SYSTEM_SERVICE one included, `MODULE_ERROR` with no detail and the operator's line (G495); the Runtime
+  refuses it on the system-service session first, `NOT_AUTHORISED` (G492, PKG-0544). Event authority is the Runtime's
+  (l.1176). An admitted watch writes one operator line naming the caller and what it holds of the bounds
+  ("admitted for module instance c of Runtime R: 1 of 4 for this caller, 1 of 16 in all"): a watch is long-lived.
+  A reader may open and cancel in a loop, so its watch lines (admitted, cancelled by the Runtime, ended) and its
+  handoffs' lines (cancelled, failed), which name the caller since 5-6b's merge, go through G495's limit
+  (`linelimit.nim`; Fable §17.7): 8 lines of a kind a minute for each caller (`ReaderLineBurst`, twice the
+  per-caller watch bound), the rest counted.
+- **Decision (hints):** the engine reports each landed commit as `cmChanged` (`onCommitted`, the one place the
+  installed state changes; a no-op commits nothing, PKG-0552). The shell counts them (`Shell.changes`) and wakes
+  `changedSince`. Each watch (`facade.observe`) waits for the count to move, checks the caller is still a reader
+  (PKG-0546, PKG-0550), and publishes one `installed_packages_changed` (`{}`, no revision, PKG-0553) through its own
+  invocation's scope (`inv.publishScoped`), never broadcast (PKG-0545). Changes while a hint is in flight are folded
+  into one more (PKG-0552). Visibility is all or nothing (PKG-0530), so every commit, a removal included, is
+  observable to a reader (PKG-0551). Equivalent watches on one session each publish (PKG-0561).
+- **Decision (its end):** the Runtime's cancel ends it at once, `CANCELLED`: the caller's cancel, the loss of its
+  session, or a deadline the caller set, which the provider never sees (INTERFACE §2.9.3 gives it no deadline), all
+  reach it as that cancel (PKG-0556). The cancel is seen while it waits (`changedSince` is cancellable) and while a hint
+  is in flight (a `race` on the hint, which is not cancelled: the kit answers it before the call completes, G338)
+  (PKG-0562). A hint the kit answers with a failure ends the watch `{}` with a log line, as does the stop. Ending
+  touches no operation (PKG-0557). The consumer watches again and re-queries (l.1762).
+- **Decision (bounds, PKG-0558, PKG-0560) [IMPL]:** 4 watches per origin and 16 in all, one hint in flight each; past
+  either the call is `MODULE_ERROR` with no detail and the facade's line ("at the watch bound: 4 in flight for this
+  caller", "… 16 in flight in all"). An admitted watch never has to end for a bound (inspection item
+  `pm-watch-ends-within-limits`). 16 is planning's figure; 32 would leave 54 call workers, and nothing shows that is
+  safe.
+- **Decision (the call workers held) [IMPL; ruling 4, draft 3]:** a hosted call in flight holds one of the Runtime's
+  call workers for its whole length (`runtime/hostcall.nim`), so each watch holds one while it runs, and so does each
+  operation from admission until its answer (2 running and 32 queued, each up to its queue wait plus
+  `operation_deadline_ms`), and each page call (8, readers' handoffs among them, G500). **The Package Manager can hold
+  up to 58 of the 128 call workers (G242) at once, leaving 70 for every other module's hosted calls.** That is a stated
+  limit with no lane of its own: HOST-CONFIG's limits table states it beside the pool. No PM-only pool is built. The
+  binding's calls use their own worker (G493), so none of this refuses a handoff at the Runtime. Freeing the worker a
+  hosted call holds is a core item of its own, "a hosted call in flight holds a polling thread", on planning's end
+  list, held by the pause.
+- **Decision (the visibility decision):** data, not a callback: the reader list and its Runtime (G498), fixed for the
+  realization. No synchronous authorization callback is retained (PKG-0547); a caller no longer readable or no longer a
+  reader ends the watch with no hint (PKG-0548); the reader list is the protected adapter PKG-0549 permits (inspection
+  item `pm-watch-visibility`).
+- **Tests:** `test_pm_queries` "the Package Manager's watch and progress, hosted": hints, coalescing, no hint for a
+  no-op, one for a removal, none on another session, the cancel, the loss of a session; the bounds and their lines, the
+  place given back, a session's four watches each hinting. `test_pm_queries` (a non-reader's watch refused);
+  `test_system_binding` (the system-service session's, `NOT_AUTHORISED`); `test_pm_install` (`cmChanged` per commit,
+  none for a no-op).
+- **Status:** built 5-6b-2 (I144).
+
+### G502 — Progress: phases, counters and who gets it
+- **Kind:** IMPL; **owner decision 2026-11-23 (Q12 (a), "Accept all three")** · **Specs:** PACKAGE MANAGER §15.2
+  l.1776-1798 (PKG-0564..0573; TXT-0497, TXT-0498), App A (PKG-0632, PKG-0636).
+- **Decision (who):** an operation (`install_package`, `remove_package`, `update_package`) with a `progress_key` from
+  a reader (G498) publishes `operation_progress`; without the key, or for a caller that is not a reader, nothing
+  (PKG-0564, PKG-0571; Q12 (a)). A non-reader sees nothing else differently: progress is optional.
+- **Decision (the engine's reports):** `submit(…, progress = true)` marks the operation, and each phase it reaches is
+  `cmProgress{progressOf, phase, completed, total}` until its answer or its cancel; counters are measured bytes
+  (PKG-0568), `completed` clamped to `total` (PKG-0569):
+  - **`resolving`** when its resolution starts, no counters;
+  - **`fetching`** at each piece of an archive handed to the spool: the bytes read of the size `stat_object` gave;
+  - **`verifying`** when the worker's inspection pass over an archive starts (none of its bytes) and when it ends (all
+    of them); a cache hit does no pass and reports none;
+  - **`installing`** when a record is staged (extraction is one worker job, so no measured count exists before its
+    end: no counters, never an implied total, PKG-0570); the plan's extraction bytes would need the store to report
+    them, and are not built;
+  - **`removing`** at a remove's commit, no counters.
+  Phases have no order and recur per package (TXT-0497, TXT-0498).
+- **Decision (the facade):** the shell hands each report to the operation's `ProgressSink`. One publication is in
+  flight per operation, through its own invocation's scope (PKG-0565, PKG-0566), the key echoed unchanged (PKG-0567);
+  the latest report replaces a pending one, the caller is checked a reader at each publication (PKG-0572), and nothing
+  is published once the operation is answered or a publication failed. The response stays authoritative; a cancelled
+  operation reports nothing more.
+- **Tests:** `test_pm_install` "the watch's hints and the operations' progress" (the phases, the counters, none without
+  progress, removing, a cancel); `test_pm_queries` (through the scope, the key echoed, resolving first, none on another
+  session, none without a key or for a non-reader).
+- **Status:** built 5-6b-2 (I144).
+
+### G503 — `logosctl package` and `catalog`: `lcn_call` on the Package Manager's described surface
+- **Kind:** IMPL; **owner decision 2026-11-23 (Q14 (a), "Accept all three")** · **Specs:** PACKAGE MANAGER §15.1
+  l.1756-1774 (PKG-0554, PKG-0555), §15.2 l.1776-1798 (PKG-0573), §14; TRANSPORT §5.2, §6 (an invocation-scoped
+  event); CA l.244-247; plan draft 3.1 §5.7; ruling 4; Fable §11.2 point 1.
+- **Decision (the commands):** `package list|inspect|install|remove|update|handoff|watch` and `catalog list`
+  (`cli.cddl`: `lcn.cli_package_command`, `lcn.cli_catalog_command`) are `lcn_call` commands (DAEMON.md §7a). It
+  types each request against the contract the Package Manager describes (`requestShape`, `checkRequest`) and reads
+  each answer by its keys: it imports none of the Package Manager's types (the layer rule forbids it).
+- **Decision (the grants, S13 and S14):** S13, the Package Manager may `publish-event` on its own contract; without it
+  every hint and progress publication is skipped (CA l.244-247). S14, only when `lcn_call` is composed, is one rule
+  with two patterns on that contract:
+  - `discover`, naming no provider: a discovery names none, and a pattern that names providers covers no scope
+    without one (G207, `policy.patternContains`);
+  - `establish-route`, `renew-route`, `call` and `subscribe-event` at the provider `package_manager`.
+
+  Neither narrows the access, so the operations are included (Q14 (a)). Under `allow-all` it has them anyway.
+- **Decision (one route for a scoped event):** the hints and the progress are published in the call's own scope (G501,
+  G502), which reaches the subscriptions of the session that carried the request only (TRANSPORT §5.2). So
+  `lcn_call`'s subscription and its call share one route, whose access names the method and the event
+  (`commands.openSub`, `subCall`); the subscription is made first. Other commands' calls on that route are told apart
+  by their progress key; another watch's hint only makes a watch list again.
+- **Decision (its own bounds, ruling 4):** every logosctl command is the one caller `lcn_call`, so `lcn_call` holds at
+  most 2 page calls (list pages and handoffs) and 4 watches in flight (`PmGate`, the Package Manager's per-caller
+  bounds, G500, G501). One more waits at the gate (it looks again every 20 ms and ends at the launcher's cancel) and
+  is never sent to be refused; past `--timeout` it ends exit 2 with nothing sent. The aggregate bounds (8, 16) count
+  other readers too, which `lcn_call` cannot see.
+  - **A fifth watch (Fable §17.1 point 4):** it writes one notice on stderr as its wait begins ("lcn_call has 4
+    watches open: this one waits for one of them to end"; `{"notice": ...}` in JSON), and its `--for` end is the
+    gate's deadline: past it, it ends exit 2, "… stayed at its bound (4) past --for; nothing was sent". With no
+    `--for` it waits until a place is free or the launcher cancels.
+  - **The wait off POSIX (Fable §17.3 point 5):** the gate and the watch's pause wait on the launcher's descriptor by
+    `poll`; elsewhere `waitCancel` sleeps the same time instead, so neither spins. `lcn_call` is POSIX only today.
+- **Decision (a refusal):** a reader's method answers `MODULE_ERROR` with no message and no detail at a bound, to a
+  non-reader and at a fault (G498, G501), and `lcn_call` cannot tell these apart: it says "the Package Manager refused
+  the query: it is at its query bound (8 page calls or 16 watches in all), lcn_call is not one of its readers, or it
+  failed; the Package Manager's log says which" (`PmRefusal`), exit 5. An operator who took `lcn_call` out of
+  `readers` is not told to try again.
+- **Decision (package errors):** the Package Manager's error arm (PM §14) is exit 5 with its code and its declared text.
+- **Decision (remove's words) [IMPL] (planning, 2026-11-25):** `remove_package` succeeds with `{}` whether or not the
+  package was installed (PM §15 l.1693-1699), and `{}` cannot tell the two apart. So `package remove` prints
+  `NAME VERSION is not installed`, which is true after either, never "removed".
+- **Decision (lists) [IMPL]:** every page, in order. An `invalid-request` for a cursor means the listing is no longer
+  held (a commit or a catalog change between two pages): it starts over, at most 3 times (`ListStarts`), then fails
+  exit 5, `invalid-request`, "… kept changing while lcn_call read them: it started over 3 times; run the command
+  again". An install that finishes during a list is not an error. A list is collected whole before anything is
+  written, so a start over writes nothing twice; what it holds is the installed set or the catalog's entries (Fable
+  §17.3 point 5; DAEMON.md §7a).
+- **Decision (progress) [IMPL]:** with `--progress`, a fresh `requestKey()` as `progress_key`, the subscription first;
+  each publication for that key is a line on stderr in either format, since stdout carries the one result. A
+  progress stream that ends only stops the lines (PKG-0573); the outcome is the call's, and a cancel, a timeout or a
+  lost route after sending is exit 2, the outcome unknown (DAEMON.md §7a), never a rollback.
+- **Decision (the watch) [IMPL]:** a hint only says to look again and a submitted watch proves no boundary (PKG-0554),
+  so `lcn_call` lists the installed packages when the watch is made, after each hint, every 30 s
+  (`WatchRefreshMs`), and after a lost watch, which it makes again on the provider looked up again (PKG-0555); a
+  line is written when the list differs from the last one written. Each list has the Runtime Control deadline.
+  - **A lost watch (Fable §17.1 point 3):** its `{}`, its route's, session's or hints' end, or a failure a re-making
+    helps (`remakable`: `NOT_READY`, `TRANSPORT_ERROR`, `TIMEOUT`, a `CANCELLED` nobody asked for), of the watch call,
+    of a list, or of making it again (the provider's lookup, as when the Package Manager is stopped or starting; the
+    subscription). Once a watch was made and listed, a loss writes one notice on stderr ("the watch on the Package
+    Manager was lost (WHY); it is made again for up to 30 s") and the watch is made again every 1 s
+    (`WatchResyncMs`) for up to 30 s from the loss (`WatchRemakeMs`, the refresh period); a watch made and listed
+    again ends the loss. So a stop and start of the Package Manager within 30 s keeps the watch.
+  - **Its end:** `--count`, `--for`, the launcher's cancel, or a failure: a refusal or an error arm (5), any other
+    failure of a list or of the call, the last failure of a watch not made again within 30 s, or a failure before the
+    watch was first made (as `package list`'s). It is a stream (`server.isStream`).
+- **Tests:** `test_cli` (every page in order, the restarts and their bound, an error arm ends a listing, the error arm's
+  exit, the opaque refusal's text, the gate: a third waits, a deadline gives 2, a cancel 130, watches counted apart),
+  `test_daemon_config` (S13 and S14 as rules and as the Capability Authority decides them, with and without
+  `lcn_call`; S1-S14 word for word in DAEMON.md), `test_logosd_pm` (on S14 alone: the catalog and the installed list,
+  an install and a remove with progress lines, an inspection, a handoff's package error, a watch's lines, three
+  lists at once and no refusal; with `lcn_call` not a reader, both lists refused with `PmRefusal` and the log's line,
+  an install with `--progress` and no lines, PKG-0573; PKG-0555 in three cases, each list shown on its own (Fable
+  §17.6, planning 2026-11-25): through the test hook `LCN_TEST_CLI_WATCH`, the first hint lost with its watch and the
+  refresh longer than the case, so the line after the loss is the re-made watch's, with one notice; a 300 ms refresh
+  with every hint ignored and no loss, so a change is written from the refresh and the watch is never made again;
+  and a real loss, the Package Manager stopped and started under a watch, which is made again within 30 s with one
+  notice and writes the next change; a fifth watch with `--for 2s`, its notice, exit 2 at its deadline, and a place
+  given back admitting the next), `test_cli`
+  (PKG-0573: `classify` makes a cancel, a timeout or a lost route the outcome unknown).
+- **Claims (planning, 2026-11-25):** PKG-0554, PKG-0555 and PKG-0573 by test, none by inspection. The test hook
+  (`-d:lcnTestHooks`, `LCN_TEST_CLI_WATCH`: `refresh=MS`, `lose-first-hint`, `deaf`) is read when a watch command
+  starts; `tests/support/clibuild.nim` builds the test `liblcn_call` with the define, as `pmbuild` does.
+- **Status:** built 5-6b-3 (I148); the lost watch, the fifth watch's notice and deadline, and the wait off POSIX
+  in 5-6b's merge follow-up (Fable §17).
+
+### G504 — PKG-0559 is recorded as not met
+- **Kind:** IMPL; **owner decision 2026-11-23 (Q11, "Record as not met")** · **Specs:** PACKAGE MANAGER l.1769
+  (PKG-0559); plan draft 3.1 §5.8; G493, G497, G500.
+- **Decision:** PKG-0559 ("Ordinary observation MUST NOT block or consume capacity reserved for required Runtime-owned
+  system-service progress, including runtime handoff retrieval") is not met until the held large-reply core item lands
+  after the pause. Its claims entry defers it by name.
+- **What still holds a handoff:** `commit` waits on the module thread while the host loop's 64 MiB output budget is
+  full (`host/endpoint.nim`), and while it waits no reply of the Package Manager completes, the handoff's included. It
+  takes 64 MiB of replies a consumer does not read (four maximal ones, or sixty-four of 1 MiB; one page does not do
+  it), from any caller, operation and inspect replies included, and lasts until the stalled consumer is closed at
+  `write_stall_timeout_ms` (30 s by default). Each reply's check and copies also run on the module thread (G497).
+- **What 5-6 builds anyway:** the page byte budget (G500), the binding's own worker (G493), and the bound on ordinary
+  handoffs (a reader's is a page job, G500).
+- **What PKG-0559 waits for (Fable's five conditions, as G493):** piece (b), the commit's wait and the response check
+  off the module thread; the binding's own worker (built); room for the system session in both output pools, submitted
+  and committed (the held item's, with piece (b), ruling B); the bound on ordinary handoffs (built); the system
+  session's completions not starved of host workers under piece (b).
+- **Its claim's test** is the held item's acceptance test, not a 5-6 test: both output pools held full (eight stalled
+  connections), ordinary handoff calls waiting, and a handoff answered within a bound.
+- **Status:** recorded 5-6b-2 (I144).
 
 ### G505 — logosd's own instances take a new library (artifact adoption)
 - **Kind:** IMPL, with an owner decision (2026-11-23, option (a): an upgrade of logosd keeps the session; plan
@@ -11925,7 +12287,13 @@ These were set while writing the plan, are not spec matters, and can be vetoed a
 | G495 | what ordinary routes reach before 5-6b | IMPL (owner, Q7 (b)) | 9 |
 | G496 | pmtest after the module | IMPL (Q8 (a)) | 9 |
 | G497 | the facade's large-reply figures | IMPL | 9 |
-| G500 | `list_packages`' selection and order | IMPL (Q10 (a)) | 9 |
+| G498 | the Package Manager's readers (C4) | IMPL (owner, C4; Q7 (b)) | 9 |
+| G499 | the Package Manager's cursors and their retention policy | IMPL (Q9 (A)) | 9 |
+| G500 | the lists: selection, pages, the read-only worker and the page-job bounds | IMPL (Q10 (a), Q11 (c), ruling A) | 9 |
+| G501 | the watch: hints, its end, its bounds and the call workers it holds | IMPL (ruling 4) | 9 |
+| G502 | progress: phases, counters and who gets it | IMPL (owner, 2026-11-23, Q12 (a)) | 9 |
+| G503 | `logosctl package` and `catalog`: `lcn_call` on the Package Manager's described surface | IMPL (owner, 2026-11-23, Q14 (a)) | 9 |
+| G504 | PKG-0559 is recorded as not met | IMPL (owner, 2026-11-23, Q11) | 9 |
 | G505 | logosd's own instances take a new library (artifact adoption) | IMPL (owner, 2026-11-23 (a)) | 9 |
 
 ---
@@ -12075,9 +12443,12 @@ of work follows the tiers in `docs/SPEC-STATUS.md`: most settled areas first.
 | I140 | IMPL | Tier 5 step 5-6a-1: the Package Manager instance, composed by logosd (step5-6 plan draft 3, part 5-6a-1; G490, G491, G494, G495, G496, G497, G500; the owner's Q2, Q7 (b), Q11) | **Built.** The module `logos_package_manager` (`src/logos_package_manager.nim`) on a generated kit: `src/logos_core/pm/logos_package_manager_kit.nim`, `_types.nim`, `.exports` and `.map` (lcn-gen from the mirrored PM contract; the plan named `package_manager_kit.nim`, the generator names the kit after the module). `pm/requests.nim` turns each request into the core's operation, `pm/facade.nim` answers with pre-encoded responses (G494: `KitOptions.encodedResponses`, lcn-gen `--encoded-response:METHOD`; the kit's boundary still validates the bytes), and `pm/listing.nim` holds `list_packages`' selection and order (G500; 5-6b serves the method). The Runtime marks the instance (G490): a top-level host-config `package_manager`, `EngineConfig.packageManager`, the carrier's `system: true`, a completed probe as a system binding. logosd composes it (G491): `hosted_dynamic`, placement `process`, host-ambient, state `package_manager.state`, the library `package_manager.artifact` or the companion `<exe>/../lib/logos-core/liblogos_package_manager.{so,dylib}` with the hash logosd is built with (`-d:pmArtifactHash`; the flake's `pmLib`), started after the operator's list, with S12 (logosctl may not retire or reconfigure it). The former `instance` field is refused before the schema. The observation methods (`list_packages`, `list_installed_packages`, `watch_installed_packages`) and an ordinary caller's `get_runtime_handoff` get MODULE_ERROR with no message or detail (G495); the SYSTEM_SERVICE caller is 5-6a-2's, the readers 5-6b's. **Found while building.** logosctl's `init` and `daemon config check|set` composed with logosctl's own executable, which has no `pmArtifactHash`, so a packaged install refused a section without `artifact`. They now compose a stand-in for the companion library (`pmCompanion`; an all-zero hash, never started); logosd itself refuses such a section at start when it has no library (exit 1). Recorded in G491. **pmtest** keeps `status`, `resolve`, `install` and `handoff` only (G496): a successful handoff through the real module needs a SYSTEM_SERVICE caller, which 5-6a-2 brings; the long-extraction cases moved to `test_pm_module`. **Tests.** `test_pm_module` (the module through its kit), `test_listing`, `test_logosd_pm` (rewritten: composition, the companion library and its override, ordering, S12, the refusals), `test_host` (the mark), `test_daemon_config` (the section, the stand-in, S12, DAEMON.md word for word), `test_pm_hosted` (the probe's handoff), `test_kit`/`test_nimgen` (pre-encoded responses). **Claims.** 36 PKG units more (PKG-0003..0008, 0366, 0367, 0369..0377, 0379, 0519, 0521, 0513, 0514, and the copies 0630, 0631, 0633, 0637, 0639..0647, 0649); PKG-0005 and PKG-0006 also by inspection (`pm-never-co-located`); spectrace `gate` 403/403. **Not yet.** G497's facade figures wait for 5-3c-4 (Q16). |
 | I141 | IMPL | Tier 5 step 5-6a-2: the Package Manager's system-service binding (step5-6 plan draft 3, part 5-6a-2, §10; G492, G493; the owner's Q3 (a), Q4 (a)) | **Built.** The marked instance gets a second listener, the system-service endpoint: `served.openHostedSystem` makes it in its own fresh private directory, the host gets it as fd 6 with `init.system_endpoint` (`hostspawn.c`, `loader/hosted.nim`, `host/main.nim`), and `host/endpoint.nim` serves it beside fd 4 from the primary contract alone; the loop's `io_hello` from it carries `system: true`, the verdict `system: true` in place of a consumer, and the provider's caller view is LOGOS_CALLER_SYSTEM_SERVICE (`carrier.cddl`, `carrier_types.nim`). An endpoint that does not arrive or is not valid fails the placement as fd 4's does (TRN-0186). The Runtime keeps a second ticket store, `TicketStore[SystemBinding]`, and judges a system Hello against it alone (`transport/hello.nim` `SystemHelloCheck`, `engine.acceptSystemHello`): every refusal NOT_AUTHORISED with one message, the schema check after the token's, the response token empty, a refused ticket not consumed. `runtime/sysbind.nim` holds the binding (pending, ready, invalid) and the engine's queue: made when the instance reaches readiness, Hello retried from 1 s doubling to 30 s on the engine clock with a fresh ticket each time and the failed one revoked; one request in flight and 64 parked (the 65th MODULE_ERROR), a request parked on a pending binding waits at most 10 s (NOT_READY), its own deadline TIMEOUT, a withdrawal CANCELLED with a Cancel for the one in flight; a lost session fails the request in flight TRANSPORT_ERROR and is made again on next use; the instance's stop invalidates it (tickets revoked, sessions closed, requests NOT_READY). The provider side admits only `get_runtime_handoff` on such a session (`rqSysAdmit`; a subscription refused) and runs it on the binding's own worker (`sysCalls`, `plumbing.nim`), outside the shared call workers. Diagnostics name the binding's readiness, each failed attempt and its next delay, a lost session and its end; logosd logs them. **Found while building.** The host's end did not stop the system endpoint; `hostEnded` now closes its sessions and stops both. A pre-existing race in the Module Host's dispatch pool (`host/endpoint.nim` `post`, 4b-3): it grows only while `idle` is 0, and a worker counts as idle until it has taken the job posted before, so of two calls posted together the second can wait behind the first; a provider that blocks in its call then holds it (orc-release, four held meter calls sent at once: three ran). Fixed in its own commit, I146 (planning, 2026-11-23); `test_system_binding` sends its four held calls at once. The deviations from the plan's wording are G492's and G493's [IMPL] notes (own directory, the Runtime-side Hello-refusal test hook, the engine-side Request count, the verdict's `system`, fd 6's failure failing the placement, the in-flight request TRANSPORT_ERROR on a lost session, the two intdefines). **Tests.** `test_system_binding` (new, 12 cases with its `.nims` lowering the call-worker pool to 2 + 2: readiness, the handoff through the binding, scope, tickets, a failed attempt, stop and restart, the own worker, the pool sizes refused at compile time without the test hooks, the queue, the request's ends, the refused first and later Hello; a `-d:lcnTestHooks` gate in `pm/facade.nim` holds a handoff), `test_transport` (suite `trn.system`: six cases on the system ticket store), `test_module_host` (H-6b: an init naming a system endpoint with nothing on fd 6, or a socket there that does not listen, is `init_failed`, TRN-0186; H-14: a host given no system endpoint keeps none of the daemon's fd 6, open and inheritable), `test_logosd_pm` (the readiness line in logosd's log). **Claims.** TRANSPORT §8.1.2 (TRN-0328..0345), RUN-0318, PKG-0380, PKG-0388 and the copy PKG-0650 (dropped from `spec/repin-pending.toml`); RUN-0313..0319, RUN-0851..0855, RUN-0700 and TRN-0182..0194 re-tagged with the binding's cases. **At the merge turn** (planning, 2026-11-24, with 5-6a-1 on master and merged here): pmtest's `install` and `handoff` went, with `test_pm_hosted`'s handoff case (`test_system_binding` has it) and pmbench's pmtest path (`reply` times the facade only); G496's status; the documents citing 5-5-4's one-string figures say they can no longer be rerun from the tool (G447, G497); G493 states the handoff's bound for 5-8; `test_system_binding`'s CI weights (rule 6) and its POSIX guard's reason (G107). Nothing in logosd asks for a handoff before 5-8. |
 | I142 | IMPL | `wrapRoute`'s refusal at `observe_subscription_end` releases through the kit's `release` (a use-after-free found before 5-6a-1's merge; G339; planning's ruling, 2026-11-24) | **The fault.** `consumert.wrapRoute` registers `observe_end` with the new handle as its user data, then `observe_subscription_end`. When the route ends between the two, its end report runs at once. Under a confined dispatcher (G339), `onRouteEndCb` queues the handle's end task for the module thread, and `observe_subscription_end` is refused with the route's end ("the handle's path has ended"). The refusal path freed the handle at once, so the queued `runRouteEnd` ran on freed memory. It ran the caller's `onRouteEnd` for a handle the caller never got, and crashed once the memory was reused. The fault came with 389fa3e (N-1.2) and 099e57f (N-1.3). **Where it was seen.** `test_pm_module`'s long-extraction stop case failed 1 run in 20 on server.lan under orc, with I146's pool change as well as without it. At the stop, the Runtime's binding invalidation ended a route the Package Manager's binding had just opened to `hf`. The Package Manager's Module Host ended with SIGSEGV after `binding "main": the route to "hf" was refused: "NOT_READY: the handle's path has ended"`. The install's call ended with the host, and the stop passed its deadline. **The fix.** That refusal releases the handle through `release` (forward-declared). `release` sets `closing`, waits for a running report and leaves the free to the last queued task. The refusal's reason is returned as before. `release` is refused only inside a handler or end callback of the handle, which a new handle's wrap never is, so its result is asserted in `lcnTestHooks` builds; a refusal would leak the handle and the route. A refusal at `observe_end` has registered nothing and keeps the direct release. **What the caller sees.** Under a confined dispatcher, wrapped on the module thread as the kit's rule has it (G339), the queued task runs after the wrap returned, sees `closing`, and runs no `onRouteEnd` for the handle the caller never received. A wrap off the module thread has no such promise: the queued task can run the caller's callback before `closing` is set. With no dispatcher, the report runs inside the delivery, which the route's release waits for, so `onRouteEnd` may run before the wrap returns and also when it then fails (INTERFACE l.1450, l.1467); this is memory-safe and unchanged, and the doc comments of `wrapRoute` and `kit/routes.materialize` say so. **Reach.** Any confined kit that wraps a route (`kit/routes`: `materialize`, `openRoute`) could hit this when a route ends while it is wrapped, not only the Package Manager. **Tests.** Two `test_consumert` cases use a fake route whose `observe_end` is installed and whose `observe_subscription_end` delivers the route's end, then refuses with it (INTERFACE l.1467; a binding never delivers from inside `observe_end` on the registering thread, l.1450). Under a confined dispatcher that keeps the task, the wrap fails NOT_READY with the second registration's reason and the route is released once. The queued report, run as the module thread would run it after the wrap, runs no `onRouteEnd` and frees the handle. With no dispatcher, `onRouteEnd` runs once, inline, the wrap fails with the same reason, and the route is released once. Checked both ways under orc: the confined case fails at 2f9aa9e (`onRouteEnd` ran once, on the freed handle) and passes with the fix; the no-dispatcher case, whose old path freed nothing still in use, passes at both. |
+| I143 | IMPL | Tier 5 step 5-6b-1: the Package Manager's readers, cursors and lists (step5-6 plan draft 3.1, part 5-6b-1, §5.1-§5.4, §10.3; G498, G499, G500; C4; the owner's Q7 (b); Q9 (A), Q10 (a), Q11 (c), ruling A) | **Built.** Readers (G498): `package_manager.readers` in the daemon configuration (`daemon_config.cddl`), carried with the Runtime id in `lcn.pm_input` (`pm/input.cddl`, `input.nim`; `compose.pmInputOf` appends both and checks the list), checked by the facade on every call (`facade.readerOf`). Cursors (G499): `pm/cursors.nim`, held by the engine with its clock and token source injected (`initEngine`'s `tokens`), reclaimed on every query and by a 1 s timer (`tkCursors`); the catalog epoch (`catalogInUseChanged`). The lists (G500): `list_packages` from the listed entries' encodings, kept when a catalog goes in use; `list_installed_packages` as page jobs (`cmPage`, `wjPage`) on a second, read-only worker (`WorkerConfig.readOnly`, `root`; `shell.reader`, stopped after the first; `worker.abandonWorker` when it fails to start), the snapshot's listing order sorted once (`Snapshot.order`), the page framed by `listing.pageText`; the 256 KiB byte budget; 2 page jobs per origin and 8 in all, a refusal logged by the facade (`queried`); a reader's `get_runtime_handoff` as `wjReaderHandoff` on that worker, through the same `jobs.handoffJob` as the binding's. The kit returns pre-encoded bytes for both lists (`PmEncodedResponses`). Test hooks `LCN_TEST_PM_PAGE_BUDGET`, `LCN_TEST_PM_PAGE_PACE_MS` and `LCN_TEST_HANDOFF_JOBS`. **Tests.** `test_pm_queries` (new: the policy and the pages as units, and the lists hosted with readers `c` and `d` and a non-reader `x`), `test_pm_install` (the engine's page jobs), `test_system_binding` (a reader's handoff), `test_pm_input`, `test_daemon_config`, `test_logosd_pm` (`lcn_call` lists as the default reader). **Docs.** PACKAGE-MANAGER.md §2, §14 and §15, DAEMON.md (`readers`), CONFORMANCE.md. |
+| I144 | IMPL | Tier 5 step 5-6b-2: the Package Manager's watch and progress (step5-6 plan draft 3.1, part 5-6b-2, §5.5, §5.6, §5.8, §10.3; G501, G502, G504; the owner's Q11 and Q12 (a); ruling 4) | **Built.** The engine reports each landed commit (`cmChanged`, in `onCommitted`) and, for an operation submitted with progress (`submit`'s `progress`), each phase it reaches (`cmProgress`: resolving at its resolution, fetching per spooled piece against the stat size, verifying at the inspection pass's start and end, installing at each stage, removing at a remove's commit). The shell counts the changes (`changes`, `changedSince`, an `AsyncEvent` fired at each and at the close) and hands progress to each operation's `ProgressSink` until its answer. The facade serves `watch_installed_packages` to readers within 4 per caller and 16 in all (`observe`: one hint in flight, coalesced, the cancel seen while waiting and through a `race` while a hint is in flight; an admission line and a refusal line), and publishes a reader's progress through the operation's scope, one in flight, the latest replacing a pending one. HOST-CONFIG's limits table states the 58 call workers the Package Manager can hold (G501). PKG-0559 is recorded as not met (G504). **Tests.** `test_pm_install` (the engine's reports), `test_pm_queries` (the watch, its bounds and progress, hosted), `test_system_binding` (PKG-0544). **Claims.** PKG-0520, 0522..0524, 0544..0553, 0556..0558, 0560..0562, 0564..0572, 0632, 0634..0636; PKG-0547..0549 and 0560 by inspection; TXT-0497 and TXT-0498 leave the re-pin's list. **Docs.** PACKAGE-MANAGER.md §2 and §15, HOST-CONFIG.md, CONFORMANCE.md. |
 | I145 | IMPL | Tier 5 step 5-6 G160: artifact adoption for logosd's own instances (plan `tier5-plans/step5-6-g160-plan.md` draft 3; G505; the owner's 2026-11-23 (a)) | **Built.** The host field `artifact_adoption` (`runtime/host_config.cddl`, regenerated `host_config_types.nim` and `daemon_config_types.nim`; `host_config.checkArtifactAdoption`; `HostConfig.artifactAdoption` and `EngineConfig.artifactAdoption`). `store.adoptionBytes`; `engine.reconcile` lets a listed instance through when only its artifact hash changed (the suite compared on its own, since the stored form names the one suite) and names both ids, or "cannot be upgraded in place (G505)", otherwise; `bootstrap`'s equal-facts write diagnoses the adoption with both digests. `artifact.stage`'s integrity refusal names the accepted digest and the one found, and `failAttempt` diagnoses a Loader integrity failure with that message (until now no realization failure of an ordinary instance reached the host's log). logosd: compose lists `lcn_call` and `package_manager` when it composes them; `checkCli` and `checkPackageManager` refuse an override whose id is not the companion's; the start log names the Package Manager library's source, as it did lcn_call's. The Package Manager's `openStore` reads the index's `format` before any write and refuses another number as `sfFormat` (both numbers, "nothing was changed"), again under the lock; `libraryFormatForTests` under `lcnTestHooks`. **Tests.** The G505 cases in `test_host`, `test_daemon_config`, `test_persist`, `test_pm_store` and `test_logosd_pm`; `support/pmbuild.nim` and `support/clibuild.nim` build a second library of the same source (another `NimMain` prefix: other bytes), and `support/pmfixture.treeOf` snapshots a directory. No new suite or check. **Docs.** HOST-CONFIG.md (the schema, `artifact_adoption`, the G160 paragraph), DEPLOYMENT.md §1, DAEMON.md. |
 | I146 | IMPL | The Module Host's dispatch pool claims a worker at each post (Tier 5 step 5-6a-2, found while building I141; planning, 2026-11-23) | **Cause.** `host/endpoint.nim`'s pool (4b-3, I91) ran each admitted call on a dispatch worker, growing while no worker was idle. Two races: (1) `post` grew only when `idle` was 0, and a new worker counted as idle from its start until it had taken a job, so of two calls posted together the second found `idle` 1 and was queued with no worker of its own; a provider that blocks in its call (meter channel 23) then held it until that call ended. Under orc-release, four held meter calls sent at once to one hosted meter ran three; under orc and refc the four ran. (2) `post` took the new thread's index (`p.count - 1`) after releasing the lock, so two posts that both grew could start the same `Thread` object; it could not yet happen, since both callers of `post` (the verdict and a cancel hook) run on the ordering thread, and the fix keeps the right form for a later caller (Fable §13.4). **Fix.** `host/dispatchcount.nim` (pure): every job is claimed at its post, under the pool's lock, by an idle worker, by a new worker whose thread index the claim returns, or, every worker busy at the cap, as waiting; a worker whose job ended takes a waiting one before it counts itself idle. A worker no longer changes the counts when it takes a job. **Tests.** `test_module_host` suite "the dispatch pool's counts" (every platform): two posts before any worker has taken a job start two workers at distinct indexes; the cap's waiting job goes to the next worker to finish; an exhaustive walk of every order of four posts and the workers' receives leaves four blocking calls running, and the same walk over the counting before I146 leaves one queued; a second walk adds the jobs' ends (cap 2, five jobs) and checks at every state that the workers not running a job minus the jobs claimed and not received equals `idle` minus `waiting`, with never both above zero, reaching every claim kind and both outcomes of `finished` (Fable §13.4, §13.5). The dispatch worker's 0-job, which nothing sent and which `post` would have miscounted, is gone: the workers end with the process. `test_system_binding`'s own-worker case again sends its four held calls at once (it failed so under orc-release before the fix). No earlier failure in these records or the shared notes is tied to the race; none is claimed. |
 | I147 | IMPL | `hostspawn.c`'s spawn has one declaration (Tier 5 step 5-6a-2, found at its merge turn when the Mac froze twice; 2026-11-24) | **The fault.** I141 gave `lcn_host_spawn` a `system` parameter before `pid_out` (G492's fd 6) and updated `runtime/hostsup.nim`'s `importc` only. Three more declarations kept the seven-parameter list: `runtime/remotesup.nim` (the remote listener's spawn), `daemon/remoteside.nim` (the key holder's) and `tests/test_remote_lifecycle.nim` (its `logos_remote` harness). Each Nim `importc` emits its own C prototype in its own translation unit, so nothing failed to compile. The C side took `system` from the slot of the pid pointer and `pid_out` from an unset register: the child started, its pid was written through that garbage pointer, and the caller's `pid` stayed -1. In the harness, `exitOf(-1, ms)` waits on any child and at its deadline sends `kill(-1, SIGKILL)`, which reaches every process the user owns. Under the merge turn's Mac reach this ended the session twice, both times while `test_remote_lifecycle` ran under orc (its binary built 15:19:06 and 15:40:00, the resets 15:28:04 and 15:44:15). In logosd it was undefined behaviour: a write through a garbage pointer, and the supervisor's `kill(Pid(-p.pid), SIGKILL)` aimed at pid 1 while the real listener and key holder were never signalled. Master never had it: the parameter and the stale copies met only on `step5-6a-2`. **The fix.** One declaration, which the C compiler checks. `runtime/hostspawn.h` holds the prototype and `hostspawn.c` includes it; `hostsup`'s private `cHostSpawn` takes it with `header:`, so Nim writes no prototype of its own and a call with the wrong arguments fails to compile (the old seven-argument declaration, compiled against the header in a scratch file: "too few arguments to function call, expected 8, have 7"). `hostsup.lcnHostSpawn*` wraps it and is what every caller imports: `remotesup`, `remoteside` and the test pass `system = -1`, and `tools/lint/layers.toml` lets the daemon import `runtime/hostsup` for it. The wrapper turns a success with no pid above 1 into a failure (`SpawnNoPid`, "the spawn reported no process id"), so nothing waits on or signals such a pid. Every group signal in `hostsup`, `remotesup` and `remoteside` goes through `hostsup.signalGroup`, which refuses a leader of 1 or less and sends nothing (`kill(-leader)`: -0 is the caller's own group, -1 every process the user owns, -(-1) init); `hostsup` writes the refusal to stderr, `remotesup` notes it, `remoteside` logs a warning. The tests signal and wait through `tests/support/signals.nim` (`signalPid`, `signalPidGroup`, `pidGone`, `requirePid`), which fails the test on a pid of 1 or less before anything is sent or waited on: the remote harness (`spawnRemote`, `exitOf`, `gone`, the SIGSTOP case), `daemonproc`, `peerproc`, `hostowner`, and the kills in `test_logosd`, `test_logosd_pm`, `test_hosted`, `test_hosted_routes` and `test_lcn_call`. `tools/lint/cimports.py` (the flake check `lint-cimports`) refuses a second `importc` of a non-static function our C sources define (`src`, `sdk/src` and the test trees): on the tree before the fix it names the three stale copies; on the fix's tree it finds 192 such functions, 108 imported, none twice. So `lcn_host_spawn` is the only function our C sources define that more than one module imported, and the only one moved behind a header. The sweep for `kill(` found no other pid that comes from a spawn: `logosd` and `daemon/supervise` signal `getpid()`, and the SDK suites `test_entry` and `test_kit_dylib` end their children with osproc's `Process.kill()`, whose spawn raises when it fails. **Tests.** `test_module_host`'s "a spawn that reports success with its pid left at -1 ... fails cleanly" (the test hook `failNextSpawnPid`): `spawnProcess` and a host's `spawn` both fail with "the spawn reported no process id", no group signal is sent (`groupSignalsSent`), a group signal to -1, 0 or 1 is refused unsent, and a real group is still signalled. `test_remote_lifecycle`, whose harness cases run the spawn as logosd does. The full I147 diff's reach (`tools/affected_suites --changed`, flake.nix aside: 62 suites, every one inside 5-6a-2's 71); flake.nix's edit only adds `lint-cimports`, and the drvPath diff shows no suite's derivation changed by it. |
+| I148 | IMPL | Tier 5 step 5-6b-3: `logosctl package` and `catalog` through `lcn_call` (step5-6 plan draft 3.1, part 5-6b-3, §5.7, §10.3; G503; the owner's Q14 (a); ruling 4) | **Built.** `cli.cddl`'s `lcn.cli_package_command` (list, inspect, install, remove, update, handoff, watch) and `lcn.cli_catalog_command` (list), regenerated `cli_types.nim`; `logosctl` parses them (`packageOf`) and sends a watch with no deadline. `lcn_call`: `commands.nim`'s package section types each request from the described contract (`pmChecked`), reads every page (`listAll`, at most 3 restarts), counts its own page calls and watches (`PmGate`, 2 and 4, shared by every command; `enter`, `leave`), gives an opaque refusal of a reader's method the text naming its three causes (`readerStop`, `PmRefusal`) and the error arm exit 5 (`packageStop`). An operation with `--progress` and a watch subscribe and call on one route whose access names both (`openSub`, `subCall`), since the Package Manager publishes in the call's own scope; `rpc.callAsync` runs a `Side` tick on the subscription's wake pipe while the call is in flight (`CallResult.ended` when it ends the call). Progress lines on stderr (`present.progressLine`); the watch lists at its start, at each hint, every 30 s and after a loss, and writes a changed list. A watch is a stream (`server.isStream`). logosd adds S13 (the Package Manager publishes its events) and, with `lcn_call`, S14 (`compose.systemRules`, `pmContract`): `discover` in a pattern of its own with no provider, the rest at `package_manager`. `package remove` prints `NAME VERSION is not installed`, since `{}` is the answer whether or not it was installed (PM §15 l.1693-1699; planning, 2026-11-25). DAEMON.md §5 and §7a. G500 now states the 256 KiB page budget's figures, the 1 MiB ones, the oversized record's bound and the one constant (planning, 2026-11-25), and the page job uses `listing.fits`. **Found while building.** S14 first had one pattern naming the provider, which covers no discovery (a discovery names none), so every command was NOT_AUTHORISED; `test_logosd_pm` found it. **Tests.** `test_cli` (the package units), `test_daemon_config` (S13, S14; S1-S14 word for word), `test_logosd_pm` (end to end on S14 alone; a non-reader), `test_pm_queries` (the budget against `limit`). **Claims.** PKG-0554, PKG-0555 and PKG-0573 by test (planning, 2026-11-25): PKG-0555 through the test hook `LCN_TEST_CLI_WATCH`, PKG-0573 in `test_cli` (`classify`) and the non-reader's install. **Limits.** The aggregate query bounds are not visible to `lcn_call`. **Merge follow-up (Fable §17, planning 2026-11-25).** A cancelled page job keeps its place and snapshot until the read-only worker answers it, whose answer is then dropped (G500; PKG-0558): a list-and-cancel loop meets the bound. A lost watch is made again every 1 s for up to 30 s from the loss, `NOT_READY` included, with one notice on stderr per loss, so a stop and start of the Package Manager keeps a watch (G503). A fifth watch writes a notice as it waits, and its `--for` is the gate's deadline (exit 2). The gate's and the watch's waits sleep off POSIX instead of spinning (`waitCancel`). The refusal lines are limited for each caller, per line, 60 s, with counts (G495). **§17.7 (planning and Fable, 2026-11-25).** The limiter (`pm/linelimit.nim`, renamed from `refusals.nim`) is bounded: at 1024 kinds with none past its window, a new kind's line is counted into one overflow kind for all callers, never added. A new kind past the bound sweeps for kinds past their window at most once a window. The lines it covers go through it with a kind apart from the line (method, event, caller): a refused call's, a reader's watch lines (admitted, cancelled, ended), an operation's and a reader's handoff's cancel lines, and the engine's line when a reader's handoff fails, 8 of a kind a minute per caller (a refusal once); the cancel lines name the caller. It does not cover an operation's own lines (at most one end line per operation, its limit and fault lines) or a reader's list's detail line on a store fault, a stated limit (Fable §17.8; G495). The shell holds it, and flushes it as it closes. Every reason reaching `refuse` is fixed text. PKG-0559 has its own claims entry, deferred by name with G504's five conditions. DAEMON.md §7a says a list is collected whole before anything is written. Tests: `test_pm_install` (the cancel and the loop), `test_pm_queries` (the limiter; five more refusals, no line), `test_logosd_pm` (PKG-0555's hook case split in two, a loss with no refresh and a refresh with no loss; a real loss, the stop and start under a watch; the fifth watch). | 2026-11-25 |
 | R6 | SCOPE (revises R1; Tier 5 plan A6) | CI legs from Tier 5 | Linux x86_64, Linux aarch64 and macOS arm64 in the `nix` and `nimble` jobs; Windows x86_64 in the `windows` job, on the Nimble path with its own toolchain, the library suites under orc, blocking since step 5-4c (G123 as revised, G334). Android and iOS join with M12, with G105 and G125. Owner's approval of the Tier 5 plan, batch A (A6), 2026-11-16. | 2026-11-16 |
 | R7 | SCOPE (Tier 5 restructure; plan `tier5-plans/restructure-in-place.md`) | The SDK inside this repository | `sdk/` is the package `logos_sdk`, this implementation's layer 1: the base set (CBOR, cdCDDLe, hashing, commitments, INTERFACE), the generators, the module kit and `logos_sdk/testing`. Core (`src/logos_core/`), the daemon and the CLI are built on it. `tools/lint/layers.py` (the check `lint-layers`, strict) holds the import direction with no recorded exception. Each spec's ledger has one owning package: CDE, CMT and HSH are under `sdk/conformance/`, the rest, IFC included until its claims are split, under `conformance/`; `spectrace owners` holds that a unit has one owner. No behaviour, claim or gate result changed. | 2026-11-18 |
 | R8 | SCOPE (Tier 5 restructure R9 with R10b; plan `tier5-plans/stepW2-X-plan.md` X0.1; amends R7) | Which package claims a unit, and where its evidence is | Each live gated unit is claimed by the package that implements its rule, and its evidence is in that package's own tree: a tagged test in its test tree (`tests/` for core, `sdk/tests/` for the SDK) or an item in its `conformance/inspection/`. `spectrace gate`, `owners` and `deploydoc` count only the owner's tree. `owners` also reports a unit that both packages claim, one that neither claims with different statuses in the two files, and one tested or inspected only outside its owner's tree. A spec's ledger stays with one package (R7); where both packages claim units of a spec, each has a claims file, and each gives the other's units `out-of-scope:<owner>`. INTERFACE's ledger, main claims file and inspection file move to `sdk/conformance/`. Core claims the Runtime's 143 IFC units in `conformance/claims/IFC.toml`, 13 of them through 8 items in `conformance/inspection/IFC.toml`; two shared items are split by unit. The SDK claims 124 RUN units in `sdk/conformance/claims/RUN.toml`, 114 of them §9.2–§9.3's shared types and Runtime Control schema (the header `codegen/hostgen` writes), and the kit's 7 CFG units of §6 and §8 in `sdk/conformance/claims/CFG.toml`. The 11 IFC units the SDK implements whose only evidence was in core's suites gain SDK tests: IFC-0210, IFC-0513, IFC-0516, IFC-0517, IFC-0671, IFC-0717, IFC-0724, IFC-0735, IFC-0736 and IFC-0776 in `test_kit`, `test_kit_confined` and `test_calls`, and IFC-0577 in a new audit-build suite, `sdk/tests/test_wipe_kit.nim` (the ledger fixture's marked `seal` through the typed provider entry, the generated call helpers and the typed `prepareInvoke`, with no Runtime). IFC-0518, a negative checked by inspection, is tested there too, and its item is reworded for the SDK's two handle holders. No unit changes status: the claimed set is unchanged, unit for unit (`tools/restructure/claim_split.py --compare`, 3572 units; `claim_split.tsv` records each unit's owner and where its evidence is). Per package: IFC core 143, SDK 665; RUN core 767, SDK 124; CFG core 119, SDK 7. | 2026-11-22 |

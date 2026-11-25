@@ -44,7 +44,7 @@ import std/[algorithm, atomics, json, locks, monotimes, strutils, tables, times]
 import results
 import logos_sdk/cbor
 import logos_sdk/commitment
-import logos_sdk/base/[hex, wipe]
+import logos_sdk/base/[hex, testhooks, wipe]
 import logos_sdk/hash/hashinput
 import logos_sdk/iface/[accept, provider, surface]
 import logos_sdk/kit/rc_types
@@ -54,8 +54,12 @@ from ../authority/scopes import rcContractInfo
 import ../daemon/render
 import ./[args, cli_types, present, routes, rpc, streams, wire]
 
+testHooksMarker("lcn_call_commands") # [PKG-0555] the watch's hook (`LCN_TEST_CLI_WATCH`)
+
 when defined(posix):
   import std/posix
+else:
+  from std/os import sleep
 
 export results
 
@@ -65,12 +69,21 @@ const
   ReadChunk = 65_536
 
 type
+  PmGate* = object
+    ## [G503; ruling 4] lcn_call's own calls to the Package Manager in flight. lcn_call
+    ## is one origin to it, so they stay within its per-caller bounds: one more waits
+    ## here for a running one to end, and is never sent to be refused.
+    pages*: Atomic[int] ## list pages and handoffs: at most `PmPageCalls`
+    watches*: Atomic[int] ## watches: at most `PmWatches`
+
   Env* = object ## What every command shares; plain values, copied per worker.
     rc*: ptr LogosRuntimeControlBinding
     routes*: RouteTable
     hub*: Hub ## the streams' (`streams.nim`)
     stopping*: ptr Atomic[bool] ## the server's: lcn_call is stopping; nil: never
     production*: bool
+    pm*: ptr PmGate
+      ## [G503] lcn_call's calls to the Package Manager in flight; nil: none counted
 
   Job* = object ## One admitted request.
     msg*: LcnCliMessage
@@ -98,6 +111,7 @@ type
     fds: seq[cint]
     cancelFd: cint
     deadline: Opt[int]
+    started: MonoTime ## the command's start, for what remains of `deadline`
 
   Provider = object ## The selected provider and contract.
     module, instance: string
@@ -1083,6 +1097,805 @@ proc runEvents(c: Ctx, cmd: LcnCliEventsCommand): Result[void, Stop] =
   # binding's release, after `_MODULE_destroy`: the stream is never freed.
   res
 
+# package and catalog (G503) ------------------------------------------------------------
+
+const
+  PmModule* = "logos_package_manager" ## [G491] the composed instance's module
+  PmPageCalls* = 2
+    ## [G503; G499, G500] lcn_call's list pages and handoffs in flight: the Package
+    ## Manager's page-job bound for one caller
+  PmWatches* = 4
+    ## [G503; G501] lcn_call's watches in flight: its watch bound for one caller
+  ListStarts* = 3
+    ## [G503; IMPL] how often one listing starts over when the Package Manager no
+    ## longer holds its cursor (a commit, or a catalog refresh, between two pages)
+  GateTickMs = 20 ## [IMPL] a wait at the gate looks again this often
+  WatchRefreshMs* = 30_000
+    ## [G503; PKG-0554, PKG-0555] a watch lists the installed packages again this
+    ## often: a submitted watch proves no observation boundary
+  WatchResyncMs = 1_000 ## [IMPL] the pause before a lost watch is made again
+  WatchRemakeMs* = WatchRefreshMs
+    ## [G503; IMPL, Fable §17.1 point 3] how long a lost watch is made again before the
+    ## command ends with the last failure: the refresh period, from the loss
+  InstalledEvent = "logos.package_manager.installed_packages_changed_event"
+  ProgressEvent = "logos.package_manager.operation_progress_event"
+  PmRefusal* =
+    "the Package Manager refused the query: it is at its query bound (8 page calls " &
+    "or 16 watches in all), lcn_call is not one of its readers, or it failed; the " &
+    "Package Manager's log says which"
+    ## [G503; plan §5.7, Fable §11.2 point 1] what lcn_call says for a MODULE_ERROR
+    ## with no detail from a reader's method: it cannot tell the three apart
+
+proc waitCancel(cancelFd: cint, ms: int): bool =
+  ## [IMPL] Waits `ms`, or less when the launcher cancels: true then. With no
+  ## descriptor to wait on (not POSIX; Fable §17.3 point 5) a sleep of `ms`, never a
+  ## spin; lcn_call is POSIX only today.
+  when defined(posix):
+    var p = TPollfd(fd: cancelFd, events: POLLIN)
+    let r = poll(addr p, 1, cint(ms))
+    r > 0 and cancelFd >= 0 and (p.revents and (POLLIN or POLLHUP or POLLERR)) != 0
+  else:
+    sleep(ms)
+    false
+
+proc tryEnter*(slot: var Atomic[int], bound: int): bool =
+  ## [G503] One of `bound` places if one is free now.
+  var n = slot.load
+  while n < bound:
+    if slot.compareExchange(n, n + 1):
+      return true
+  false
+
+proc enter*(
+    slot: var Atomic[int],
+    bound: int,
+    cancelFd: cint,
+    deadline: Opt[MonoTime],
+    past = "--timeout",
+): Result[void, Stop] =
+  ## [G503; ruling 4] One of `bound` places, waited for: until one is free, the
+  ## launcher cancels, or `deadline` passes (exit 2: nothing was sent); `past` names
+  ## the option that set it.
+  while true:
+    if slot.tryEnter(bound):
+      return ok()
+    var wait = GateTickMs
+    if deadline.isSome:
+      let left = inMilliseconds(deadline.get - getMonoTime())
+      if left <= 0:
+        return err(
+          Stop(
+            exit: ExitUnreachable,
+            message:
+              "lcn_call's calls to the Package Manager stayed at its bound (" & $bound &
+              ") past " & past & "; nothing was sent",
+          )
+        )
+      wait = min(wait, int(left))
+    if waitCancel(cancelFd, wait):
+      return err(cancelled())
+
+proc leave*(slot: var Atomic[int]) =
+  discard slot.fetchSub(1)
+
+func opaque*(s: Stop): bool =
+  ## A MODULE_ERROR with no message and no detail: what the Package Manager answers
+  ## a caller at a query bound, one that is not a reader, and a fault (G498, G501).
+  s.code == $ecModule and s.message.len == 0 and s.detail.isNone
+
+func readerStop*(s: Stop): Stop =
+  ## [G503] A reader's method's failure, with `PmRefusal` for an opaque one.
+  if not s.opaque:
+    return s
+  Stop(exit: s.exit, code: s.code, message: PmRefusal)
+
+func textOf(v: CborValue, key: string): string =
+  let x = v.lookup(key)
+  if x.isNone:
+    return ""
+  x.get.getText.get("")
+
+func u64Of(v: CborValue, key: string): Opt[uint64] =
+  let x = v.lookup(key)
+  if x.isNone:
+    return Opt.none(uint64)
+  x.get.getUint64
+
+func packageStop*(answer: CborValue): Opt[Stop] =
+  ## [SPEC PM §14] The answer's `error` arm, as exit 5 with the Package Manager's
+  ## code and its declared message; none for any other arm.
+  let e = answer.lookup("error")
+  if e.isNone:
+    return Opt.none(Stop)
+  Opt.some(
+    Stop(
+      exit: ExitProvider,
+      code: e.get.textOf("code"),
+      message: e.get.textOf("message"),
+      declared: true,
+    )
+  )
+
+type PageFetch* =
+  proc(cursor: Opt[string]): Result[CborValue, Stop] {.gcsafe, raises: [].}
+  ## One page's answer: `{packages, ? next_cursor}` or `{error}`.
+
+proc listAll*(fetch: PageFetch, what: string): Result[seq[CborValue], Stop] =
+  ## [G503; G499] Every page, in order. An `invalid-request` for a cursor means the
+  ## Package Manager no longer holds the listing (a commit, or a catalog refresh,
+  ## between two pages): the listing starts over, at most `ListStarts` times, then
+  ## fails saying `what` kept changing. Any other error arm ends it.
+  for start in 0 .. ListStarts:
+    var items: seq[CborValue] = @[]
+    var cursor = Opt.none(string)
+    var again = false
+    while true:
+      let answer = ?fetch(cursor)
+      let failed = packageStop(answer)
+      if failed.isSome:
+        if failed.get.code == "invalid-request" and cursor.isSome:
+          again = true
+          break
+        return err(failed.get)
+      let page = answer.lookup("packages")
+      if page.isNone or page.get.kind != ckArray:
+        return err(
+          Stop(
+            exit: ExitProvider,
+            code: $ecModule,
+            message: "a page of " & what & " has no packages",
+          )
+        )
+      items.add(page.get.items)
+      let next = answer.lookup("next_cursor")
+      if next.isNone:
+        return ok(items)
+      cursor = next.get.getText
+      if cursor.isNone:
+        return err(
+          Stop(
+            exit: ExitProvider,
+            code: $ecModule,
+            message: "a page of " & what & " has a cursor that is not text",
+          )
+        )
+    if not again:
+      break
+  err(
+    Stop(
+      exit: ExitProvider,
+      code: "invalid-request",
+      message:
+        what & " kept changing while lcn_call read them: it started over " & $ListStarts &
+        " times; run the command again",
+    )
+  )
+
+proc within(c: Ctx): Ctx =
+  ## `c` with what remains of its deadline, at least 1 ms.
+  result = c
+  if c.deadline.isSome:
+    let left = c.deadline.get - int(inMilliseconds(getMonoTime() - c.started))
+    result.deadline = Opt.some(max(left, 1))
+
+func gateDeadline(c: Ctx): Opt[MonoTime] =
+  if c.deadline.isNone:
+    return Opt.none(MonoTime)
+  Opt.some(c.started + initDuration(milliseconds = c.deadline.get))
+
+proc pmMethod(
+    c: Ctx, p: Provider, bare: string
+): Result[(SurfaceMethod, RequestShape, RouteSpec, Digest), Stop] =
+  ## [G503] The Package Manager's method `bare`, its request rule, its route and its
+  ## declaration root.
+  let m = p.surface.methodNamed(bare).valueOr:
+    return err(
+      Stop(
+        exit: ExitRc,
+        code: $ecModule,
+        message: "the Package Manager's contract has no method " & bare,
+      )
+    )
+  let sh = requestShape(p.set, m).valueOr:
+    return err(refused(error))
+  let root = ?p.memberRoot(m.doc, m.name)
+  let spec = RouteSpec(
+    key: routeKey(c.target, p.address, p.selected, "methods", root),
+    contract: p.selected,
+    provider: p.address,
+    access: LogosNSRuntimeControlRouteAccess(methods: Opt.some(@[@root])),
+    schema: p.schema,
+  )
+  ok((m, sh, spec, root))
+
+proc pmChecked(
+    c: Ctx, p: Provider, bare: string, request: CborValue
+): Result[(SurfaceMethod, RouteSpec, Digest, seq[byte]), Stop] =
+  ## [G503] `bare`'s request checked against its request rule (exit 1), encoded.
+  let (m, sh, spec, root) = ?c.pmMethod(p, bare)
+  checkRequest(sh, request).isOkOr:
+    return err(refused(error & "; fields: " & sh.fieldList))
+  ok((m, spec, root, encodeCbor(request)))
+
+proc pmSend(
+    c: Ctx, p: Provider, bare: string, request: CborValue
+): Result[CallResult, Stop] =
+  ## [G503] One call of the Package Manager's `bare`: the request checked against its
+  ## request rule first (exit 1), then sent with `c`'s deadline.
+  let (m, spec, _, params) = ?c.pmChecked(p, bare, request)
+  c.callWithRetry(spec, m.bare, params)
+
+proc pmAnswer(r: CallResult, reader: bool): Result[CborValue, Stop] =
+  ## The call's answer, decoded; a failure as `classify` says, an opaque one of a
+  ## reader's method with `PmRefusal`; the `error` arm as `packageStop`.
+  if r.cancelled:
+    return err(cancelled())
+  if not r.ok:
+    let s = classify(r)
+    return err(
+      if reader:
+        readerStop(s)
+      else:
+        s
+    )
+  let v = decodeCbor(r.response).valueOr:
+    return err(
+      Stop(
+        exit: ExitProvider,
+        code: $ecModule,
+        message: "the Package Manager's answer is not Logos deterministic CBOR",
+      )
+    )
+  let failed = packageStop(v)
+  if failed.isSome:
+    return err(failed.get)
+  ok(v)
+
+proc pmProvider(c: Ctx): Result[Provider, Stop] =
+  c.provider(LcnCliProvider(module: PmModule))
+
+proc pageCall(
+    c: Ctx, p: Provider, bare: string, request: CborValue
+): Result[CborValue, Stop] =
+  ## [G503] A page call (a list page, a handoff), within lcn_call's own page bound;
+  ## its error arm returned as the answer, for `listAll`.
+  if c.env.pm != nil:
+    ?enter(c.env.pm[].pages, PmPageCalls, c.cancelFd, c.gateDeadline)
+  defer:
+    if c.env.pm != nil:
+      leave(c.env.pm[].pages)
+  let r = ?c.within.pmSend(p, bare, request)
+  if r.cancelled:
+    return err(cancelled())
+  if not r.ok:
+    return err(readerStop(classify(r)))
+  let v = decodeCbor(r.response).valueOr:
+    return err(
+      Stop(
+        exit: ExitProvider,
+        code: $ecModule,
+        message: "the Package Manager's answer is not Logos deterministic CBOR",
+      )
+    )
+  ok(v)
+
+proc listing(
+    c: Ctx, p: Provider, bare: string, package: Opt[string], what: string
+): Result[seq[CborValue], Stop] =
+  ## [G503] Every page of `bare` (`list_installed_packages`, `list_packages`).
+  proc fetch(cursor: Opt[string]): Result[CborValue, Stop] =
+    var entries: seq[CborEntry] = @[]
+    if cursor.isSome:
+      entries.add((cbor("cursor"), cbor(cursor.get)))
+    if package.isSome:
+      entries.add((cbor("package"), cbor(package.get)))
+    c.pageCall(p, bare, CborValue(kind: ckMap, entries: entries))
+
+  listAll(fetch, what)
+
+func identityText(v: CborValue): string =
+  ## `name version` of a record's `identity`.
+  let id = v.lookup("identity")
+  if id.isNone:
+    return "?"
+  id.get.textOf("package") & " " & id.get.textOf("version")
+
+func identityMap(package, version: string): CborValue =
+  cborMap((cbor("package"), cbor(package)), (cbor("version"), cbor(version)))
+
+proc need(x: Opt[string], what: string): Result[string, Stop] =
+  if x.isNone:
+    return err(refused(what))
+  ok(x.get)
+
+# Subscriptions on the Package Manager's routes --------------------------------------------
+
+type Sub = object
+  ## One event subscription on a leased route, as `runSubscribe` makes it.
+  lease: Lease
+  s: Stream
+
+proc openSub(c: Ctx, p: Provider, id: string, meth: Digest): Result[Sub, Stop] =
+  ## [G503; SPEC TRANSPORT §5.2, §6] A subscription to the Package Manager's event `id`
+  ## for the call of the method whose root is `meth`: the Package Manager publishes it
+  ## in that call's own scope (PM §15.1, §15.2), which reaches the subscriptions of the
+  ## session that carried the request only. So both share one route, whose access
+  ## names the method and the event, and the call goes on the subscription's lease
+  ## (`subCall`).
+  let found = p.surface.eventsNamed(id)
+  if found.len != 1:
+    return err(
+      Stop(
+        exit: ExitRc,
+        code: $ecModule,
+        message: "the Package Manager's contract has no event " & id,
+      )
+    )
+  let e = found[0]
+  let root = ?p.memberRoot(e.doc, e.id)
+  let both = digestOfInput(encodeCbor(cborArray(cbor(@meth), cbor(@root))))
+  let spec = RouteSpec(
+    key: routeKey(c.target, p.address, p.selected, "methods+subscribe_events", both),
+    contract: p.selected,
+    provider: p.address,
+    access: LogosNSRuntimeControlRouteAccess(
+      methods: Opt.some(@[@meth]), subscribe_events: Opt.some(@[@root])
+    ),
+    schema: p.schema,
+  )
+  let lease = c.env.routes.acquire(spec, Opt.none(int), c.cancelFd).valueOr:
+    return err(rcStop(error))
+  let s = c.env.hub.open(lease.handle, 1).valueOr:
+    c.env.routes.done(lease)
+    return err(Stop(exit: ExitUnreachable, message: error))
+  var r: LogosResult
+  withLock lease.lock[]:
+    r = lease.route.vtable.subscribe(
+      lease.route, cstring(e.id), handler(), s.userData(0), s.idSlot(0)
+    )
+  if int64(r.code) != 0:
+    s.settle(0, false)
+    c.env.hub.detach(s)
+    freeStream(s) # [IF l.1400] no handler was or will be invoked
+    if r.code in [CErrorCode(ord(ecNotReady)), CErrorCode(ord(ecTransport))]:
+      c.env.routes.drop(lease)
+    c.env.routes.done(lease)
+    return err(subscribeFailure(r))
+  if c.env.routes.ended(lease):
+    s.markEnded(ekRoute, CErrorCode(ord(ecNotReady)))
+  ok(Sub(lease: lease, s: s))
+
+proc closeSub(c: Ctx, sub: Sub) =
+  var u: LogosResult
+  withLock sub.lease.lock[]:
+    u = sub.lease.route.vtable.unsubscribe(sub.lease.route, sub.s.id(0))
+  c.env.hub.detach(sub.s)
+  if int64(u.code) == 0:
+    freeStream(sub.s)
+  else:
+    # [IF l.1436-1438] e.g. the route ended: valid until the handle's release.
+    c.env.routes.keepUntilRelease(sub.lease, sub.s, freeStream)
+  c.env.routes.done(sub.lease)
+
+proc subCall(
+    c: Ctx, sub: Sub, bare: string, params: openArray[byte], side: Side
+): CallResult =
+  ## [G503] The call on the subscription's own route, with `c`'s deadline. A call the
+  ## route did not take (`retryable`) drops it, so the next subscription gets a new one.
+  result = callRoute(
+    sub.lease.route, sub.lease.lock, bare, params, c.deadline, c.cancelFd, side
+  )
+  if result.retryable:
+    c.env.routes.drop(sub.lease)
+
+# Operations and their progress (PM §15.2) -------------------------------------------------
+
+proc progressLine(c: Ctx, v: CborValue): Result[void, SinkError] =
+  ## [G503] One `operation_progress` publication, on stderr in either format: stdout
+  ## carries the command's one result.
+  let phase = v.textOf("phase")
+  let done = v.u64Of("bytes_completed")
+  let total = v.u64Of("bytes_total")
+  var j = %*{"phase": phase}
+  var t = "progress: " & phase
+  if done.isSome:
+    j["bytes_completed"] = %done.get
+  if total.isSome:
+    j["bytes_total"] = %total.get
+  if done.isSome and total.isSome:
+    t.add(" " & $done.get & " of " & $total.get & " bytes")
+  elif total.isSome:
+    t.add(" of " & $total.get & " bytes")
+  c.pres.progressLine(%*{"progress": j}, t)
+
+proc operate(
+    c: Ctx, bare: string, request: CborValue, progress: bool
+): Result[CborValue, Stop] =
+  ## [G503; PM §15.2] An install, remove or update. With `progress`, lcn_call first
+  ## subscribes to `operation_progress`, then sends a fresh key and writes each
+  ## publication for it as it comes. [PKG-0573] A cancel, a timeout or a lost route
+  ## is reported as the outcome unknown (exit 2), never as a rollback; a progress
+  ## stream that ends only stops the progress lines.
+  let p = ?c.pmProvider()
+  if not progress:
+    return pmAnswer(?c.within.pmSend(p, bare, request), reader = false)
+  let key = requestKey().valueOr:
+    return err(rcStop(error))
+  var req = request
+  req.entries.add((cbor("progress_key"), cbor(key)))
+  let (m, _, root, params) = ?c.pmChecked(p, bare, req)
+  var watching = true
+  var r: CallResult
+  for attempt in 0 .. 1:
+    # Once more on a new route when this one took no request, as `callWithRetry`.
+    let sub = ?c.openSub(p, ProgressEvent, root)
+    proc drain(): bool =
+      discard sub.s.wait(-1, 0) # the wake pipe
+      for ev in sub.s.take():
+        if not watching:
+          continue
+        let v = decodeCbor(ev.data).valueOr:
+          continue
+        if v.textOf("progress_key") != key:
+          continue # another command's operation on this shared route
+        if c.progressLine(v).isErr:
+          watching = false # the reader of stderr is gone; the operation goes on
+      if sub.s.ending.kind != ekNone:
+        watching = false
+      true
+
+    r = c.within.subCall(
+      sub, m.bare, params, Side(fd: sub.s.wakeFd, everyMs: -1, tick: drain)
+    )
+    discard drain()
+    c.closeSub(sub)
+    if not (attempt == 0 and r.retryable):
+      break
+  pmAnswer(r, reader = false)
+
+# The watch (PM §15.1) ---------------------------------------------------------------------
+
+when defined(lcnTestHooks):
+  from std/os import getEnv
+
+  type WatchHook = object
+    refreshMs: int ## > 0: in place of `WatchRefreshMs`
+    loseFirstHint: bool ## a watch command's first hint ends its watch, unlisted
+    deaf: bool ## every other hint is ignored, as if it were lost
+
+  proc watchHook(): WatchHook =
+    ## [PKG-0555] A test build's watch, from `LCN_TEST_CLI_WATCH`: a comma list of
+    ## `refresh=MS`, `deaf` and `lose-first-hint`, read when a watch command starts.
+    for item in getEnv("LCN_TEST_CLI_WATCH").split(','):
+      let t = item.strip()
+      if t == "deaf":
+        result.deaf = true
+      elif t == "lose-first-hint":
+        result.loseFirstHint = true
+      elif t.startsWith("refresh="):
+        try:
+          result.refreshMs = parseInt(t["refresh=".len ..^ 1])
+        except ValueError:
+          discard
+
+proc installedView(items: seq[CborValue]): (JsonNode, string) =
+  var a = newJArray()
+  var names: seq[string] = @[]
+  for r in items:
+    let id = r.lookup("identity")
+    let n = (if id.isSome: id.get.textOf("package") else: "?")
+    let v = (if id.isSome: id.get.textOf("version") else: "?")
+    a.add(%*{"package": n, "version": v})
+    names.add(n & " " & v)
+  (
+    %*{"installed": a},
+    "installed: " & (if names.len == 0: "(none)" else: names.join(", ")),
+  )
+
+func remakable(s: Stop): bool =
+  ## [G503; Fable §17.1 point 3] A failure a lost watch is made again after: the Package
+  ## Manager not ready (stopped, starting, its route ended), a transport failure, a
+  ## timeout, or a cancel lcn_call's user did not ask for.
+  not s.silent and s.code in [$ecNotReady, $ecTransport, $ecTimeout, $ecCancelled]
+
+proc runWatch(c: Ctx, cmd: LcnCliPackageCommand): Result[void, Stop] =
+  ## [G503; PM §15.1] The installed packages as a stream: one line with every
+  ## installed identity at the start, and again whenever they changed.
+  ## [PKG-0554, PKG-0555] A watch's hint only says to look again, and a submitted
+  ## watch proves no observation boundary, so lcn_call lists the packages after
+  ## each hint, every `WatchRefreshMs` and after a lost watch, which it makes
+  ## again; a line is written when the list differs from the last one written.
+  ## [Fable §17.1 point 3] A watch that was made and listed, then lost (it ended, its
+  ## route or its hints were lost, or the Package Manager stopped), is made again every
+  ## `WatchResyncMs` for up to `WatchRemakeMs` from the loss, with one notice on stderr
+  ## for each loss. [Fable §17.1 point 4] A watch waiting at lcn_call's own bound says
+  ## so on stderr, and `--for` bounds that wait.
+  ## The stream ends as `subscribe`'s does (count, for, the launcher's cancel), or
+  ## with the failure of a list or of the watch itself: one no re-making helps, one
+  ## before the watch was first made, or one still there `WatchRemakeMs` after a loss.
+  let (count, forMs) = ?limits(cmd.count, cmd.for_ms)
+  var shown = Opt.none(string)
+  var written = 0
+  let started = getMonoTime()
+  var pres = c.pres
+  ?pres.streamStart().mapErr(outputStop)
+  if c.env.pm != nil and not c.env.pm[].watches.tryEnter(PmWatches):
+    let msg =
+      "lcn_call has " & $PmWatches &
+      " watches open: this one waits for one of them to end"
+    ?pres.notice(%*{"notice": msg}, "notice: " & msg).mapErr(outputStop)
+    let deadline =
+      if forMs.isSome:
+        Opt.some(started + initDuration(milliseconds = forMs.get))
+      else:
+        Opt.none(MonoTime)
+    ?enter(c.env.pm[].watches, PmWatches, c.cancelFd, deadline, past = "--for")
+  defer:
+    if c.env.pm != nil:
+      leave(c.env.pm[].watches)
+  var nc = c
+  nc.deadline = Opt.none(int)
+  var refreshMs = WatchRefreshMs
+  when defined(lcnTestHooks):
+    let hook = watchHook()
+    if hook.refreshMs > 0:
+      refreshMs = hook.refreshMs
+    var lostOnce = false
+  proc expired(): bool =
+    forMs.isSome and int(inMilliseconds(getMonoTime() - started)) >= forMs.get
+
+  var made = false ## a watch was made and its list written or compared
+  var lostAt = Opt.none(MonoTime) ## when the watch was lost; none while it is made
+  proc lose(s: Opt[Stop]): Result[void, Stop] =
+    ## The watch is lost: it is made again, unless `s` is a failure no re-making helps
+    ## or one before the watch was first made, or the loss is `WatchRemakeMs` old.
+    if s.isSome and (not made or not s.get.remakable):
+      return err(s.get)
+    let now = getMonoTime()
+    if lostAt.isNone:
+      lostAt = Opt.some(now)
+      let why =
+        if s.isSome and s.get.message.len > 0:
+          " (" & s.get.message & ")"
+        else:
+          ""
+      let msg =
+        "the watch on the Package Manager was lost" & why &
+        "; it is made again for up to " & $(WatchRemakeMs div 1000) & " s"
+      pres.notice(%*{"notice": msg}, "notice: " & msg).isOkOr:
+        return err(outputStop(error))
+    elif int(inMilliseconds(now - lostAt.get)) >= WatchRemakeMs:
+      if s.isSome:
+        return err(s.get)
+      return err(
+        Stop(
+          exit: ExitRc,
+          code: $ecNotReady,
+          message:
+            "the watch on the Package Manager was not made again within " &
+            $(WatchRemakeMs div 1000) & " s",
+        )
+      )
+    ok()
+
+  while true:
+    if lostAt.isSome:
+      # A lost watch: a pause, then made again.
+      if expired():
+        return ok()
+      if waitCancel(c.cancelFd, WatchResyncMs):
+        return err(nc.interrupted)
+      if expired():
+        return ok()
+    # The provider each time the watch is made: a lost one may come back as a new record.
+    let p = c.pmProvider().valueOr:
+      ?lose(Opt.some(error))
+      continue
+    let (wm, _, wroot, wparams) = c.pmChecked(
+      p, "watch_installed_packages", CborValue(kind: ckMap)
+    ).valueOr:
+      ?lose(Opt.some(error))
+      continue
+    let sub = nc.openSub(p, InstalledEvent, wroot).valueOr:
+      ?lose(Opt.some(error))
+      continue
+    var failure = Opt.none(Stop)
+    var finished = false
+    var lastList = getMonoTime()
+    var first = true
+    proc look(): bool =
+      ## Lists and writes when the view changed; false ends the watch call.
+      var lc = c
+      lc.started = getMonoTime()
+      lc.deadline = Opt.some(RcDeadlineMs)
+        # [IMPL] a list in a stream, as a Runtime Control call
+      let items = lc.listing(
+        p, "list_installed_packages", Opt.none(string), "the installed packages"
+      )
+      lastList = getMonoTime()
+      if items.isErr:
+        failure = Opt.some(items.error)
+        return false
+      made = true
+      lostAt = Opt.none(MonoTime)
+      let (j, t) = installedView(items.get)
+      if shown.isNone or shown.get != t:
+        pres.streamLine(j, t).isOkOr:
+          failure = Opt.some(outputStop(error))
+          return false
+        shown = Opt.some(t)
+        inc written
+        if count.isSome and written >= count.get:
+          finished = true
+          return false
+      true
+
+    proc tick(): bool =
+      discard sub.s.wait(-1, 0)
+      var hints = sub.s.take().len
+      when defined(lcnTestHooks):
+        if hook.loseFirstHint and hints > 0 and not lostOnce:
+          lostOnce = true
+          return false # as a lost subscription below: the watch is made again
+        if hook.deaf:
+          hints = 0
+      if expired():
+        finished = true
+        return false
+      if first or hints > 0 or inMilliseconds(getMonoTime() - lastList) >= refreshMs:
+        first = false
+        if not look():
+          return false
+      if sub.s.ending.kind != ekNone:
+        return false # the hints are lost: the watch is made again
+      true
+
+    var every = refreshMs
+    if forMs.isSome:
+      every =
+        min(every, max(forMs.get - int(inMilliseconds(getMonoTime() - started)), 1))
+    # The watch on the subscription's route: its hints are published in its own scope.
+    let call = nc.subCall(
+      sub, wm.bare, wparams, Side(fd: sub.s.wakeFd, everyMs: every, tick: tick)
+    )
+    nc.closeSub(sub)
+    if failure.isSome:
+      ?lose(failure) # a list's failure: made again when it is one a re-making helps
+      continue
+    if finished:
+      return ok()
+    if call.cancelled:
+      return err(nc.interrupted)
+    if not call.ok and not call.ended:
+      # A refusal or a fault ends it; NOT_READY, TRANSPORT_ERROR and the like are a loss.
+      ?lose(Opt.some(readerStop(classify(call))))
+      continue
+    if call.ok:
+      let v = decodeCbor(call.response)
+      if v.isOk:
+        let failed = packageStop(v.get)
+        if failed.isSome:
+          return err(failed.get)
+    # The watch ended (`{}`), its route or its hints were lost: made again.
+    ?lose(Opt.none(Stop))
+
+# The actions ------------------------------------------------------------------------------
+
+proc runPackage(c: Ctx, cmd: LcnCliPackageCommand): Result[void, Stop] =
+  ## [G503; PM §15] One `package` action on the composed Package Manager.
+  template answer(v: JsonNode, text: string) =
+    c.pres.done(v, text).isOkOr:
+      return err(outputStop(error))
+    return ok()
+
+  case cmd.action.kind
+  of LcnCliPackageActionKind.List:
+    let p = ?c.pmProvider()
+    let items =
+      ?c.listing(p, "list_installed_packages", cmd.package, "the installed packages")
+    var lines: seq[string] = @[]
+    var a = newJArray()
+    for r in items:
+      a.add(jsonOf(r))
+      lines.add(identityText(r))
+    answer(
+      %*{"packages": a},
+      (if lines.len == 0: "no packages installed" else: lines.join("\n")),
+    )
+  of LcnCliPackageActionKind.Inspect:
+    let package = ?need(cmd.package, "package inspect names a PACKAGE")
+    var entries: seq[CborEntry] = @[(cbor("package"), cbor(package))]
+    if cmd.version.isSome:
+      entries.add((cbor("version"), cbor(cmd.version.get)))
+    let p = ?c.pmProvider()
+    let v = ?pmAnswer(
+      ?c.within.pmSend(p, "inspect_package", CborValue(kind: ckMap, entries: entries)),
+      reader = false,
+    )
+    answer(jsonOf(v), toDiag(v))
+  of LcnCliPackageActionKind.Install:
+    let package = ?need(cmd.package, "package install names a PACKAGE")
+    var entries: seq[CborEntry] = @[(cbor("package"), cbor(package))]
+    if cmd.version.isSome:
+      entries.add((cbor("version"), cbor(cmd.version.get)))
+    let v = ?c.operate(
+      "install_package",
+      CborValue(kind: ckMap, entries: entries),
+      cmd.progress.get(false),
+    )
+    let rec = v.lookup("installed")
+    answer(
+      jsonOf(v), "installed " & (if rec.isSome: identityText(rec.get)
+      else: package)
+    )
+  of LcnCliPackageActionKind.Remove:
+    let package = ?need(cmd.package, "package remove names a PACKAGE and its VERSION")
+    let version = ?need(cmd.version, "package remove names a PACKAGE and its VERSION")
+    let v = ?c.operate(
+      "remove_package",
+      cborMap((cbor("identity"), identityMap(package, version))),
+      cmd.progress.get(false),
+    )
+    # [IMPL; G503] PM §15 l.1693-1699: `{}` whether or not it was installed, so the text
+    # says what is true after either.
+    answer(jsonOf(v), package & " " & version & " is not installed")
+  of LcnCliPackageActionKind.Update:
+    let package = ?need(cmd.package, "package update names a PACKAGE and its VERSION")
+    let version = ?need(cmd.version, "package update names a PACKAGE and its VERSION")
+    var entries: seq[CborEntry] = @[(cbor("current"), identityMap(package, version))]
+    if cmd.to.isSome:
+      entries.add((cbor("target_version"), cbor(cmd.to.get)))
+    let v = ?c.operate(
+      "update_package",
+      CborValue(kind: ckMap, entries: entries),
+      cmd.progress.get(false),
+    )
+    let rec = v.lookup("installed")
+    answer(
+      jsonOf(v), "installed " & (if rec.isSome: identityText(rec.get)
+      else: package)
+    )
+  of LcnCliPackageActionKind.Handoff:
+    let package =
+      ?need(cmd.package, "package handoff names a PACKAGE, its VERSION and a MODULE")
+    let version =
+      ?need(cmd.version, "package handoff names a PACKAGE, its VERSION and a MODULE")
+    let module =
+      ?need(cmd.module, "package handoff names a PACKAGE, its VERSION and a MODULE")
+    let p = ?c.pmProvider()
+    let v = ?c.pageCall(
+      p,
+      "get_runtime_handoff",
+      cborMap(
+        (cbor("module"), cbor(module)), (cbor("package"), identityMap(package, version))
+      ),
+    )
+    let failed = packageStop(v)
+    if failed.isSome:
+      return err(failed.get)
+    answer(jsonOf(v), toDiag(v))
+  of LcnCliPackageActionKind.Watch:
+    c.runWatch(cmd)
+
+proc runCatalog(c: Ctx, cmd: LcnCliCatalogCommand): Result[void, Stop] =
+  ## [G503; PM §15] The catalog, every page.
+  let p = ?c.pmProvider()
+  let items = ?c.listing(p, "list_packages", cmd.package, "the catalog's packages")
+  var lines: seq[string] = @[]
+  var a = newJArray()
+  for r in items:
+    a.add(jsonOf(r))
+    let src = r.lookup("source")
+    let kind = (if src.isSome: src.get.textOf("kind") else: "")
+    lines.add(identityText(r) & (if kind.len > 0: " (" & kind & ")" else: ""))
+  c.pres.done(
+    %*{"packages": a},
+    (if lines.len == 0: "the catalog lists no packages"
+    else: lines.join("\n")),
+  ).isOkOr:
+    return err(outputStop(error))
+  ok()
+
 # A request ---------------------------------------------------------------------------------
 
 func what(cmd: LcnCliCommand): string =
@@ -1100,6 +1913,13 @@ func what(cmd: LcnCliCommand): string =
     "events"
   of LcnCliCommandKind.lcn_Cli_rc_command:
     "rc " & cmd.arm_lcn_Cli_rc_command.`method`
+  of LcnCliCommandKind.lcn_Cli_package_command:
+    # [G503] The action and the package's name: no version, module or key.
+    let x = cmd.arm_lcn_Cli_package_command
+    "package " & toLowerAscii($x.action.kind) &
+      (if x.package.isSome: " " & x.package.get else: "")
+  of LcnCliCommandKind.lcn_Cli_catalog_command:
+    "catalog list"
 
 proc run*(env: Env, job: Job): Done =
   ## [G344-G349] One request: its output written to the launcher's
@@ -1115,6 +1935,7 @@ proc run*(env: Env, job: Job): Done =
       if job.msg.deadline_ms.isSome: Opt.some(int(job.msg.deadline_ms.get))
       else: Opt.none(int)
     ),
+    started: getMonoTime(),
     pres: Presenter(
       json: job.msg.isJson,
       deployment: (if env.production: "production" else: "non-production"),
@@ -1143,6 +1964,10 @@ proc run*(env: Env, job: Job): Done =
       r = runSubscribe(c, job.msg.command.arm_lcn_Cli_subscribe_command)
     of LcnCliCommandKind.lcn_Cli_events_command:
       r = runEvents(c, job.msg.command.arm_lcn_Cli_events_command)
+    of LcnCliCommandKind.lcn_Cli_package_command:
+      r = runPackage(c, job.msg.command.arm_lcn_Cli_package_command)
+    of LcnCliCommandKind.lcn_Cli_catalog_command:
+      r = runCatalog(c, job.msg.command.arm_lcn_Cli_catalog_command)
     of LcnCliCommandKind.lcn_Cli_rc_command:
       r = R.err(refused("the rc op comes with remote Runtimes (Tier 5 step 5-7a)"))
   if r.isOk:

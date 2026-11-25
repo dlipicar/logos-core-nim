@@ -37,6 +37,7 @@ import ./support/authfixture, logos_sdk/testing/[kitbuild, schemasuite]
 from ../src/logos_core/transport/tls/trust import TrustSnapshot, newTrustSnapshot
 import ../src/logos_core/remote/carrier_types
 from ../src/logos_core/pm/input import MaxReadDeadlineMs
+from ../src/logos_core/pm/contractset import pmContractSet
 import logos_sdk/iface/accept
 import ../src/logos_core/pins as core_pins
 from ../src/logos_core/package/resolver import
@@ -1525,7 +1526,7 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
         $PresetDependencyDepth & ", \"assignment_attempts\": " &
         $PresetAssignmentAttempts & ", \"candidates_per_name\": " &
         $PresetCandidatesPerName & ", \"partial_closure_names\": " &
-        $PresetPartialClosureNames & "}}"
+        $PresetPartialClosureNames & "}, \"runtime_instance_id\": \"rt-1\"}"
     )
     check app.protected_inputs.isSome
     check app.protected_inputs.get.len == 1
@@ -1574,6 +1575,69 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
       prod,
     ).get
     check plain.composition.appConfig.protected_inputs.isNone
+
+  test "[IMPL-DECISION G498] [PKG-0529] compose: the input's readers are package_manager.readers, else lcn_call when this start composes it, else none, with the Runtime's id; a reader named twice, the Package Manager itself or an instance this start does not run is refused":
+    proc inputOf(text: string): CborValue =
+      result = cborMap()
+      let p = prepareDaemon(Session(dir: freshDir()), dcBytes(text), prod)
+      check p.isOk
+      if p.isErr:
+        checkpoint p.error
+        return
+      let ins = p.get.composition.appConfig.protected_inputs
+      check ins.isSome and ins.get.len == 1
+      if ins.isSome and ins.get.len == 1:
+        result = decodeCbor(ins.get[0].input).get(cborMap())
+
+    proc withCli(text: string): string =
+      text.replace(
+        "\"package_manager\": ",
+        "\"cli\": {\"artifact\": {\"id\": \"lcn_call\", \"local_path\": " &
+          "\"/opt/lib/liblcn_call.so\", \"hash\": " & Zero32 &
+          ", \"hash_suite\": \"logos.hash-suite.blake3-256\"}}, \"package_manager\": ",
+      )
+
+    func names(xs: varargs[string]): Opt[CborValue] =
+      var items: seq[CborValue]
+      for x in xs:
+        items.add(cbor(x))
+      Opt.some(CborValue(kind: ckArray, items: items))
+
+    proc readersOf(section: string): string =
+      withHost(pmText(pmSection(extra = "\"readers\": " & section)))
+
+    let plain = inputOf(withHost(pmText()))
+    check plain.lookup("readers").isNone
+    check plain.lookup("runtime_instance_id") == Opt.some(cbor("rt-1"))
+    check inputOf(withCli(withHost(pmText()))).lookup("readers") == names(CliInstance)
+    check inputOf(withCli(readersOf("[\"st\"]"))).lookup("readers") == names("st")
+    check inputOf(withCli(readersOf("[\"st\", \"" & CliInstance & "\"]"))).lookup(
+      "readers"
+    ) == names("st", CliInstance)
+    # An empty list: no reader, though lcn_call is composed.
+    check inputOf(withCli(readersOf("[]"))).lookup("readers").isNone
+    for (given, refusal) in [
+      ("[\"st\", \"st\"]", "package_manager.readers names st twice"),
+      (
+        "[\"" & PmInstance & "\"]",
+        "package_manager.readers names the Package Manager's own instance",
+      ),
+      (
+        "[\"zz\"]",
+        "package_manager.readers names zz, which is not an instance this start runs",
+      ),
+      (
+        "[\"" & CliInstance & "\"]",
+        "package_manager.readers names " & CliInstance &
+          ", which is not an instance this start runs",
+      ),
+    ]:
+      checkpoint given
+      let r = prepareDaemon(Session(dir: freshDir()), dcBytes(readersOf(given)), prod)
+      check r.isErr
+      if r.isErr:
+        checkpoint r.error
+        check r.error.endsWith(refusal)
 
   posixTest "[IMPL-DECISION G491] [PKG-0513] the composed Package Manager: from package_manager.artifact, host-ambient, started by the orchestrator after the operator's list; this logosd, with no compiled hash, refuses a section without the artifact, naming the field; logosctl's checks compose a stand-in":
     # A test logosd is built without the companion library's hash (`pmArtifactHash`):
@@ -1659,12 +1723,12 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
     ) ==
       "package_manager.artifact.id must be logos_package_manager, the companion library's id"
 
-  test "[G402] [IMPL-DECISION G491] S9 to S12 with the section: six rules, each provider once, in byte order":
+  test "[G402] [IMPL-DECISION G491] [IMPL-DECISION G503] S9 to S13 with the section: seven rules, each provider once, in byte order; S14 with lcn_call too":
     let orch = orchestratorValue(dcOf(pmText())).get
     let base = systemRules(orch).get
     let two = PmSettings(instance: PmInstance, providers: @["st", "a", "st"])
     let rules = systemRules(orch, pm = Opt.some(two)).get
-    check rules.len == base.len + 6
+    check rules.len == base.len + 7
     let added = rules[base.len .. ^1].mapIt(toDiag(it))
     # S9's Runtime Control rule names no target: a list method's decision
     # names none, so a rule with `targets` would never allow list_modules (I86).
@@ -1679,6 +1743,27 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
     check added[5].startsWith("{\"kind\": \"deny\"")
     check "\"target-denied\"" in added[5]
     check "\"modules\": [\"logos_package_manager\"]" in added[5]
+    # S13: the composed instance publishes on its own contract, the pinned App A root.
+    let root = "h'" & toHex(pmContractSet().get.primary.root).toLowerAscii & "'"
+    check added[6].startsWith(
+      "{\"kind\": \"allow\", \"subject\": {\"instances\": [\"package_manager\"]}"
+    )
+    check "\"actions\": [\"publish-event\"]" in added[6] and root in added[6]
+    # S14 comes only with lcn_call: its access to that instance's contract.
+    let withCli = systemRules(orch, cli = true).get
+    let both = systemRules(orch, cli = true, pm = Opt.some(two)).get
+    check both.len == withCli.len + 8
+    let s14 = toDiag(both[^1])
+    check s14.startsWith(
+      "{\"kind\": \"allow\", \"subject\": {\"instances\": [\"lcn_call\"]}"
+    )
+    # Two patterns: a discovery names no provider (`authscopes.accessScope`), so
+    # `discover` has a pattern with no `providers`; the rest are the instance's only.
+    check "\"actions\": [\"discover\"]}" in s14
+    check "\"actions\": [\"call\", \"establish-route\", \"renew-route\", \"subscribe-event\"], \"providers\": {\"instances\": [\"package_manager\"]}" in
+      s14
+    check s14.count(root) == 2
+    check "\"access\"" notin s14
     # They are in the policy compose hands the authority.
     let c = checked(pmText()).get
     let s = Session(dir: freshDir())
@@ -1793,6 +1878,89 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
     check e.allows(published("st", "p-st"))
     check not e.allows(published("b", "p-b"))
     e.close()
+
+  test "[IMPL-DECISION G503] S13 and S14, decided by the Capability Authority: the Package Manager publishes its events; lcn_call discovers, routes to, calls and subscribes to it, mutations included; no one else does":
+    let text = pmText()
+    let root = @(pmContractSet().get.primary.root)
+    let decl = newSeq[byte](32)
+    let access = LogosNSRuntimeControlRouteAccess(methods: Opt.some(@[decl])).encode.get
+    proc to(
+        action: AuthzAction,
+        operation, consumer: string,
+        provider = "p-pm",
+        module = PmModule,
+        contract = root,
+    ): AuthzRequest =
+      AuthzRequest(
+        action: action,
+        operation: operation,
+        consumer: consumer,
+        target: provider,
+        provider: provider,
+        route: "route-9",
+        module: module,
+        contract: contract,
+        declaration: decl,
+        access: (if action == aaRoute: access else: @[]),
+      )
+
+    for cli in [true, false]:
+      checkpoint "lcn_call composed: " & $cli
+      var e = openPolicy(text, cli = cli, pm = checked(text).get.pm)
+      check e.facts.putInstance(PmInstance, InstanceFacts(module: PmModule)).isOk
+      check e.facts.putInstance(CliInstance, InstanceFacts(module: CliModule)).isOk
+      check e.facts.putInstance("st", InstanceFacts(module: "storesvc")).isOk
+      check e.facts.putProvider("p-pm", PmInstance).isOk
+      check e.facts.putProvider("p-st", "st").isOk
+      # S14: everything lcn_call's package commands need, with lcn_call only. A
+      # discovery's scope names no provider: `describe_provider`'s for each contract.
+      check e.allows(to(aaDiscover, "describe_provider", CliInstance)) == cli
+      check not e.allows(to(aaDiscover, "describe_provider", "st"))
+      check e.allows(to(aaRoute, "establish_route", CliInstance)) == cli
+      check e.allows(to(aaRoute, "renew_route", CliInstance)) == cli
+      for m in [
+        "install_package", "remove_package", "update_package", "inspect_package",
+        "list_packages", "list_installed_packages", "watch_installed_packages",
+        "get_runtime_handoff",
+      ]:
+        checkpoint m
+        check e.allows(to(aaCall, m, CliInstance)) == cli
+      for ev in ["installed_packages_changed_event", "operation_progress_event"]:
+        check e.allows(to(aaSubscribeEvent, ev, CliInstance)) == cli
+        # S13: the Package Manager publishes them, whoever composed lcn_call.
+        check e.allows(
+          AuthzRequest(
+            action: aaPublishEvent,
+            operation: ev,
+            consumer: PmInstance,
+            target: CliInstance,
+            provider: "p-pm",
+            route: "route-9",
+            module: PmModule,
+            contract: root,
+            declaration: decl,
+          )
+        )
+        check not e.allows(
+          AuthzRequest(
+            action: aaPublishEvent,
+            operation: ev,
+            consumer: "st",
+            target: CliInstance,
+            provider: "p-st",
+            route: "route-9",
+            module: "storesvc",
+            contract: root,
+            declaration: decl,
+          )
+        )
+      # No other consumer reaches the Package Manager, and lcn_call no other provider.
+      check not e.allows(to(aaCall, "install_package", "st"))
+      check not e.allows(to(aaRoute, "establish_route", "st"))
+      check not e.allows(
+        to(aaCall, "stat_object", CliInstance, "p-st", "storesvc", @LcnStorageFetchRoot)
+      )
+      e.close()
 
   test "[IMPL-DECISION G491] the replaced field: package_manager.instance is refused before the schema, naming state and artifact":
     let text =
@@ -2559,7 +2727,7 @@ suite "dc.init: logosctl init's session [IMPL-DECISION G192] [batch E 19] [U8]":
     check getFilePermissions(s.runDir) == {fpUserRead, fpUserWrite, fpUserExec}
 
 suite "dc.docs: docs/DAEMON.md carries the schemas and the system rules verbatim":
-  test "[PKG-0474] every daemon CDDL file, the package trust file's and the launcher's, S1-S12 and logosd's preset of the resolver limits, word for word":
+  test "[PKG-0474] [IMPL-DECISION G503] every daemon CDDL file, the package trust file's and the launcher's, S1-S14 and logosd's preset of the resolver limits, word for word":
     let root = currentSourcePath().parentDir.parentDir
     let doc = readFile(root / "docs" / "DAEMON.md")
     for name in [
@@ -2582,12 +2750,14 @@ suite "dc.docs: docs/DAEMON.md carries the schemas and the system rules verbatim
     for r in systemRules(orch, cli = true).get[base.len .. ^1]:
       cli.add(toDiag(r) & "\n")
     check (cli & "```") in doc
-    # [G402, G491] S9 to S12, which logosd adds with a package_manager section.
+    # [G402, G491, G503] S9 to S14, which logosd adds with a package_manager section
+    # and lcn_call.
     let withCli = systemRules(orch, cli = true).get.len
     let pm = PmSettings(instance: "package_manager", providers: @["storage"])
     var pmRules = "```text\n"
     for r in systemRules(orch, cli = true, pm = Opt.some(pm)).get[withCli .. ^1]:
       pmRules.add(toDiag(r) & "\n")
+    checkpoint pmRules
     check (pmRules & "```") in doc
     # [G399; ruling C2, C3] logosd's preset and the start's log line.
     let preset =

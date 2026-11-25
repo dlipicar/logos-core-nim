@@ -10,7 +10,7 @@ import logos_sdk/codegen/common_types
 export nimrt, common_types
 
 const
-  primaryDocument = "; logos-core-nim.daemon-config.v1: logosd\'s protected deployment input (Tier 4b\x0A; step 4b-6; DECISIONS I95, G293). One Logos deterministic-CBOR\x0A; lcn.daemon_config value in <session>/daemon-config.cbor. docs/DAEMON.md\x0A; documents each field (BCP l.359).\x0A;\x0A; logosd derives one logos-core-nim.app-config.v1 value from it\x0A; (daemon/compose.nim, G294) and hands that to logos_runtime_create; it is not a\x0A; configuration_format of the library. Where the host configuration has a rule,\x0A; this format uses it, so a field means the same in both: the rules named\x0A; lcn.app_* and lcn.ap_* are host_config.cddl\'s and policy.cddl\'s, resolved in\x0A; one document with this one. Every path is absolute. The checks the schema\x0A; cannot express (reserved names, the strategies an operator may use, the\x0A; development switch, the evidence key\'s binding) are applied by\x0A; daemon/config.nim before anything starts.\x0A\x0Alcn.daemon_config = {\x0A  format: \"logos-core-nim.daemon-config.v1\",\x0A  runtime: lcn.dc_runtime,\x0A  policy: lcn.dc_policy,\x0A  ? modules: [* lcn.app_module],\x0A  ? declarations: [* lcn.app_declaration],\x0A  ? ordering: [* lcn.app_ordering],\x0A  ? orchestration: lcn.dc_orchestration,\x0A  ? call_audit: lcn.dc_call_audit,\x0A  ? routing: [* lcn.app_routing_rule],\x0A  ? transport: lcn.app_transport,\x0A  ? remote: lcn.dc_remote,\x0A  ? permissions: lcn.dc_permissions,\x0A  ? state_transfers: [* lcn.app_state_transfer],\x0A  ? ctl: lcn.dc_ctl,\x0A  ? cli: lcn.dc_cli,\x0A  ? package_manager: lcn.dc_package_manager,\x0A  ? test_hooks: lcn.dc_test_hooks,\x0A}\x0A\x0A; runtime_instance_id: assigned by logosctl init (RUNTIME l.2586) and fixed for\x0A; the session\'s life. The directories come from the session layout.\x0Alcn.dc_runtime = {\x0A  runtime_instance_id: tstr .size (1..128),\x0A  ? startup_deadline_ms: uint32,\x0A  ? stop_deadline_ms: uint32,\x0A  ? shutdown_grace_ms: uint32,\x0A  ? apply_deadline_ms: uint32,\x0A  ? max_payload_depth: uint16,\x0A  ? module_host: lcn.app_path,\x0A  ? module_host_env: [* lcn.app_env_name],\x0A  ? remote_program: lcn.app_path,\x0A}\x0A\x0A; allow-all needs the development switch in the trust file (decision 11).\x0A; capability-authority: the authority instance is logosd\'s own; rules are the\x0A; operator\'s, and logosd adds the system rules (DAEMON.md \xC2\xA75). recovery: absent\x0A; is off; logosctl init writes true (RUNTIME l.1676).\x0Alcn.dc_policy =\x0A  { kind: \"allow-all\" } /\x0A  {\x0A    kind: \"capability-authority\",\x0A    source: tstr .size (1..128),\x0A    ? decision_validity_ms: uint64,\x0A    ? audit: { ? records: uint64 },\x0A    ? evaluation_deadline_ms: uint32,\x0A    ? recovery: bool,\x0A    rules: [* lcn.ap_rule],\x0A  }\x0A\x0A; The orchestration module\'s value (decision 8): the operator instances it\x0A; starts, and its restart policy. lcn.dc_restart and lcn.dc_override repeat\x0A; lcn_orchestrator.restart and lcn_orchestrator.override (config.cddl).\x0Alcn.dc_orchestration = {\x0A  ? start: [* lcn.app_instance_id],\x0A  ? restart: lcn.dc_restart,\x0A  ? overrides: [* lcn.dc_override],\x0A  ? resync_ms: uint32,\x0A}\x0A\x0Alcn.dc_restart =\x0A  { kind: \"disabled\" } /\x0A  {\x0A    kind: \"backoff\",\x0A    initial_delay_ms: uint32,\x0A    max_delay_ms: uint32,\x0A    multiplier: uint32,\x0A    ? max_attempts: uint32,\x0A    stable_ms: uint32,\x0A  }\x0A\x0Alcn.dc_override = {\x0A  instance: lcn.app_instance_id,\x0A  restart: lcn.dc_restart,\x0A}\x0A\x0A; call_records and evidence as in the host configuration; store: logosd\'s\x0A; call-evidence store (G301), which needs evidence.\x0Alcn.dc_call_audit = {\x0A  ? call_records: uint32,\x0A  ? evidence: lcn.app_evidence_key,\x0A  ? store: lcn.dc_evidence_store,\x0A}\x0A\x0Alcn.dc_evidence_store = {\x0A  ? max_records: uint32,\x0A  ? max_age_days: uint16,\x0A  ? queue: uint32,\x0A}\x0A\x0A; profile: absent selects the reference profile, since logosd always selects\x0A; one (decision 3). initial: the operator instances\' settings; logosd adds the\x0A; system instances\' host-ambient settings.\x0Alcn.dc_permissions = {\x0A  ? profile: \"logos-core-nim.permission-profile.v1\",\x0A  ? initial: [* lcn.app_initial_settings],\x0A}\x0A\x0A; The logosctl instance\'s socket (G296).\x0Alcn.dc_ctl = {\x0A  ? socket_dir: lcn.app_path,\x0A  ? workers: uint8,\x0A  ? idle_timeout_ms: uint32,\x0A}\x0A\x0A; The lcn_call instance, the CLI module (DECISIONS G343, G344; DAEMON.md\x0A; \xC2\xA77a). artifact replaces the library installed with logosd; socket_dir must\x0A; be owner-only, as ctl.socket_dir; workers 1-32 (default 8), streams 1-64\x0A; (default 8), idle_timeout_ms 100-600000 (default 30000), route_idle_ms\x0A; 1000-86400000 (default 600000).\x0Alcn.dc_cli = {\x0A  ? artifact: lcn.app_artifact,\x0A  ? socket_dir: lcn.app_path,\x0A  ? workers: uint8,\x0A  ? streams: uint8,\x0A  ? idle_timeout_ms: uint32,\x0A  ? route_idle_ms: uint32,\x0A}\x0A\x0A; The Package Manager (DECISIONS G399, G491; DAEMON.md \xC2\xA73;\x0A; docs/PACKAGE-MANAGER.md): logosd composes it as the reserved hosted_dynamic\x0A; instance package_manager of logos_package_manager (placement process), from\x0A; artifact if given, else the companion library installed with logosd, whose\x0A; BLAKE3-256 is compiled in; with neither, the section refuses to start. state\x0A; is the instance\'s state_assignment. storage holds at least one binding, each\x0A; naming a hosted_dynamic entry of modules, with unique names; catalog.storage\x0A; names one of them. resolver_limits, when present, holds all four limits;\x0A; absent, logosd\'s preset applies (DAEMON.md \xC2\xA73). The lcn.pm_* rules are\x0A; pm/input.cddl\'s, resolved in one document as lcn.app_* are. logosd composes\x0A; the instance\'s lcn.pm_input from this section and the trust file the start\x0A; accepted. The former instance field is refused, naming state and artifact.\x0Alcn.dc_package_manager = {\x0A  state: tstr .size (1..128),\x0A  ? artifact: lcn.app_artifact,\x0A  storage: [* lcn.pm_binding],\x0A  catalog: lcn.pm_catalog_ref,\x0A  ? resolver_limits: lcn.pm_resolver_limits,\x0A  ? limits: lcn.pm_limits,\x0A}\x0A\x0A; Accepted only by a logosd built with lcnTestHooks, with the development\x0A; switch on (G300); a packaged logosd refuses the field. The Module Loader\x0A; reports its failure loader_failure_after_ms after the start, or once the\x0A; file loader_failure_on_file names exists, whichever comes first.\x0Alcn.dc_test_hooks = {\x0A  ? ctl_command_delay_ms: uint32,\x0A  ? loader_failure_after_ms: uint32,\x0A  ? loader_failure_on_file: lcn.app_path,\x0A  ? diagnostics: lcn.dc_test_diagnostics,\x0A}\x0A\x0A; count diagnostics holding text, recorded as text the Runtime did not write\x0A; once the start\'s own diagnostics are logged (I95, amended 2026-11-16).\x0Alcn.dc_test_diagnostics = {\x0A  text: tstr .size (1..1024),\x0A  count: uint32,\x0A}\x0A\x0A; remote: the remote profile logos.remote.tls-tcp (G407-G410; REMOTE.md).\x0A; enabled: logosd starts its remote side, which needs runtime_instance_id to be\x0A; a lowercase UUID version 4 (RUNTIME l.2592-2593) and the remote trust input\x0A; (section 6a), and refuses policy allow-all (G415). signing: what signs the\x0A; TLS handshakes with the Runtime\'s key; absent is \"logosd\". key-holder needs\x0A; key_holder, the logos_keyholder program, and key_holder needs key-holder;\x0A; \"process-copy\" is accepted only by a logosd built with -d:logosTestSigning.\x0A; listeners and exports (G412; RUNTIME \xC2\xA79.3.9): the deployment\'s remote\x0A; listener and provider export records, as Runtime Control holds them, only\x0A; with enabled; validated as Runtime Control validates them (l.3319-3321).\x0Alcn.dc_remote = {\x0A  enabled: bool,\x0A  ? signing: lcn.dc_remote_signing,\x0A  ? key_holder: lcn.app_path,\x0A  ? listeners: [* lcn.rc_remote_listener_record],\x0A  ? exports: [* lcn.rc_provider_export_record],\x0A}\x0A\x0Alcn.dc_remote_signing = \"logosd\" / \"key-holder\" / \"process-copy\"\x0A\x0A; logos-core-nim.app-config.v1: the Host Embedding API configuration (RUNTIME\x0A; \xC2\xA713.3 configuration_format; decision G76). One Logos deterministic-CBOR\x0A; lcn.app_config value. docs/HOST-CONFIG.md documents each field.\x0A;\x0A; An array that is present is non-empty, and the checks the schema cannot\x0A; express (unique ids, ordering, the orchestration instance, the authority\x0A; instance, the package manager instance, the artifact adoption list) are\x0A; applied at logos_runtime_create (runtime/host_config.nim).\x0A; lcn.authority_policy is the Capability Authority\'s policy input,\x0A; authority/policy.cddl (docs/AUTHORITY-POLICY.md).\x0A\x0Alcn.app_config = {\x0A  runtime: lcn.app_runtime,\x0A  policy: lcn.app_policy,\x0A  orchestration: lcn.app_instance_id,\x0A  modules: [* lcn.app_module],\x0A  ? ordering: [* lcn.app_ordering],\x0A  ? declarations: [* lcn.app_declaration],\x0A  ? call_audit: lcn.app_call_audit,\x0A  ? routing: [* lcn.app_routing_rule],\x0A  ? transport: lcn.app_transport,\x0A  ? remote: lcn.app_remote,\x0A  ? permissions: lcn.app_permissions,\x0A  ? state_transfers: [* lcn.app_state_transfer],\x0A  ? protected_inputs: [* lcn.app_protected_input],\x0A  ; [G490] The instance that holds the Package Manager responsibility (RUNTIME\x0A  ; l.293): the hosted_dynamic logos_package_manager, the one hosted module\x0A  ; whose reserved name the Module Host accepts.\x0A  ? package_manager: lcn.app_instance_id,\x0A  ; [G505] Instances whose retained record may take a new artifact hash at a\x0A  ; start, all other facts equal: the host\'s assertion that the instance keeps\x0A  ; its state, grants and settings across a new library. logosd lists its own\x0A  ; composed instances (package_manager, lcn_call), never an operator\'s.\x0A  ? artifact_adoption: [* lcn.app_instance_id],\x0A}\x0A\x0Alcn.app_runtime = {\x0A  work_dir: lcn.app_path,\x0A  ? state_root: lcn.app_path,\x0A  ? store_dir: lcn.app_path,\x0A  ? runtime_instance_id: tstr .size (1..128),\x0A  ? startup_deadline_ms: uint32,\x0A  ? stop_deadline_ms: uint32,\x0A  ? shutdown_grace_ms: uint32,\x0A  ? apply_deadline_ms: uint32,\x0A  ? max_payload_depth: uint16,\x0A  ? endpoint_dir: lcn.app_path,\x0A  ? module_host: lcn.app_path,\x0A  ? module_host_env: [* lcn.app_env_name],\x0A  ? remote_program: lcn.app_path,\x0A}\x0A\x0A; module_host: the logos-module-host program, an absolute path (Tier 4b step\x0A; 4b-3); without it hosted_dynamic is refused. module_host_env: the names of\x0A; the variables every Module Host gets from the daemon\'s environment.\x0A; remote_program: the logos_remote program, an absolute path (Tier 5 step\x0A; 5-7a-2; DECISIONS G411); without it no remote profile is enabled here, and\x0A; enabling a remote listener is MODULE_ERROR (G412).\x0Alcn.app_env_name = tstr .size (1..128)\x0A\x0Alcn.app_path = tstr .size (1..4096)\x0A\x0A; allow-all: every operation is allowed (RUNTIME l.1633-1634).\x0A; capability-authority: the named logos_capability_authority instance decides\x0A; (RUNTIME \xC2\xA79; DECISIONS I85). evaluation_deadline_ms: 1..60000, default 5000;\x0A; recovery: the derived rules also apply after a binding loss (RUN-0860).\x0Alcn.app_policy =\x0A  { kind: \"allow-all\" } /\x0A  {\x0A    kind: \"capability-authority\",\x0A    authority: lcn.app_instance_id,\x0A    policy: lcn.authority_policy,\x0A    ? evaluation_deadline_ms: uint32,\x0A    ? recovery: bool,\x0A  }\x0A\x0A; Call audit (CA \xC2\xA79, \xC2\xA79.1): call_records is the in-memory ring\'s capacity,\x0A; 1..1000000, default 4096; evidence the call-evidence signing key.\x0Alcn.app_call_audit = {\x0A  ? call_records: uint32,\x0A  ? evidence: lcn.app_evidence_key,\x0A}\x0A\x0A; kid: the logos.capability_authority.evidence_key_id verifiers map to this\x0A; Runtime; secret_key_file: a 96-byte SLH-DSA-SHA2-192s secret key, mode 0600.\x0Alcn.app_evidence_key = {\x0A  kid: bstr .size (1..128),\x0A  secret_key_file: lcn.app_path,\x0A}\x0A\x0A; Routing selection (RUNTIME l.901-911; DECISIONS I90, G254): a route\x0A; from a module named caller (absent: any) to the module named callee is\x0A; direct or uses local transport. The rule naming the caller wins; with no\x0A; rule a route is direct. No rule names logos_module_loader, no callee is\x0A; logos_runtime_control, and local-transport is refused where the platform\x0A; has no unix-stream profile (TRANSPORT \xC2\xA78.2.1).\x0Alcn.app_routing_rule = {\x0A  ? caller: tstr .size (1..64),\x0A  callee: tstr .size (1..64),\x0A  mode: \"direct\" / \"local-transport\",\x0A}\x0A\x0A; The transport I/O thread\'s limits (TRANSPORT \xC2\xA75.2, \xC2\xA78.6; DECISIONS I90);\x0A; an absent field keeps its default. docs/HOST-CONFIG.md lists every limit.\x0A; frame_limit is at least 16 MiB (TRANSPORT l.380).\x0Alcn.app_transport = {\x0A  ? frame_limit: uint32,\x0A  ? hello_timeout_ms: uint32,\x0A  ? write_stall_timeout_ms: uint32,\x0A  ? max_pending_output_bytes: uint64,\x0A  ? conn_output_bytes: uint32,\x0A  ? caller_undelivered_bytes: uint32,\x0A  ? max_inbound: uint16,\x0A  ? max_outbound: uint16,\x0A  ? max_calls: uint32,\x0A  ? max_in_flight: uint32,\x0A}\x0A\x0A; Remote transport (RUNTIME \xC2\xA79.3.9; Tier 5 step 5-7a-2; DECISIONS G408, G412,\x0A; G415; docs/REMOTE.md). Only the embedding host sets it (logosd\'s compose).\x0A; snapshot: this start\'s trust snapshot, one deterministic-CBOR lcn.rch_snapshot\x0A; (remote/carrier.cddl); its Runtimes with an active record are the enrolled\x0A; ones. listeners and exports: the deployment\'s records (RUNTIME l.3319-3321),\x0A; held as Runtime Control holds them (lcn.rc_x is logos.runtime_control.x and\x0A; lcn.rt_x is logos.runtime.x, generated from the mirrored contract), each\x0A; address at most once and each export naming a listener here, validated as\x0A; Runtime Control validates them.\x0Alcn.app_remote = {\x0A  snapshot: bstr .size (1..16842752),\x0A  ? listeners: [* lcn.rc_remote_listener_record],\x0A  ? exports: [* lcn.rc_provider_export_record],\x0A}\x0A\x0A; The permission profile (RUNTIME l.1595, l.2526-2604; DECISIONS G110, G279,\x0A; I93; docs/PERMISSIONS.md). Absent: no profile is selected and permission\x0A; settings have the constant form (G229). profile names a profile this library\x0A; ships. initial is the protected provisioning of a new instance\'s settings\x0A; (RUNTIME l.2543): the entry naming the instance, else its module\'s entry,\x0A; else revision 1 with no permission (l.2541). It never names the Module\x0A; Loader, whose settings are its construction\'s (G253). Each permissions array\x0A; is ascending by permission name and names only defined permissions the\x0A; Runtime enforces; it may be empty.\x0Alcn.app_permissions = {\x0A  profile: \"logos-core-nim.permission-profile.v1\",\x0A  ? initial: [* lcn.app_initial_settings],\x0A}\x0A\x0Alcn.app_initial_settings = {\x0A  module: tstr .size (1..64),\x0A  ? instance: lcn.app_instance_id,\x0A  permissions: [* lcn.app_permission_setting],\x0A}\x0A\x0A; logos.runtime_control.permission_setting (RUNTIME l.2348-2351)\x0Alcn.app_permission_setting = {\x0A  permission: tstr .size (1..128),\x0A  constraints: bstr .size (1..1048576),\x0A}\x0A\x0A; One state transfer (RUNTIME l.3546-3553; DECISIONS I96, G305-G307),\x0A; applied once, when start bootstraps, before anything starts. to is a listed\x0A; instance new to the Runtime with its own state_assignment; from is an\x0A; instance the Runtime retains or retired, not listed in modules. from is\x0A; stopped and retired in the same write that creates to, which then gets\x0A; from\'s state: move renames from\'s state directory to to\'s; copy copies it\x0A; (at most max_bytes, default 1 GiB) and leaves it as it was. The entry is the\x0A; deployment\'s assertion that to can use that state: the Runtime infers none\x0A; from names, versions or contracts (RUN-0999). docs/HOST-CONFIG.md, \"State\x0A; transfer\".\x0Alcn.app_state_transfer = {\x0A  from: lcn.app_instance_id,\x0A  to: lcn.app_instance_id,\x0A  mode: \"move\" / \"copy\",\x0A  ? max_bytes: uint64,\x0A}\x0A\x0A; logos.runtime.module_instance_id (RUNTIME \xC2\xA79.2)\x0Alcn.app_instance_id = tstr .size (1..128)\x0A\x0Alcn.app_module = {\x0A  instance: lcn.app_instance_id,\x0A  module: tstr .size (1..64),\x0A  implementation: lcn.app_implementation,\x0A  ? primary_contract: logos.schema_commitment,\x0A  ? implements: [* logos.schema_commitment],\x0A  ? extends: [* logos.schema_commitment],\x0A  ? requires: [* lcn.app_requirement],\x0A  ? requested_permissions: [* lcn.app_permission],\x0A  ? state_assignment: tstr .size (1..128),\x0A  ? configuration: lcn.app_configuration,\x0A  ? provisioned_configuration: bstr .size (1..8388608),\x0A}\x0A\x0A; One deterministic-CBOR logos.module_configuration.configuration_declaration\x0A; (CONFIG \xC2\xA72): the module\'s schema binding and its optional package default.\x0A; provisioned_configuration is this instance\'s protected value (CONFIG l.142;\x0A; decision G141), a complete value of the binding\'s root; it needs\x0A; configuration. docs/HOST-CONFIG.md says when a changed value takes effect.\x0Alcn.app_configuration = bstr .size (1..16777216)\x0A\x0A; logos.module_loader.direct_static, direct_dynamic and hosted_dynamic with\x0A; the process placement (LOADER \xC2\xA73)\x0Alcn.app_implementation =\x0A  { strategy: \"direct_static\", binding: tstr .size (1..128) } /\x0A  { strategy: \"direct_dynamic\", artifact: lcn.app_artifact } /\x0A  { strategy: \"hosted_dynamic\", placement: \"process\", artifact: lcn.app_artifact }\x0A\x0A; logos.module_loader.artifact (LOADER \xC2\xA73)\x0Alcn.app_artifact = {\x0A  id: tstr .size (1..128),\x0A  local_path: lcn.app_path,\x0A  hash: bstr .size 32,\x0A  hash_suite: \"logos.hash-suite.blake3-256\",\x0A}\x0A\x0A; logos.package_manifest.provider_requirement (PACKAGE MANAGER \xC2\xA74)\x0Alcn.app_requirement = {\x0A  contract: logos.schema_commitment,\x0A  cardinality: \"single\" / \"all-runtime-visible\",\x0A}\x0A\x0A; logos.package_manifest.requested_permission (PACKAGE MANAGER \xC2\xA74)\x0Alcn.app_permission = {\x0A  permission: tstr .size (1..128),\x0A  constraints: bstr .size (1..1048576),\x0A  ? reason: tstr .size (1..512),\x0A}\x0A\x0A; one lifecycle-ordering constraint (RUNTIME \xC2\xA73.7)\x0Alcn.app_ordering = {\x0A  prerequisite: lcn.app_instance_id,\x0A  dependent: lcn.app_instance_id,\x0A}\x0A\x0A; One accepted declaration per module name, for create_module (decision G55;\x0A; RUNTIME l.3614-3621): lcn.app_module without instance, state_assignment and\x0A; provisioned_configuration (a provisioned value belongs to an instance, never\x0A; to a module name: RUN-0923). With persistent_state, each created instance\x0A; gets a fresh state assignment.\x0Alcn.app_declaration = {\x0A  module: tstr .size (1..64),\x0A  implementation: lcn.app_implementation,\x0A  ? primary_contract: logos.schema_commitment,\x0A  ? implements: [* logos.schema_commitment],\x0A  ? extends: [* logos.schema_commitment],\x0A  ? requires: [* lcn.app_requirement],\x0A  ? requested_permissions: [* lcn.app_permission],\x0A  ? persistent_state: true,\x0A  ? configuration: lcn.app_configuration,\x0A}\x0A\x0A; The protected realization input of one instance (decision G400): protected\x0A; construction input (RUNTIME l.1600-1601) that only the embedding host sets.\x0A; At each realization attempt the Module Loader writes `input` to\x0A; `<state_dir>/.lcn-protected-input`, and removes it when initialization\x0A; returns, at release and at retirement (docs/HOST-CONFIG.md). The instance is\x0A; listed in `modules`, has a state_assignment, and has at most one entry. Not\x0A; for secrets: the file passes through a directory that backups and state\x0A; copies may read.\x0Alcn.app_protected_input = {\x0A  instance: lcn.app_instance_id,\x0A  input: bstr .size (1..16777216),\x0A}\x0A\x0A; logos-core-nim.authority-policy.v1: the Capability Authority\'s policy input\x0A; (BCP l.360; DECISIONS I84). One Logos deterministic-CBOR lcn.authority_policy\x0A; value. docs/AUTHORITY-POLICY.md documents each rule.\x0A;\x0A; Every array is a set: strictly ascending by its elements\' deterministic-CBOR\x0A; bytes, with no duplicates (CA l.130-138 applied to this input), and non-empty,\x0A; except a method or event list, which permits none of that kind when empty\x0A; (CA l.126). The checks the schema cannot express (order, non-empty arrays, the\x0A; source pattern, bounds, names that resolve, restricted declarations, a\x0A; target-denied rule that names no target) are applied when the policy is\x0A; loaded (authority/policy.nim).\x0A\x0Alcn.authority_policy = {\x0A  format: \"logos-core-nim.authority-policy.v1\",\x0A  source: tstr .size (1..128),\x0A  ? decision_validity_ms: uint64,\x0A  ? audit: { ? records: uint64 },\x0A  rules: [* lcn.ap_rule],\x0A}\x0A\x0Alcn.ap_rule = lcn.ap_allow / lcn.ap_deny / lcn.ap_issue / lcn.ap_revoke / lcn.ap_inspect\x0A\x0Alcn.ap_allow = {\x0A  kind: \"allow\",\x0A  subject: lcn.ap_subject,\x0A  scopes: [* lcn.ap_scope],\x0A  ? commitment: lcn.ap_commitment,\x0A}\x0A\x0Alcn.ap_deny = {\x0A  kind: \"deny\",\x0A  subject: lcn.ap_subject,\x0A  scopes: [* lcn.ap_scope],\x0A  ? code: \"consumer-denied\" / \"target-denied\",\x0A}\x0A\x0Alcn.ap_issue = {\x0A  kind: \"issue\",\x0A  subject: lcn.ap_subject,\x0A  targets: lcn.ap_target,\x0A  scopes: [* lcn.ap_scope],\x0A  ? max_validity_ms: uint64,\x0A}\x0A\x0Alcn.ap_revoke = {\x0A  kind: \"revoke\",\x0A  subject: lcn.ap_subject,\x0A  targets: lcn.ap_target,\x0A}\x0A\x0Alcn.ap_inspect = {\x0A  kind: \"inspect\",\x0A  subject: lcn.ap_subject,\x0A  ? grants: lcn.ap_target,\x0A  ? audit: lcn.ap_target,\x0A  ? policy_changes: true,\x0A}\x0A\x0A; G47 facts. Fields AND, list entries OR. [G415; owner decision B5, item O1 (a)]\x0A; A subject that names no Runtime matches local instances only; a consumer of\x0A; another Runtime (a forwarded consumer, RUNTIME l.1685-1699) is matched only by\x0A; a subject whose runtimes names that Runtime, and only while that Runtime is\x0A; actively enrolled. So {} matches any local instance. runtimes holds lowercase\x0A; UUIDv4 Runtime ids, never this Runtime\'s own, and is never combined with\x0A; modules, signers or packages, which a forwarded consumer does not carry. In an\x0A; inspect rule\'s grants and audit, a subject naming no Runtime covers the\x0A; records of every consumer, local and forwarded (O1\'s inspect choice (x)).\x0Alcn.ap_subject = {\x0A  ? runtimes: [* tstr .size (1..128)],\x0A  ? instances: [* tstr .size (1..128)],\x0A  ? modules: [* tstr .size (1..64)],\x0A  ? signers: [* bstr .size 48],\x0A  ? packages: [* tstr .size (1..128)],\x0A}\x0A\x0A; [G415] What provider selectors and the targets of runtime-control and\x0A; module-execution scopes name: this Runtime\'s own instances and providers\x0A; (RUNTIME l.1829, l.2541-2542), so no runtimes.\x0Alcn.ap_selector = {\x0A  ? instances: [* tstr .size (1..128)],\x0A  ? modules: [* tstr .size (1..64)],\x0A  ? signers: [* bstr .size 48],\x0A  ? packages: [* tstr .size (1..128)],\x0A}\x0A\x0Alcn.ap_target = lcn.ap_subject / \"self\" / \"issued\"\x0A\x0Alcn.ap_scope =\x0A  lcn.ap_provider_access / lcn.ap_runtime_control / lcn.ap_module_execution /\x0A  lcn.ap_permission\x0A\x0Alcn.ap_provider_access = {\x0A  kind: \"provider-access\",\x0A  contract: logos.schema_commitment / \"capability-authority\" / \"runtime-control\",\x0A  actions: [* lcn.ap_action],\x0A  ? providers: lcn.ap_selector,\x0A  ? access: lcn.ap_access,\x0A}\x0A\x0Alcn.ap_action =\x0A  \"discover\" / \"establish-route\" / \"renew-route\" / \"call\" / \"publish-event\" /\x0A  \"subscribe-event\"\x0A\x0Alcn.ap_access = {\x0A  ? methods: [* lcn.ap_decl],\x0A  ? publish_events: [* lcn.ap_decl],\x0A  ? subscribe_events: [* lcn.ap_decl],\x0A}\x0A\x0Alcn.ap_runtime_control = {\x0A  kind: \"runtime-control\",\x0A  ? methods: [* lcn.ap_decl],\x0A  ? events: [* lcn.ap_decl],\x0A  ? targets: lcn.ap_selector,\x0A}\x0A\x0Alcn.ap_module_execution = {\x0A  kind: \"module-execution\",\x0A  targets: lcn.ap_selector,\x0A  actions: [* (\"start\" / \"stop\")],\x0A  ? modes: [* (\"direct\" / \"local-transport\")],\x0A  ? placements: [* (\"process\" / \"sandbox\" / \"container\")],\x0A}\x0A\x0A; A permission scope (CA l.212-216; DECISIONS I93): the name, and the broadest\x0A; constraints allowed (one deterministic-CBOR value of the definition); without\x0A; constraints any conforming value. Both are checked against the selected\x0A; permission profile when the policy is loaded. A start is allowed only by one\x0A; rule holding its execution scope and every permission scope (G207).\x0Alcn.ap_permission = {\x0A  kind: \"permission\",\x0A  permission: tstr .size (1..128),\x0A  ? constraints: bstr .size (1..1048576),\x0A}\x0A\x0A; a declaration root, or a name the contract\'s pinned schema resolves (only with\x0A; \"capability-authority\" or \"runtime-control\")\x0Alcn.ap_decl = bstr .size 32 / tstr .size (1..128)\x0A\x0A; logos.capability_authority.commitment_requirements, repeated (test_nimgen)\x0Alcn.ap_commitment = {\x0A  ? request: \"retain-root\",\x0A  ? response: \"retain-root\",\x0A}\x0A\x0Alcn.rc_address_profile = tstr .size (1..128)\x0A\x0Alcn.rc_host_name = tstr .size (1..255)\x0A\x0Alcn.rc_port = uint16\x0A\x0Alcn.rc_server_name = tstr .size (1..255)\x0A\x0Alcn.rc_alpn = tstr .size (1..255)\x0A\x0Alcn.rc_tls_tcp_runtime_address = {\x0A    transport: \"tls-tcp\",\x0A    host: lcn.rc_host_name,\x0A    port: lcn.rc_port,\x0A    ? server_name: lcn.rc_server_name,\x0A    ? profile: lcn.rc_address_profile,\x0A}\x0A\x0Alcn.rc_quic_runtime_address = {\x0A    transport: \"quic\",\x0A    host: lcn.rc_host_name,\x0A    port: lcn.rc_port,\x0A    ? server_name: lcn.rc_server_name,\x0A    ? alpn: lcn.rc_alpn,\x0A    ? profile: lcn.rc_address_profile,\x0A}\x0A\x0Alcn.rc_remote_listener_address =\x0A    lcn.rc_tls_tcp_runtime_address /\x0A    lcn.rc_quic_runtime_address\x0A\x0Alcn.rc_remote_listener_record = {\x0A    address: lcn.rc_remote_listener_address,\x0A    enabled: bool,\x0A    runtime_control_enabled: bool,\x0A}\x0A\x0Alcn.rc_provider_export_record = {\x0A    listener: lcn.rc_remote_listener_address,\x0A    provider: lcn.rt_module_provider_address,\x0A    enabled: bool,\x0A}\x0A\x0Alcn.rt_runtime_instance_id = tstr .size (1..128)\x0A\x0Alcn.rt_module_provider_id = tstr .size (1..128)\x0A\x0Alcn.rt_module_provider_address = {\x0A    ? runtime_instance_id: lcn.rt_runtime_instance_id,\x0A    provider: lcn.rt_module_provider_id,\x0A}\x0A\x0A; The Package Manager\'s protected input (Tier 5 step 5-3b; DECISIONS G399,\x0A; G400; docs/PACKAGE-MANAGER.md \xC2\xA72). One Logos deterministic-CBOR value that\x0A; the embedding host writes (logosd\'s compose) and the hosted Package Manager\x0A; reads at initialization through the protected realization input, never\x0A; through configuration (CONFIGURATION l.58). Closed: an unknown field is\x0A; refused. The rules the schema cannot say are pm/input.nim\'s.\x0Alcn.pm_input = {\x0A  format: \"logos-core-nim.pm-input.v1\",\x0A  trust: bstr .size (1..1048576),   ; the session trust file\'s accepted bytes\x0A  storage: [* lcn.pm_binding],      ; at least one, by rule\x0A  catalog: lcn.pm_catalog_ref,\x0A  resolver_limits: lcn.pm_resolver_limits,\x0A  ? limits: lcn.pm_limits,\x0A}\x0A\x0A; One Storage binding: the name an LGX source\'s `storage` names\x0A; (PACKAGE MANAGER l.854-857), and the lcn.storage_fetch provider instance\x0A; that serves it. Names are unique, by rule.\x0Alcn.pm_binding = {\x0A  binding: tstr .size (1..128),\x0A  instance: tstr .size (1..128),\x0A}\x0A\x0A; The protected catalog (G401): the catalog document\'s binding, locator and\x0A; BLAKE3-256 digest. `storage` names one of the bindings, by rule.\x0Alcn.pm_catalog_ref = {\x0A  storage: tstr .size (1..128),\x0A  object: bstr .size (1..4096),\x0A  digest: bstr .size 32,\x0A}\x0A\x0A; The resolver limits (PACKAGE MANAGER l.1241-1254; G399 as ruled on\x0A; 2026-11-22): protected policy input, required, with all four keys; each a\x0A; positive integer no greater than its maximum (package/resolver.nim\'s\x0A; MaxResolverLimits, docs/CONFORMANCE.md). The Package Manager has no default:\x0A; the embedding host resolves them (logosd: the operator\'s values, or its\x0A; preset, docs/DAEMON.md). Not in `limits`, where an absent key is a default.\x0Alcn.pm_resolver_limits = {\x0A  partial_closure_names: uint64,\x0A  dependency_depth: uint64,\x0A  candidates_per_name: uint64,\x0A  assignment_attempts: uint64,\x0A}\x0A\x0A; The bounds, each checked by rule as written here; an absent one is its\x0A; default.\x0A; archive_bytes: 1..1073741824, default 1073741824 (1 GiB): one archive,\x0A;   spooled to disk and read in pieces; the inspection\'s other LGX bounds keep\x0A;   G75\'s proportions to it (G453).\x0A; catalog_bytes: 1..4194304, default 4194304 (4 MiB): the catalog document.\x0A; catalog_entries: 1..65536, default 65536.\x0A; cache_entries: 1..4096, default 256: the verification cache.\x0A; read_deadline_ms: 1..86400000, default 300000: one call, and the wait for\x0A;   `ready` after `not-ready` (G402).\x0A; operation_entries: 1..16777216, default 262144: the records, dependency\x0A;   entries and contracts one root operation reads (G477).\x0A; operation_deadline_ms: 1..86400000, default 3600000 (1 h): one root\x0A;   operation, from taking its slot (G449).\x0Alcn.pm_limits = {\x0A  ? archive_bytes: uint64,\x0A  ? catalog_bytes: uint32,\x0A  ? catalog_entries: uint32,\x0A  ? cache_entries: uint16,\x0A  ? read_deadline_ms: uint32,\x0A  ? operation_entries: uint32,\x0A  ? operation_deadline_ms: uint32,\x0A}\x0A"
+  primaryDocument = "; logos-core-nim.daemon-config.v1: logosd\'s protected deployment input (Tier 4b\x0A; step 4b-6; DECISIONS I95, G293). One Logos deterministic-CBOR\x0A; lcn.daemon_config value in <session>/daemon-config.cbor. docs/DAEMON.md\x0A; documents each field (BCP l.359).\x0A;\x0A; logosd derives one logos-core-nim.app-config.v1 value from it\x0A; (daemon/compose.nim, G294) and hands that to logos_runtime_create; it is not a\x0A; configuration_format of the library. Where the host configuration has a rule,\x0A; this format uses it, so a field means the same in both: the rules named\x0A; lcn.app_* and lcn.ap_* are host_config.cddl\'s and policy.cddl\'s, resolved in\x0A; one document with this one. Every path is absolute. The checks the schema\x0A; cannot express (reserved names, the strategies an operator may use, the\x0A; development switch, the evidence key\'s binding) are applied by\x0A; daemon/config.nim before anything starts.\x0A\x0Alcn.daemon_config = {\x0A  format: \"logos-core-nim.daemon-config.v1\",\x0A  runtime: lcn.dc_runtime,\x0A  policy: lcn.dc_policy,\x0A  ? modules: [* lcn.app_module],\x0A  ? declarations: [* lcn.app_declaration],\x0A  ? ordering: [* lcn.app_ordering],\x0A  ? orchestration: lcn.dc_orchestration,\x0A  ? call_audit: lcn.dc_call_audit,\x0A  ? routing: [* lcn.app_routing_rule],\x0A  ? transport: lcn.app_transport,\x0A  ? remote: lcn.dc_remote,\x0A  ? permissions: lcn.dc_permissions,\x0A  ? state_transfers: [* lcn.app_state_transfer],\x0A  ? ctl: lcn.dc_ctl,\x0A  ? cli: lcn.dc_cli,\x0A  ? package_manager: lcn.dc_package_manager,\x0A  ? test_hooks: lcn.dc_test_hooks,\x0A}\x0A\x0A; runtime_instance_id: assigned by logosctl init (RUNTIME l.2586) and fixed for\x0A; the session\'s life. The directories come from the session layout.\x0Alcn.dc_runtime = {\x0A  runtime_instance_id: tstr .size (1..128),\x0A  ? startup_deadline_ms: uint32,\x0A  ? stop_deadline_ms: uint32,\x0A  ? shutdown_grace_ms: uint32,\x0A  ? apply_deadline_ms: uint32,\x0A  ? max_payload_depth: uint16,\x0A  ? module_host: lcn.app_path,\x0A  ? module_host_env: [* lcn.app_env_name],\x0A  ? remote_program: lcn.app_path,\x0A}\x0A\x0A; allow-all needs the development switch in the trust file (decision 11).\x0A; capability-authority: the authority instance is logosd\'s own; rules are the\x0A; operator\'s, and logosd adds the system rules (DAEMON.md \xC2\xA75). recovery: absent\x0A; is off; logosctl init writes true (RUNTIME l.1676).\x0Alcn.dc_policy =\x0A  { kind: \"allow-all\" } /\x0A  {\x0A    kind: \"capability-authority\",\x0A    source: tstr .size (1..128),\x0A    ? decision_validity_ms: uint64,\x0A    ? audit: { ? records: uint64 },\x0A    ? evaluation_deadline_ms: uint32,\x0A    ? recovery: bool,\x0A    rules: [* lcn.ap_rule],\x0A  }\x0A\x0A; The orchestration module\'s value (decision 8): the operator instances it\x0A; starts, and its restart policy. lcn.dc_restart and lcn.dc_override repeat\x0A; lcn_orchestrator.restart and lcn_orchestrator.override (config.cddl).\x0Alcn.dc_orchestration = {\x0A  ? start: [* lcn.app_instance_id],\x0A  ? restart: lcn.dc_restart,\x0A  ? overrides: [* lcn.dc_override],\x0A  ? resync_ms: uint32,\x0A}\x0A\x0Alcn.dc_restart =\x0A  { kind: \"disabled\" } /\x0A  {\x0A    kind: \"backoff\",\x0A    initial_delay_ms: uint32,\x0A    max_delay_ms: uint32,\x0A    multiplier: uint32,\x0A    ? max_attempts: uint32,\x0A    stable_ms: uint32,\x0A  }\x0A\x0Alcn.dc_override = {\x0A  instance: lcn.app_instance_id,\x0A  restart: lcn.dc_restart,\x0A}\x0A\x0A; call_records and evidence as in the host configuration; store: logosd\'s\x0A; call-evidence store (G301), which needs evidence.\x0Alcn.dc_call_audit = {\x0A  ? call_records: uint32,\x0A  ? evidence: lcn.app_evidence_key,\x0A  ? store: lcn.dc_evidence_store,\x0A}\x0A\x0Alcn.dc_evidence_store = {\x0A  ? max_records: uint32,\x0A  ? max_age_days: uint16,\x0A  ? queue: uint32,\x0A}\x0A\x0A; profile: absent selects the reference profile, since logosd always selects\x0A; one (decision 3). initial: the operator instances\' settings; logosd adds the\x0A; system instances\' host-ambient settings.\x0Alcn.dc_permissions = {\x0A  ? profile: \"logos-core-nim.permission-profile.v1\",\x0A  ? initial: [* lcn.app_initial_settings],\x0A}\x0A\x0A; The logosctl instance\'s socket (G296).\x0Alcn.dc_ctl = {\x0A  ? socket_dir: lcn.app_path,\x0A  ? workers: uint8,\x0A  ? idle_timeout_ms: uint32,\x0A}\x0A\x0A; The lcn_call instance, the CLI module (DECISIONS G343, G344; DAEMON.md\x0A; \xC2\xA77a). artifact replaces the library installed with logosd; socket_dir must\x0A; be owner-only, as ctl.socket_dir; workers 1-32 (default 8), streams 1-64\x0A; (default 8), idle_timeout_ms 100-600000 (default 30000), route_idle_ms\x0A; 1000-86400000 (default 600000).\x0Alcn.dc_cli = {\x0A  ? artifact: lcn.app_artifact,\x0A  ? socket_dir: lcn.app_path,\x0A  ? workers: uint8,\x0A  ? streams: uint8,\x0A  ? idle_timeout_ms: uint32,\x0A  ? route_idle_ms: uint32,\x0A}\x0A\x0A; The Package Manager (DECISIONS G399, G491; DAEMON.md \xC2\xA73;\x0A; docs/PACKAGE-MANAGER.md): logosd composes it as the reserved hosted_dynamic\x0A; instance package_manager of logos_package_manager (placement process), from\x0A; artifact if given, else the companion library installed with logosd, whose\x0A; BLAKE3-256 is compiled in; with neither, the section refuses to start. state\x0A; is the instance\'s state_assignment. storage holds at least one binding, each\x0A; naming a hosted_dynamic entry of modules, with unique names; catalog.storage\x0A; names one of them. resolver_limits, when present, holds all four limits;\x0A; absent, logosd\'s preset applies (DAEMON.md \xC2\xA73). The lcn.pm_* rules are\x0A; pm/input.cddl\'s, resolved in one document as lcn.app_* are. logosd composes\x0A; the instance\'s lcn.pm_input from this section and the trust file the start\x0A; accepted. The former instance field is refused, naming state and artifact.\x0Alcn.dc_package_manager = {\x0A  state: tstr .size (1..128),\x0A  ? artifact: lcn.app_artifact,\x0A  storage: [* lcn.pm_binding],\x0A  catalog: lcn.pm_catalog_ref,\x0A  ? resolver_limits: lcn.pm_resolver_limits,\x0A  ? limits: lcn.pm_limits,\x0A  ; [G498] C4\'s readers: instances this start runs whose ordinary calls may\x0A  ; observe the installed set and the catalog. Absent: lcn_call when logosd\x0A  ; composes it, else none. Empty: none.\x0A  ? readers: [* tstr .size (1..128)],\x0A}\x0A\x0A; Accepted only by a logosd built with lcnTestHooks, with the development\x0A; switch on (G300); a packaged logosd refuses the field. The Module Loader\x0A; reports its failure loader_failure_after_ms after the start, or once the\x0A; file loader_failure_on_file names exists, whichever comes first.\x0Alcn.dc_test_hooks = {\x0A  ? ctl_command_delay_ms: uint32,\x0A  ? loader_failure_after_ms: uint32,\x0A  ? loader_failure_on_file: lcn.app_path,\x0A  ? diagnostics: lcn.dc_test_diagnostics,\x0A}\x0A\x0A; count diagnostics holding text, recorded as text the Runtime did not write\x0A; once the start\'s own diagnostics are logged (I95, amended 2026-11-16).\x0Alcn.dc_test_diagnostics = {\x0A  text: tstr .size (1..1024),\x0A  count: uint32,\x0A}\x0A\x0A; remote: the remote profile logos.remote.tls-tcp (G407-G410; REMOTE.md).\x0A; enabled: logosd starts its remote side, which needs runtime_instance_id to be\x0A; a lowercase UUID version 4 (RUNTIME l.2592-2593) and the remote trust input\x0A; (section 6a), and refuses policy allow-all (G415). signing: what signs the\x0A; TLS handshakes with the Runtime\'s key; absent is \"logosd\". key-holder needs\x0A; key_holder, the logos_keyholder program, and key_holder needs key-holder;\x0A; \"process-copy\" is accepted only by a logosd built with -d:logosTestSigning.\x0A; listeners and exports (G412; RUNTIME \xC2\xA79.3.9): the deployment\'s remote\x0A; listener and provider export records, as Runtime Control holds them, only\x0A; with enabled; validated as Runtime Control validates them (l.3319-3321).\x0Alcn.dc_remote = {\x0A  enabled: bool,\x0A  ? signing: lcn.dc_remote_signing,\x0A  ? key_holder: lcn.app_path,\x0A  ? listeners: [* lcn.rc_remote_listener_record],\x0A  ? exports: [* lcn.rc_provider_export_record],\x0A}\x0A\x0Alcn.dc_remote_signing = \"logosd\" / \"key-holder\" / \"process-copy\"\x0A\x0A; logos-core-nim.app-config.v1: the Host Embedding API configuration (RUNTIME\x0A; \xC2\xA713.3 configuration_format; decision G76). One Logos deterministic-CBOR\x0A; lcn.app_config value. docs/HOST-CONFIG.md documents each field.\x0A;\x0A; An array that is present is non-empty, and the checks the schema cannot\x0A; express (unique ids, ordering, the orchestration instance, the authority\x0A; instance, the package manager instance, the artifact adoption list) are\x0A; applied at logos_runtime_create (runtime/host_config.nim).\x0A; lcn.authority_policy is the Capability Authority\'s policy input,\x0A; authority/policy.cddl (docs/AUTHORITY-POLICY.md).\x0A\x0Alcn.app_config = {\x0A  runtime: lcn.app_runtime,\x0A  policy: lcn.app_policy,\x0A  orchestration: lcn.app_instance_id,\x0A  modules: [* lcn.app_module],\x0A  ? ordering: [* lcn.app_ordering],\x0A  ? declarations: [* lcn.app_declaration],\x0A  ? call_audit: lcn.app_call_audit,\x0A  ? routing: [* lcn.app_routing_rule],\x0A  ? transport: lcn.app_transport,\x0A  ? remote: lcn.app_remote,\x0A  ? permissions: lcn.app_permissions,\x0A  ? state_transfers: [* lcn.app_state_transfer],\x0A  ? protected_inputs: [* lcn.app_protected_input],\x0A  ; [G490] The instance that holds the Package Manager responsibility (RUNTIME\x0A  ; l.293): the hosted_dynamic logos_package_manager, the one hosted module\x0A  ; whose reserved name the Module Host accepts.\x0A  ? package_manager: lcn.app_instance_id,\x0A  ; [G505] Instances whose retained record may take a new artifact hash at a\x0A  ; start, all other facts equal: the host\'s assertion that the instance keeps\x0A  ; its state, grants and settings across a new library. logosd lists its own\x0A  ; composed instances (package_manager, lcn_call), never an operator\'s.\x0A  ? artifact_adoption: [* lcn.app_instance_id],\x0A}\x0A\x0Alcn.app_runtime = {\x0A  work_dir: lcn.app_path,\x0A  ? state_root: lcn.app_path,\x0A  ? store_dir: lcn.app_path,\x0A  ? runtime_instance_id: tstr .size (1..128),\x0A  ? startup_deadline_ms: uint32,\x0A  ? stop_deadline_ms: uint32,\x0A  ? shutdown_grace_ms: uint32,\x0A  ? apply_deadline_ms: uint32,\x0A  ? max_payload_depth: uint16,\x0A  ? endpoint_dir: lcn.app_path,\x0A  ? module_host: lcn.app_path,\x0A  ? module_host_env: [* lcn.app_env_name],\x0A  ? remote_program: lcn.app_path,\x0A}\x0A\x0A; module_host: the logos-module-host program, an absolute path (Tier 4b step\x0A; 4b-3); without it hosted_dynamic is refused. module_host_env: the names of\x0A; the variables every Module Host gets from the daemon\'s environment.\x0A; remote_program: the logos_remote program, an absolute path (Tier 5 step\x0A; 5-7a-2; DECISIONS G411); without it no remote profile is enabled here, and\x0A; enabling a remote listener is MODULE_ERROR (G412).\x0Alcn.app_env_name = tstr .size (1..128)\x0A\x0Alcn.app_path = tstr .size (1..4096)\x0A\x0A; allow-all: every operation is allowed (RUNTIME l.1633-1634).\x0A; capability-authority: the named logos_capability_authority instance decides\x0A; (RUNTIME \xC2\xA79; DECISIONS I85). evaluation_deadline_ms: 1..60000, default 5000;\x0A; recovery: the derived rules also apply after a binding loss (RUN-0860).\x0Alcn.app_policy =\x0A  { kind: \"allow-all\" } /\x0A  {\x0A    kind: \"capability-authority\",\x0A    authority: lcn.app_instance_id,\x0A    policy: lcn.authority_policy,\x0A    ? evaluation_deadline_ms: uint32,\x0A    ? recovery: bool,\x0A  }\x0A\x0A; Call audit (CA \xC2\xA79, \xC2\xA79.1): call_records is the in-memory ring\'s capacity,\x0A; 1..1000000, default 4096; evidence the call-evidence signing key.\x0Alcn.app_call_audit = {\x0A  ? call_records: uint32,\x0A  ? evidence: lcn.app_evidence_key,\x0A}\x0A\x0A; kid: the logos.capability_authority.evidence_key_id verifiers map to this\x0A; Runtime; secret_key_file: a 96-byte SLH-DSA-SHA2-192s secret key, mode 0600.\x0Alcn.app_evidence_key = {\x0A  kid: bstr .size (1..128),\x0A  secret_key_file: lcn.app_path,\x0A}\x0A\x0A; Routing selection (RUNTIME l.901-911; DECISIONS I90, G254): a route\x0A; from a module named caller (absent: any) to the module named callee is\x0A; direct or uses local transport. The rule naming the caller wins; with no\x0A; rule a route is direct. No rule names logos_module_loader, no callee is\x0A; logos_runtime_control, and local-transport is refused where the platform\x0A; has no unix-stream profile (TRANSPORT \xC2\xA78.2.1).\x0Alcn.app_routing_rule = {\x0A  ? caller: tstr .size (1..64),\x0A  callee: tstr .size (1..64),\x0A  mode: \"direct\" / \"local-transport\",\x0A}\x0A\x0A; The transport I/O thread\'s limits (TRANSPORT \xC2\xA75.2, \xC2\xA78.6; DECISIONS I90);\x0A; an absent field keeps its default. docs/HOST-CONFIG.md lists every limit.\x0A; frame_limit is at least 16 MiB (TRANSPORT l.380).\x0Alcn.app_transport = {\x0A  ? frame_limit: uint32,\x0A  ? hello_timeout_ms: uint32,\x0A  ? write_stall_timeout_ms: uint32,\x0A  ? max_pending_output_bytes: uint64,\x0A  ? conn_output_bytes: uint32,\x0A  ? caller_undelivered_bytes: uint32,\x0A  ? max_inbound: uint16,\x0A  ? max_outbound: uint16,\x0A  ? max_calls: uint32,\x0A  ? max_in_flight: uint32,\x0A}\x0A\x0A; Remote transport (RUNTIME \xC2\xA79.3.9; Tier 5 step 5-7a-2; DECISIONS G408, G412,\x0A; G415; docs/REMOTE.md). Only the embedding host sets it (logosd\'s compose).\x0A; snapshot: this start\'s trust snapshot, one deterministic-CBOR lcn.rch_snapshot\x0A; (remote/carrier.cddl); its Runtimes with an active record are the enrolled\x0A; ones. listeners and exports: the deployment\'s records (RUNTIME l.3319-3321),\x0A; held as Runtime Control holds them (lcn.rc_x is logos.runtime_control.x and\x0A; lcn.rt_x is logos.runtime.x, generated from the mirrored contract), each\x0A; address at most once and each export naming a listener here, validated as\x0A; Runtime Control validates them.\x0Alcn.app_remote = {\x0A  snapshot: bstr .size (1..16842752),\x0A  ? listeners: [* lcn.rc_remote_listener_record],\x0A  ? exports: [* lcn.rc_provider_export_record],\x0A}\x0A\x0A; The permission profile (RUNTIME l.1595, l.2526-2604; DECISIONS G110, G279,\x0A; I93; docs/PERMISSIONS.md). Absent: no profile is selected and permission\x0A; settings have the constant form (G229). profile names a profile this library\x0A; ships. initial is the protected provisioning of a new instance\'s settings\x0A; (RUNTIME l.2543): the entry naming the instance, else its module\'s entry,\x0A; else revision 1 with no permission (l.2541). It never names the Module\x0A; Loader, whose settings are its construction\'s (G253). Each permissions array\x0A; is ascending by permission name and names only defined permissions the\x0A; Runtime enforces; it may be empty.\x0Alcn.app_permissions = {\x0A  profile: \"logos-core-nim.permission-profile.v1\",\x0A  ? initial: [* lcn.app_initial_settings],\x0A}\x0A\x0Alcn.app_initial_settings = {\x0A  module: tstr .size (1..64),\x0A  ? instance: lcn.app_instance_id,\x0A  permissions: [* lcn.app_permission_setting],\x0A}\x0A\x0A; logos.runtime_control.permission_setting (RUNTIME l.2348-2351)\x0Alcn.app_permission_setting = {\x0A  permission: tstr .size (1..128),\x0A  constraints: bstr .size (1..1048576),\x0A}\x0A\x0A; One state transfer (RUNTIME l.3546-3553; DECISIONS I96, G305-G307),\x0A; applied once, when start bootstraps, before anything starts. to is a listed\x0A; instance new to the Runtime with its own state_assignment; from is an\x0A; instance the Runtime retains or retired, not listed in modules. from is\x0A; stopped and retired in the same write that creates to, which then gets\x0A; from\'s state: move renames from\'s state directory to to\'s; copy copies it\x0A; (at most max_bytes, default 1 GiB) and leaves it as it was. The entry is the\x0A; deployment\'s assertion that to can use that state: the Runtime infers none\x0A; from names, versions or contracts (RUN-0999). docs/HOST-CONFIG.md, \"State\x0A; transfer\".\x0Alcn.app_state_transfer = {\x0A  from: lcn.app_instance_id,\x0A  to: lcn.app_instance_id,\x0A  mode: \"move\" / \"copy\",\x0A  ? max_bytes: uint64,\x0A}\x0A\x0A; logos.runtime.module_instance_id (RUNTIME \xC2\xA79.2)\x0Alcn.app_instance_id = tstr .size (1..128)\x0A\x0Alcn.app_module = {\x0A  instance: lcn.app_instance_id,\x0A  module: tstr .size (1..64),\x0A  implementation: lcn.app_implementation,\x0A  ? primary_contract: logos.schema_commitment,\x0A  ? implements: [* logos.schema_commitment],\x0A  ? extends: [* logos.schema_commitment],\x0A  ? requires: [* lcn.app_requirement],\x0A  ? requested_permissions: [* lcn.app_permission],\x0A  ? state_assignment: tstr .size (1..128),\x0A  ? configuration: lcn.app_configuration,\x0A  ? provisioned_configuration: bstr .size (1..8388608),\x0A}\x0A\x0A; One deterministic-CBOR logos.module_configuration.configuration_declaration\x0A; (CONFIG \xC2\xA72): the module\'s schema binding and its optional package default.\x0A; provisioned_configuration is this instance\'s protected value (CONFIG l.142;\x0A; decision G141), a complete value of the binding\'s root; it needs\x0A; configuration. docs/HOST-CONFIG.md says when a changed value takes effect.\x0Alcn.app_configuration = bstr .size (1..16777216)\x0A\x0A; logos.module_loader.direct_static, direct_dynamic and hosted_dynamic with\x0A; the process placement (LOADER \xC2\xA73)\x0Alcn.app_implementation =\x0A  { strategy: \"direct_static\", binding: tstr .size (1..128) } /\x0A  { strategy: \"direct_dynamic\", artifact: lcn.app_artifact } /\x0A  { strategy: \"hosted_dynamic\", placement: \"process\", artifact: lcn.app_artifact }\x0A\x0A; logos.module_loader.artifact (LOADER \xC2\xA73)\x0Alcn.app_artifact = {\x0A  id: tstr .size (1..128),\x0A  local_path: lcn.app_path,\x0A  hash: bstr .size 32,\x0A  hash_suite: \"logos.hash-suite.blake3-256\",\x0A}\x0A\x0A; logos.package_manifest.provider_requirement (PACKAGE MANAGER \xC2\xA74)\x0Alcn.app_requirement = {\x0A  contract: logos.schema_commitment,\x0A  cardinality: \"single\" / \"all-runtime-visible\",\x0A}\x0A\x0A; logos.package_manifest.requested_permission (PACKAGE MANAGER \xC2\xA74)\x0Alcn.app_permission = {\x0A  permission: tstr .size (1..128),\x0A  constraints: bstr .size (1..1048576),\x0A  ? reason: tstr .size (1..512),\x0A}\x0A\x0A; one lifecycle-ordering constraint (RUNTIME \xC2\xA73.7)\x0Alcn.app_ordering = {\x0A  prerequisite: lcn.app_instance_id,\x0A  dependent: lcn.app_instance_id,\x0A}\x0A\x0A; One accepted declaration per module name, for create_module (decision G55;\x0A; RUNTIME l.3614-3621): lcn.app_module without instance, state_assignment and\x0A; provisioned_configuration (a provisioned value belongs to an instance, never\x0A; to a module name: RUN-0923). With persistent_state, each created instance\x0A; gets a fresh state assignment.\x0Alcn.app_declaration = {\x0A  module: tstr .size (1..64),\x0A  implementation: lcn.app_implementation,\x0A  ? primary_contract: logos.schema_commitment,\x0A  ? implements: [* logos.schema_commitment],\x0A  ? extends: [* logos.schema_commitment],\x0A  ? requires: [* lcn.app_requirement],\x0A  ? requested_permissions: [* lcn.app_permission],\x0A  ? persistent_state: true,\x0A  ? configuration: lcn.app_configuration,\x0A}\x0A\x0A; The protected realization input of one instance (decision G400): protected\x0A; construction input (RUNTIME l.1600-1601) that only the embedding host sets.\x0A; At each realization attempt the Module Loader writes `input` to\x0A; `<state_dir>/.lcn-protected-input`, and removes it when initialization\x0A; returns, at release and at retirement (docs/HOST-CONFIG.md). The instance is\x0A; listed in `modules`, has a state_assignment, and has at most one entry. Not\x0A; for secrets: the file passes through a directory that backups and state\x0A; copies may read.\x0Alcn.app_protected_input = {\x0A  instance: lcn.app_instance_id,\x0A  input: bstr .size (1..16777216),\x0A}\x0A\x0A; logos-core-nim.authority-policy.v1: the Capability Authority\'s policy input\x0A; (BCP l.360; DECISIONS I84). One Logos deterministic-CBOR lcn.authority_policy\x0A; value. docs/AUTHORITY-POLICY.md documents each rule.\x0A;\x0A; Every array is a set: strictly ascending by its elements\' deterministic-CBOR\x0A; bytes, with no duplicates (CA l.130-138 applied to this input), and non-empty,\x0A; except a method or event list, which permits none of that kind when empty\x0A; (CA l.126). The checks the schema cannot express (order, non-empty arrays, the\x0A; source pattern, bounds, names that resolve, restricted declarations, a\x0A; target-denied rule that names no target) are applied when the policy is\x0A; loaded (authority/policy.nim).\x0A\x0Alcn.authority_policy = {\x0A  format: \"logos-core-nim.authority-policy.v1\",\x0A  source: tstr .size (1..128),\x0A  ? decision_validity_ms: uint64,\x0A  ? audit: { ? records: uint64 },\x0A  rules: [* lcn.ap_rule],\x0A}\x0A\x0Alcn.ap_rule = lcn.ap_allow / lcn.ap_deny / lcn.ap_issue / lcn.ap_revoke / lcn.ap_inspect\x0A\x0Alcn.ap_allow = {\x0A  kind: \"allow\",\x0A  subject: lcn.ap_subject,\x0A  scopes: [* lcn.ap_scope],\x0A  ? commitment: lcn.ap_commitment,\x0A}\x0A\x0Alcn.ap_deny = {\x0A  kind: \"deny\",\x0A  subject: lcn.ap_subject,\x0A  scopes: [* lcn.ap_scope],\x0A  ? code: \"consumer-denied\" / \"target-denied\",\x0A}\x0A\x0Alcn.ap_issue = {\x0A  kind: \"issue\",\x0A  subject: lcn.ap_subject,\x0A  targets: lcn.ap_target,\x0A  scopes: [* lcn.ap_scope],\x0A  ? max_validity_ms: uint64,\x0A}\x0A\x0Alcn.ap_revoke = {\x0A  kind: \"revoke\",\x0A  subject: lcn.ap_subject,\x0A  targets: lcn.ap_target,\x0A}\x0A\x0Alcn.ap_inspect = {\x0A  kind: \"inspect\",\x0A  subject: lcn.ap_subject,\x0A  ? grants: lcn.ap_target,\x0A  ? audit: lcn.ap_target,\x0A  ? policy_changes: true,\x0A}\x0A\x0A; G47 facts. Fields AND, list entries OR. [G415; owner decision B5, item O1 (a)]\x0A; A subject that names no Runtime matches local instances only; a consumer of\x0A; another Runtime (a forwarded consumer, RUNTIME l.1685-1699) is matched only by\x0A; a subject whose runtimes names that Runtime, and only while that Runtime is\x0A; actively enrolled. So {} matches any local instance. runtimes holds lowercase\x0A; UUIDv4 Runtime ids, never this Runtime\'s own, and is never combined with\x0A; modules, signers or packages, which a forwarded consumer does not carry. In an\x0A; inspect rule\'s grants and audit, a subject naming no Runtime covers the\x0A; records of every consumer, local and forwarded (O1\'s inspect choice (x)).\x0Alcn.ap_subject = {\x0A  ? runtimes: [* tstr .size (1..128)],\x0A  ? instances: [* tstr .size (1..128)],\x0A  ? modules: [* tstr .size (1..64)],\x0A  ? signers: [* bstr .size 48],\x0A  ? packages: [* tstr .size (1..128)],\x0A}\x0A\x0A; [G415] What provider selectors and the targets of runtime-control and\x0A; module-execution scopes name: this Runtime\'s own instances and providers\x0A; (RUNTIME l.1829, l.2541-2542), so no runtimes.\x0Alcn.ap_selector = {\x0A  ? instances: [* tstr .size (1..128)],\x0A  ? modules: [* tstr .size (1..64)],\x0A  ? signers: [* bstr .size 48],\x0A  ? packages: [* tstr .size (1..128)],\x0A}\x0A\x0Alcn.ap_target = lcn.ap_subject / \"self\" / \"issued\"\x0A\x0Alcn.ap_scope =\x0A  lcn.ap_provider_access / lcn.ap_runtime_control / lcn.ap_module_execution /\x0A  lcn.ap_permission\x0A\x0Alcn.ap_provider_access = {\x0A  kind: \"provider-access\",\x0A  contract: logos.schema_commitment / \"capability-authority\" / \"runtime-control\",\x0A  actions: [* lcn.ap_action],\x0A  ? providers: lcn.ap_selector,\x0A  ? access: lcn.ap_access,\x0A}\x0A\x0Alcn.ap_action =\x0A  \"discover\" / \"establish-route\" / \"renew-route\" / \"call\" / \"publish-event\" /\x0A  \"subscribe-event\"\x0A\x0Alcn.ap_access = {\x0A  ? methods: [* lcn.ap_decl],\x0A  ? publish_events: [* lcn.ap_decl],\x0A  ? subscribe_events: [* lcn.ap_decl],\x0A}\x0A\x0Alcn.ap_runtime_control = {\x0A  kind: \"runtime-control\",\x0A  ? methods: [* lcn.ap_decl],\x0A  ? events: [* lcn.ap_decl],\x0A  ? targets: lcn.ap_selector,\x0A}\x0A\x0Alcn.ap_module_execution = {\x0A  kind: \"module-execution\",\x0A  targets: lcn.ap_selector,\x0A  actions: [* (\"start\" / \"stop\")],\x0A  ? modes: [* (\"direct\" / \"local-transport\")],\x0A  ? placements: [* (\"process\" / \"sandbox\" / \"container\")],\x0A}\x0A\x0A; A permission scope (CA l.212-216; DECISIONS I93): the name, and the broadest\x0A; constraints allowed (one deterministic-CBOR value of the definition); without\x0A; constraints any conforming value. Both are checked against the selected\x0A; permission profile when the policy is loaded. A start is allowed only by one\x0A; rule holding its execution scope and every permission scope (G207).\x0Alcn.ap_permission = {\x0A  kind: \"permission\",\x0A  permission: tstr .size (1..128),\x0A  ? constraints: bstr .size (1..1048576),\x0A}\x0A\x0A; a declaration root, or a name the contract\'s pinned schema resolves (only with\x0A; \"capability-authority\" or \"runtime-control\")\x0Alcn.ap_decl = bstr .size 32 / tstr .size (1..128)\x0A\x0A; logos.capability_authority.commitment_requirements, repeated (test_nimgen)\x0Alcn.ap_commitment = {\x0A  ? request: \"retain-root\",\x0A  ? response: \"retain-root\",\x0A}\x0A\x0Alcn.rc_address_profile = tstr .size (1..128)\x0A\x0Alcn.rc_host_name = tstr .size (1..255)\x0A\x0Alcn.rc_port = uint16\x0A\x0Alcn.rc_server_name = tstr .size (1..255)\x0A\x0Alcn.rc_alpn = tstr .size (1..255)\x0A\x0Alcn.rc_tls_tcp_runtime_address = {\x0A    transport: \"tls-tcp\",\x0A    host: lcn.rc_host_name,\x0A    port: lcn.rc_port,\x0A    ? server_name: lcn.rc_server_name,\x0A    ? profile: lcn.rc_address_profile,\x0A}\x0A\x0Alcn.rc_quic_runtime_address = {\x0A    transport: \"quic\",\x0A    host: lcn.rc_host_name,\x0A    port: lcn.rc_port,\x0A    ? server_name: lcn.rc_server_name,\x0A    ? alpn: lcn.rc_alpn,\x0A    ? profile: lcn.rc_address_profile,\x0A}\x0A\x0Alcn.rc_remote_listener_address =\x0A    lcn.rc_tls_tcp_runtime_address /\x0A    lcn.rc_quic_runtime_address\x0A\x0Alcn.rc_remote_listener_record = {\x0A    address: lcn.rc_remote_listener_address,\x0A    enabled: bool,\x0A    runtime_control_enabled: bool,\x0A}\x0A\x0Alcn.rc_provider_export_record = {\x0A    listener: lcn.rc_remote_listener_address,\x0A    provider: lcn.rt_module_provider_address,\x0A    enabled: bool,\x0A}\x0A\x0Alcn.rt_runtime_instance_id = tstr .size (1..128)\x0A\x0Alcn.rt_module_provider_id = tstr .size (1..128)\x0A\x0Alcn.rt_module_provider_address = {\x0A    ? runtime_instance_id: lcn.rt_runtime_instance_id,\x0A    provider: lcn.rt_module_provider_id,\x0A}\x0A\x0A; The Package Manager\'s protected input (Tier 5 step 5-3b; DECISIONS G399,\x0A; G400; docs/PACKAGE-MANAGER.md \xC2\xA72). One Logos deterministic-CBOR value that\x0A; the embedding host writes (logosd\'s compose) and the hosted Package Manager\x0A; reads at initialization through the protected realization input, never\x0A; through configuration (CONFIGURATION l.58). Closed: an unknown field is\x0A; refused. The rules the schema cannot say are pm/input.nim\'s.\x0Alcn.pm_input = {\x0A  format: \"logos-core-nim.pm-input.v1\",\x0A  trust: bstr .size (1..1048576),   ; the session trust file\'s accepted bytes\x0A  storage: [* lcn.pm_binding],      ; at least one, by rule\x0A  catalog: lcn.pm_catalog_ref,\x0A  resolver_limits: lcn.pm_resolver_limits,\x0A  ? limits: lcn.pm_limits,\x0A  ; [G498] C4\'s readers: the module instances of this Runtime whose ordinary\x0A  ; calls may observe the installed set and the catalog (the two lists, the\x0A  ; watch, progress and get_runtime_handoff). Unique, by rule; with readers,\x0A  ; runtime_instance_id is required (the Runtime a reader\'s calls come from).\x0A  ; Absent: no reader. Fixed for the realization.\x0A  ? readers: [* tstr .size (1..128)],\x0A  ? runtime_instance_id: tstr .size (1..128),\x0A}\x0A\x0A; One Storage binding: the name an LGX source\'s `storage` names\x0A; (PACKAGE MANAGER l.854-857), and the lcn.storage_fetch provider instance\x0A; that serves it. Names are unique, by rule.\x0Alcn.pm_binding = {\x0A  binding: tstr .size (1..128),\x0A  instance: tstr .size (1..128),\x0A}\x0A\x0A; The protected catalog (G401): the catalog document\'s binding, locator and\x0A; BLAKE3-256 digest. `storage` names one of the bindings, by rule.\x0Alcn.pm_catalog_ref = {\x0A  storage: tstr .size (1..128),\x0A  object: bstr .size (1..4096),\x0A  digest: bstr .size 32,\x0A}\x0A\x0A; The resolver limits (PACKAGE MANAGER l.1241-1254; G399 as ruled on\x0A; 2026-11-22): protected policy input, required, with all four keys; each a\x0A; positive integer no greater than its maximum (package/resolver.nim\'s\x0A; MaxResolverLimits, docs/CONFORMANCE.md). The Package Manager has no default:\x0A; the embedding host resolves them (logosd: the operator\'s values, or its\x0A; preset, docs/DAEMON.md). Not in `limits`, where an absent key is a default.\x0Alcn.pm_resolver_limits = {\x0A  partial_closure_names: uint64,\x0A  dependency_depth: uint64,\x0A  candidates_per_name: uint64,\x0A  assignment_attempts: uint64,\x0A}\x0A\x0A; The bounds, each checked by rule as written here; an absent one is its\x0A; default.\x0A; archive_bytes: 1..1073741824, default 1073741824 (1 GiB): one archive,\x0A;   spooled to disk and read in pieces; the inspection\'s other LGX bounds keep\x0A;   G75\'s proportions to it (G453).\x0A; catalog_bytes: 1..4194304, default 4194304 (4 MiB): the catalog document.\x0A; catalog_entries: 1..65536, default 65536.\x0A; cache_entries: 1..4096, default 256: the verification cache.\x0A; read_deadline_ms: 1..86400000, default 300000: one call, and the wait for\x0A;   `ready` after `not-ready` (G402).\x0A; operation_entries: 1..16777216, default 262144: the records, dependency\x0A;   entries and contracts one root operation reads (G477).\x0A; operation_deadline_ms: 1..86400000, default 3600000 (1 h): one root\x0A;   operation, from taking its slot (G449).\x0Alcn.pm_limits = {\x0A  ? archive_bytes: uint64,\x0A  ? catalog_bytes: uint32,\x0A  ? catalog_entries: uint32,\x0A  ? cache_entries: uint16,\x0A  ? read_deadline_ms: uint32,\x0A  ? operation_entries: uint32,\x0A  ? operation_deadline_ms: uint32,\x0A}\x0A"
   interfaceDocuments: array[0, string] = []
   supportingDocuments: array[0, string] = []
 
@@ -538,6 +538,7 @@ type
     artifact*: Opt[LcnAppArtifact]
     catalog*: LcnPmCatalogRef
     limits*: Opt[LcnPmLimits]
+    readers*: Opt[seq[string]]
     resolver_limits*: Opt[LcnPmResolverLimits]
     state*: string
     storage*: seq[LcnPmBinding]
@@ -649,7 +650,9 @@ type
     catalog*: LcnPmCatalogRef
     format*: string = "logos-core-nim.pm-input.v1"
     limits*: Opt[LcnPmLimits]
+    readers*: Opt[seq[string]]
     resolver_limits*: LcnPmResolverLimits
+    runtime_instance_id*: Opt[string]
     storage*: seq[LcnPmBinding]
     trust*: seq[byte]
 
@@ -4162,6 +4165,8 @@ proc stepEncLcnDcPackageManager*(w: var EncWork, src: pointer, dst: ptr CborValu
     inc n
   if x.limits.isSome:
     inc n
+  if x.readers.isSome:
+    inc n
   if x.resolver_limits.isSome:
     inc n
   let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
@@ -4178,6 +4183,13 @@ proc stepEncLcnDcPackageManager*(w: var EncWork, src: pointer, dst: ptr CborValu
     node.entries[k].key = cbor("limits")
     w.later(stepEncLcnPmLimits, addr x.limits.get, addr node.entries[k].value)
     inc k
+  if x.readers.isSome:
+    node.entries[k].key = cbor("readers")
+    let a305 = newCborArray(x.readers.get.len)
+    node.entries[k].value = a305
+    for i306 in 0 ..< x.readers.get.len:
+      a305.items[i306] = cbor(x.readers.get[i306])
+    inc k
   if x.resolver_limits.isSome:
     node.entries[k].key = cbor("resolver_limits")
     w.later(stepEncLcnPmResolverLimits, addr x.resolver_limits.get, addr node.entries[k].value)
@@ -4186,10 +4198,10 @@ proc stepEncLcnDcPackageManager*(w: var EncWork, src: pointer, dst: ptr CborValu
   node.entries[k].value = cbor(x.state)
   inc k
   node.entries[k].key = cbor("storage")
-  let a306 = newCborArray(x.storage.len)
-  node.entries[k].value = a306
-  for i307 in 0 ..< x.storage.len:
-    w.later(stepEncLcnPmBinding, addr x.storage[i307], addr a306.items[i307])
+  let a310 = newCborArray(x.storage.len)
+  node.entries[k].value = a310
+  for i311 in 0 ..< x.storage.len:
+    w.later(stepEncLcnPmBinding, addr x.storage[i311], addr a310.items[i311])
   inc k
 
 proc stepDecLcnDcPackageManager*(w: var DecWork, v: CborValue, dst: pointer) =
@@ -4205,15 +4217,21 @@ proc stepDecLcnDcPackageManager*(w: var DecWork, v: CborValue, dst: pointer) =
   if f304.isSome:
     r.limits = Opt.some(default(LcnPmLimits))
     w.later(stepDecLcnPmLimits, f304.get, addr r.limits.get)
-  let f305 = v.lookup("resolver_limits")
-  if f305.isSome:
+  let f307 = v.lookup("readers")
+  if f307.isSome:
+    r.readers = Opt.some(default(seq[string]))
+    r.readers.get.setLen(f307.get.items.len)
+    for i308 in 0 ..< f307.get.items.len:
+      r.readers.get[i308] = f307.get.items[i308].text
+  let f309 = v.lookup("resolver_limits")
+  if f309.isSome:
     r.resolver_limits = Opt.some(default(LcnPmResolverLimits))
-    w.later(stepDecLcnPmResolverLimits, f305.get, addr r.resolver_limits.get)
+    w.later(stepDecLcnPmResolverLimits, f309.get, addr r.resolver_limits.get)
   r.state = v.lookup("state").get.text
-  let f308 = v.lookup("storage").get
-  r.storage.setLen(f308.items.len)
-  for i309 in 0 ..< f308.items.len:
-    w.later(stepDecLcnPmBinding, f308.items[i309], addr r.storage[i309])
+  let f312 = v.lookup("storage").get
+  r.storage.setLen(f312.items.len)
+  for i313 in 0 ..< f312.items.len:
+    w.later(stepDecLcnPmBinding, f312.items[i313], addr r.storage[i313])
 
 proc toCbor*(x: LcnDcPackageManager): CborValue =
   runEnc(stepEncLcnDcPackageManager, addr x)
@@ -4235,10 +4253,10 @@ proc stepEncLcnDcPermissions*(w: var EncWork, src: pointer, dst: ptr CborValue) 
   var k = 0
   if x.initial.isSome:
     node.entries[k].key = cbor("initial")
-    let a310 = newCborArray(x.initial.get.len)
-    node.entries[k].value = a310
-    for i311 in 0 ..< x.initial.get.len:
-      w.later(stepEncLcnAppInitialSettings, addr x.initial.get[i311], addr a310.items[i311])
+    let a314 = newCborArray(x.initial.get.len)
+    node.entries[k].value = a314
+    for i315 in 0 ..< x.initial.get.len:
+      w.later(stepEncLcnAppInitialSettings, addr x.initial.get[i315], addr a314.items[i315])
     inc k
   if x.profile.isSome:
     node.entries[k].key = cbor("profile")
@@ -4248,14 +4266,14 @@ proc stepEncLcnDcPermissions*(w: var EncWork, src: pointer, dst: ptr CborValue) 
 proc stepDecLcnDcPermissions*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnDcPermissions](dst)
   r[] = LcnDcPermissions()
-  let f312 = v.lookup("initial")
-  if f312.isSome:
+  let f316 = v.lookup("initial")
+  if f316.isSome:
     r.initial = Opt.some(default(seq[LcnAppInitialSettings]))
-    r.initial.get.setLen(f312.get.items.len)
-    for i313 in 0 ..< f312.get.items.len:
-      w.later(stepDecLcnAppInitialSettings, f312.get.items[i313], addr r.initial.get[i313])
-  let f314 = v.lookup("profile")
-  if f314.isSome:
+    r.initial.get.setLen(f316.get.items.len)
+    for i317 in 0 ..< f316.get.items.len:
+      w.later(stepDecLcnAppInitialSettings, f316.get.items[i317], addr r.initial.get[i317])
+  let f318 = v.lookup("profile")
+  if f318.isSome:
     r.profile = Opt.some("logos-core-nim.permission-profile.v1")
 
 proc toCbor*(x: LcnDcPermissions): CborValue =
@@ -4303,9 +4321,9 @@ proc stepEncLcnDcPolicyARCapabilityAuthorityAuditMap*(w: var EncWork, src: point
 proc stepDecLcnDcPolicyARCapabilityAuthorityAuditMap*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnDcPolicyARCapabilityAuthorityAuditMap](dst)
   r[] = LcnDcPolicyARCapabilityAuthorityAuditMap()
-  let f315 = v.lookup("records")
-  if f315.isSome:
-    r.records = Opt.some(uint64(f315.get.uint))
+  let f319 = v.lookup("records")
+  if f319.isSome:
+    r.records = Opt.some(uint64(f319.get.uint))
 
 proc toCbor*(x: LcnDcPolicyARCapabilityAuthorityAuditMap): CborValue =
   runEnc(stepEncLcnDcPolicyARCapabilityAuthorityAuditMap, addr x)
@@ -4349,10 +4367,10 @@ proc stepEncLcnDcPolicyARCapabilityAuthorityMap*(w: var EncWork, src: pointer, d
     node.entries[k].value = cbor(x.recovery.get)
     inc k
   node.entries[k].key = cbor("rules")
-  let a320 = newCborArray(x.rules.len)
-  node.entries[k].value = a320
-  for i321 in 0 ..< x.rules.len:
-    w.later(stepEncLcnApRule, addr x.rules[i321], addr a320.items[i321])
+  let a324 = newCborArray(x.rules.len)
+  node.entries[k].value = a324
+  for i325 in 0 ..< x.rules.len:
+    w.later(stepEncLcnApRule, addr x.rules[i325], addr a324.items[i325])
   inc k
   node.entries[k].key = cbor("source")
   node.entries[k].value = cbor(x.source)
@@ -4361,23 +4379,23 @@ proc stepEncLcnDcPolicyARCapabilityAuthorityMap*(w: var EncWork, src: pointer, d
 proc stepDecLcnDcPolicyARCapabilityAuthorityMap*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnDcPolicyARCapabilityAuthorityMap](dst)
   r[] = LcnDcPolicyARCapabilityAuthorityMap()
-  let f316 = v.lookup("audit")
-  if f316.isSome:
+  let f320 = v.lookup("audit")
+  if f320.isSome:
     r.audit = Opt.some(default(LcnDcPolicyARCapabilityAuthorityAuditMap))
-    w.later(stepDecLcnDcPolicyARCapabilityAuthorityAuditMap, f316.get, addr r.audit.get)
-  let f317 = v.lookup("decision_validity_ms")
-  if f317.isSome:
-    r.decision_validity_ms = Opt.some(uint64(f317.get.uint))
-  let f318 = v.lookup("evaluation_deadline_ms")
-  if f318.isSome:
-    r.evaluation_deadline_ms = Opt.some(uint32(f318.get.uint))
-  let f319 = v.lookup("recovery")
-  if f319.isSome:
-    r.recovery = Opt.some(asBool(f319.get))
-  let f322 = v.lookup("rules").get
-  r.rules.setLen(f322.items.len)
-  for i323 in 0 ..< f322.items.len:
-    w.later(stepDecLcnApRule, f322.items[i323], addr r.rules[i323])
+    w.later(stepDecLcnDcPolicyARCapabilityAuthorityAuditMap, f320.get, addr r.audit.get)
+  let f321 = v.lookup("decision_validity_ms")
+  if f321.isSome:
+    r.decision_validity_ms = Opt.some(uint64(f321.get.uint))
+  let f322 = v.lookup("evaluation_deadline_ms")
+  if f322.isSome:
+    r.evaluation_deadline_ms = Opt.some(uint32(f322.get.uint))
+  let f323 = v.lookup("recovery")
+  if f323.isSome:
+    r.recovery = Opt.some(asBool(f323.get))
+  let f326 = v.lookup("rules").get
+  r.rules.setLen(f326.items.len)
+  for i327 in 0 ..< f326.items.len:
+    w.later(stepDecLcnApRule, f326.items[i327], addr r.rules[i327])
   r.source = v.lookup("source").get.text
 
 proc toCbor*(x: LcnDcPolicyARCapabilityAuthorityMap): CborValue =
@@ -4435,10 +4453,10 @@ proc stepEncLcnDcRemote*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   inc k
   if x.exports.isSome:
     node.entries[k].key = cbor("exports")
-    let a324 = newCborArray(x.exports.get.len)
-    node.entries[k].value = a324
-    for i325 in 0 ..< x.exports.get.len:
-      w.later(stepEncLcnRcProviderExportRecord, addr x.exports.get[i325], addr a324.items[i325])
+    let a328 = newCborArray(x.exports.get.len)
+    node.entries[k].value = a328
+    for i329 in 0 ..< x.exports.get.len:
+      w.later(stepEncLcnRcProviderExportRecord, addr x.exports.get[i329], addr a328.items[i329])
     inc k
   if x.key_holder.isSome:
     node.entries[k].key = cbor("key_holder")
@@ -4446,10 +4464,10 @@ proc stepEncLcnDcRemote*(w: var EncWork, src: pointer, dst: ptr CborValue) =
     inc k
   if x.listeners.isSome:
     node.entries[k].key = cbor("listeners")
-    let a329 = newCborArray(x.listeners.get.len)
-    node.entries[k].value = a329
-    for i330 in 0 ..< x.listeners.get.len:
-      w.later(stepEncLcnRcRemoteListenerRecord, addr x.listeners.get[i330], addr a329.items[i330])
+    let a333 = newCborArray(x.listeners.get.len)
+    node.entries[k].value = a333
+    for i334 in 0 ..< x.listeners.get.len:
+      w.later(stepEncLcnRcRemoteListenerRecord, addr x.listeners.get[i334], addr a333.items[i334])
     inc k
   if x.signing.isSome:
     node.entries[k].key = cbor("signing")
@@ -4460,25 +4478,25 @@ proc stepDecLcnDcRemote*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnDcRemote](dst)
   r[] = LcnDcRemote()
   r.enabled = asBool(v.lookup("enabled").get)
-  let f326 = v.lookup("exports")
-  if f326.isSome:
+  let f330 = v.lookup("exports")
+  if f330.isSome:
     r.exports = Opt.some(default(seq[LcnRcProviderExportRecord]))
-    r.exports.get.setLen(f326.get.items.len)
-    for i327 in 0 ..< f326.get.items.len:
-      w.later(stepDecLcnRcProviderExportRecord, f326.get.items[i327], addr r.exports.get[i327])
-  let f328 = v.lookup("key_holder")
-  if f328.isSome:
-    r.key_holder = Opt.some(decLcnAppPath(f328.get))
-  let f331 = v.lookup("listeners")
-  if f331.isSome:
+    r.exports.get.setLen(f330.get.items.len)
+    for i331 in 0 ..< f330.get.items.len:
+      w.later(stepDecLcnRcProviderExportRecord, f330.get.items[i331], addr r.exports.get[i331])
+  let f332 = v.lookup("key_holder")
+  if f332.isSome:
+    r.key_holder = Opt.some(decLcnAppPath(f332.get))
+  let f335 = v.lookup("listeners")
+  if f335.isSome:
     r.listeners = Opt.some(default(seq[LcnRcRemoteListenerRecord]))
-    r.listeners.get.setLen(f331.get.items.len)
-    for i332 in 0 ..< f331.get.items.len:
-      w.later(stepDecLcnRcRemoteListenerRecord, f331.get.items[i332], addr r.listeners.get[i332])
-  let f333 = v.lookup("signing")
-  if f333.isSome:
+    r.listeners.get.setLen(f335.get.items.len)
+    for i336 in 0 ..< f335.get.items.len:
+      w.later(stepDecLcnRcRemoteListenerRecord, f335.get.items[i336], addr r.listeners.get[i336])
+  let f337 = v.lookup("signing")
+  if f337.isSome:
     r.signing = Opt.some(default(LcnDcRemoteSigning))
-    w.later(stepDecLcnDcRemoteSigning, f333.get, addr r.signing.get)
+    w.later(stepDecLcnDcRemoteSigning, f337.get, addr r.signing.get)
 
 proc toCbor*(x: LcnDcRemote): CborValue =
   runEnc(stepEncLcnDcRemote, addr x)
@@ -4550,9 +4568,9 @@ proc stepDecLcnDcRestartARBackoffMap*(w: var DecWork, v: CborValue, dst: pointer
   let r = cast[ptr LcnDcRestartARBackoffMap](dst)
   r[] = LcnDcRestartARBackoffMap()
   r.initial_delay_ms = uint32(v.lookup("initial_delay_ms").get.uint)
-  let f334 = v.lookup("max_attempts")
-  if f334.isSome:
-    r.max_attempts = Opt.some(uint32(f334.get.uint))
+  let f338 = v.lookup("max_attempts")
+  if f338.isSome:
+    r.max_attempts = Opt.some(uint32(f338.get.uint))
   r.max_delay_ms = uint32(v.lookup("max_delay_ms").get.uint)
   r.multiplier = uint32(v.lookup("multiplier").get.uint)
   r.stable_ms = uint32(v.lookup("stable_ms").get.uint)
@@ -4650,10 +4668,10 @@ proc stepEncLcnDcRuntime*(w: var EncWork, src: pointer, dst: ptr CborValue) =
     inc k
   if x.module_host_env.isSome:
     node.entries[k].key = cbor("module_host_env")
-    let a338 = newCborArray(x.module_host_env.get.len)
-    node.entries[k].value = a338
-    for i339 in 0 ..< x.module_host_env.get.len:
-      a338.items[i339] = encLcnAppEnvName(x.module_host_env.get[i339])
+    let a342 = newCborArray(x.module_host_env.get.len)
+    node.entries[k].value = a342
+    for i343 in 0 ..< x.module_host_env.get.len:
+      a342.items[i343] = encLcnAppEnvName(x.module_host_env.get[i343])
     inc k
   if x.remote_program.isSome:
     node.entries[k].key = cbor("remote_program")
@@ -4678,34 +4696,34 @@ proc stepEncLcnDcRuntime*(w: var EncWork, src: pointer, dst: ptr CborValue) =
 proc stepDecLcnDcRuntime*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnDcRuntime](dst)
   r[] = LcnDcRuntime()
-  let f335 = v.lookup("apply_deadline_ms")
-  if f335.isSome:
-    r.apply_deadline_ms = Opt.some(uint32(f335.get.uint))
-  let f336 = v.lookup("max_payload_depth")
-  if f336.isSome:
-    r.max_payload_depth = Opt.some(uint16(f336.get.uint))
-  let f337 = v.lookup("module_host")
-  if f337.isSome:
-    r.module_host = Opt.some(decLcnAppPath(f337.get))
-  let f340 = v.lookup("module_host_env")
+  let f339 = v.lookup("apply_deadline_ms")
+  if f339.isSome:
+    r.apply_deadline_ms = Opt.some(uint32(f339.get.uint))
+  let f340 = v.lookup("max_payload_depth")
   if f340.isSome:
-    r.module_host_env = Opt.some(default(seq[LcnAppEnvName]))
-    r.module_host_env.get.setLen(f340.get.items.len)
-    for i341 in 0 ..< f340.get.items.len:
-      r.module_host_env.get[i341] = decLcnAppEnvName(f340.get.items[i341])
-  let f342 = v.lookup("remote_program")
-  if f342.isSome:
-    r.remote_program = Opt.some(decLcnAppPath(f342.get))
-  r.runtime_instance_id = v.lookup("runtime_instance_id").get.text
-  let f343 = v.lookup("shutdown_grace_ms")
-  if f343.isSome:
-    r.shutdown_grace_ms = Opt.some(uint32(f343.get.uint))
-  let f344 = v.lookup("startup_deadline_ms")
+    r.max_payload_depth = Opt.some(uint16(f340.get.uint))
+  let f341 = v.lookup("module_host")
+  if f341.isSome:
+    r.module_host = Opt.some(decLcnAppPath(f341.get))
+  let f344 = v.lookup("module_host_env")
   if f344.isSome:
-    r.startup_deadline_ms = Opt.some(uint32(f344.get.uint))
-  let f345 = v.lookup("stop_deadline_ms")
-  if f345.isSome:
-    r.stop_deadline_ms = Opt.some(uint32(f345.get.uint))
+    r.module_host_env = Opt.some(default(seq[LcnAppEnvName]))
+    r.module_host_env.get.setLen(f344.get.items.len)
+    for i345 in 0 ..< f344.get.items.len:
+      r.module_host_env.get[i345] = decLcnAppEnvName(f344.get.items[i345])
+  let f346 = v.lookup("remote_program")
+  if f346.isSome:
+    r.remote_program = Opt.some(decLcnAppPath(f346.get))
+  r.runtime_instance_id = v.lookup("runtime_instance_id").get.text
+  let f347 = v.lookup("shutdown_grace_ms")
+  if f347.isSome:
+    r.shutdown_grace_ms = Opt.some(uint32(f347.get.uint))
+  let f348 = v.lookup("startup_deadline_ms")
+  if f348.isSome:
+    r.startup_deadline_ms = Opt.some(uint32(f348.get.uint))
+  let f349 = v.lookup("stop_deadline_ms")
+  if f349.isSome:
+    r.stop_deadline_ms = Opt.some(uint32(f349.get.uint))
 
 proc toCbor*(x: LcnDcRuntime): CborValue =
   runEnc(stepEncLcnDcRuntime, addr x)
@@ -4775,19 +4793,19 @@ proc stepEncLcnDcTestHooks*(w: var EncWork, src: pointer, dst: ptr CborValue) =
 proc stepDecLcnDcTestHooks*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnDcTestHooks](dst)
   r[] = LcnDcTestHooks()
-  let f346 = v.lookup("ctl_command_delay_ms")
-  if f346.isSome:
-    r.ctl_command_delay_ms = Opt.some(uint32(f346.get.uint))
-  let f347 = v.lookup("diagnostics")
-  if f347.isSome:
+  let f350 = v.lookup("ctl_command_delay_ms")
+  if f350.isSome:
+    r.ctl_command_delay_ms = Opt.some(uint32(f350.get.uint))
+  let f351 = v.lookup("diagnostics")
+  if f351.isSome:
     r.diagnostics = Opt.some(default(LcnDcTestDiagnostics))
-    w.later(stepDecLcnDcTestDiagnostics, f347.get, addr r.diagnostics.get)
-  let f348 = v.lookup("loader_failure_after_ms")
-  if f348.isSome:
-    r.loader_failure_after_ms = Opt.some(uint32(f348.get.uint))
-  let f349 = v.lookup("loader_failure_on_file")
-  if f349.isSome:
-    r.loader_failure_on_file = Opt.some(decLcnAppPath(f349.get))
+    w.later(stepDecLcnDcTestDiagnostics, f351.get, addr r.diagnostics.get)
+  let f352 = v.lookup("loader_failure_after_ms")
+  if f352.isSome:
+    r.loader_failure_after_ms = Opt.some(uint32(f352.get.uint))
+  let f353 = v.lookup("loader_failure_on_file")
+  if f353.isSome:
+    r.loader_failure_on_file = Opt.some(decLcnAppPath(f353.get))
 
 proc toCbor*(x: LcnDcTestHooks): CborValue =
   runEnc(stepEncLcnDcTestHooks, addr x)
@@ -4858,6 +4876,10 @@ proc stepEncLcnPmInput*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   var n = 5
   if x.limits.isSome:
     inc n
+  if x.readers.isSome:
+    inc n
+  if x.runtime_instance_id.isSome:
+    inc n
   let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
   dst[] = node
   var k = 0
@@ -4871,14 +4893,25 @@ proc stepEncLcnPmInput*(w: var EncWork, src: pointer, dst: ptr CborValue) =
     node.entries[k].key = cbor("limits")
     w.later(stepEncLcnPmLimits, addr x.limits.get, addr node.entries[k].value)
     inc k
+  if x.readers.isSome:
+    node.entries[k].key = cbor("readers")
+    let a356 = newCborArray(x.readers.get.len)
+    node.entries[k].value = a356
+    for i357 in 0 ..< x.readers.get.len:
+      a356.items[i357] = cbor(x.readers.get[i357])
+    inc k
   node.entries[k].key = cbor("resolver_limits")
   w.later(stepEncLcnPmResolverLimits, addr x.resolver_limits, addr node.entries[k].value)
   inc k
+  if x.runtime_instance_id.isSome:
+    node.entries[k].key = cbor("runtime_instance_id")
+    node.entries[k].value = cbor(x.runtime_instance_id.get)
+    inc k
   node.entries[k].key = cbor("storage")
-  let a353 = newCborArray(x.storage.len)
-  node.entries[k].value = a353
-  for i354 in 0 ..< x.storage.len:
-    w.later(stepEncLcnPmBinding, addr x.storage[i354], addr a353.items[i354])
+  let a362 = newCborArray(x.storage.len)
+  node.entries[k].value = a362
+  for i363 in 0 ..< x.storage.len:
+    w.later(stepEncLcnPmBinding, addr x.storage[i363], addr a362.items[i363])
   inc k
   node.entries[k].key = cbor("trust")
   node.entries[k].value = cbor(x.trust)
@@ -4887,18 +4920,27 @@ proc stepEncLcnPmInput*(w: var EncWork, src: pointer, dst: ptr CborValue) =
 proc stepDecLcnPmInput*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnPmInput](dst)
   r[] = LcnPmInput()
-  let f350 = v.lookup("catalog").get
-  w.later(stepDecLcnPmCatalogRef, f350, addr r.catalog)
-  let f351 = v.lookup("limits")
-  if f351.isSome:
+  let f354 = v.lookup("catalog").get
+  w.later(stepDecLcnPmCatalogRef, f354, addr r.catalog)
+  let f355 = v.lookup("limits")
+  if f355.isSome:
     r.limits = Opt.some(default(LcnPmLimits))
-    w.later(stepDecLcnPmLimits, f351.get, addr r.limits.get)
-  let f352 = v.lookup("resolver_limits").get
-  w.later(stepDecLcnPmResolverLimits, f352, addr r.resolver_limits)
-  let f355 = v.lookup("storage").get
-  r.storage.setLen(f355.items.len)
-  for i356 in 0 ..< f355.items.len:
-    w.later(stepDecLcnPmBinding, f355.items[i356], addr r.storage[i356])
+    w.later(stepDecLcnPmLimits, f355.get, addr r.limits.get)
+  let f358 = v.lookup("readers")
+  if f358.isSome:
+    r.readers = Opt.some(default(seq[string]))
+    r.readers.get.setLen(f358.get.items.len)
+    for i359 in 0 ..< f358.get.items.len:
+      r.readers.get[i359] = f358.get.items[i359].text
+  let f360 = v.lookup("resolver_limits").get
+  w.later(stepDecLcnPmResolverLimits, f360, addr r.resolver_limits)
+  let f361 = v.lookup("runtime_instance_id")
+  if f361.isSome:
+    r.runtime_instance_id = Opt.some(f361.get.text)
+  let f364 = v.lookup("storage").get
+  r.storage.setLen(f364.items.len)
+  for i365 in 0 ..< f364.items.len:
+    w.later(stepDecLcnPmBinding, f364.items[i365], addr r.storage[i365])
   r.trust = v.lookup("trust").get.bytes
 
 proc toCbor*(x: LcnPmInput): CborValue =
@@ -4961,27 +5003,27 @@ proc stepEncLcnPmLimits*(w: var EncWork, src: pointer, dst: ptr CborValue) =
 proc stepDecLcnPmLimits*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnPmLimits](dst)
   r[] = LcnPmLimits()
-  let f357 = v.lookup("archive_bytes")
-  if f357.isSome:
-    r.archive_bytes = Opt.some(uint64(f357.get.uint))
-  let f358 = v.lookup("cache_entries")
-  if f358.isSome:
-    r.cache_entries = Opt.some(uint16(f358.get.uint))
-  let f359 = v.lookup("catalog_bytes")
-  if f359.isSome:
-    r.catalog_bytes = Opt.some(uint32(f359.get.uint))
-  let f360 = v.lookup("catalog_entries")
-  if f360.isSome:
-    r.catalog_entries = Opt.some(uint32(f360.get.uint))
-  let f361 = v.lookup("operation_deadline_ms")
-  if f361.isSome:
-    r.operation_deadline_ms = Opt.some(uint32(f361.get.uint))
-  let f362 = v.lookup("operation_entries")
-  if f362.isSome:
-    r.operation_entries = Opt.some(uint32(f362.get.uint))
-  let f363 = v.lookup("read_deadline_ms")
-  if f363.isSome:
-    r.read_deadline_ms = Opt.some(uint32(f363.get.uint))
+  let f366 = v.lookup("archive_bytes")
+  if f366.isSome:
+    r.archive_bytes = Opt.some(uint64(f366.get.uint))
+  let f367 = v.lookup("cache_entries")
+  if f367.isSome:
+    r.cache_entries = Opt.some(uint16(f367.get.uint))
+  let f368 = v.lookup("catalog_bytes")
+  if f368.isSome:
+    r.catalog_bytes = Opt.some(uint32(f368.get.uint))
+  let f369 = v.lookup("catalog_entries")
+  if f369.isSome:
+    r.catalog_entries = Opt.some(uint32(f369.get.uint))
+  let f370 = v.lookup("operation_deadline_ms")
+  if f370.isSome:
+    r.operation_deadline_ms = Opt.some(uint32(f370.get.uint))
+  let f371 = v.lookup("operation_entries")
+  if f371.isSome:
+    r.operation_entries = Opt.some(uint32(f371.get.uint))
+  let f372 = v.lookup("read_deadline_ms")
+  if f372.isSome:
+    r.read_deadline_ms = Opt.some(uint32(f372.get.uint))
 
 proc toCbor*(x: LcnPmLimits): CborValue =
   runEnc(stepEncLcnPmLimits, addr x)
@@ -5068,10 +5110,10 @@ proc stepDecLcnRcProviderExportRecord*(w: var DecWork, v: CborValue, dst: pointe
   let r = cast[ptr LcnRcProviderExportRecord](dst)
   r[] = LcnRcProviderExportRecord()
   r.enabled = asBool(v.lookup("enabled").get)
-  let f364 = v.lookup("listener").get
-  w.later(stepDecLcnRcRemoteListenerAddress, f364, addr r.listener)
-  let f365 = v.lookup("provider").get
-  w.later(stepDecLcnRtModuleProviderAddress, f365, addr r.provider)
+  let f373 = v.lookup("listener").get
+  w.later(stepDecLcnRcRemoteListenerAddress, f373, addr r.listener)
+  let f374 = v.lookup("provider").get
+  w.later(stepDecLcnRtModuleProviderAddress, f374, addr r.provider)
 
 proc toCbor*(x: LcnRcProviderExportRecord): CborValue =
   runEnc(stepEncLcnRcProviderExportRecord, addr x)
@@ -5118,17 +5160,17 @@ proc stepEncLcnRcQuicRuntimeAddress*(w: var EncWork, src: pointer, dst: ptr Cbor
 proc stepDecLcnRcQuicRuntimeAddress*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnRcQuicRuntimeAddress](dst)
   r[] = LcnRcQuicRuntimeAddress()
-  let f366 = v.lookup("alpn")
-  if f366.isSome:
-    r.alpn = Opt.some(decLcnRcAlpn(f366.get))
+  let f375 = v.lookup("alpn")
+  if f375.isSome:
+    r.alpn = Opt.some(decLcnRcAlpn(f375.get))
   r.host = decLcnRcHostName(v.lookup("host").get)
   r.port = decLcnRcPort(v.lookup("port").get)
-  let f367 = v.lookup("profile")
-  if f367.isSome:
-    r.profile = Opt.some(decLcnRcAddressProfile(f367.get))
-  let f368 = v.lookup("server_name")
-  if f368.isSome:
-    r.server_name = Opt.some(decLcnRcServerName(f368.get))
+  let f376 = v.lookup("profile")
+  if f376.isSome:
+    r.profile = Opt.some(decLcnRcAddressProfile(f376.get))
+  let f377 = v.lookup("server_name")
+  if f377.isSome:
+    r.server_name = Opt.some(decLcnRcServerName(f377.get))
 
 proc toCbor*(x: LcnRcQuicRuntimeAddress): CborValue =
   runEnc(stepEncLcnRcQuicRuntimeAddress, addr x)
@@ -5184,8 +5226,8 @@ proc stepEncLcnRcRemoteListenerRecord*(w: var EncWork, src: pointer, dst: ptr Cb
 proc stepDecLcnRcRemoteListenerRecord*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnRcRemoteListenerRecord](dst)
   r[] = LcnRcRemoteListenerRecord()
-  let f369 = v.lookup("address").get
-  w.later(stepDecLcnRcRemoteListenerAddress, f369, addr r.address)
+  let f378 = v.lookup("address").get
+  w.later(stepDecLcnRcRemoteListenerAddress, f378, addr r.address)
   r.enabled = asBool(v.lookup("enabled").get)
   r.runtime_control_enabled = asBool(v.lookup("runtime_control_enabled").get)
 
@@ -5236,12 +5278,12 @@ proc stepDecLcnRcTlsTcpRuntimeAddress*(w: var DecWork, v: CborValue, dst: pointe
   r[] = LcnRcTlsTcpRuntimeAddress()
   r.host = decLcnRcHostName(v.lookup("host").get)
   r.port = decLcnRcPort(v.lookup("port").get)
-  let f370 = v.lookup("profile")
-  if f370.isSome:
-    r.profile = Opt.some(decLcnRcAddressProfile(f370.get))
-  let f371 = v.lookup("server_name")
-  if f371.isSome:
-    r.server_name = Opt.some(decLcnRcServerName(f371.get))
+  let f379 = v.lookup("profile")
+  if f379.isSome:
+    r.profile = Opt.some(decLcnRcAddressProfile(f379.get))
+  let f380 = v.lookup("server_name")
+  if f380.isSome:
+    r.server_name = Opt.some(decLcnRcServerName(f380.get))
 
 proc toCbor*(x: LcnRcTlsTcpRuntimeAddress): CborValue =
   runEnc(stepEncLcnRcTlsTcpRuntimeAddress, addr x)
@@ -5271,9 +5313,9 @@ proc stepDecLcnRtModuleProviderAddress*(w: var DecWork, v: CborValue, dst: point
   let r = cast[ptr LcnRtModuleProviderAddress](dst)
   r[] = LcnRtModuleProviderAddress()
   r.provider = decLcnRtModuleProviderId(v.lookup("provider").get)
-  let f372 = v.lookup("runtime_instance_id")
-  if f372.isSome:
-    r.runtime_instance_id = Opt.some(decLcnRtRuntimeInstanceId(f372.get))
+  let f381 = v.lookup("runtime_instance_id")
+  if f381.isSome:
+    r.runtime_instance_id = Opt.some(decLcnRtRuntimeInstanceId(f381.get))
 
 proc toCbor*(x: LcnRtModuleProviderAddress): CborValue =
   runEnc(stepEncLcnRtModuleProviderAddress, addr x)

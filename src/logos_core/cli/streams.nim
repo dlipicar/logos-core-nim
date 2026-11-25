@@ -288,6 +288,11 @@ proc ending*(s: Stream): Ending =
   withLock s.lock:
     result = s.ended
 
+proc wakeFd*(s: Stream): cint =
+  ## [G503] Readable once an event or an end woke the stream; `wait` with a
+  ## timeout of 0 empties it.
+  s.wakeR
+
 proc abortFd*(s: Stream): cint =
   ## Readable once the queue has overflowed: a write to the terminal stops.
   s.abortR

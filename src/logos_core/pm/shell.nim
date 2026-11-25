@@ -53,6 +53,16 @@
 ##   payload.
 ## - **The worker's jobs** (`cmWork`, G447) are queued for its thread; its
 ##   answers come back through the kit's `post` and are queued as events.
+## - **The read-only worker** (5-6b-1; G500): a second worker thread, started after the
+##   first with the installation root's path and its own trust copy, runs the page jobs
+##   (`cmPage`): `list_installed_packages` pages and readers' handoffs. It is stopped and
+##   joined after the first. Test builds take the page byte budget from
+##   `LCN_TEST_PM_PAGE_BUDGET`, and append a line to the file `LCN_TEST_HANDOFF_JOBS`
+##   names for each `wjHandoff` the first worker gets.
+## - **Watches and progress** (5-6b-2; G501, G502): each landed commit (`cmChanged`)
+##   counts in `changes` and wakes `changedSince`; an operation given a `ProgressSink`
+##   is submitted with progress, and each `cmProgress` for it goes to the sink until
+##   its answer or its cancel.
 ## - **`closeShell`** (`_MODULE_destroy`): the engine stops (no command
 ##   follows, G437), timers are cancelled, outstanding calls are cancelled and
 ##   awaited (bounded), the route set is closed, and a root operation still
@@ -62,7 +72,7 @@
 
 {.push raises: [], gcsafe.}
 
-import std/[algorithm, deques, os, tables]
+import std/[algorithm, deques, monotimes, os, tables]
 import results
 import logos_sdk/confined
 import logos_sdk/kit/routes
@@ -73,7 +83,8 @@ import
 import ../durable
 import ../runtime/protinput
 import ../package/[errors, resolver]
-import ./[engine, worker]
+import ./[engine, linelimit, worker]
+from ./listing import PageBudget
 
 when defined(posix):
   import ./store
@@ -96,6 +107,15 @@ type
   ShellLog* = proc(line: string) {.nimcall, gcsafe, raises: [].}
     ## Receives each log line, without its newline.
 
+  ProgressReport* = object
+    ## [G502] One phase an operation reached: `cmProgress` without its request.
+    phase*: ProgressPhase
+    completed*: Opt[uint64]
+    total*: Opt[uint64]
+
+  ProgressSink* = proc(r: ProgressReport) {.gcsafe, raises: [].}
+    ## [G502] Receives an operation's progress on the module thread, until its answer.
+
   Link = ref object ## One route of a binding, from establishment to release.
     shell {.cursor.}: Shell
     binding: string
@@ -111,6 +131,8 @@ type
     routeSet: RouteSet
     stateDir: string
     log: ShellLog
+    lines: LineLimit
+      ## [G495, G501; Fable §17.3 point 3, §17.7] the lines a caller can repeat, limited
     links: Table[string, Link] ## the current route of each binding
     retired: seq[Link] ## replaced routes, kept until the shell closes
     established: Table[string, int] ## routes established per binding
@@ -126,6 +148,10 @@ type
     nextRequest: uint64
     closed: bool
     worker: Worker ## [G447]
+    reader: Worker ## [5-6b-1; G500] the read-only worker
+    changeCount: uint64 ## [G501] the commits that landed this start
+    changed: AsyncEvent ## [G501] fired at each, and when the shell closes
+    sinks: Table[uint64, ProgressSink] ## [G502] by request, until its answer
     when defined(posix):
       store: InstalledStore ## [G444] held from `_init` to `_destroy`
 
@@ -148,6 +174,12 @@ proc stderrLog*(line: string) {.nimcall, gcsafe, raises: [].} =
 
 proc say(s: Shell, text: string) =
   s.log("package-manager: " & oneLine(text))
+
+proc note*(s: Shell, kind, line: string, burst: int) =
+  ## [§17.7] A line a caller can repeat, through the limit (`linelimit.nim`): `kind` is
+  ## fixed text naming the caller, apart from what the line carries.
+  for l in s.lines.admit(kind, line, burst, getMonoTime()):
+    s.log(l)
 
 # The event queue ----------------------------------------------------------------------
 
@@ -489,6 +521,30 @@ proc continueSoon(arg: pointer) {.gcsafe, raises: [].} =
     t.shell.run(t.shell.engine.handle(continued(t.operation)))
   GC_unref(t)
 
+when defined(lcnTestHooks):
+  from std/strutils import parseInt
+
+  proc testPageBudget(): int =
+    ## [IMPL] A test build's page byte budget, from `LCN_TEST_PM_PAGE_BUDGET`.
+    try:
+      let v = parseInt(getEnv("LCN_TEST_PM_PAGE_BUDGET", "0"))
+      if v > 0: v else: PageBudget
+    except ValueError:
+      PageBudget
+
+  proc noteHandoffJob() =
+    ## [IMPL; plan §10.3, ruling A] One line for each `wjHandoff`, in the file
+    ## `LCN_TEST_HANDOFF_JOBS` names.
+    let path = getEnv("LCN_TEST_HANDOFF_JOBS")
+    if path.len == 0:
+      return
+    try:
+      let f = open(path, fmAppend)
+      f.write("wjHandoff\n")
+      f.close()
+    except CatchableError:
+      discard
+
 proc exec(s: Shell, c: var Command) =
   ## `c`'s outcome, if it has one, is moved out: a closure can be large.
   case c.kind
@@ -513,18 +569,36 @@ proc exec(s: Shell, c: var Command) =
     if s.replies.pop(c.request, f):
       f.complete(move c.outcome)
   of cmLog:
-    s.say(c.text)
+    if c.noteKind.len > 0:
+      s.note(c.noteKind, "package-manager: " & oneLine(c.text), ReaderLineBurst)
+    else:
+      s.say(c.text)
   of cmContinue:
     # [G455; Fable F2] One poll later, never in this drain.
     let t = Turn(shell: s, operation: c.operation)
     GC_ref(t)
     callSoon(continueSoon, cast[pointer](t))
   of cmWork:
+    when defined(lcnTestHooks):
+      if c.job.kind == wjHandoff:
+        noteHandoffJob()
     s.worker.submit(move c.job)
+  of cmPage:
+    s.reader.submit(move c.job)
   of cmAnswer:
+    s.sinks.del(c.answerTo)
     var f: Future[OperationAnswer].Raising([CancelledError])
     if s.answers.pop(c.answerTo, f):
       f.complete(move c.answer)
+  of cmChanged:
+    # [G501] Every watch waiting sees the new count.
+    inc s.changeCount
+    s.changed.fire()
+    s.changed.clear()
+  of cmProgress:
+    let sink = s.sinks.getOrDefault(c.progressOf)
+    if not sink.isNil:
+      sink(ProgressReport(phase: c.phase, completed: c.completed, total: c.total))
   of cmCancelCall:
     # [G449] Through the Interface's cancel; the call's answer still comes back.
     let f = s.calls.getOrDefault(c.cancelled)
@@ -596,11 +670,32 @@ proc openShell*(
     when defined(posix):
       store.close()
     refuse(error)
+  let budget =
+    when defined(lcnTestHooks):
+      testPageBudget()
+    else:
+      PageBudget
   var (e, notes) = initEngine(
-    input, kept, freshKey, platform, pathRules = pathRules, turnWork = turnWork
+    input,
+    kept,
+    freshKey,
+    platform,
+    pathRules = pathRules,
+    turnWork = turnWork,
+    pageBudget = budget,
   )
-  let s = Shell(engine: move e, routeSet: routeSet, stateDir: dir, log: log)
+  let s = Shell(
+    engine: move e,
+    routeSet: routeSet,
+    stateDir: dir,
+    log: log,
+    changed: newAsyncEvent(),
+  )
   var config = s.engine.workerConfig(spoolDir)
+  # [G500] The read-only worker's own copy, with the root's path and no store files.
+  var readConfig = config
+  readConfig.readOnly = true
+  readConfig.root = dir / InstallDir
   when defined(posix):
     s.store = move store
     s.engine.setSnapshot(snapshotOf(s.store))
@@ -616,6 +711,15 @@ proc openShell*(
       s.store.close()
     refuse(moduleError(started.error))
   s.worker = started.get
+  let reading =
+    startWorker(init.services.poster, cast[pointer](s), onWorkerResult, move readConfig)
+  if reading.isErr:
+    discard s.routeSet.close()
+    abandonWorker(s.worker)
+    when defined(posix):
+      s.store.close()
+    refuse(moduleError(reading.error))
+  s.reader = reading.get
   s.run(move notes)
   GC_ref(s)
   callSoon(startSoon, cast[pointer](s))
@@ -653,10 +757,12 @@ proc resolveRoot*(
 proc ask(
     s: Shell,
     issue: proc(e: var Engine, id: uint64): seq[Command] {.gcsafe, raises: [].},
+    sink: ProgressSink = nil,
 ): Future[OperationAnswer].Raising([CancelledError]) =
   ## One operation or query through the engine; completes with its answer. Cancelled by its
   ## caller, it is cancelled in the engine (leaving its queue, or ending at its next
-  ## suspension), and the future ends cancelled.
+  ## suspension), and the future ends cancelled. [G502] `sink` receives the operation's
+  ## progress until then.
   let f = Future[OperationAnswer].Raising([CancelledError]).init(
       "pm operation", {FutureFlag.OwnCancelSchedule}
     )
@@ -671,7 +777,10 @@ proc ask(
   inc s.nextRequest
   let id = s.nextRequest
   s.answers[id] = f
+  if not sink.isNil:
+    s.sinks[id] = sink
   f.cancelCallback = proc(arg: pointer) {.gcsafe, raises: [].} =
+    s.sinks.del(id)
     var held: Future[OperationAnswer].Raising([CancelledError])
     if s.answers.pop(id, held):
       s.run(s.engine.cancel(id))
@@ -680,13 +789,32 @@ proc ask(
   f
 
 proc operate*(
-    s: Shell, op: OperationRequest
+    s: Shell, op: OperationRequest, progress: ProgressSink = nil
 ): Future[OperationAnswer].Raising([CancelledError]) =
-  ## [G449] One operation through the engine's slots.
+  ## [G449] One operation through the engine's slots. [G502] With `progress`, each phase
+  ## it reaches goes to it, on this thread, until the answer.
+  let wanted = not progress.isNil
   s.ask(
     proc(e: var Engine, id: uint64): seq[Command] {.gcsafe, raises: [].} =
-      e.submit(id, op)
+      e.submit(id, op, wanted),
+    progress,
   )
+
+func changes*(s: Shell): uint64 =
+  ## [G501] The commits that landed since the shell opened.
+  s.changeCount
+
+func closing*(s: Shell): bool =
+  ## `closeShell` began.
+  s.closed
+
+proc changedSince*(
+    s: Shell, seen: uint64
+): Future[void] {.async: (raises: [CancelledError]).} =
+  ## [G501] Completes once `changes` is past `seen`, or the shell closes. Cancelling it
+  ## leaves nothing behind.
+  while s.changeCount == seen and not s.closed:
+    await s.changed.wait()
 
 proc handoff*(
     s: Shell, identity: PackageIdentity, module: string
@@ -696,6 +824,41 @@ proc handoff*(
     proc(e: var Engine, id: uint64): seq[Command] {.gcsafe, raises: [].} =
       e.handoff(id, identity, module)
   )
+
+proc listPackages*(
+    s: Shell, origin: Origin, filter, cursor: Opt[string], limit: Opt[uint16]
+): Future[OperationAnswer].Raising([CancelledError]) =
+  ## [G500] One `list_packages` page for the reader `origin`.
+  s.ask(
+    proc(e: var Engine, id: uint64): seq[Command] {.gcsafe, raises: [].} =
+      e.listPackages(id, origin, filter, cursor, limit)
+  )
+
+proc listInstalled*(
+    s: Shell, origin: Origin, filter, cursor: Opt[string], limit: Opt[uint16]
+): Future[OperationAnswer].Raising([CancelledError]) =
+  ## [G500] One `list_installed_packages` page for the reader `origin`.
+  s.ask(
+    proc(e: var Engine, id: uint64): seq[Command] {.gcsafe, raises: [].} =
+      e.listInstalled(id, origin, filter, cursor, limit)
+  )
+
+proc readerHandoff*(
+    s: Shell, origin: Origin, identity: PackageIdentity, module: string
+): Future[OperationAnswer].Raising([CancelledError]) =
+  ## [G500, ruling A] A reader's `get_runtime_handoff`, a page job.
+  s.ask(
+    proc(e: var Engine, id: uint64): seq[Command] {.gcsafe, raises: [].} =
+      e.readerHandoff(id, origin, identity, module)
+  )
+
+func readers*(s: Shell): seq[string] =
+  ## [G498] The protected input's readers.
+  s.engine.input.readers
+
+func runtimeInstanceId*(s: Shell): string =
+  ## [G498] The Runtime the readers' calls come from.
+  s.engine.input.runtimeInstanceId
 
 proc shellStatus*(s: Shell): ShellStatus =
   ## The catalog in use, each binding's route, and the running operations.
@@ -727,6 +890,9 @@ proc closeShell*(s: Shell): Future[void] {.async: (raises: []).} =
   if s.closed:
     return
   s.closed = true
+  # [G501] A watch still waiting ends.
+  s.changed.fire()
+  s.sinks.clear()
   # [G405] The engine names the operations still running; they are answered
   # once the calls have ended.
   var answers = s.engine.stop()
@@ -777,7 +943,13 @@ proc closeShell*(s: Shell): Future[void] {.async: (raises: []).} =
   # [G447] The worker after the engine: no job follows; it deletes its spool files.
   await stopWorker(s.worker)
   s.worker = nil
+  if not s.reader.isNil:
+    await stopWorker(s.reader)
+    s.reader = nil
   when defined(posix):
     s.store.close()
+  # [§17.7] The counts of the limited lines not written yet.
+  for l in s.lines.flush():
+    s.log(l)
 
 {.pop.}

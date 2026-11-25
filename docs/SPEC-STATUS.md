@@ -87,7 +87,7 @@ The 308 PKG units by step (`PKG-` omitted):
 | 5-6a-1 | A1 | 20 | 0003-0008, 0366, 0367, 0369-0377, 0379, 0519, 0521 |
 | 5-6a-1 | A2 | 2 | 0513, 0514 |
 | 5-6a-2 | A1 | 2 | 0380, 0388 (built, I141; with App A's copy 0650) |
-| 5-6b | A1 | 55 | 0368, 0378, 0381, 0383-0387, 0520, 0522-0533, 0538-0542, 0544-0562, 0564-0573 |
+| 5-6b | A1 | 55 | 0368, 0378, 0381, 0383-0387, 0520, 0522-0533, 0538-0542, 0544-0562, 0564-0573 (5-6b-1 built 22, I143: 0368, 0378, 0381, 0383-0387, 0525-0533, 0538-0542; with App A's copies 0638 and 0648. 5-6b-2 built 29, I144: 0520, 0522-0524, 0544-0553, 0556-0558, 0560-0562, 0564-0572, four by inspection; with App A's copies 0632, 0634-0636. 5-6b-3 built 3, I148: 0554, 0555 and 0573, two by inspection; 0559 is not met, G504) |
 | 5-7a | A4 | 1 | 0435 |
 | 5-8 | B | 19 | 0060, 0287, 0289, 0335, 0337-0345, 0347-0351, 0512 (and TXT-0545, riding on 0351: G391) |
 | 5-8 | A2 | 1 | 0354 |
@@ -132,7 +132,7 @@ The plan's §6, with the owner's decisions so far. *Open* names the decision tha
 | 5-5 | TF-12, TF-14 | keep I69's interims; exclude an installed candidate whose signer is no longer accepted | TF-12 settled by PM l.1304-1307 at 6cac8335 (G167); the signer exclusion built at re-pin P7b (I110) |
 | 5-5 | the no-op install and update while the retained signer is not accepted (TF-07's second point); a D9 stop | fail with `signature-verification-failed` | decided (C6: fail); built at re-pin P7b, the update half in the resolver and the install half at resolution (G166) |
 | 5-6a | where the Package Manager runs | hosted in its own process, the engine's binding over TRANSPORT §8.1.2 | decided (C1; the owner's Q2, 2026-11-23: logosd composes it); hosted built in 5-6a-1 (G490, G491): the reserved instance `package_manager`, marked in the host configuration; the binding built in 5-6a-2 (G492, G493, I141): the system-service endpoint on fd 6, its own ticket store, the engine's queue and the binding's own worker |
-| 5-6b | package record observation | deny by default; the grant is protected deployment input | open (C4) |
+| 5-6b | package record observation | deny by default; the grant is protected deployment input | decided (C4); built in 5-6b-1 (G498, I143): `package_manager.readers`, else `lcn_call`, carried in `lcn.pm_input` with the Runtime id; a non-reader is `MODULE_ERROR` with a log line; watch and progress for readers are 5-6b-2's |
 | 5-7a | the remote trust input: its own input and revision, apart from the package trust file | — | decided (C2); built 2026-11-22 by 5-7a-1 (G408): `remote/trust.cbor` and its mark, `logosctl remote trust` |
 | 5-7a | NF-06 (G81), the authority part | G81 (a) narrowed | decided (B5); compared with CA l.77-78 at 6cac8335 (re-pin P6a): the enrolled half of TXT-0359 (claimed for the half with no Runtime enrolled) and TXT-0360 (riding RUN-1125) are 5-7a's; built 2026-11-22 by 5-7a-2 (G415), TXT-0359's enrolled half tested, TXT-0360 with 5-7a-4 |
 | 5-7a | NA-04 (G255); TF-30 point 1 (G194) | kept | decided (B9) |
@@ -850,6 +850,61 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
 
   No unit changes status: RUNTIME l.1316-1322 name continuity for static bindings only, and G160's dynamic half
   stays an interim (TF-08); PKG-0513 and PKG-0514 keep their evidence, the latter now on the same session.
+
+- 2026-11-24, Tier 5 step 5-6b-1 (I143; G498, G499, G500 completed; C4; the owner's Q7 (b)), the Package Manager's
+  readers, cursors and lists:
+  - Readers (C4): `package_manager.readers`, else `lcn_call` when logosd composes it, carried with the Runtime id
+    in `lcn.pm_input`; the facade checks the authenticated caller on every call, and anyone else is
+    `MODULE_ERROR` with no message and one log line (G498).
+  - `list_packages` from the catalog's entries, encoded once; `list_installed_packages` as page jobs on a second,
+    read-only worker, so the first worker's handoffs and stages never wait behind a page; pages of at most `limit`
+    records and 256 KiB, always one; 2 page jobs per origin and 8 in all, a refusal logged with its bound (G500).
+  - Cursors: 32 random bytes keying origin, method, filter, snapshot and place; superseded by a commit or another
+    catalog; 8 per origin and 256 in all, 60 s idle and 10 min absolute, reclaimed each query and each second; an
+    origin at its limit loses its own oldest (G499).
+  - A reader's `get_runtime_handoff` is a page job on the read-only worker, the binding's bytes.
+  - Suite `test_pm_queries` (new); cases in `test_pm_install`, `test_system_binding`, `test_pm_input` and
+    `test_daemon_config`.
+
+  Claimed: PKG-0368, PKG-0378, PKG-0381, PKG-0383 to PKG-0387, PKG-0525 to PKG-0533 and PKG-0538 to PKG-0542, and
+  App A's copies PKG-0638 and PKG-0648, which leave the re-pin's deferred list (24 units). PKG-0558 waits for
+  5-6b-2's watch bounds; PKG-0559 stays not met.
+
+- 2026-11-24, Tier 5 step 5-6b-2 (I144; G501, G502, G504; the owner's Q11 and Q12 (a); ruling 4), the Package
+  Manager's watch and progress:
+  - The watch: a reader's, one `installed_packages_changed` through its own call per landed commit, coalesced while
+    one is in flight; 4 per caller and 16 in all, each admission and refusal logged; the Runtime's cancel (the
+    caller's, a lost session, a deadline) ends it at once, and ending touches no operation (G501).
+  - Progress: a reader's operation with a `progress_key` publishes `operation_progress` through its own call, the key
+    echoed; the engine's phases with measured counters (fetching, verifying), none for resolving, installing and
+    removing (G502).
+  - The Package Manager can hold 58 of the Runtime's 128 call workers, a stated limit (HOST-CONFIG; G501).
+  - PKG-0559 is recorded as not met until the held large-reply core item (G504).
+  - Cases in `test_pm_install`, `test_pm_queries`, `test_system_binding`; `test_logosd_pm` lists through `lcn_call`,
+    the default reader.
+
+  Claimed: PKG-0520, PKG-0522 to PKG-0524, PKG-0544 to PKG-0553, PKG-0556 to PKG-0558, PKG-0560 to PKG-0562 and
+  PKG-0564 to PKG-0572 (PKG-0547 to PKG-0549 and PKG-0560 by inspection), and App A's copies PKG-0632 and PKG-0634 to
+  PKG-0636, which leave the re-pin's deferred list with TXT-0497 and TXT-0498 (33 units). PKG-0554, PKG-0555 and
+  PKG-0573, the consumer's, wait for 5-6b-3; PKG-0559 is not met.
+
+- 2026-11-25, Tier 5 step 5-6b-3 (I148; G503; the owner's Q14 (a); ruling 4), `logosctl package` and `catalog`
+  through `lcn_call`:
+  - The commands list, inspect, install, remove, update, hand off and watch on the composed Package Manager, typed
+    from its described contract; every page of a list, started over at most 3 times when a commit supersedes it.
+  - `lcn_call` holds its own page calls and watches within the per-caller bounds; an opaque refusal names its three
+    causes; the error arm is exit 5.
+  - `--progress` and the watch subscribe and call on one route, since the Package Manager publishes in the call's
+    own scope; progress lines on stderr; the watch lists at each hint, every 30 s and after a loss.
+  - S13 (the Package Manager publishes its events) and, with `lcn_call`, S14 (its access, the operations included).
+  - Cases in `test_cli`, `test_daemon_config` and `test_logosd_pm`.
+
+  Claimed by test: PKG-0554, PKG-0555 (through the test hook `LCN_TEST_CLI_WATCH`) and PKG-0573 (3 units).
+
+  The merge follow-up (Fable §17, planning 2026-11-25): a cancelled page job keeps its place until its job has ended
+  (PKG-0558); a lost watch is made again for 30 s, with a notice, and survives a stop and start of the Package Manager
+  (PKG-0555); a fifth watch's notice and `--for` deadline; the refusal lines limited per caller (G495); PKG-0559
+  deferred by name with G504's five conditions.
 
 ## Tiers at f4f83471 (the original plan)
 
