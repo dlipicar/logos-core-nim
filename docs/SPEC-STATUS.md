@@ -899,7 +899,7 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   - S13 (the Package Manager publishes its events) and, with `lcn_call`, S14 (its access, the operations included).
   - Cases in `test_cli`, `test_daemon_config` and `test_logosd_pm`.
 
-  Claimed: PKG-0554, and PKG-0555 and PKG-0573 by inspection (3 units).
+  Claimed by test: PKG-0554, PKG-0555 (through the test hook `LCN_TEST_CLI_WATCH`) and PKG-0573 (3 units).
 
 ## Tiers at f4f83471 (the original plan)
 

@@ -74,13 +74,3 @@ reason = "The watch's visibility decision is data, not a callback: the protected
 [[item]]
 ids = ["PKG-0560"]
 reason = "An admitted watch never has to end for its limits (PM l.1772): it holds at most one hint in flight and folds every later change into one more (`observe` in src/logos_core/pm/facade.nim), so nothing it retains grows past its bound; the bounds on watches themselves are applied at admission (4 per caller, 16 in all, tested under [PKG-0558] in tests/test_pm_queries.nim). It ends only through ordinary completion ({} when a hint is not delivered or the Package Manager stops) or invocation failure (CANCELLED when the Runtime cancels it), and a hint already handed to the kit is answered before the call completes (G338: a job completes only after every publication of its invocation was answered), so no committed delivery obligation is discarded."
-
-# pm-consumer-refresh (step 5-6b-3, DECISIONS G503, I148)
-[[item]]
-ids = ["PKG-0555"]
-reason = "The consumer's refresh (PM l.1760). `runWatch` in src/logos_core/cli/commands.nim lists the installed packages when the watch is made, after each hint (tests/test_logosd_pm.nim's watch), every `WatchRefreshMs` (30 s) whether or not a hint came, and after a lost watch: its `{}`, its route's or its session's end, or a transport failure, after which it makes the watch again (`WatchResyncMs`, 1 s) on the provider looked up again and lists before writing. The periodic refresh and the resynchronization have no suite that reaches them in a suite's time: a route session lasts an hour and the Package Manager ends a watch `{}` only when a hint is not delivered or it stops; the code paths are the ones the hint path takes (`look`)."
-
-# pm-consumer-outcome (step 5-6b-3, DECISIONS G503, I148)
-[[item]]
-ids = ["PKG-0573"]
-reason = "The consumer's reading of an outcome (PM l.1796). `operate` in src/logos_core/cli/commands.nim takes an operation's outcome from its call only: a progress stream that ends, or a caller that gets none (a non-reader, tests/test_logosd_pm.nim), only stops the progress lines. A cancel, a timeout or a transport failure after the request was sent is exit 2, 'the outcome unknown' (`classify`, docs/DAEMON.md §7a's exit table, whose row says the provider may have run the call), never a rollback or a refusal; `lcn_call` retries only what was never sent (`retryable`)."

@@ -44,7 +44,7 @@ import std/[algorithm, atomics, json, locks, monotimes, strutils, tables, times]
 import results
 import logos_sdk/cbor
 import logos_sdk/commitment
-import logos_sdk/base/[hex, wipe]
+import logos_sdk/base/[hex, testhooks, wipe]
 import logos_sdk/hash/hashinput
 import logos_sdk/iface/[accept, provider, surface]
 import logos_sdk/kit/rc_types
@@ -53,6 +53,8 @@ import logos_sdk/iface/outcome
 from ../authority/scopes import rcContractInfo
 import ../daemon/render
 import ./[args, cli_types, present, routes, rpc, streams, wire]
+
+testHooksMarker("lcn_call_commands") # [PKG-0555] the watch's hook (`LCN_TEST_CLI_WATCH`)
 
 when defined(posix):
   import std/posix
@@ -1529,6 +1531,29 @@ proc operate(
 
 # The watch (PM §15.1) ---------------------------------------------------------------------
 
+when defined(lcnTestHooks):
+  from std/os import getEnv
+
+  type WatchHook = object
+    refreshMs: int ## > 0: in place of `WatchRefreshMs`
+    loseFirstHint: bool ## a watch command's first hint ends its watch, unlisted
+    deaf: bool ## every other hint is ignored, as if it were lost
+
+  proc watchHook(): WatchHook =
+    ## [PKG-0555] A test build's watch, from `LCN_TEST_CLI_WATCH`: a comma list of
+    ## `refresh=MS`, `deaf` and `lose-first-hint`, read when a watch command starts.
+    for item in getEnv("LCN_TEST_CLI_WATCH").split(','):
+      let t = item.strip()
+      if t == "deaf":
+        result.deaf = true
+      elif t == "lose-first-hint":
+        result.loseFirstHint = true
+      elif t.startsWith("refresh="):
+        try:
+          result.refreshMs = parseInt(t["refresh=".len ..^ 1])
+        except ValueError:
+          discard
+
 proc installedView(items: seq[CborValue]): (JsonNode, string) =
   var a = newJArray()
   var names: seq[string] = @[]
@@ -1565,6 +1590,12 @@ proc runWatch(c: Ctx, cmd: LcnCliPackageCommand): Result[void, Stop] =
       leave(c.env.pm[].watches)
   var nc = c
   nc.deadline = Opt.none(int)
+  var refreshMs = WatchRefreshMs
+  when defined(lcnTestHooks):
+    let hook = watchHook()
+    if hook.refreshMs > 0:
+      refreshMs = hook.refreshMs
+    var lostOnce = false
   proc expired(): bool =
     forMs.isSome and int(inMilliseconds(getMonoTime() - started)) >= forMs.get
 
@@ -1606,11 +1637,17 @@ proc runWatch(c: Ctx, cmd: LcnCliPackageCommand): Result[void, Stop] =
 
     proc tick(): bool =
       discard sub.s.wait(-1, 0)
-      let hints = sub.s.take().len
+      var hints = sub.s.take().len
+      when defined(lcnTestHooks):
+        if hook.loseFirstHint and hints > 0 and not lostOnce:
+          lostOnce = true
+          return false # as a lost subscription below: the watch is made again
+        if hook.deaf:
+          hints = 0
       if expired():
         finished = true
         return false
-      if first or hints > 0 or inMilliseconds(getMonoTime() - lastList) >= WatchRefreshMs:
+      if first or hints > 0 or inMilliseconds(getMonoTime() - lastList) >= refreshMs:
         first = false
         if not look():
           return false
@@ -1618,7 +1655,7 @@ proc runWatch(c: Ctx, cmd: LcnCliPackageCommand): Result[void, Stop] =
         return false # the hints are lost: the watch is made again
       true
 
-    var every = WatchRefreshMs
+    var every = refreshMs
     if forMs.isSome:
       every =
         min(every, max(forMs.get - int(inMilliseconds(getMonoTime() - started)), 1))

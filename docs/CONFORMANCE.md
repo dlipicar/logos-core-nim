@@ -860,9 +860,10 @@ The Package Manager's watch and progress (DECISIONS I144; G501, G502, G504; the 
 `logosctl package` and `catalog` through `lcn_call` (DECISIONS I148; G503; the owner's Q14 (a); ruling 4;
 `docs/DAEMON.md` §5, §7a).
 
-- **Claimed:** PKG-0554 (a hint or a submitted watch is never taken for the state: `lcn_call` lists after each), and
-  by inspection PKG-0555 (the refresh at each hint, every 30 s and after a lost watch) and PKG-0573 (a lost progress
-  stream, a cancel or a timeout is no outcome: exit 2, the outcome unknown). 3 units.
+- **Claimed:** PKG-0554 (a hint or a submitted watch is never taken for the state: `lcn_call` lists after each),
+  PKG-0555 (the refresh and the resynchronization: through the test hook `LCN_TEST_CLI_WATCH`, a lost watch is made
+  again and lists, and a change whose hint is ignored is written from a shortened refresh) and PKG-0573 (a cancel, a
+  timeout or a lost route is exit 2, the outcome unknown; an install goes on without progress). 3 units, by test.
 - **Limits of the claim:**
   - **`lcn_call` sees only its own calls:** it holds its page calls and watches within the Package Manager's
     per-caller bounds (2 and 4), and a query refused at a bound in all (8 page calls, 16 watches) is reported with

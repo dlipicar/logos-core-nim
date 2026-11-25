@@ -250,8 +250,9 @@ default = "deferred:tier-5"
 "PKG-0636" = "claimed"
 # Step 5-6b-3, the consumer's duties in lcn_call (DECISIONS G503; I148): `logosctl package watch` lists after the
 # watch is made and after each hint, never taking a hint or a submission for the state (PKG-0554,
-# tests/test_logosd_pm.nim). PKG-0555 (the periodic refresh and the resynchronization) and PKG-0573 (a lost
-# progress stream, a cancel or a timeout is no outcome) are claimed by inspection (conformance/inspection/PKG.toml).
+# tests/test_logosd_pm.nim). PKG-0555 (the periodic refresh and the resynchronization) through the test hook
+# LCN_TEST_CLI_WATCH (tests/test_logosd_pm.nim); PKG-0573 (a cancel, a timeout or a lost route is the outcome
+# unknown, and an install goes on without progress) in tests/test_cli.nim and tests/test_logosd_pm.nim.
 "PKG-0554" = "claimed"
 "PKG-0555" = "claimed"
 "PKG-0573" = "claimed"

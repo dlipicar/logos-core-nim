@@ -1045,6 +1045,18 @@ cliargs.multi_response = {}
       check classify(failed(ecModule)).declared
       check not classify(failed(ecNotReady)).declared
 
+    test "[PKG-0573] an operation cancelled, timed out or cut off is the outcome unknown (exit 2), never a rollback: the provider may have run it; a cancel the launcher asked for is 130":
+      # `operate` answers from its call alone, through `pmAnswer` and so `classify`: a
+      # progress stream that ends only stops the progress lines (test_logosd_pm).
+      for c in [ecTransport, ecTimeout, ecCancelled]:
+        let s = classify(failed(c))
+        check s.exit == ExitUnreachable
+        check "the outcome is unknown: the provider may have run the call" in s.message
+        check "roll" notin s.message and "not installed" notin s.message
+        check not s.declared
+      let asked = classify(failed(ecCancelled, cancelled = true))
+      check asked.exit == ExitInterrupted and asked.silent
+
   # An extended contract view (R l.90-91), built in process as
   # sdk/tests/test_call_surface.nim does: no fixture carries `extends`.
   const

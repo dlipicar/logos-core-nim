@@ -57,6 +57,8 @@ when defined(posix):
       ## [IMPL] How long the override case watches the Package Manager stay down: many
       ## times `RestartInitialMs`.
     PaceVariable = "LCN_TEST_PM_PAGE_PACE_MS"
+    WatchHookVariable = "LCN_TEST_CLI_WATCH"
+      ## [PKG-0555] lcn_call's watch hook
       ## [IMPL] the Package Manager's test hook: a page job's pause per record
     PaceMs = 400 * Slow
     FakeInstance = "fetch-1"
@@ -733,7 +735,7 @@ when defined(posix):
       check d.stopped == 0
       check hostsGone()
 
-    test "[IMPL-DECISION G503] [IMPL-DECISION G498] lcn_call when package_manager.readers does not name it: package list and catalog list fail, exit 5, with the text naming the three causes, and the Package Manager's log says which; an install with --progress succeeds with no progress lines":
+    test "[PKG-0573] [IMPL-DECISION G503] [IMPL-DECISION G498] lcn_call when package_manager.readers does not name it: package list and catalog list fail, exit 5, with the text naming the three causes, and the Package Manager's log says which; an install with --progress succeeds with no progress lines":
       let c = newCase()
       var section = pmSection()
       section.readers = Opt.some(@[FakeInstance])
@@ -770,6 +772,89 @@ when defined(posix):
       check installed.code == 0
       check installed.stdout.linesOf == @["installed app 1.0.0"]
       check not installed.stderr.linesOf.anyIt(it.startsWith("progress: "))
+      check d.stopped == 0
+      check hostsGone()
+
+    test "[PKG-0555] [IMPL-DECISION G503] the watch refreshes and resynchronizes (LCN_TEST_CLI_WATCH: a 300 ms refresh, the first hint lost with its watch, later hints ignored): the lost watch is made again and lists, and a change whose hint is ignored is written from the refresh, with no third watch":
+      let c = newCase()
+      var dc = pmConfig()
+      dc.runtime.module_host_env = Opt.some(@SanitizerEnv & @[WatchHookVariable])
+      check c.initPm(dc).code == 0
+      c.stock()
+      c.anchor()
+      let d = spawnChild(
+        dExe,
+        ["--session-dir", c.s.dir],
+        c.dir,
+        "logosd" & $children.len,
+        env = [(WatchHookVariable, "refresh=300,lose-first-hint,deaf")],
+      )
+      children.add(d)
+      c.expectReady(d)
+      check c.reaches(d, PmInstance, "ready")
+      check c.setReadiness("ready")
+      check c.acquired(d, catalogLine("configured"))
+      proc admitted(): int =
+        # The watches the Package Manager admitted for lcn_call.
+        d.errText.linesOf.countIt(
+          it.startsWith(
+            "package-manager: watch_installed_packages admitted for module instance " &
+              CliInstance & " of Runtime "
+          )
+        )
+
+      let watch = spawnChild(
+        ctlExe,
+        ["--session-dir", c.s.dir, "--json", "package", "watch", "--count", "3"],
+        c.dir,
+        "watch",
+      )
+      children.add(watch)
+      check eventually(
+        "the watch's first line",
+        d,
+        proc(): bool =
+          watch.outText.linesOf.len == 1,
+      )
+      check eventually(
+        "the watch's admission",
+        d,
+        proc(): bool =
+          admitted() == 1,
+      )
+      # The install's hint is lost with its watch: lcn_call makes the watch again, on
+      # the provider looked up again, and lists before it writes.
+      check c.ctl("package", "install", "lib", "1.2.0").code == 0
+      check eventually(
+        "the watch made again",
+        d,
+        proc(): bool =
+          admitted() == 2,
+      )
+      check eventually(
+        "the watch's line after the loss",
+        d,
+        proc(): bool =
+          watch.outText.linesOf.len == 2,
+      )
+      # Every hint is ignored from now on: the next change is written from the refresh.
+      check c.ctl("package", "install", "app", "1.0.0").code == 0
+      check waitExit(watch, ReadyMs) == 0
+      checkpoint("the watch: " & watch.outText & watch.errText)
+      check watch.outText.linesOf ==
+        @[
+          $(%*{"installed": newJArray()}),
+          $(%*{"installed": [{"package": "lib", "version": "1.2.0"}]}),
+          $(
+            %*{
+              "installed": [
+                {"package": "app", "version": "1.0.0"},
+                {"package": "lib", "version": "1.2.0"},
+              ]
+            }
+          ),
+        ]
+      check admitted() == 2
       check d.stopped == 0
       check hostsGone()
 
