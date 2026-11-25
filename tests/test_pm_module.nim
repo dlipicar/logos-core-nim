@@ -884,23 +884,41 @@ when defined(posix):
       s.e.finish()
 
     test "[IMPL-DECISION G449] an operation's deadline answers its call while the worker extracts; a stop then ends at the worker's next piece, its directory deleted":
-      putEnv("LCN_TEST_EXTRACT_PACE_MS", "1500")
+      # The worker holds at the extraction's first write until `hold` exists or the stop
+      # (`LCN_TEST_EXTRACT_HOLD_FILE`, `pm/store.nim`), so the deadline passes while it
+      # extracts however fast the runner is. The deadline only has to outlast big's
+      # retrieval and verification, which a sanitizer slows: under ThreadSanitizer on arm64
+      # they took longer than 8 s (big CI run 1). The case is about the order, not the value.
+      let hold = work / "deadline-hold"
+      removeFile(hold)
+      putEnv("LCN_TEST_EXTRACT_HOLD_FILE", hold)
       defer:
-        delEnv("LCN_TEST_EXTRACT_PACE_MS")
+        delEnv("LCN_TEST_EXTRACT_HOLD_FILE")
+        try:
+          writeFile(hold, "") # lets a worker this case failed to stop go on
+        except IOError:
+          discard
       var cfg = hosted(
-        pmInputBytes(Opt.some(LcnPmLimits(operation_deadline_ms: Opt.some(8_000'u32))))
+        pmInputBytes(
+          Opt.some(LcnPmLimits(operation_deadline_ms: Opt.some(uint32(8_000 * Slow))))
+        )
       )
-      cfg.moduleHostEnv.add("LCN_TEST_EXTRACT_PACE_MS")
+      cfg.moduleHostEnv.add("LCN_TEST_EXTRACT_HOLD_FILE")
       let s = setup(cfg, "deadline")
       pmA = s.rc.open(pmRoot, pmSchema)
       bAnswer.store(-1)
+      let began = getMonoTime()
       var t: Thread[void]
       createThread(t, installBig)
       check waitUntil(
         proc(): bool =
-          extracting(s.pmDir),
+          extracting(s.pmDir) or bAnswer.load != -1,
         Answer,
       )
+      # Else the deadline passed before the extraction began.
+      checkpoint "the extraction began after " & $(getMonoTime() - began) &
+        "; the install's answer by then " & $bAnswer.load
+      check extracting(s.pmDir)
       joinThread(t)
       check bAnswer.load == 1
       check extracting(s.pmDir)
