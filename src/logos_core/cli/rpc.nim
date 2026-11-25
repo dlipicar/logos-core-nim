@@ -49,6 +49,7 @@ type
 
   CallResult* = object ## A provider call's outcome.
     cancelled*: bool ## the launcher cancelled before the outcome
+    ended*: bool ## [G503] the caller's `Side.tick` cancelled it before the outcome
     prepared*: bool ## `prepare_call` succeeded, so the call was submitted
     case ok*: bool
     of true:
@@ -158,6 +159,18 @@ proc onComplete(
     var one = 1'u8
     discard posix.write(slot.wakeW, addr one, 1)
 
+type Side* = object
+  ## [G503] What the waiting worker serves while a call is in flight: a stream's
+  ## wake descriptor, a period, and `tick`, run once after the call is submitted and
+  ## then whenever `fd` is readable or `everyMs` has passed. `tick` returning false
+  ## cancels the call: the caller's own end, its outcome still waited for.
+  fd*: cint ## -1: none
+  everyMs*: int ## -1: only on `fd`
+  tick*: proc(): bool {.gcsafe, raises: [].} ## nil: no side
+
+func noSide*(): Side =
+  Side(fd: -1, everyMs: -1)
+
 template locked(lock: ptr Lock, body: untyped) =
   if lock.isNil:
     body
@@ -172,11 +185,14 @@ proc callAsync[H](
     params: openArray[byte],
     deadlineMs: Opt[int],
     cancelFd: cint,
+    side: Side,
 ): CallResult =
   ## [SPEC INTERFACE §2.9.1] One call of `bare` through `h` (a route handle or
   ## the Runtime Control binding), waited for. Readable `cancelFd` (the
   ## launcher's EOF, or lcn_call closing) cancels it; the outcome is still
-  ## waited for, then the call is released.
+  ## waited for, then the call is released. [G503] `side.tick` runs on this
+  ## thread while the call is in flight (`Side`); its false cancels the call,
+  ## and the result is then `ended`, not `cancelled`.
   when defined(posix):
     var pipeFds: array[0 .. 1, cint]
     if pipe(pipeFds) != 0:
@@ -233,22 +249,36 @@ proc callAsync[H](
       return CallResult(ok: false, failure: failureOf(checked.error))
     call.vtable.submit(addr call)
     var cancelled = false
+    var ended = false
+    var serving = side.tick != nil
+    if serving and not side.tick():
+      call.vtable.cancel(addr call)
+      ended = true
+      serving = false
     while true:
       var done = false
       withLock slot.lock:
         done = slot.done
       if done:
         break
-      var p: array[2, TPollfd]
+      # A negative fd is ignored by poll(2).
+      var p: array[3, TPollfd]
       p[0] = TPollfd(fd: pipeFds[0], events: POLLIN)
-      p[1] = TPollfd(fd: cancelFd, events: POLLIN)
-      let watch = not cancelled and cancelFd >= 0
-      let n = poll(addr p[0], Tnfds(if watch: 2 else: 1), -1)
+      p[1] = TPollfd(fd: (if not cancelled: cancelFd else: -1), events: POLLIN)
+      p[2] = TPollfd(fd: (if serving: side.fd else: -1), events: POLLIN)
+      let n = poll(addr p[0], 3, cint(if serving: side.everyMs else: -1))
       if n < 0 and errno != EINTR:
         break
-      if watch and (p[1].revents and (POLLIN or POLLHUP or POLLERR)) != 0:
-        call.vtable.cancel(addr call)
+      if not cancelled and cancelFd >= 0 and
+          (p[1].revents and (POLLIN or POLLHUP or POLLERR)) != 0:
+        if not ended:
+          call.vtable.cancel(addr call)
         cancelled = true
+        serving = false
+      if serving and n >= 0 and not side.tick():
+        call.vtable.cancel(addr call)
+        ended = true
+        serving = false
     call.vtable.release(addr call) # waits for a completion that is running
     if slot.code == ecOk:
       result = CallResult(ok: true, response: bytesOf(slot.response))
@@ -260,6 +290,7 @@ proc callAsync[H](
         f.detail = Opt.some(bytesOf(slot.detail))
       result = CallResult(ok: false, failure: f)
     result.cancelled = cancelled
+    result.ended = ended and not cancelled
     result.prepared = true
     cleanup()
   else:
@@ -272,10 +303,11 @@ proc callRoute*(
     params: openArray[byte],
     deadlineMs: Opt[int],
     cancelFd: cint,
+    side = noSide(),
 ): CallResult =
   ## The provider's method `bare` through `route`; `prepare_call` under the
   ## handle's lock.
-  callAsync(route, handleLock, bare, params, deadlineMs, cancelFd)
+  callAsync(route, handleLock, bare, params, deadlineMs, cancelFd, side)
 
 # Runtime Control --------------------------------------------------------------------
 
@@ -287,7 +319,7 @@ proc rcBytes*(
 ): Result[seq[byte], Failure] =
   ## [SPEC INTERFACE §5.2] One Runtime Control call: the response's bytes. A
   ## cancelled call is CANCELLED.
-  let r = callAsync(rc, nil, bare, params, Opt.some(RcDeadlineMs), cancelFd)
+  let r = callAsync(rc, nil, bare, params, Opt.some(RcDeadlineMs), cancelFd, noSide())
   if r.cancelled and not r.ok:
     return err(failure(ecCancelled, "the launcher cancelled"))
   if not r.ok:

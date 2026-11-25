@@ -56,6 +56,9 @@ when defined(posix):
     NoRestartMs = 3_000 * Slow
       ## [IMPL] How long the override case watches the Package Manager stay down: many
       ## times `RestartInitialMs`.
+    PaceVariable = "LCN_TEST_PM_PAGE_PACE_MS"
+      ## [IMPL] the Package Manager's test hook: a page job's pause per record
+    PaceMs = 400 * Slow
     FakeInstance = "fetch-1"
     FakeState = "fetch-1"
     PmState = "pm"
@@ -446,6 +449,28 @@ when defined(posix):
       ", candidates_per_name " & $PresetCandidatesPerName & ", assignment_attempts " &
       $PresetAssignmentAttempts & " (logosd's preset)"
 
+  func linesOf(text: string): seq[string] =
+    ## The non-empty lines of `text`.
+    text.splitLines.filterIt(it.len > 0)
+
+  proc jsonOf(text: string): JsonNode =
+    try:
+      parseJson(text)
+    except CatchableError:
+      checkpoint("not JSON: " & text)
+      newJNull()
+
+  proc ctlJson(c: Case, args: varargs[string]): JsonNode =
+    ## `logosctl --json ARGS`: its envelope, or null.
+    let r = runOnce(
+      ctlExe,
+      @["--session-dir", c.s.dir, "--json"] & @args,
+      c.dir,
+      timeoutMs = 120_000 * Slow,
+    )
+    checkpoint("logosctl " & args.join(" ") & ": exit " & $r.code & ": " & r.stderr)
+    jsonOf(r.stdout)
+
   proc refusedWith(r: Ran, text: string): bool =
     ## The command failed and its stderr holds `text`.
     checkpoint("exit " & $r.code & ": " & r.stdout & r.stderr)
@@ -553,6 +578,199 @@ when defined(posix):
           c.records == 0,
       )
       check second.stopped == 0
+      check hostsGone()
+
+    test "[IMPL-DECISION G503] [PKG-0554] logosctl package and catalog through lcn_call, on logosd's rule S14 alone: the catalog and the installed packages listed, an install and a remove with their progress on stderr, an inspection, a handoff's package error, a watch that lists again at each change, and three lists at once within lcn_call's own page bound":
+      let c = newCase()
+      var dc = pmConfig()
+      # [S14] No operator rule grants lcn_call the Package Manager.
+      dc.policy.arm_Capability_authority.rules =
+        @[callerRule(fakeRoot), callerRule(@LcnStorageFetchRoot, discoverOnly = true)]
+      sortSet(dc.policy.arm_Capability_authority.rules)
+      # A page job's pause before each record it reads (`pm/jobs.nim`), so that page
+      # calls overlap.
+      dc.runtime.module_host_env = Opt.some(@SanitizerEnv & @[PaceVariable])
+      check c.initPm(dc).code == 0
+      c.stock()
+      c.anchor()
+      let d = spawnChild(
+        dExe,
+        ["--session-dir", c.s.dir],
+        c.dir,
+        "logosd" & $children.len,
+        env = [(PaceVariable, $PaceMs)],
+      )
+      children.add(d)
+      c.expectReady(d)
+      check c.reaches(d, PmInstance, "ready")
+      check c.setReadiness("ready")
+      check c.acquired(d, catalogLine("configured"))
+      # The catalog, every page, and one name's entries.
+      let catalog = c.ctl("catalog", "list")
+      checkpoint("catalog list: " & catalog.stdout & catalog.stderr)
+      check catalog.code == 0
+      check catalog.stdout.linesOf.sorted == @["app 1.0.0 (lgx)", "lib 1.2.0 (lgx)"]
+      check c.ctl("catalog", "list", "lib").stdout.linesOf == @["lib 1.2.0 (lgx)"]
+      check c.ctl("package", "list").stdout.linesOf == @["no packages installed"]
+      # [PKG-0554] The watch: a line with the installed packages at its start, and one
+      # more each time they changed, from a list after each hint. Each change below waits
+      # for the watch's line before the next, since a list after a hint shows what is
+      # installed then (an install's dependency is its own commit, before the package's).
+      let watch = spawnChild(
+        ctlExe,
+        ["--session-dir", c.s.dir, "--json", "package", "watch", "--count", "4"],
+        c.dir,
+        "watch",
+      )
+      children.add(watch)
+      check eventually(
+        "the watch's first line",
+        d,
+        proc(): bool =
+          watch.outText.linesOf.len == 1,
+      )
+      # Its first list may come before the Package Manager admits it: the install waits.
+      check eventually(
+        "the watch's admission",
+        d,
+        proc(): bool =
+          (
+            "package-manager: watch_installed_packages admitted for module instance " &
+            CliInstance & " of Runtime "
+          ) in d.errText,
+      )
+      check c.ctl("package", "install", "lib", "1.2.0").stdout.linesOf ==
+        @["installed lib 1.2.0"]
+      check eventually(
+        "the watch's line after lib's install",
+        d,
+        proc(): bool =
+          watch.outText.linesOf.len == 2,
+      )
+      # [PM §15.2] An install with its progress: the lines on stderr, the result on stdout.
+      let installed = c.ctl("package", "install", "app", "1.0.0", "--progress")
+      checkpoint("package install: " & installed.stdout & installed.stderr)
+      check installed.code == 0
+      check installed.stdout.linesOf == @["installed app 1.0.0"]
+      let phases = installed.stderr.linesOf.filterIt(it.startsWith("progress: "))
+      check phases.len >= 1
+      if phases.len > 0:
+        check phases[0] == "progress: resolving"
+      check c.ctl("package", "list").stdout.linesOf == @["app 1.0.0", "lib 1.2.0"]
+      check eventually(
+        "the watch's line after app's install",
+        d,
+        proc(): bool =
+          watch.outText.linesOf.len == 3,
+      )
+      # [G503] Three lists at once: lcn_call holds the third until one of its two page
+      # calls ends, so the Package Manager refuses none.
+      var lists: seq[Child]
+      for i in 0 .. 2:
+        lists.add(
+          spawnChild(
+            ctlExe,
+            ["--session-dir", c.s.dir, "--json", "package", "list"],
+            c.dir,
+            "list" & $i,
+          )
+        )
+      children.add(lists)
+      for l in lists:
+        check waitExit(l, ReadyMs) == 0
+        checkpoint("package list: " & l.outText & l.errText)
+        check jsonOf(l.outText){"result"}{"packages"}.getElems.len == 2
+      check "at the page-job bound" notin d.errText
+      # An inspection, and a handoff of a module the data package does not have.
+      check not c.ctlJson("package", "inspect", "app", "1.0.0"){"result"}{"inspection"}{
+        "manifest"
+      }.isNil
+      let handoff = c.ctl("package", "handoff", "app", "1.0.0", "main")
+      checkpoint("package handoff: " & handoff.stdout & handoff.stderr)
+      check handoff.code == 5
+      check "logosctl: invalid-request: " in handoff.stderr
+      # A remove with its progress: `removing`.
+      let removed = c.ctl("package", "remove", "app", "1.0.0", "--progress")
+      checkpoint("package remove: " & removed.stdout & removed.stderr)
+      check removed.code == 0
+      check removed.stdout.linesOf == @["app 1.0.0 is not installed"]
+      check "progress: removing" in removed.stderr.linesOf
+      # The watch's four lines; at its count it ends its call.
+      check waitExit(watch, ReadyMs) == 0
+      checkpoint("the watch: " & watch.outText & watch.errText)
+      check watch.outText.linesOf ==
+        @[
+          $(%*{"installed": newJArray()}),
+          $(%*{"installed": [{"package": "lib", "version": "1.2.0"}]}),
+          $(
+            %*{
+              "installed": [
+                {"package": "app", "version": "1.0.0"},
+                {"package": "lib", "version": "1.2.0"},
+              ]
+            }
+          ),
+          $(%*{"installed": [{"package": "lib", "version": "1.2.0"}]}),
+        ]
+      check eventually(
+        "the watch's end",
+        d,
+        proc(): bool =
+          "package-manager: watch_installed_packages cancelled by the Runtime" in
+            d.errText,
+      )
+      # [SPEC PM §15 l.1693-1699] Removed again: `{}` all the same, so the same words.
+      let twice = c.ctl("package", "remove", "app", "1.0.0")
+      checkpoint("package remove again: " & twice.stdout & twice.stderr)
+      check twice.code == 0
+      check twice.stdout.linesOf == @["app 1.0.0 is not installed"]
+      # [SPEC PM §14] A package error: exit 5, its code and declared text. Updating what
+      # is not installed is the resolver's `package-not-installed` (l.1701-1719).
+      let again = c.ctl("package", "update", "app", "1.0.0")
+      checkpoint("package update after the remove: " & again.stdout & again.stderr)
+      check again.code == 5
+      check "logosctl: package-not-installed: " in again.stderr
+      check d.stopped == 0
+      check hostsGone()
+
+    test "[IMPL-DECISION G503] [IMPL-DECISION G498] lcn_call when package_manager.readers does not name it: package list and catalog list fail, exit 5, with the text naming the three causes, and the Package Manager's log says which; an install with --progress succeeds with no progress lines":
+      let c = newCase()
+      var section = pmSection()
+      section.readers = Opt.some(@[FakeInstance])
+      check c.initPm(pmConfig(section)).code == 0
+      c.stock()
+      c.anchor()
+      let d = c.ready()
+      check c.setReadiness("ready")
+      check c.acquired(d, catalogLine("configured"))
+      for (a0, m0) in [
+        (@["package", "list"], "list_installed_packages"),
+        (@["catalog", "list"], "list_packages"),
+      ]:
+        let (args, meth) = (a0, m0) # copies: the closure below captures `meth`
+        let r = c.ctl(args)
+        checkpoint(args.join(" ") & ": exit " & $r.code & ": " & r.stdout & r.stderr)
+        check r.code == 5
+        check "the Package Manager refused the query: it is at its query bound" in
+          r.stderr
+        check eventually(
+          "the refusal of " & meth,
+          d,
+          proc(): bool =
+            d.errText.linesOf.anyIt(
+              it.startsWith(
+                "package-manager: " & meth & " refused for module instance " &
+                  CliInstance & " of Runtime "
+              ) and it.endsWith(": not a reader")
+            ),
+        )
+      # [G502] Progress is a reader's: the operation goes on without it.
+      let installed = c.ctl("package", "install", "app", "1.0.0", "--progress")
+      checkpoint("package install: " & installed.stdout & installed.stderr)
+      check installed.code == 0
+      check installed.stdout.linesOf == @["installed app 1.0.0"]
+      check not installed.stderr.linesOf.anyIt(it.startsWith("progress: "))
+      check d.stopped == 0
       check hostsGone()
 
     test "[IMPL-DECISION G399] [BCP-0049] a trust change applies at the next start: a name removed from the anchor is withdrawn, and the kept catalog is in use at once":

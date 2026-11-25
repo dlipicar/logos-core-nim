@@ -12,8 +12,9 @@ installation: 5-5-1 the installed records, the responses, the handoff's construc
 bound (§8, §12, §13); 5-5-2 the store's root and extraction (§8, §9); 5-5-3 the worker and the spool
 (§10); the operations (§11) follow. Step 5-6a-1 makes it the module `logos_package_manager`, which
 logosd composes as the reserved instance `package_manager` (§14); 5-6a-2 binds it as the Runtime's
-system service, which `get_runtime_handoff` serves; 5-6b-1 serves the readers and the two lists, and
-5-6b-2 the watch and progress (§15).
+system service, which `get_runtime_handoff` serves; 5-6b-1 serves the readers and the two lists,
+5-6b-2 the watch and progress (§15), and 5-6b-3 gives them to `logosctl package` and `catalog` through
+`lcn_call` ([DAEMON.md](DAEMON.md) §7a).
 
 ## 1. Placement and the data path
 
@@ -612,7 +613,8 @@ G504, I144; the owner's Q11 and Q12 (a)).
   every call, before any filter, snapshot or cursor (PKG-0529), and on every page (PKG-0385). A reader
   sees every record and a non-reader none (PKG-0530). The list is fixed for the realization: a change
   applies at the next start. Which methods a reader may call at all stays the Runtime's authority:
-  logosd grants `lcn_call`'s, and another reader needs the operator's grants.
+  logosd grants `lcn_call`'s (S14, [DAEMON.md](DAEMON.md) §5; G503), and another reader needs the
+  operator's grants.
 - **`limit`.** Absent, 100; 1 to 1000; 0 or more than 1000 is `invalid-request` (l.1640).
 - **`list_packages`** (l.1656-1657): the catalog's `lgx` entries (§14) in its canonical order, each
   page answered on the module thread from the entries' encodings, made once when the catalog goes in

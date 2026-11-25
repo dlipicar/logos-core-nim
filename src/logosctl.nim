@@ -99,6 +99,14 @@ online, through the lcn_call instance (it writes the result itself):
   subscribe MODULE EVENT [--count N] [--for DURATION]
        [--instance I] [--contract ROOT] [--node NAME]
   events [NAME]... [--count N] [--for DURATION] [--node NAME]
+  package list [PACKAGE]
+  package inspect PACKAGE [VERSION]
+  package install PACKAGE [VERSION] [--progress]
+  package remove PACKAGE VERSION [--progress]
+  package update PACKAGE VERSION [--to VERSION] [--progress]
+  package handoff PACKAGE VERSION MODULE
+  package watch [--count N] [--for DURATION]
+  catalog list [PACKAGE]
 
 offline (the session's files; writers hold its lock):
   init [--config @FILE] [--policy @FILE] [--module-config INSTANCE=@FILE]... [--development]
@@ -158,7 +166,7 @@ fields); --provider names an export of that listener."""
     MaxFileArgs = 14 ## [G344] 16 descriptors, stdout and stderr included
     NoValue = [
       "json", "text", "wait", "development", "remove", "print-template", "help",
-      "version", "yes", "all",
+      "version", "yes", "all", "progress",
     ]
 
   type
@@ -1054,7 +1062,77 @@ fields); --provider names an export of that listener."""
       )
     ok(args)
 
+  proc packageOf(c: Cli): Result[LcnCliCommand, Fail] =
+    ## [G503] `package ACTION ...` and `catalog list [PACKAGE]`: the Package Manager's
+    ## methods through lcn_call (DAEMON.md §7a).
+    if c.args[0] == "catalog":
+      if c.args.len < 2 or c.args[1] != "list" or c.args.len > 3:
+        return err(usage("catalog list takes at most one PACKAGE"))
+      return ok(
+        LcnCliCommand(
+          kind: LcnCliCommandKind.lcn_Cli_catalog_command,
+          arm_lcn_Cli_catalog_command: LcnCliCatalogCommand(
+            package: (if c.args.len > 2: Opt.some(c.args[2])
+            else: Opt.none(string))
+          ),
+        )
+      )
+    let action = ?c.arg(1, "a package action")
+    let rest = c.args[2 .. ^1]
+    var cmd = LcnCliPackageCommand()
+    template positional(least, most: int, shape: string) =
+      if rest.len < least or rest.len > most:
+        return err(usage("package " & action & " takes " & shape))
+      if rest.len > 0:
+        cmd.package = Opt.some(rest[0])
+      if rest.len > 1:
+        cmd.version = Opt.some(rest[1])
+
+    let progress = "progress" in c.flags
+    if progress and action notin ["install", "remove", "update"]:
+      return err(usage("--progress is for package install, remove and update"))
+    if c.opt("to").isSome and action != "update":
+      return err(usage("--to is for package update"))
+    case action
+    of "list":
+      cmd.action = LcnCliPackageAction(kind: LcnCliPackageActionKind.List)
+      positional(0, 1, "at most one PACKAGE")
+    of "inspect":
+      cmd.action = LcnCliPackageAction(kind: LcnCliPackageActionKind.Inspect)
+      positional(1, 2, "PACKAGE [VERSION]")
+    of "install":
+      cmd.action = LcnCliPackageAction(kind: LcnCliPackageActionKind.Install)
+      positional(1, 2, "PACKAGE [VERSION]")
+    of "remove":
+      cmd.action = LcnCliPackageAction(kind: LcnCliPackageActionKind.Remove)
+      positional(2, 2, "PACKAGE VERSION")
+    of "update":
+      cmd.action = LcnCliPackageAction(kind: LcnCliPackageActionKind.Update)
+      positional(2, 2, "PACKAGE VERSION")
+      cmd.to = c.opt("to")
+    of "handoff":
+      cmd.action = LcnCliPackageAction(kind: LcnCliPackageActionKind.Handoff)
+      positional(3, 3, "PACKAGE VERSION MODULE")
+      cmd.module = Opt.some(rest[2])
+    of "watch":
+      cmd.action = LcnCliPackageAction(kind: LcnCliPackageActionKind.Watch)
+      positional(0, 0, "no arguments")
+      cmd.count = ?c.countOpt()
+      cmd.for_ms = ?c.durationOpt("for")
+    else:
+      return err(usage("unknown package action " & action))
+    if progress:
+      cmd.progress = Opt.some(true)
+    ok(
+      LcnCliCommand(
+        kind: LcnCliCommandKind.lcn_Cli_package_command,
+        arm_lcn_Cli_package_command: cmd,
+      )
+    )
+
   proc commandOf(c: Cli, files: var seq[cint]): Result[LcnCliCommand, Fail] =
+    if c.args[0] in ["package", "catalog"]:
+      return c.packageOf()
     if c.args[0] == "events":
       # [G346, G349] The target's Runtime Control events; no names: the
       # events rule's three.
@@ -1131,8 +1209,11 @@ fields); --provider names an export of that listener."""
         ),
         # [G349] A stream has no deadline; `--timeout` bounds activation.
         deadline_ms: (
-          if c.args[0] in ["subscribe", "events"]: Opt.none(uint32)
-          else: Opt.some(uint32(c.timeoutMs))
+          if c.args[0] in ["subscribe", "events"] or
+              (c.args[0] == "package" and c.args.len > 1 and c.args[1] == "watch"):
+            Opt.none(uint32)
+          else:
+            Opt.some(uint32(c.timeoutMs))
         ),
         command: move command,
       ),
@@ -2527,7 +2608,7 @@ fields); --provider names an export of that listener."""
       c.emitFail(c.args[0], "unknown", fail(ExitUsage, error))
       return ExitUsage
     let command = c.args.join(" ")
-    if c.args[0] in ["call", "describe", "subscribe", "events"]:
+    if c.args[0] in ["call", "describe", "subscribe", "events", "package", "catalog"]:
       let r = cmdLaunch(c, s)
       if r.isErr:
         if r.error.exit != ExitInterrupted:

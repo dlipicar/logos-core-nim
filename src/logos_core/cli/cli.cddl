@@ -39,7 +39,8 @@ lcn.cli_fd_role = "stdout" / "stderr" / "file"
 
 lcn.cli_command =
   lcn.cli_call_command / lcn.cli_describe_command /
-  lcn.cli_subscribe_command / lcn.cli_events_command / lcn.cli_rc_command
+  lcn.cli_subscribe_command / lcn.cli_events_command / lcn.cli_rc_command /
+  lcn.cli_package_command / lcn.cli_catalog_command
 
 ; A provider: the instance of a module, and the contract to use, an
 ; implemented interface by its root; absent, the primary contract.
@@ -105,6 +106,39 @@ lcn.cli_rc_command = {
   op: "rc",
   method: tstr .size (1..64),
   params: bstr .size (0..1048576),
+}
+
+; The Package Manager's methods (PACKAGE MANAGER §15; Tier 5 step 5-6b-3;
+; DECISIONS G503), on the composed logos_package_manager instance through
+; lcn_call's routes. action names the method: list (list_installed_packages,
+; every page), inspect (inspect_package), install, remove and update (their
+; *_package methods; progress follows operation_progress), handoff
+; (get_runtime_handoff for module), and watch (watch_installed_packages and
+; installed_packages_changed: a stream, ended as subscribe's is). package and
+; version name a package, or filter list; to is update's target version. The
+; bounds are the Package Manager's (PM §4, §15); its own rules check every
+; value again.
+lcn.cli_package_command = {
+  op: "package",
+  action: lcn.cli_package_action,
+  ? package: tstr .size (1..128),
+  ? version: tstr .size (1..128),
+  ? to: tstr .size (1..128),
+  ? module: tstr .size (1..64),
+  ? progress: bool,
+  ? count: uint32,
+  ? for_ms: uint32,
+}
+
+lcn.cli_package_action =
+  "list" / "inspect" / "install" / "remove" / "update" / "handoff" / "watch"
+
+; The Package Manager's catalog (list_packages, every page), package a
+; filter.
+lcn.cli_catalog_command = {
+  op: "catalog",
+  action: "list",
+  ? package: tstr .size (1..128),
 }
 
 lcn.cli_reply = {

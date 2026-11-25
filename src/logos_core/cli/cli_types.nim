@@ -10,7 +10,7 @@ import logos_sdk/codegen/common_types
 export nimrt, common_types
 
 const
-  primaryDocument = "; logos-core-nim.cli.v1: the protocol between the logosctl launcher and the\x0A; lcn_call instance\'s socket (Tier 5 step N-2; DECISIONS G344; BOOTSTRAP\x0A; l.384-390). BOOTSTRAP assigns no interoperable activation encoding or\x0A; terminal protocol, so this one is the implementation\'s own; docs/DAEMON.md\x0A; \xC2\xA77a documents it.\x0A;\x0A; A frame is a 4-byte big-endian length, then one Logos deterministic-CBOR\x0A; value. A connection carries one command: the launcher sends one\x0A; lcn.cli_request, with its descriptors attached to the frame\'s first byte as\x0A; SCM_RIGHTS ancillary data, in the order its fds list names them; lcn_call\x0A; answers accepted once it has taken the command, then done with the exit\x0A; status, or refused instead of both. lcn_call writes everything the user reads\x0A; to the passed descriptors itself; a reply carries no payload, argument or\x0A; provider text. The launcher cancels by shutting down its write side. (Names\x0A; ending in _request or _response are callable rules, INTERFACE \xC2\xA71.3; the\x0A; request here is lcn.cli_message.)\x0A\x0A; Lists are [* ...] (G10: no other occurrence); lcn_call checks the limits the\x0A; comments give.\x0Alcn.cli_message = {\x0A  protocol: \"logos-core-nim.cli.v1\",\x0A  ? target: lcn.cli_node_name,\x0A  output: lcn.cli_output,\x0A  fds: [* lcn.cli_fd_role],\x0A  ? deadline_ms: uint32,\x0A  command: lcn.cli_command,\x0A}\x0A\x0A; The target node\'s name: \"local\" is this Runtime (G347); absent, lcn_call\'s\x0A; default, \"local\" in N-2. lcn_call checks the name\'s syntax,\x0A; [a-z][a-z0-9_-]*.\x0Alcn.cli_node_name = tstr .size (1..63)\x0A\x0Alcn.cli_output = \"json\" / \"text\"\x0A\x0A; 2 to 16 descriptors: the first two are always stdout and stderr; each file is\x0A; the content of one @FILE argument (@- passes the launcher\'s stdin).\x0Alcn.cli_fd_role = \"stdout\" / \"stderr\" / \"file\"\x0A\x0Alcn.cli_command =\x0A  lcn.cli_call_command / lcn.cli_describe_command /\x0A  lcn.cli_subscribe_command / lcn.cli_events_command / lcn.cli_rc_command\x0A\x0A; A provider: the instance of a module, and the contract to use, an\x0A; implemented interface by its root; absent, the primary contract.\x0Alcn.cli_provider = {\x0A  module: tstr .size (1..64),\x0A  ? instance: tstr .size (1..128),\x0A  ? contract: bstr .size 32,\x0A}\x0A\x0A; One call (D26: named arguments only). args (at most 256) and json are\x0A; exclusive; json is one JSON object, the whole request.\x0Alcn.cli_call_command = {\x0A  op: \"call\",\x0A  provider: lcn.cli_provider,\x0A  method: tstr .size (1..128),\x0A  ? args: [* lcn.cli_arg],\x0A  ? json: tstr .size (1..1048576),\x0A}\x0A\x0A; key=value, or key=@FILE: fd indexes the message\'s fds, a \"file\" role.\x0Alcn.cli_arg = lcn.cli_text_arg / lcn.cli_file_arg\x0A\x0Alcn.cli_text_arg = {\x0A  kind: \"text\",\x0A  name: tstr .size (1..128),\x0A  value: tstr .size (0..65536),\x0A}\x0A\x0Alcn.cli_file_arg = {\x0A  kind: \"file\",\x0A  name: tstr .size (1..128),\x0A  fd: uint8,\x0A}\x0A\x0Alcn.cli_describe_command = {\x0A  op: \"describe\",\x0A  provider: lcn.cli_provider,\x0A}\x0A\x0A; A stream ends at count events, after for_ms, at the launcher\'s EOF, or when\x0A; lcn_call ends it (G349).\x0Alcn.cli_subscribe_command = {\x0A  op: \"subscribe\",\x0A  provider: lcn.cli_provider,\x0A  event: tstr .size (1..128),\x0A  ? count: uint32,\x0A  ? for_ms: uint32,\x0A}\x0A\x0A; The target Runtime\'s own Runtime Control events; names (1 to 16) absent:\x0A; the default set, the three the events rule grants (G346).\x0Alcn.cli_events_command = {\x0A  op: \"events\",\x0A  ? names: [* tstr .size (1..128)],\x0A  ? count: uint32,\x0A  ? for_ms: uint32,\x0A}\x0A\x0A; Runtime Control at a named node, through lcn_call\'s binding for it (RUNTIME\x0A; l.238; G347): reserved for Tier 5 step 5-7a, refused until then. params is\x0A; the method\'s deterministic-CBOR request.\x0Alcn.cli_rc_command = {\x0A  op: \"rc\",\x0A  method: tstr .size (1..64),\x0A  params: bstr .size (0..1048576),\x0A}\x0A\x0Alcn.cli_reply = {\x0A  protocol: \"logos-core-nim.cli.v1\",\x0A  outcome: lcn.cli_outcome,\x0A}\x0A\x0Alcn.cli_outcome = lcn.cli_accepted / lcn.cli_done / lcn.cli_refused\x0A\x0Alcn.cli_accepted = { status: \"accepted\" }\x0A\x0A; The launcher\'s exit status (G349).\x0Alcn.cli_done = { status: \"done\", exit: uint8 }\x0A\x0A; A frame or a command lcn_call refuses before taking it; the connection is\x0A; closed after it and every descriptor that arrived is closed.\x0Alcn.cli_refused = {\x0A  status: \"refused\",\x0A  reason: \"protocol\" / \"too-large\" / \"busy\" / \"closing\",\x0A  ? message: tstr .size (0..512),\x0A}\x0A"
+  primaryDocument = "; logos-core-nim.cli.v1: the protocol between the logosctl launcher and the\x0A; lcn_call instance\'s socket (Tier 5 step N-2; DECISIONS G344; BOOTSTRAP\x0A; l.384-390). BOOTSTRAP assigns no interoperable activation encoding or\x0A; terminal protocol, so this one is the implementation\'s own; docs/DAEMON.md\x0A; \xC2\xA77a documents it.\x0A;\x0A; A frame is a 4-byte big-endian length, then one Logos deterministic-CBOR\x0A; value. A connection carries one command: the launcher sends one\x0A; lcn.cli_request, with its descriptors attached to the frame\'s first byte as\x0A; SCM_RIGHTS ancillary data, in the order its fds list names them; lcn_call\x0A; answers accepted once it has taken the command, then done with the exit\x0A; status, or refused instead of both. lcn_call writes everything the user reads\x0A; to the passed descriptors itself; a reply carries no payload, argument or\x0A; provider text. The launcher cancels by shutting down its write side. (Names\x0A; ending in _request or _response are callable rules, INTERFACE \xC2\xA71.3; the\x0A; request here is lcn.cli_message.)\x0A\x0A; Lists are [* ...] (G10: no other occurrence); lcn_call checks the limits the\x0A; comments give.\x0Alcn.cli_message = {\x0A  protocol: \"logos-core-nim.cli.v1\",\x0A  ? target: lcn.cli_node_name,\x0A  output: lcn.cli_output,\x0A  fds: [* lcn.cli_fd_role],\x0A  ? deadline_ms: uint32,\x0A  command: lcn.cli_command,\x0A}\x0A\x0A; The target node\'s name: \"local\" is this Runtime (G347); absent, lcn_call\'s\x0A; default, \"local\" in N-2. lcn_call checks the name\'s syntax,\x0A; [a-z][a-z0-9_-]*.\x0Alcn.cli_node_name = tstr .size (1..63)\x0A\x0Alcn.cli_output = \"json\" / \"text\"\x0A\x0A; 2 to 16 descriptors: the first two are always stdout and stderr; each file is\x0A; the content of one @FILE argument (@- passes the launcher\'s stdin).\x0Alcn.cli_fd_role = \"stdout\" / \"stderr\" / \"file\"\x0A\x0Alcn.cli_command =\x0A  lcn.cli_call_command / lcn.cli_describe_command /\x0A  lcn.cli_subscribe_command / lcn.cli_events_command / lcn.cli_rc_command /\x0A  lcn.cli_package_command / lcn.cli_catalog_command\x0A\x0A; A provider: the instance of a module, and the contract to use, an\x0A; implemented interface by its root; absent, the primary contract.\x0Alcn.cli_provider = {\x0A  module: tstr .size (1..64),\x0A  ? instance: tstr .size (1..128),\x0A  ? contract: bstr .size 32,\x0A}\x0A\x0A; One call (D26: named arguments only). args (at most 256) and json are\x0A; exclusive; json is one JSON object, the whole request.\x0Alcn.cli_call_command = {\x0A  op: \"call\",\x0A  provider: lcn.cli_provider,\x0A  method: tstr .size (1..128),\x0A  ? args: [* lcn.cli_arg],\x0A  ? json: tstr .size (1..1048576),\x0A}\x0A\x0A; key=value, or key=@FILE: fd indexes the message\'s fds, a \"file\" role.\x0Alcn.cli_arg = lcn.cli_text_arg / lcn.cli_file_arg\x0A\x0Alcn.cli_text_arg = {\x0A  kind: \"text\",\x0A  name: tstr .size (1..128),\x0A  value: tstr .size (0..65536),\x0A}\x0A\x0Alcn.cli_file_arg = {\x0A  kind: \"file\",\x0A  name: tstr .size (1..128),\x0A  fd: uint8,\x0A}\x0A\x0Alcn.cli_describe_command = {\x0A  op: \"describe\",\x0A  provider: lcn.cli_provider,\x0A}\x0A\x0A; A stream ends at count events, after for_ms, at the launcher\'s EOF, or when\x0A; lcn_call ends it (G349).\x0Alcn.cli_subscribe_command = {\x0A  op: \"subscribe\",\x0A  provider: lcn.cli_provider,\x0A  event: tstr .size (1..128),\x0A  ? count: uint32,\x0A  ? for_ms: uint32,\x0A}\x0A\x0A; The target Runtime\'s own Runtime Control events; names (1 to 16) absent:\x0A; the default set, the three the events rule grants (G346).\x0Alcn.cli_events_command = {\x0A  op: \"events\",\x0A  ? names: [* tstr .size (1..128)],\x0A  ? count: uint32,\x0A  ? for_ms: uint32,\x0A}\x0A\x0A; Runtime Control at a named node, through lcn_call\'s binding for it (RUNTIME\x0A; l.238; G347): reserved for Tier 5 step 5-7a, refused until then. params is\x0A; the method\'s deterministic-CBOR request.\x0Alcn.cli_rc_command = {\x0A  op: \"rc\",\x0A  method: tstr .size (1..64),\x0A  params: bstr .size (0..1048576),\x0A}\x0A\x0A; The Package Manager\'s methods (PACKAGE MANAGER \xC2\xA715; Tier 5 step 5-6b-3;\x0A; DECISIONS G503), on the composed logos_package_manager instance through\x0A; lcn_call\'s routes. action names the method: list (list_installed_packages,\x0A; every page), inspect (inspect_package), install, remove and update (their\x0A; *_package methods; progress follows operation_progress), handoff\x0A; (get_runtime_handoff for module), and watch (watch_installed_packages and\x0A; installed_packages_changed: a stream, ended as subscribe\'s is). package and\x0A; version name a package, or filter list; to is update\'s target version. The\x0A; bounds are the Package Manager\'s (PM \xC2\xA74, \xC2\xA715); its own rules check every\x0A; value again.\x0Alcn.cli_package_command = {\x0A  op: \"package\",\x0A  action: lcn.cli_package_action,\x0A  ? package: tstr .size (1..128),\x0A  ? version: tstr .size (1..128),\x0A  ? to: tstr .size (1..128),\x0A  ? module: tstr .size (1..64),\x0A  ? progress: bool,\x0A  ? count: uint32,\x0A  ? for_ms: uint32,\x0A}\x0A\x0Alcn.cli_package_action =\x0A  \"list\" / \"inspect\" / \"install\" / \"remove\" / \"update\" / \"handoff\" / \"watch\"\x0A\x0A; The Package Manager\'s catalog (list_packages, every page), package a\x0A; filter.\x0Alcn.cli_catalog_command = {\x0A  op: \"catalog\",\x0A  action: \"list\",\x0A  ? package: tstr .size (1..128),\x0A}\x0A\x0Alcn.cli_reply = {\x0A  protocol: \"logos-core-nim.cli.v1\",\x0A  outcome: lcn.cli_outcome,\x0A}\x0A\x0Alcn.cli_outcome = lcn.cli_accepted / lcn.cli_done / lcn.cli_refused\x0A\x0Alcn.cli_accepted = { status: \"accepted\" }\x0A\x0A; The launcher\'s exit status (G349).\x0Alcn.cli_done = { status: \"done\", exit: uint8 }\x0A\x0A; A frame or a command lcn_call refuses before taking it; the connection is\x0A; closed after it and every descriptor that arrived is closed.\x0Alcn.cli_refused = {\x0A  status: \"refused\",\x0A  reason: \"protocol\" / \"too-large\" / \"busy\" / \"closing\",\x0A  ? message: tstr .size (0..512),\x0A}\x0A"
   interfaceDocuments: array[0, string] = []
   supportingDocuments: array[0, string] = []
 
@@ -52,10 +52,17 @@ type
     op*: string = "call"
     provider*: LcnCliProvider
 
+  LcnCliCatalogCommand* = object
+    action*: string = "list"
+    op*: string = "catalog"
+    package*: Opt[string]
+
   LcnCliCommandKind* {.pure.} = enum
     lcn_Cli_call_command
+    lcn_Cli_catalog_command
     lcn_Cli_describe_command
     lcn_Cli_events_command
+    lcn_Cli_package_command
     lcn_Cli_rc_command
     lcn_Cli_subscribe_command
 
@@ -63,10 +70,14 @@ type
     case kind*: LcnCliCommandKind
     of LcnCliCommandKind.lcn_Cli_call_command:
       arm_lcn_Cli_call_command*: LcnCliCallCommand
+    of LcnCliCommandKind.lcn_Cli_catalog_command:
+      arm_lcn_Cli_catalog_command*: LcnCliCatalogCommand
     of LcnCliCommandKind.lcn_Cli_describe_command:
       arm_lcn_Cli_describe_command*: LcnCliDescribeCommand
     of LcnCliCommandKind.lcn_Cli_events_command:
       arm_lcn_Cli_events_command*: LcnCliEventsCommand
+    of LcnCliCommandKind.lcn_Cli_package_command:
+      arm_lcn_Cli_package_command*: LcnCliPackageCommand
     of LcnCliCommandKind.lcn_Cli_rc_command:
       arm_lcn_Cli_rc_command*: LcnCliRcCommand
     of LcnCliCommandKind.lcn_Cli_subscribe_command:
@@ -140,6 +151,43 @@ type
     of LcnCliOutputKind.Text:
       discard
 
+  LcnCliPackageActionKind* {.pure.} = enum
+    Handoff
+    Inspect
+    Install
+    List
+    Remove
+    Update
+    Watch
+
+  LcnCliPackageAction* = object
+    case kind*: LcnCliPackageActionKind
+    of LcnCliPackageActionKind.Handoff:
+      discard
+    of LcnCliPackageActionKind.Inspect:
+      discard
+    of LcnCliPackageActionKind.Install:
+      discard
+    of LcnCliPackageActionKind.List:
+      discard
+    of LcnCliPackageActionKind.Remove:
+      discard
+    of LcnCliPackageActionKind.Update:
+      discard
+    of LcnCliPackageActionKind.Watch:
+      discard
+
+  LcnCliPackageCommand* = object
+    action*: LcnCliPackageAction
+    count*: Opt[uint32]
+    for_ms*: Opt[uint32]
+    module*: Opt[string]
+    op*: string = "package"
+    package*: Opt[string]
+    progress*: Opt[bool]
+    to*: Opt[string]
+    version*: Opt[string]
+
   LcnCliProvider* = object
     contract*: Opt[seq[byte]]
     instance*: Opt[string]
@@ -200,6 +248,10 @@ proc toCbor*(x: LcnCliCallCommand): CborValue
 proc fromChecked*(T: type LcnCliCallCommand, v: CborValue): LcnCliCallCommand
 proc stepEncLcnCliCallCommand*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnCliCallCommand*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCliCatalogCommand): CborValue
+proc fromChecked*(T: type LcnCliCatalogCommand, v: CborValue): LcnCliCatalogCommand
+proc stepEncLcnCliCatalogCommand*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCliCatalogCommand*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LcnCliCommand): CborValue
 proc fromChecked*(T: type LcnCliCommand, v: CborValue): LcnCliCommand
 proc stepEncLcnCliCommand*(w: var EncWork, src: pointer, dst: ptr CborValue)
@@ -238,6 +290,14 @@ proc toCbor*(x: LcnCliOutput): CborValue
 proc fromChecked*(T: type LcnCliOutput, v: CborValue): LcnCliOutput
 proc stepEncLcnCliOutput*(w: var EncWork, src: pointer, dst: ptr CborValue)
 proc stepDecLcnCliOutput*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCliPackageAction): CborValue
+proc fromChecked*(T: type LcnCliPackageAction, v: CborValue): LcnCliPackageAction
+proc stepEncLcnCliPackageAction*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCliPackageAction*(w: var DecWork, v: CborValue, dst: pointer)
+proc toCbor*(x: LcnCliPackageCommand): CborValue
+proc fromChecked*(T: type LcnCliPackageCommand, v: CborValue): LcnCliPackageCommand
+proc stepEncLcnCliPackageCommand*(w: var EncWork, src: pointer, dst: ptr CborValue)
+proc stepDecLcnCliPackageCommand*(w: var DecWork, v: CborValue, dst: pointer)
 proc toCbor*(x: LcnCliProvider): CborValue
 proc fromChecked*(T: type LcnCliProvider, v: CborValue): LcnCliProvider
 proc stepEncLcnCliProvider*(w: var EncWork, src: pointer, dst: ptr CborValue)
@@ -371,15 +431,53 @@ proc fromChecked*(T: type LcnCliCallCommand, v: CborValue): LcnCliCallCommand =
   runDec(stepDecLcnCliCallCommand, v, addr r)
   r
 
+proc stepEncLcnCliCatalogCommand*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCliCatalogCommand](src)
+  var n = 2
+  if x.package.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("action")
+  node.entries[k].value = cbor("list")
+  inc k
+  node.entries[k].key = cbor("op")
+  node.entries[k].value = cbor("catalog")
+  inc k
+  if x.package.isSome:
+    node.entries[k].key = cbor("package")
+    node.entries[k].value = cbor(x.package.get)
+    inc k
+
+proc stepDecLcnCliCatalogCommand*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCliCatalogCommand](dst)
+  r[] = LcnCliCatalogCommand()
+  let f7 = v.lookup("package")
+  if f7.isSome:
+    r.package = Opt.some(f7.get.text)
+
+proc toCbor*(x: LcnCliCatalogCommand): CborValue =
+  runEnc(stepEncLcnCliCatalogCommand, addr x)
+
+proc fromChecked*(T: type LcnCliCatalogCommand, v: CborValue): LcnCliCatalogCommand =
+  var r: LcnCliCatalogCommand
+  runDec(stepDecLcnCliCatalogCommand, v, addr r)
+  r
+
 proc stepEncLcnCliCommand*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   let x {.used.} = cast[ptr LcnCliCommand](src)
   case x.kind
   of LcnCliCommandKind.lcn_Cli_call_command:
     w.later(stepEncLcnCliCallCommand, addr x.arm_lcn_Cli_call_command, addr dst[])
+  of LcnCliCommandKind.lcn_Cli_catalog_command:
+    w.later(stepEncLcnCliCatalogCommand, addr x.arm_lcn_Cli_catalog_command, addr dst[])
   of LcnCliCommandKind.lcn_Cli_describe_command:
     w.later(stepEncLcnCliDescribeCommand, addr x.arm_lcn_Cli_describe_command, addr dst[])
   of LcnCliCommandKind.lcn_Cli_events_command:
     w.later(stepEncLcnCliEventsCommand, addr x.arm_lcn_Cli_events_command, addr dst[])
+  of LcnCliCommandKind.lcn_Cli_package_command:
+    w.later(stepEncLcnCliPackageCommand, addr x.arm_lcn_Cli_package_command, addr dst[])
   of LcnCliCommandKind.lcn_Cli_rc_command:
     w.later(stepEncLcnCliRcCommand, addr x.arm_lcn_Cli_rc_command, addr dst[])
   of LcnCliCommandKind.lcn_Cli_subscribe_command:
@@ -398,9 +496,15 @@ proc stepDecLcnCliCommand*(w: var DecWork, v: CborValue, dst: pointer) =
     r[] = LcnCliCommand(kind: LcnCliCommandKind.lcn_Cli_events_command)
     w.later(stepDecLcnCliEventsCommand, v, addr r.arm_lcn_Cli_events_command)
   of 3:
+    r[] = LcnCliCommand(kind: LcnCliCommandKind.lcn_Cli_catalog_command)
+    w.later(stepDecLcnCliCatalogCommand, v, addr r.arm_lcn_Cli_catalog_command)
+  of 4:
+    r[] = LcnCliCommand(kind: LcnCliCommandKind.lcn_Cli_package_command)
+    w.later(stepDecLcnCliPackageCommand, v, addr r.arm_lcn_Cli_package_command)
+  of 5:
     r[] = LcnCliCommand(kind: LcnCliCommandKind.lcn_Cli_describe_command)
     w.later(stepDecLcnCliDescribeCommand, v, addr r.arm_lcn_Cli_describe_command)
-  of 4:
+  of 6:
     r[] = LcnCliCommand(kind: LcnCliCommandKind.lcn_Cli_subscribe_command)
     w.later(stepDecLcnCliSubscribeCommand, v, addr r.arm_lcn_Cli_subscribe_command)
   else:
@@ -429,8 +533,8 @@ proc stepEncLcnCliDescribeCommand*(w: var EncWork, src: pointer, dst: ptr CborVa
 proc stepDecLcnCliDescribeCommand*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCliDescribeCommand](dst)
   r[] = LcnCliDescribeCommand()
-  let f7 = v.lookup("provider").get
-  w.later(stepDecLcnCliProvider, f7, addr r.provider)
+  let f8 = v.lookup("provider").get
+  w.later(stepDecLcnCliProvider, f8, addr r.provider)
 
 proc toCbor*(x: LcnCliDescribeCommand): CborValue =
   runEnc(stepEncLcnCliDescribeCommand, addr x)
@@ -487,10 +591,10 @@ proc stepEncLcnCliEventsCommand*(w: var EncWork, src: pointer, dst: ptr CborValu
     inc k
   if x.names.isSome:
     node.entries[k].key = cbor("names")
-    let a10 = newCborArray(x.names.get.len)
-    node.entries[k].value = a10
-    for i11 in 0 ..< x.names.get.len:
-      a10.items[i11] = cbor(x.names.get[i11])
+    let a11 = newCborArray(x.names.get.len)
+    node.entries[k].value = a11
+    for i12 in 0 ..< x.names.get.len:
+      a11.items[i12] = cbor(x.names.get[i12])
     inc k
   node.entries[k].key = cbor("op")
   node.entries[k].value = cbor("events")
@@ -499,18 +603,18 @@ proc stepEncLcnCliEventsCommand*(w: var EncWork, src: pointer, dst: ptr CborValu
 proc stepDecLcnCliEventsCommand*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCliEventsCommand](dst)
   r[] = LcnCliEventsCommand()
-  let f8 = v.lookup("count")
-  if f8.isSome:
-    r.count = Opt.some(uint32(f8.get.uint))
-  let f9 = v.lookup("for_ms")
+  let f9 = v.lookup("count")
   if f9.isSome:
-    r.for_ms = Opt.some(uint32(f9.get.uint))
-  let f12 = v.lookup("names")
-  if f12.isSome:
+    r.count = Opt.some(uint32(f9.get.uint))
+  let f10 = v.lookup("for_ms")
+  if f10.isSome:
+    r.for_ms = Opt.some(uint32(f10.get.uint))
+  let f13 = v.lookup("names")
+  if f13.isSome:
     r.names = Opt.some(default(seq[string]))
-    r.names.get.setLen(f12.get.items.len)
-    for i13 in 0 ..< f12.get.items.len:
-      r.names.get[i13] = f12.get.items[i13].text
+    r.names.get.setLen(f13.get.items.len)
+    for i14 in 0 ..< f13.get.items.len:
+      r.names.get[i14] = f13.get.items[i14].text
 
 proc toCbor*(x: LcnCliEventsCommand): CborValue =
   runEnc(stepEncLcnCliEventsCommand, addr x)
@@ -597,10 +701,10 @@ proc stepEncLcnCliMessage*(w: var EncWork, src: pointer, dst: ptr CborValue) =
     node.entries[k].value = cbor(uint64(x.deadline_ms.get))
     inc k
   node.entries[k].key = cbor("fds")
-  let a16 = newCborArray(x.fds.len)
-  node.entries[k].value = a16
-  for i17 in 0 ..< x.fds.len:
-    w.later(stepEncLcnCliFdRole, addr x.fds[i17], addr a16.items[i17])
+  let a17 = newCborArray(x.fds.len)
+  node.entries[k].value = a17
+  for i18 in 0 ..< x.fds.len:
+    w.later(stepEncLcnCliFdRole, addr x.fds[i18], addr a17.items[i18])
   inc k
   node.entries[k].key = cbor("output")
   w.later(stepEncLcnCliOutput, addr x.output, addr node.entries[k].value)
@@ -616,20 +720,20 @@ proc stepEncLcnCliMessage*(w: var EncWork, src: pointer, dst: ptr CborValue) =
 proc stepDecLcnCliMessage*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCliMessage](dst)
   r[] = LcnCliMessage()
-  let f14 = v.lookup("command").get
-  w.later(stepDecLcnCliCommand, f14, addr r.command)
-  let f15 = v.lookup("deadline_ms")
-  if f15.isSome:
-    r.deadline_ms = Opt.some(uint32(f15.get.uint))
-  let f18 = v.lookup("fds").get
-  r.fds.setLen(f18.items.len)
-  for i19 in 0 ..< f18.items.len:
-    w.later(stepDecLcnCliFdRole, f18.items[i19], addr r.fds[i19])
-  let f20 = v.lookup("output").get
-  w.later(stepDecLcnCliOutput, f20, addr r.output)
-  let f21 = v.lookup("target")
-  if f21.isSome:
-    r.target = Opt.some(decLcnCliNodeName(f21.get))
+  let f15 = v.lookup("command").get
+  w.later(stepDecLcnCliCommand, f15, addr r.command)
+  let f16 = v.lookup("deadline_ms")
+  if f16.isSome:
+    r.deadline_ms = Opt.some(uint32(f16.get.uint))
+  let f19 = v.lookup("fds").get
+  r.fds.setLen(f19.items.len)
+  for i20 in 0 ..< f19.items.len:
+    w.later(stepDecLcnCliFdRole, f19.items[i20], addr r.fds[i20])
+  let f21 = v.lookup("output").get
+  w.later(stepDecLcnCliOutput, f21, addr r.output)
+  let f22 = v.lookup("target")
+  if f22.isSome:
+    r.target = Opt.some(decLcnCliNodeName(f22.get))
 
 proc toCbor*(x: LcnCliMessage): CborValue =
   runEnc(stepEncLcnCliMessage, addr x)
@@ -704,6 +808,142 @@ proc fromChecked*(T: type LcnCliOutput, v: CborValue): LcnCliOutput =
   runDec(stepDecLcnCliOutput, v, addr r)
   r
 
+proc stepEncLcnCliPackageAction*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCliPackageAction](src)
+  case x.kind
+  of LcnCliPackageActionKind.Handoff:
+    dst[] = cbor("handoff")
+  of LcnCliPackageActionKind.Inspect:
+    dst[] = cbor("inspect")
+  of LcnCliPackageActionKind.Install:
+    dst[] = cbor("install")
+  of LcnCliPackageActionKind.List:
+    dst[] = cbor("list")
+  of LcnCliPackageActionKind.Remove:
+    dst[] = cbor("remove")
+  of LcnCliPackageActionKind.Update:
+    dst[] = cbor("update")
+  of LcnCliPackageActionKind.Watch:
+    dst[] = cbor("watch")
+
+proc stepDecLcnCliPackageAction*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCliPackageAction](dst)
+  case generatedSchema().arm("lcn.cli_package_action#", v)
+  of 0:
+    r[] = LcnCliPackageAction(kind: LcnCliPackageActionKind.List)
+  of 1:
+    r[] = LcnCliPackageAction(kind: LcnCliPackageActionKind.Watch)
+  of 2:
+    r[] = LcnCliPackageAction(kind: LcnCliPackageActionKind.Remove)
+  of 3:
+    r[] = LcnCliPackageAction(kind: LcnCliPackageActionKind.Update)
+  of 4:
+    r[] = LcnCliPackageAction(kind: LcnCliPackageActionKind.Handoff)
+  of 5:
+    r[] = LcnCliPackageAction(kind: LcnCliPackageActionKind.Inspect)
+  of 6:
+    r[] = LcnCliPackageAction(kind: LcnCliPackageActionKind.Install)
+  else:
+    raiseAssert "a checked value selects a known arm"
+
+proc toCbor*(x: LcnCliPackageAction): CborValue =
+  runEnc(stepEncLcnCliPackageAction, addr x)
+
+proc fromChecked*(T: type LcnCliPackageAction, v: CborValue): LcnCliPackageAction =
+  var r: LcnCliPackageAction
+  runDec(stepDecLcnCliPackageAction, v, addr r)
+  r
+
+proc stepEncLcnCliPackageCommand*(w: var EncWork, src: pointer, dst: ptr CborValue) =
+  let x {.used.} = cast[ptr LcnCliPackageCommand](src)
+  var n = 2
+  if x.count.isSome:
+    inc n
+  if x.for_ms.isSome:
+    inc n
+  if x.module.isSome:
+    inc n
+  if x.package.isSome:
+    inc n
+  if x.progress.isSome:
+    inc n
+  if x.to.isSome:
+    inc n
+  if x.version.isSome:
+    inc n
+  let node = CborValue(kind: ckMap, entries: newSeq[CborEntry](n))
+  dst[] = node
+  var k = 0
+  node.entries[k].key = cbor("action")
+  w.later(stepEncLcnCliPackageAction, addr x.action, addr node.entries[k].value)
+  inc k
+  if x.count.isSome:
+    node.entries[k].key = cbor("count")
+    node.entries[k].value = cbor(uint64(x.count.get))
+    inc k
+  if x.for_ms.isSome:
+    node.entries[k].key = cbor("for_ms")
+    node.entries[k].value = cbor(uint64(x.for_ms.get))
+    inc k
+  if x.module.isSome:
+    node.entries[k].key = cbor("module")
+    node.entries[k].value = cbor(x.module.get)
+    inc k
+  node.entries[k].key = cbor("op")
+  node.entries[k].value = cbor("package")
+  inc k
+  if x.package.isSome:
+    node.entries[k].key = cbor("package")
+    node.entries[k].value = cbor(x.package.get)
+    inc k
+  if x.progress.isSome:
+    node.entries[k].key = cbor("progress")
+    node.entries[k].value = cbor(x.progress.get)
+    inc k
+  if x.to.isSome:
+    node.entries[k].key = cbor("to")
+    node.entries[k].value = cbor(x.to.get)
+    inc k
+  if x.version.isSome:
+    node.entries[k].key = cbor("version")
+    node.entries[k].value = cbor(x.version.get)
+    inc k
+
+proc stepDecLcnCliPackageCommand*(w: var DecWork, v: CborValue, dst: pointer) =
+  let r = cast[ptr LcnCliPackageCommand](dst)
+  r[] = LcnCliPackageCommand()
+  let f23 = v.lookup("action").get
+  w.later(stepDecLcnCliPackageAction, f23, addr r.action)
+  let f24 = v.lookup("count")
+  if f24.isSome:
+    r.count = Opt.some(uint32(f24.get.uint))
+  let f25 = v.lookup("for_ms")
+  if f25.isSome:
+    r.for_ms = Opt.some(uint32(f25.get.uint))
+  let f26 = v.lookup("module")
+  if f26.isSome:
+    r.module = Opt.some(f26.get.text)
+  let f27 = v.lookup("package")
+  if f27.isSome:
+    r.package = Opt.some(f27.get.text)
+  let f28 = v.lookup("progress")
+  if f28.isSome:
+    r.progress = Opt.some(asBool(f28.get))
+  let f29 = v.lookup("to")
+  if f29.isSome:
+    r.to = Opt.some(f29.get.text)
+  let f30 = v.lookup("version")
+  if f30.isSome:
+    r.version = Opt.some(f30.get.text)
+
+proc toCbor*(x: LcnCliPackageCommand): CborValue =
+  runEnc(stepEncLcnCliPackageCommand, addr x)
+
+proc fromChecked*(T: type LcnCliPackageCommand, v: CborValue): LcnCliPackageCommand =
+  var r: LcnCliPackageCommand
+  runDec(stepDecLcnCliPackageCommand, v, addr r)
+  r
+
 proc stepEncLcnCliProvider*(w: var EncWork, src: pointer, dst: ptr CborValue) =
   let x {.used.} = cast[ptr LcnCliProvider](src)
   var n = 1
@@ -729,12 +969,12 @@ proc stepEncLcnCliProvider*(w: var EncWork, src: pointer, dst: ptr CborValue) =
 proc stepDecLcnCliProvider*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCliProvider](dst)
   r[] = LcnCliProvider()
-  let f22 = v.lookup("contract")
-  if f22.isSome:
-    r.contract = Opt.some(f22.get.bytes)
-  let f23 = v.lookup("instance")
-  if f23.isSome:
-    r.instance = Opt.some(f23.get.text)
+  let f31 = v.lookup("contract")
+  if f31.isSome:
+    r.contract = Opt.some(f31.get.bytes)
+  let f32 = v.lookup("instance")
+  if f32.isSome:
+    r.instance = Opt.some(f32.get.text)
   r.module = v.lookup("module").get.text
 
 proc toCbor*(x: LcnCliProvider): CborValue =
@@ -830,11 +1070,11 @@ proc stepEncLcnCliRefused*(w: var EncWork, src: pointer, dst: ptr CborValue) =
 proc stepDecLcnCliRefused*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCliRefused](dst)
   r[] = LcnCliRefused()
-  let f24 = v.lookup("message")
-  if f24.isSome:
-    r.message = Opt.some(f24.get.text)
-  let f25 = v.lookup("reason").get
-  w.later(stepDecLcnCliRefusedReasonChoice, f25, addr r.reason)
+  let f33 = v.lookup("message")
+  if f33.isSome:
+    r.message = Opt.some(f33.get.text)
+  let f34 = v.lookup("reason").get
+  w.later(stepDecLcnCliRefusedReasonChoice, f34, addr r.reason)
 
 proc toCbor*(x: LcnCliRefused): CborValue =
   runEnc(stepEncLcnCliRefused, addr x)
@@ -859,8 +1099,8 @@ proc stepEncLcnCliReply*(w: var EncWork, src: pointer, dst: ptr CborValue) =
 proc stepDecLcnCliReply*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCliReply](dst)
   r[] = LcnCliReply()
-  let f26 = v.lookup("outcome").get
-  w.later(stepDecLcnCliOutcome, f26, addr r.outcome)
+  let f35 = v.lookup("outcome").get
+  w.later(stepDecLcnCliOutcome, f35, addr r.outcome)
 
 proc toCbor*(x: LcnCliReply): CborValue =
   runEnc(stepEncLcnCliReply, addr x)
@@ -901,15 +1141,15 @@ proc stepEncLcnCliSubscribeCommand*(w: var EncWork, src: pointer, dst: ptr CborV
 proc stepDecLcnCliSubscribeCommand*(w: var DecWork, v: CborValue, dst: pointer) =
   let r = cast[ptr LcnCliSubscribeCommand](dst)
   r[] = LcnCliSubscribeCommand()
-  let f27 = v.lookup("count")
-  if f27.isSome:
-    r.count = Opt.some(uint32(f27.get.uint))
+  let f36 = v.lookup("count")
+  if f36.isSome:
+    r.count = Opt.some(uint32(f36.get.uint))
   r.event = v.lookup("event").get.text
-  let f28 = v.lookup("for_ms")
-  if f28.isSome:
-    r.for_ms = Opt.some(uint32(f28.get.uint))
-  let f29 = v.lookup("provider").get
-  w.later(stepDecLcnCliProvider, f29, addr r.provider)
+  let f37 = v.lookup("for_ms")
+  if f37.isSome:
+    r.for_ms = Opt.some(uint32(f37.get.uint))
+  let f38 = v.lookup("provider").get
+  w.later(stepDecLcnCliProvider, f38, addr r.provider)
 
 proc toCbor*(x: LcnCliSubscribeCommand): CborValue =
   runEnc(stepEncLcnCliSubscribeCommand, addr x)
@@ -988,6 +1228,20 @@ proc encode*(x: LcnCliCallCommand): Result[seq[byte], string] =
 proc decode*(T: type LcnCliCallCommand, data: openArray[byte]): Result[LcnCliCallCommand, string] =
   ## One deterministic-CBOR `lcn.cli_call_command` value.
   let v = ?generatedSchema().decodeChecked("lcn.cli_call_command", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCliCatalogCommand, v: CborValue): Result[LcnCliCatalogCommand, string] =
+  ## A value checked against `lcn.cli_catalog_command`.
+  ?generatedSchema().check("lcn.cli_catalog_command", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCliCatalogCommand): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.cli_catalog_command`.
+  generatedSchema().encodeChecked("lcn.cli_catalog_command", toCbor(x))
+
+proc decode*(T: type LcnCliCatalogCommand, data: openArray[byte]): Result[LcnCliCatalogCommand, string] =
+  ## One deterministic-CBOR `lcn.cli_catalog_command` value.
+  let v = ?generatedSchema().decodeChecked("lcn.cli_catalog_command", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type LcnCliCommand, v: CborValue): Result[LcnCliCommand, string] =
@@ -1114,6 +1368,34 @@ proc encode*(x: LcnCliOutput): Result[seq[byte], string] =
 proc decode*(T: type LcnCliOutput, data: openArray[byte]): Result[LcnCliOutput, string] =
   ## One deterministic-CBOR `lcn.cli_output` value.
   let v = ?generatedSchema().decodeChecked("lcn.cli_output", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCliPackageAction, v: CborValue): Result[LcnCliPackageAction, string] =
+  ## A value checked against `lcn.cli_package_action`.
+  ?generatedSchema().check("lcn.cli_package_action", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCliPackageAction): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.cli_package_action`.
+  generatedSchema().encodeChecked("lcn.cli_package_action", toCbor(x))
+
+proc decode*(T: type LcnCliPackageAction, data: openArray[byte]): Result[LcnCliPackageAction, string] =
+  ## One deterministic-CBOR `lcn.cli_package_action` value.
+  let v = ?generatedSchema().decodeChecked("lcn.cli_package_action", data)
+  ok(fromChecked(T, v))
+
+proc fromCbor*(T: type LcnCliPackageCommand, v: CborValue): Result[LcnCliPackageCommand, string] =
+  ## A value checked against `lcn.cli_package_command`.
+  ?generatedSchema().check("lcn.cli_package_command", v)
+  ok(fromChecked(T, v))
+
+proc encode*(x: LcnCliPackageCommand): Result[seq[byte], string] =
+  ## Logos deterministic CBOR, checked against `lcn.cli_package_command`.
+  generatedSchema().encodeChecked("lcn.cli_package_command", toCbor(x))
+
+proc decode*(T: type LcnCliPackageCommand, data: openArray[byte]): Result[LcnCliPackageCommand, string] =
+  ## One deterministic-CBOR `lcn.cli_package_command` value.
+  let v = ?generatedSchema().decodeChecked("lcn.cli_package_command", data)
   ok(fromChecked(T, v))
 
 proc fromCbor*(T: type LcnCliProvider, v: CborValue): Result[LcnCliProvider, string] =

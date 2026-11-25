@@ -191,6 +191,13 @@ proc streamLine*(p: Presenter, v: JsonNode, text: string): Result[void, SinkErro
     return p.output.line($v)
   p.output.line(text)
 
+proc progressLine*(p: Presenter, v: JsonNode, text: string): Result[void, SinkError] =
+  ## [G503] An operation's progress: a JSON line, or a text line, on stderr in either
+  ## format, since stdout carries the command's one result.
+  if p.json:
+    return p.errors.line($v)
+  p.errors.line(text)
+
 proc streamStart*(p: Presenter): Result[void, SinkError] =
   ## The banner before a text stream's first line.
   if not p.json and p.nonProduction:

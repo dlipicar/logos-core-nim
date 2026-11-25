@@ -87,7 +87,7 @@ The 308 PKG units by step (`PKG-` omitted):
 | 5-6a-1 | A1 | 20 | 0003-0008, 0366, 0367, 0369-0377, 0379, 0519, 0521 |
 | 5-6a-1 | A2 | 2 | 0513, 0514 |
 | 5-6a-2 | A1 | 2 | 0380, 0388 (built, I141; with App A's copy 0650) |
-| 5-6b | A1 | 55 | 0368, 0378, 0381, 0383-0387, 0520, 0522-0533, 0538-0542, 0544-0562, 0564-0573 (5-6b-1 built 22, I143: 0368, 0378, 0381, 0383-0387, 0525-0533, 0538-0542; with App A's copies 0638 and 0648. 5-6b-2 built 29, I144: 0520, 0522-0524, 0544-0553, 0556-0558, 0560-0562, 0564-0572, four by inspection; with App A's copies 0632, 0634-0636. 0554, 0555 and 0573 are 5-6b-3's; 0559 is not met, G504) |
+| 5-6b | A1 | 55 | 0368, 0378, 0381, 0383-0387, 0520, 0522-0533, 0538-0542, 0544-0562, 0564-0573 (5-6b-1 built 22, I143: 0368, 0378, 0381, 0383-0387, 0525-0533, 0538-0542; with App A's copies 0638 and 0648. 5-6b-2 built 29, I144: 0520, 0522-0524, 0544-0553, 0556-0558, 0560-0562, 0564-0572, four by inspection; with App A's copies 0632, 0634-0636. 5-6b-3 built 3, I148: 0554, 0555 and 0573, two by inspection; 0559 is not met, G504) |
 | 5-7a | A4 | 1 | 0435 |
 | 5-8 | B | 19 | 0060, 0287, 0289, 0335, 0337-0345, 0347-0351, 0512 (and TXT-0545, riding on 0351: G391) |
 | 5-8 | A2 | 1 | 0354 |
@@ -887,6 +887,19 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   PKG-0564 to PKG-0572 (PKG-0547 to PKG-0549 and PKG-0560 by inspection), and App A's copies PKG-0632 and PKG-0634 to
   PKG-0636, which leave the re-pin's deferred list with TXT-0497 and TXT-0498 (33 units). PKG-0554, PKG-0555 and
   PKG-0573, the consumer's, wait for 5-6b-3; PKG-0559 is not met.
+
+- 2026-11-25, Tier 5 step 5-6b-3 (I148; G503; the owner's Q14 (a); ruling 4), `logosctl package` and `catalog`
+  through `lcn_call`:
+  - The commands list, inspect, install, remove, update, hand off and watch on the composed Package Manager, typed
+    from its described contract; every page of a list, started over at most 3 times when a commit supersedes it.
+  - `lcn_call` holds its own page calls and watches within the per-caller bounds; an opaque refusal names its three
+    causes; the error arm is exit 5.
+  - `--progress` and the watch subscribe and call on one route, since the Package Manager publishes in the call's
+    own scope; progress lines on stderr; the watch lists at each hint, every 30 s and after a loss.
+  - S13 (the Package Manager publishes its events) and, with `lcn_call`, S14 (its access, the operations included).
+  - Cases in `test_cli`, `test_daemon_config` and `test_logosd_pm`.
+
+  Claimed: PKG-0554, and PKG-0555 and PKG-0573 by inspection (3 units).
 
 ## Tiers at f4f83471 (the original plan)
 

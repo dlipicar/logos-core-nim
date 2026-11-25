@@ -845,7 +845,7 @@ The Package Manager's watch and progress (DECISIONS I144; G501, G502, G504; the 
     (HOST-CONFIG, Runtime limits). Freeing a hosted call's worker is a core item held by the pause.
   - **`installing` carries no counters** (G502): extraction is one worker job and measures nothing before its end.
   - **A deadline is never seen by the provider:** a watch it ends ends `CANCELLED`, like any cancel.
-  - **PKG-0554, PKG-0555 and PKG-0573** are the consumer's duties, `lcn_call`'s in 5-6b-3.
+  - **PKG-0554, PKG-0555 and PKG-0573** are the consumer's duties, `lcn_call`'s, claimed in 5-6b-3 (below).
   - **PKG-0559 is not met** (G504; the owner's Q11, "Record as not met"). A handoff can wait behind replies a
     consumer does not read: `commit` waits on the module thread while the Module Host's 64 MiB output budget is full
     (four maximal replies, or sixty-four of 1 MiB, from any caller, operation and inspect replies included), until
@@ -854,6 +854,24 @@ The Package Manager's watch and progress (DECISIONS I144; G501, G502, G504; the 
     wait and the response check off the module thread, and the system session's room in both output pools, the
     submitted bytes and the committed output. Built meanwhile: the page byte budget, the binding's own worker and the
     bound on ordinary handoffs.
+
+### What Tier 5 step 5-6b-3 changes
+
+`logosctl package` and `catalog` through `lcn_call` (DECISIONS I148; G503; the owner's Q14 (a); ruling 4;
+`docs/DAEMON.md` §5, §7a).
+
+- **Claimed:** PKG-0554 (a hint or a submitted watch is never taken for the state: `lcn_call` lists after each), and
+  by inspection PKG-0555 (the refresh at each hint, every 30 s and after a lost watch) and PKG-0573 (a lost progress
+  stream, a cancel or a timeout is no outcome: exit 2, the outcome unknown). 3 units.
+- **Limits of the claim:**
+  - **`lcn_call` sees only its own calls:** it holds its page calls and watches within the Package Manager's
+    per-caller bounds (2 and 4), and a query refused at a bound in all (8 page calls, 16 watches) is reported with
+    the three causes it cannot tell apart; the Package Manager's log says which.
+  - **Progress is not every phase:** the Package Manager replaces a pending publication with the next and drops the
+    last at the answer.
+  - **A watch whose Package Manager stopped ends** with the failure of making it again; it does not wait for a
+    restart.
+  - **S14 includes the operations** (Q14 (a)): every process of logosd's user can install and remove packages.
 
 ## Properties not claimed
 

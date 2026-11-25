@@ -214,7 +214,7 @@ default = "deferred:tier-5"
 # PKG-0568, are tests/test_pm_install.nim's. PKG-0520 and PKG-0522..0524 are §15's rules for the events and the
 # watch's response, PKG-0632 and PKG-0634..0636 App A's copies. PKG-0547..0549 and PKG-0560 are claimed by
 # inspection (conformance/inspection/PKG.toml). PKG-0554, PKG-0555 and PKG-0573 are the consumer's duties,
-# lcn_call's in 5-6b-3. PKG-0559 is recorded as not met (G504, the owner's Q11).
+# lcn_call's, claimed in 5-6b-3 (below). PKG-0559 is recorded as not met (G504, the owner's Q11).
 "PKG-0520" = "claimed"
 "PKG-0522" = "claimed"
 "PKG-0523" = "claimed"
@@ -248,6 +248,13 @@ default = "deferred:tier-5"
 "PKG-0634" = "claimed"
 "PKG-0635" = "claimed"
 "PKG-0636" = "claimed"
+# Step 5-6b-3, the consumer's duties in lcn_call (DECISIONS G503; I148): `logosctl package watch` lists after the
+# watch is made and after each hint, never taking a hint or a submission for the state (PKG-0554,
+# tests/test_logosd_pm.nim). PKG-0555 (the periodic refresh and the resynchronization) and PKG-0573 (a lost
+# progress stream, a cancel or a timeout is no outcome) are claimed by inspection (conformance/inspection/PKG.toml).
+"PKG-0554" = "claimed"
+"PKG-0555" = "claimed"
+"PKG-0573" = "claimed"
 # §2: the Nix profile comes with step 5-10. The catalog, Storage and backend metadata a
 # manifest must win over (PKG-0019, PKG-0021) are claimed through "§2" by step 5-3b-1:
 # tests/test_pm_driver.nim (DECISIONS G401, G405).

@@ -61,6 +61,7 @@ import logos_sdk/crypto/blake3
 import ../crypto/slhdsa
 import ../package/[errors, lgx, manifest, records, reffree, resolver, trustdoc]
 import ./[installed, responses, spool, vcache]
+from ./listing import fits
 
 when defined(posix):
   import ./store
@@ -480,7 +481,7 @@ when defined(posix):
         return
       let bytes =
         encodeCbor(recordValue(read.get[1].record, baseOf(w.config.root, p.rid)))
-      if result.count > 0 and items.len + bytes.len > job.budget:
+      if not fits(items.len, bytes.len, result.count, job.budget):
         break
       items.add(bytes)
       inc result.count

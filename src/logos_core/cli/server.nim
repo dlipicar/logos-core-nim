@@ -160,10 +160,15 @@ proc reply(s: ptr Server, fd: cint, r: LcnCliReply) =
   discard writeReply(fd, r, s.idleTimeoutMs)
 
 func isStream(m: LcnCliMessage): bool =
-  m.command.kind in {
-    LcnCliCommandKind.lcn_Cli_subscribe_command,
-    LcnCliCommandKind.lcn_Cli_events_command,
-  }
+  ## [G503] `package watch` is a stream too.
+  case m.command.kind
+  of LcnCliCommandKind.lcn_Cli_subscribe_command,
+      LcnCliCommandKind.lcn_Cli_events_command:
+    true
+  of LcnCliCommandKind.lcn_Cli_package_command:
+    m.command.arm_lcn_Cli_package_command.action.kind == LcnCliPackageActionKind.Watch
+  else:
+    false
 
 proc take(s: ptr Server, stream: bool): int =
   ## A slot for a command of this kind: 0 taken, 1 busy, 2 closing.
@@ -484,6 +489,8 @@ proc initModule(
     rc: init.services.runtimeControl,
     routes: newRouteTable(init.services.runtimeControl, int(config.route_idle_ms)),
     hub: hub,
+    # [G503] Never freed, as the hub: a worker may hold it until the last command ends.
+    pm: cast[ptr PmGate](allocShared0(sizeof(PmGate))),
     stopping: addr s.stopping,
     production: config.deployment.kind == LcnCallSettingsDeploymentChoiceKind.Production,
   )

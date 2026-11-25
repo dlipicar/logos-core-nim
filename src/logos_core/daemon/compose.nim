@@ -233,6 +233,19 @@ func storageFetchContract(): CborValue =
     (t("hash_suite"), t(HashSuiteId)),
   )
 
+proc pmContract(): Result[CborValue, string] =
+  ## [G503] The composed Package Manager's primary contract, as a policy names it.
+  let cs = pmContractSet().valueOr:
+    return err("package_manager: the pinned Package Manager contract: " & error)
+  ok(
+    cborMap(
+      (t("commitment_model"), t(CommitmentModelId)),
+      (t("schema_root"), cbor(@(cs.primary.root))),
+      (t("hash_profile"), t(HashProfileId)),
+      (t("hash_suite"), t(HashSuiteId)),
+    )
+  )
+
 func roots(xs: openArray[array[32, byte]]): CborValue =
   ## Declaration roots as a policy set: strictly ascending (AUTHORITY-POLICY.md).
   var sorted = xs.mapIt(@it)
@@ -252,7 +265,8 @@ proc systemRules*(
   ## is composed (`cli`; G345, G346). Every start rule holds its execution scope and
   ## the host-ambient permission scope together (G207); an absent `modes`
   ## covers direct and hosted starts alike.
-  ## [G402] S9 to S11 with a `package_manager` section (`pm`); [G491] S12 too.
+  ## [G402] S9 to S11 with a `package_manager` section (`pm`); [G491] S12 too;
+  ## [G503] S13 too, and S14 when lcn_call is composed as well.
   ## The composed Package Manager's start is S2's: `orchestratorValue` puts it in
   ## the orchestrator's start list, so its needs include it.
   let n = ?orchestratorNeeds(orch)
@@ -479,6 +493,46 @@ proc systemRules*(
         Opt.some(subjectOf("modules", [PmModule])),
       ),
     )
+    # S13 [G503]: the Package Manager publishes its two events,
+    # installed_packages_changed and operation_progress (PM §15.1, §15.2), each
+    # to the readers its own scope names.
+    let contract = ?pmContract()
+    rules.add rule(
+      "allow",
+      pmSubject,
+      cborMap(
+        (t("kind"), t("provider-access")),
+        (t("contract"), contract),
+        (t("actions"), texts(["publish-event"])),
+      ),
+    )
+    if cli:
+      # S14 [G503]: lcn_call discovers the composed Package Manager, holds routes
+      # to it, calls its eight methods, mutations included (the owner's Q14 (a),
+      # 2026-11-23), and subscribes to its two events. Whether a list or a watch
+      # is answered is the Package Manager's own check (`readers`, G498). A
+      # discovery names a contract and no provider (`engine.describeProvider`), so
+      # a pattern with `providers` never covers it: the rule's first pattern allows
+      # it on the contract, the second the rest at the Package Manager only; each
+      # requested scope needs one of them (G207).
+      rules.add rule(
+        "allow",
+        subjectOf("instances", [CliInstance]),
+        cborMap(
+          (t("kind"), t("provider-access")),
+          (t("contract"), contract),
+          (t("actions"), texts(["discover"])),
+        ),
+        cborMap(
+          (t("kind"), t("provider-access")),
+          (t("contract"), contract),
+          (
+            t("actions"),
+            texts(["call", "establish-route", "renew-route", "subscribe-event"]),
+          ),
+          (t("providers"), pmSubject),
+        ),
+      )
   ok(rules)
 
 proc mergedPolicy*(

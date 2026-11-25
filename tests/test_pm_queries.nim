@@ -192,6 +192,7 @@ suite "the lists' pages (G500)":
       textOf(encodeCbor(cborMap((cbor("packages"), CborValue(kind: ckArray)))))
 
   test "[PKG-0383] [IMPL-DECISION G500] the byte budget: a first record always fits; later ones while the page stays within it":
+    check PageBudget == 256 * 1024 # one constant, the engine's and the page job's
     check fits(0, PageBudget * 4, 0)
     check fits(10, PageBudget - 10, 1)
     check not fits(11, PageBudget - 10, 1)
@@ -761,6 +762,80 @@ when defined(posix):
       check pm.walkPages("list_packages") == (catalogEntries.mapIt(it.toCbor), 4)
       releaseAll()
       s.e.finish()
+
+    test "[PKG-0383] [IMPL-DECISION G500] the page byte budget against limit: a page cut by the budget before limit, a page cut by limit before the budget, and a record over the budget alone in its page, the next page going on after it":
+      # A Module Host's environment is copied when the engine is made (R4), so each budget
+      # has a setup of its own; the first, with the default budget, measures the records.
+      proc installAll(): seq[CborValue] =
+        # In the listing's order: package name, then descending version.
+        @[
+          installRecord("app", "1.0.0"),
+          installRecord("lib", "1.3.0"),
+          installRecord("lib", "1.2.0"),
+          installRecord("logos.example", "1.0.0"),
+        ]
+
+      proc sizesOf(r: seq[CborValue]): seq[int] =
+        r.mapIt(encodeCbor(it).len)
+
+      var size: seq[int]
+      block:
+        let s = setup(hosted(["LCN_TEST_PM_PAGE_BUDGET"]), "budgets")
+        size = installAll().sizesOf
+        releaseAll()
+        s.e.finish()
+      # What the cases rest on: `app`'s record (it names a dependency) is larger than a
+      # `lib` one, and the module package's is larger than both `lib` ones together.
+      check size[0] > size[1] and size[0] > size[2]
+      check size[3] > size[1] + size[2]
+      defer:
+        delEnv("LCN_TEST_PM_PAGE_BUDGET")
+
+      # The budget holds the two `lib` records exactly.
+      putEnv("LCN_TEST_PM_PAGE_BUDGET", $(size[1] + size[2]))
+      block:
+        let s = setup(hosted(["LCN_TEST_PM_PAGE_BUDGET"]), "budgets-a")
+        let r = installAll()
+        check r.sizesOf == size # the records measured are these
+        # Cut by the budget before `limit`: `app` alone, since `lib 1.3.0` would take the
+        # page past it; then both `lib` records, since the module package's would.
+        let a1 = pm.pageOf("list_installed_packages", limit = 1000)
+        check a1.packagesOf == r[0 .. 0]
+        let a2 = pm.pageOf("list_installed_packages", cursor = a1.nextOf, limit = 1000)
+        check a2.packagesOf == r[1 .. 2]
+        # Over the budget, alone in its page, which ends the listing.
+        let a3 = pm.pageOf("list_installed_packages", cursor = a2.nextOf, limit = 1000)
+        check a3.packagesOf == r[3 .. 3]
+        check a3.lookup("next_cursor").isNone
+        # Cut by `limit` before the budget, which would take both `lib` records.
+        let l1 = pm.pageOf("list_installed_packages", limit = 1)
+        check l1.packagesOf == r[0 .. 0]
+        let l2 = pm.pageOf("list_installed_packages", cursor = l1.nextOf, limit = 1)
+        check l2.packagesOf == r[1 .. 1]
+        check l2.nextOf.len > 0
+        # The catalog's entries are far smaller than the budget: `limit` cuts its page.
+        let c1 = pm.pageOf("list_packages", limit = 3)
+        check c1.packagesOf == catalogEntries[0 .. 2].mapIt(it.toCbor)
+        check c1.nextOf.len > 0
+        releaseAll()
+        s.e.finish()
+
+      # A budget below `app`'s record: it goes alone in the first page, over the budget,
+      # and the next page goes on after it.
+      putEnv("LCN_TEST_PM_PAGE_BUDGET", $(size[0] - 1))
+      block:
+        let s = setup(hosted(["LCN_TEST_PM_PAGE_BUDGET"]), "budgets-b")
+        let r = installAll()
+        check r.sizesOf == size
+        let b1 = pm.pageOf("list_installed_packages", limit = 1000)
+        check b1.packagesOf == r[0 .. 0]
+        let b2 = pm.pageOf("list_installed_packages", cursor = b1.nextOf, limit = 1000)
+        check b2.packagesOf.len >= 1
+        if b2.packagesOf.len >= 1:
+          check b2.packagesOf[0] == r[1]
+        check pm.walkPages("list_installed_packages", limit = 1000)[0] == r
+        releaseAll()
+        s.e.finish()
 
     test "[PKG-0558] [IMPL-DECISION G500] page jobs: past 2 in flight for one reader the call is MODULE_ERROR with no message and one operator line naming the bound, while another reader's goes on; the first worker is not behind them, so an install is answered while they wait; each page is its own snapshot's":
       putEnv("LCN_TEST_PM_PAGE_PACE_MS", $PaceMs)
