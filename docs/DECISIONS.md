@@ -6716,6 +6716,22 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
     builders moved to `tests/support/lgxcorpus.nim`, and its last suite runs the comparison on every archive it builds.
     The oracle carries one fix: the copied `readTar` indexed past the end of an archive whose tar ends inside an
     entry's padding; it now gives "an entry's data is truncated", the streaming reader's message.
+    - **The sanitizer subset** `[IMPL]` (CI run 1, 45616293974: x86_64 MSan took 4,318 s, beside three other MSan
+      checks on four cores; alone on framework.lan the same build takes 258 s): under ASan, TSan or MSan
+      `test_lgx_equiv` keeps each class's first case and then one in 10 (`SubsetStride`). A class is one mutation of
+      one archive (each kind of cut, a flip of either stream, an entry dropped, doubled or swapped, one header field)
+      or one extra host of the generated packages: 68 classes. Every random draw is still made, so a kept case is the
+      default corpus's own. Every test and every fixed case runs, the eight generated shapes under linux among them,
+      and "the agreements seen" checks that every class kept a case. 144 of the classes' 1,087 cases are kept, 199
+      comparisons in all against 1,142. orc, refc and orc-release run the default corpus, and
+      `LCN_LGX_FULL_CORPUS=1` samples nothing in any build.
+    - **A fixed hedge** `[IMPL]` (the same run): the corpus signs with `lgxcorpus.fixedHedge`, so each archive is the
+      same on every run and in every build. Signed with the operating system's fresh bytes, as before, a stream flip
+      or cut met other signature bytes on each run, and the agreements seen changed (`agFormat` 4 to 6 by default).
+      Under the subset none was left about one run in two, which failed "the agreements seen". Now the default
+      corpus sees 8 and the subset 1, every run. The fix stands for the default corpus too. `signManifest` and `sign`
+      keep the operating system's bytes by default, and a test checks that two default signatures of one manifest
+      differ. `test_lgx` and `test_lgx_peak` sign through the same corpus; their cases do not change.
 - **Status:** the writing half built in part 5-5-2, the reader in part 5-5-2b, the spool in part 5-5-3, a mutation's
   spool budget and the extraction from the spool with the operations in part 5-5-4 (I121, G449).
 

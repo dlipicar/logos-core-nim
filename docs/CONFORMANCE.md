@@ -1513,6 +1513,12 @@ and the spool"). An installed package is inflated twice, once to judge it and on
   final CI pass, orc-release on Linux, from the dev shell, since a flake check does not see the caller's
   environment: `LCN_LGX_FULL_CORPUS=1 nim c -r --mm:orc -d:release tests/test_lgx_equiv.nim`. In that build on
   the Mac it compares 9,315 archives in about 20 minutes (1,198 s); by default, about 1,430 in under 2 minutes.
+- **The sanitizer subset** [IMPL] (DECISIONS G446; CI run 1, where x86_64 MSan took 72 minutes over the default
+  corpus): under ASan, TSan or MSan `test_lgx_equiv` keeps each class's first case and one in 10 after it. A class is
+  one mutation of one archive, or one extra host of the generated packages. Every random draw is still made, and
+  every test and fixed case runs: 199 comparisons against the default corpus's 1,142. The corpus signs with a fixed
+  hedge, so its archives are the same on every run and in every build. The signing path's default stays fresh, and a
+  test checks that.
 - **Measured** (a scratch program, not committed: 5-3c-1's `pmbench archive` and `pmbench inspect`, with
   `inspectLgx` over the file beside them; one signed archive whose one data artifact is incompressible; CPU time
   of the inspection and the process's peak, each the median of three processes; Mac, `-d:release`). "In memory" is
