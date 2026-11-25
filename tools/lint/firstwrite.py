@@ -11,6 +11,12 @@ never wiped either. Giving the local an initializer (`var x: T = default(T)`, or
   python3 tools/lint/firstwrite.py [root ...]   (default: src sdk/src sdk/tests tests)
   python3 tools/lint/firstwrite.py --self-test
 
+The same holds for a local first written inside a `for` or `while` loop and written
+again in a branch after that loop, whether the later value is `nil`, `""`, `@[]`,
+`default(T)` or a fresh one (run1-san-remote: `describeProvider`'s `owner`, written in
+the loop over the instances and then `nil` in an `if`, kept the instance it held). A
+later write inside another loop leaves no value behind in 2.2.14 and is not flagged.
+
 Prints `file:line: ...` for each such local and exits 1 if there is any. A heuristic
 over the source text: scalar types are skipped, a write in a `when` branch counts at
 the `when`'s level, and a branch that ends in `return`, `raise` or `quit` is left out.
@@ -33,6 +39,7 @@ SCALAR = re.compile(
 EXIT = re.compile(r"^\s*(return|raise|quit)\b")
 ONE_LINE = r"^\s*(if|elif|else|of|except|while|for|try|finally)\b[^#]*:\s*{}\s*=[^=]"
 OPENER = re.compile(r"^\s*(when|if|case|try|elif|else|of|except|finally)\b")
+LOOP = re.compile(r"^\s*(for|while)\b")
 ROUTINE = re.compile(r"^(\s*)(proc|func|method|converter)\s")
 
 
@@ -135,6 +142,50 @@ def check(lines, start, dind, name):
     return None
 
 
+def enclosing(lines, j, dind):
+    """The lines opening the blocks that hold line `j` down to `dind`, innermost first."""
+    chain = []
+    k = opener(lines, j)
+    while k is not None and indent(lines[k]) >= dind:
+        chain.append(k)
+        k = opener(lines, k)
+    return chain
+
+
+def check_loop(lines, start, dind, name):
+    """(first write inside a loop, later write in a branch after it) for `name`, or None."""
+    plain = re.compile(r"^\s*" + re.escape(name) + r"\s*=[^=]")
+    one = re.compile(ONE_LINE.format(re.escape(name)))
+    held = None  # (the outermost loop holding the first write, that write's line)
+    for j in range(start, len(lines)):
+        line = lines[j]
+        if not is_code(line):
+            continue
+        if indent(line) < dind:
+            return None
+        if one.match(line):
+            if re.search(r"\b(return|raise)\b", line) or re.match(r"^\s*when\b", line):
+                continue
+            chain = [j] + enclosing(lines, j, dind)
+            nested = True
+        elif plain.match(line):
+            chain = enclosing(lines, j, dind)
+            nested = level(lines, j) > dind
+        else:
+            continue
+        if not nested:
+            return None  # written on every path from here on (the other check's form)
+        loops = [k for k in chain if LOOP.match(lines[k])]
+        if held is None:
+            if loops and not (plain.match(line) and exits(lines, j)):
+                held = (loops[-1], j)
+            continue
+        if held[0] in chain or loops:
+            continue
+        return (held[1], j)
+    return None
+
+
 def declarations(lines):
     """(line index, declaring indent, name, type) for each local without an initializer."""
     for i, line in enumerate(lines):
@@ -179,7 +230,11 @@ def findings(path):
             continue
         hit = check(lines, i + 1, dind, name)
         if hit:
-            yield i + 1, name, hit[0] + 1, hit[1] + 1
+            yield i + 1, name, hit[0] + 1, hit[1] + 1, "branch"
+            continue
+        hit = check_loop(lines, i + 1, dind, name)
+        if hit:
+            yield i + 1, name, hit[0] + 1, hit[1] + 1, "loop"
 
 
 def lint(roots):
@@ -197,10 +252,15 @@ def lint(roots):
                 if name.endswith(".nim") and not name.startswith("._"):
                     scanned += 1
                     path = os.path.join(d, name)
-                    for line, local, first, later in findings(path):
-                        print(f"{path}:{line}: `{local}` is first written in a branch (line {first}) "
-                              f"and written again at line {later}, which drops that value; "
-                              f"give it an initializer")
+                    for line, local, first, later, kind in findings(path):
+                        if kind == "loop":
+                            print(f"{path}:{line}: `{local}` is first written in a loop (line {first}) "
+                                  f"and written again in a branch after it at line {later}, which "
+                                  f"drops that value; give it an initializer")
+                        else:
+                            print(f"{path}:{line}: `{local}` is first written in a branch (line {first}) "
+                                  f"and written again at line {later}, which drops that value; "
+                                  f"give it an initializer")
                         count += 1
     if not scanned:
         print(f"firstwrite: no .nim file under {' '.join(roots)}", file=sys.stderr)
@@ -211,13 +271,24 @@ def lint(roots):
 # The self-test: the two runs that check nothing, a planted local and its initialized form.
 PLANTED = 'proc f(c: bool): string =\n  var x: string\n  if c:\n    x = "a"\n  x = "b"\n  x\n'
 INITIALIZED = 'proc f(c: bool): string =\n  var x: string = ""\n  if c:\n    x = "a"\n  x = "b"\n  x\n'
+# ifleak/loopnil.nim's leaking shape (upstream ISSUES.md 131), its initialized form, and the
+# forms 2.2.14 does not leak: the later write inside another loop or inside the same loop.
+LOOPNIL = ('proc f(xs: seq[Inst], c: bool): bool =\n  var x: Inst\n  for y in xs:\n'
+           '    if y.id.len > 0:\n      x = y\n  if c:\n    x = nil\n  x.isNil\n')
+LOOPNIL_INITIALIZED = LOOPNIL.replace("var x: Inst\n", "var x: Inst = nil\n")
+LOOPNIL_LATER_LOOP = LOOPNIL.replace("  if c:\n    x = nil\n", "  for z in xs:\n    if c:\n      x = nil\n")
+LOOPNIL_SAME_LOOP = ('proc f(xs: seq[Inst], c: bool): bool =\n  var x: Inst\n  for y in xs:\n'
+                     '    if y.id.len > 0:\n      x = y\n    elif c:\n      x = nil\n  x.isNil\n')
 
 
 def self_test():
     failures = []
     with tempfile.TemporaryDirectory() as tmp:
         dirs = {}
-        for name, text in (("empty", None), ("planted", PLANTED), ("initialized", INITIALIZED)):
+        for name, text in (("empty", None), ("planted", PLANTED), ("initialized", INITIALIZED),
+                           ("loopnil", LOOPNIL), ("loopnil-initialized", LOOPNIL_INITIALIZED),
+                           ("loopnil-later-loop", LOOPNIL_LATER_LOOP),
+                           ("loopnil-same-loop", LOOPNIL_SAME_LOOP)):
             dirs[name] = os.path.join(tmp, name)
             os.mkdir(dirs[name])
             if text is not None:
@@ -238,6 +309,10 @@ def self_test():
             ("a planted local", [dirs["planted"]], 1),
             ("its initialized form", [dirs["initialized"]], 0),
             ("its initialized form beside a `._` file", [dirs["appledouble"]], 0),
+            ("a local written in a loop, then nil in a branch", [dirs["loopnil"]], 1),
+            ("its initialized form", [dirs["loopnil-initialized"]], 0),
+            ("the nil in a later loop", [dirs["loopnil-later-loop"]], 0),
+            ("the nil in the same loop", [dirs["loopnil-same-loop"]], 0),
         ]
         for what, roots, want in cases:
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):

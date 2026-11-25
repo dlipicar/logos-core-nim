@@ -649,7 +649,8 @@ func select*(plan: SelectionPlan, v: CborValue): Opt[int] =
     # length takes.
     var
       found = false
-      next, other: SelectionPlan
+      next: SelectionPlan = nil # firstwrite: written in the loop and after it
+      other: SelectionPlan
     for (o, child) in node.branches:
       if o.kind == ocOther:
         other = child
