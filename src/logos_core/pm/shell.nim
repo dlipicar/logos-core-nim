@@ -59,6 +59,10 @@
 ##   joined after the first. Test builds take the page byte budget from
 ##   `LCN_TEST_PM_PAGE_BUDGET`, and append a line to the file `LCN_TEST_HANDOFF_JOBS`
 ##   names for each `wjHandoff` the first worker gets.
+## - **Watches and progress** (5-6b-2; G501, G502): each landed commit (`cmChanged`)
+##   counts in `changes` and wakes `changedSince`; an operation given a `ProgressSink`
+##   is submitted with progress, and each `cmProgress` for it goes to the sink until
+##   its answer or its cancel.
 ## - **`closeShell`** (`_MODULE_destroy`): the engine stops (no command
 ##   follows, G437), timers are cancelled, outstanding calls are cancelled and
 ##   awaited (bounded), the route set is closed, and a root operation still
@@ -103,6 +107,15 @@ type
   ShellLog* = proc(line: string) {.nimcall, gcsafe, raises: [].}
     ## Receives each log line, without its newline.
 
+  ProgressReport* = object
+    ## [G502] One phase an operation reached: `cmProgress` without its request.
+    phase*: ProgressPhase
+    completed*: Opt[uint64]
+    total*: Opt[uint64]
+
+  ProgressSink* = proc(r: ProgressReport) {.gcsafe, raises: [].}
+    ## [G502] Receives an operation's progress on the module thread, until its answer.
+
   Link = ref object ## One route of a binding, from establishment to release.
     shell {.cursor.}: Shell
     binding: string
@@ -134,6 +147,9 @@ type
     closed: bool
     worker: Worker ## [G447]
     reader: Worker ## [5-6b-1; G500] the read-only worker
+    changeCount: uint64 ## [G501] the commits that landed this start
+    changed: AsyncEvent ## [G501] fired at each, and when the shell closes
+    sinks: Table[uint64, ProgressSink] ## [G502] by request, until its answer
     when defined(posix):
       store: InstalledStore ## [G444] held from `_init` to `_destroy`
 
@@ -559,9 +575,19 @@ proc exec(s: Shell, c: var Command) =
   of cmPage:
     s.reader.submit(move c.job)
   of cmAnswer:
+    s.sinks.del(c.answerTo)
     var f: Future[OperationAnswer].Raising([CancelledError])
     if s.answers.pop(c.answerTo, f):
       f.complete(move c.answer)
+  of cmChanged:
+    # [G501] Every watch waiting sees the new count.
+    inc s.changeCount
+    s.changed.fire()
+    s.changed.clear()
+  of cmProgress:
+    let sink = s.sinks.getOrDefault(c.progressOf)
+    if not sink.isNil:
+      sink(ProgressReport(phase: c.phase, completed: c.completed, total: c.total))
   of cmCancelCall:
     # [G449] Through the Interface's cancel; the call's answer still comes back.
     let f = s.calls.getOrDefault(c.cancelled)
@@ -647,7 +673,13 @@ proc openShell*(
     turnWork = turnWork,
     pageBudget = budget,
   )
-  let s = Shell(engine: move e, routeSet: routeSet, stateDir: dir, log: log)
+  let s = Shell(
+    engine: move e,
+    routeSet: routeSet,
+    stateDir: dir,
+    log: log,
+    changed: newAsyncEvent(),
+  )
   var config = s.engine.workerConfig(spoolDir)
   # [G500] The read-only worker's own copy, with the root's path and no store files.
   var readConfig = config
@@ -714,10 +746,12 @@ proc resolveRoot*(
 proc ask(
     s: Shell,
     issue: proc(e: var Engine, id: uint64): seq[Command] {.gcsafe, raises: [].},
+    sink: ProgressSink = nil,
 ): Future[OperationAnswer].Raising([CancelledError]) =
   ## One operation or query through the engine; completes with its answer. Cancelled by its
   ## caller, it is cancelled in the engine (leaving its queue, or ending at its next
-  ## suspension), and the future ends cancelled.
+  ## suspension), and the future ends cancelled. [G502] `sink` receives the operation's
+  ## progress until then.
   let f = Future[OperationAnswer].Raising([CancelledError]).init(
       "pm operation", {FutureFlag.OwnCancelSchedule}
     )
@@ -732,7 +766,10 @@ proc ask(
   inc s.nextRequest
   let id = s.nextRequest
   s.answers[id] = f
+  if not sink.isNil:
+    s.sinks[id] = sink
   f.cancelCallback = proc(arg: pointer) {.gcsafe, raises: [].} =
+    s.sinks.del(id)
     var held: Future[OperationAnswer].Raising([CancelledError])
     if s.answers.pop(id, held):
       s.run(s.engine.cancel(id))
@@ -741,13 +778,32 @@ proc ask(
   f
 
 proc operate*(
-    s: Shell, op: OperationRequest
+    s: Shell, op: OperationRequest, progress: ProgressSink = nil
 ): Future[OperationAnswer].Raising([CancelledError]) =
-  ## [G449] One operation through the engine's slots.
+  ## [G449] One operation through the engine's slots. [G502] With `progress`, each phase
+  ## it reaches goes to it, on this thread, until the answer.
+  let wanted = not progress.isNil
   s.ask(
     proc(e: var Engine, id: uint64): seq[Command] {.gcsafe, raises: [].} =
-      e.submit(id, op)
+      e.submit(id, op, wanted),
+    progress,
   )
+
+func changes*(s: Shell): uint64 =
+  ## [G501] The commits that landed since the shell opened.
+  s.changeCount
+
+func closing*(s: Shell): bool =
+  ## `closeShell` began.
+  s.closed
+
+proc changedSince*(
+    s: Shell, seen: uint64
+): Future[void] {.async: (raises: [CancelledError]).} =
+  ## [G501] Completes once `changes` is past `seen`, or the shell closes. Cancelling it
+  ## leaves nothing behind.
+  while s.changeCount == seen and not s.closed:
+    await s.changed.wait()
 
 proc handoff*(
     s: Shell, identity: PackageIdentity, module: string
@@ -823,6 +879,9 @@ proc closeShell*(s: Shell): Future[void] {.async: (raises: []).} =
   if s.closed:
     return
   s.closed = true
+  # [G501] A watch still waiting ends.
+  s.changed.fire()
+  s.sinks.clear()
   # [G405] The engine names the operations still running; they are answered
   # once the calls have ended.
   var answers = s.engine.stop()

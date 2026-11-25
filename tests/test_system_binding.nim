@@ -681,7 +681,7 @@ when defined(posix):
       releaseAll()
       e.finish()
 
-    test "[TRN-0344] [TRN-0345] [TRN-0329] [RUN-0853] [IMPL-DECISION G492] a system-service session is get_runtime_handoff alone: the operations, the observations and a subscription are NOT_AUTHORISED from the Runtime; no route is made for it":
+    test "[TRN-0344] [TRN-0345] [TRN-0329] [RUN-0853] [PKG-0544] [IMPL-DECISION G492] a system-service session is get_runtime_handoff alone: the operations, the observations and a subscription are NOT_AUTHORISED from the Runtime; no route is made for it":
       let s = setup("scope")
       let e = s.e
       check e.bindingReady()

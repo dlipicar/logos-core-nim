@@ -64,3 +64,13 @@ reason = "No kid is retained, so none can stand in for the key identity: the ins
 [[item]]
 ids = ["PKG-0005", "PKG-0006"]
 reason = "A permission not taken (PM l.31, PKG-0005) and a duty whose condition never arises (PKG-0006). The Package Manager is never co-located or statically linked: by the owner's C1 it is hosted in its own process, the module logos_package_manager realized hosted_dynamic with placement process. The host configuration's mark accepts only such an instance and refuses a direct_static or direct_dynamic entry (runtime/host_config.nim; test [PKG-0003] in tests/test_host.nim), and logosd composes it only that way (compose.nim pmRecord; DECISIONS G491). So no Package Manager code runs in the Runtime's process, and no direct-mode instance of it exists to represent."
+
+# pm-watch-visibility (step 5-6b-2, DECISIONS G498, G501, I144)
+[[item]]
+ids = ["PKG-0547", "PKG-0548", "PKG-0549"]
+reason = "The watch's visibility decision is data, not a callback: the protected input's reader list and the Runtime it names (G498), fixed for the realization and read through `readerOf` in src/logos_core/pm/facade.nim from the invocation's Runtime-authenticated caller, at admission and again before each hint (G501). No synchronous authorization callback exists to retain (PKG-0547). When the caller can no longer be read (the invocation ended) or is no longer a reader, the check fails and the watch ends MODULE_ERROR with no hint published, and the operator's log names the caller (PKG-0548); no test can take the context away while a watch waits, since the readers do not change while the instance runs. The reader list is the protected adapter PKG-0549 permits, and the contract gains no permission operation (PKG-0549)."
+
+# pm-watch-ends-within-limits (step 5-6b-2, DECISIONS G501, G338, I144)
+[[item]]
+ids = ["PKG-0560"]
+reason = "An admitted watch never has to end for its limits (PM l.1772): it holds at most one hint in flight and folds every later change into one more (`observe` in src/logos_core/pm/facade.nim), so nothing it retains grows past its bound; the bounds on watches themselves are applied at admission (4 per caller, 16 in all, tested under [PKG-0558] in tests/test_pm_queries.nim). It ends only through ordinary completion ({} when a hint is not delivered or the Package Manager stops) or invocation failure (CANCELLED when the Runtime cancels it), and a hint already handed to the kit is answered before the call completes (G338: a job completes only after every publication of its invocation was answered), so no committed delivery obligation is discarded."

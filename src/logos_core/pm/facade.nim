@@ -27,6 +27,17 @@
 ##   on the read-only worker (G500, ruling A). Anyone else is refused.
 ## - **The lists** (`list_packages`, `list_installed_packages`; G499, G500) are served to
 ##   readers; their pages' bytes pass through as the engine framed them.
+## - **`watch_installed_packages`** (5-6b-2; G501) is a reader's, at most `WatchesPerOrigin`
+##   per caller and `WatchesAggregate` in all. It waits for a landed commit, then publishes
+##   one `installed_packages_changed` (`{}`) through its own invocation's scope, never
+##   broadcast; changes while a hint is in flight make one more. It ends CANCELLED when the
+##   Runtime cancels it (the caller's cancel, a lost connection, a deadline: the provider
+##   sees none of these but the cancel), at once, whether it waits or publishes; with `{}`
+##   when a hint is not delivered or the Package Manager stops. Ending touches no operation.
+## - **Progress** (5-6b-2; G502): an operation with a `progress_key` from a reader publishes
+##   `operation_progress` with the key echoed through its invocation's scope, one in flight,
+##   the latest report replacing a pending one, none after its answer. A non-reader's key
+##   publishes nothing.
 ## - **Refusals** are MODULE_ERROR with no message or detail: a provider cannot answer
 ##   NOT_AUTHORISED (INTERFACE l.3308-3311; G495, Q6 (b)). The operator's log gets one
 ##   line naming the caller, the method and why: not a reader, or the bound it met
@@ -37,6 +48,7 @@
 {.push raises: [], gcsafe.}
 {.used.}
 
+import std/tables
 import results
 import logos_sdk/cbor
 from logos_sdk/base/logtext import oneLine
@@ -45,11 +57,28 @@ import ./[logos_package_manager_kit, requests, shell]
 
 export logos_package_manager_kit
 
-type PackageManager* = ref object
-  shell: Shell
-  log: ShellLog
-  readers: seq[string] ## [G498] the protected input's
-  runtime: string ## [G498] the Runtime readers' calls come from
+const
+  WatchesPerOrigin* = 4 ## [IMPL; G501] watches one caller holds at once
+  WatchesAggregate* = 16 ## [IMPL; G501] watches in all
+
+type
+  PackageManager* = ref object
+    shell: Shell
+    log: ShellLog
+    readers: seq[string] ## [G498] the protected input's
+    runtime: string ## [G498] the Runtime readers' calls come from
+    watches: Table[string, int] ## [G501] by origin (`keyOf`)
+    watching: int ## [G501] in all
+
+  Progress = ref object
+    ## [G502] One operation's progress publications: one in flight, the latest report
+    ## replacing a pending one; none once the operation was answered or a publication
+    ## failed.
+    inv: Invocation
+    key: string
+    inflight: bool
+    pending: Opt[ProgressReport]
+    ended: bool
 
 when defined(lcnTestHooks):
   import std/os
@@ -123,6 +152,9 @@ proc readerOf(m: PackageManager, inv: Invocation): Opt[Origin] =
     return Opt.none(Origin)
   Opt.some(Origin(runtime: k.runtimeInstance, instance: k.moduleInstance.get))
 
+func keyOf(o: Origin): string =
+  o.runtime & "\0" & o.instance
+
 proc refuse(m: PackageManager, inv: Invocation, meth, why: string): InvocationFailure =
   ## [G495] One operator log line naming the caller, the method and why; the caller
   ## gets MODULE_ERROR with nothing more.
@@ -141,15 +173,88 @@ proc queried(
     return err(m.refuse(inv, meth, a.reason))
   answered(a)
 
+# Progress (G502) -------------------------------------------------------------------------
+
+func phaseOf(p: ProgressPhase): LogosNSPackageManagerProgressPhase =
+  type K = LogosNSPackageManagerProgressPhaseKind
+  case p
+  of ppResolving:
+    LogosNSPackageManagerProgressPhase(kind: K.Resolving)
+  of ppFetching:
+    LogosNSPackageManagerProgressPhase(kind: K.Fetching)
+  of ppVerifying:
+    LogosNSPackageManagerProgressPhase(kind: K.Verifying)
+  of ppInstalling:
+    LogosNSPackageManagerProgressPhase(kind: K.Installing)
+  of ppRemoving:
+    LogosNSPackageManagerProgressPhase(kind: K.Removing)
+
+proc publishing(
+    m: PackageManager, p: Progress, first: ProgressReport
+) {.async: (raises: []).} =
+  ## [G502; PKG-0565, PKG-0567, PKG-0571, PKG-0572] Each report through the operation's
+  ## own scope, the key echoed, the caller a reader at each publication; a failure ends
+  ## the operation's progress.
+  var r = first
+  while true:
+    if m.readerOf(p.inv).isNone:
+      p.ended = true
+      break
+    let sent = await p.inv.publishScoped(
+      LogosNSPackageManagerOperationProgressEvent(
+        bytes_completed: r.completed,
+        bytes_total: r.total,
+        phase: phaseOf(r.phase),
+        progress_key: p.key,
+      )
+    )
+    if sent.isErr:
+      p.ended = true
+      break
+    if p.ended or p.pending.isNone:
+      break
+    r = p.pending.get
+    p.pending = Opt.none(ProgressReport)
+  p.inflight = false
+
+proc sinkOf(m: PackageManager, p: Progress): ProgressSink =
+  proc(r: ProgressReport) {.gcsafe, raises: [].} =
+    if p.ended:
+      return
+    if p.inflight:
+      p.pending = Opt.some(r)
+      return
+    p.inflight = true
+    asyncSpawn m.publishing(p, r)
+
 proc operate(
-    m: PackageManager, meth: string, op: OperationRequest
+    m: PackageManager,
+    meth: string,
+    op: OperationRequest,
+    inv: Invocation = nil,
+    progressKey = Opt.none(string),
 ): Future[Result[PreEncoded, InvocationFailure]] {.async: (raises: []).} =
+  ## [G449] One operation through the shell. [G502; Q12 (a)] With a `progress_key` from a
+  ## reader, its progress is published until the answer.
+  var p: Progress = nil
+  if progressKey.isSome and not inv.isNil and m.readerOf(inv).isSome:
+    p = Progress(inv: inv, key: progressKey.get)
   let a =
     try:
-      await m.shell.operate(op)
+      await m.shell.operate(
+        op,
+        if p.isNil:
+          nil
+        else:
+          m.sinkOf(p),
+      )
     except CancelledError:
+      if not p.isNil:
+        p.ended = true
       m.log("package-manager: " & meth & " cancelled by the Runtime")
       return err(cancelled())
+  if not p.isNil:
+    p.ended = true
   answered(a)
 
 # The kit's hooks --------------------------------------------------------------------------
@@ -184,26 +289,26 @@ proc `install_package`*(
     request: LogosNSPackageManagerInstallPackageRequest,
     inv: Invocation,
 ): Future[Result[PreEncoded, InvocationFailure]] {.async: (raises: []).} =
-  ## [SPEC PM §15] `install_package`; its `progress_key` publishes nothing in 5-6a.
+  ## [SPEC PM §15] `install_package`; [G502] a reader's `progress_key` has its progress.
   let op = ?installOp(request)
-  await m.operate("install_package", op)
+  await m.operate("install_package", op, inv, request.progress_key)
 
 proc `remove_package`*(
     m: PackageManager,
     request: LogosNSPackageManagerRemovePackageRequest,
     inv: Invocation,
 ): Future[Result[PreEncoded, InvocationFailure]] {.async: (raises: []).} =
-  ## [SPEC PM §15] `remove_package`.
-  await m.operate("remove_package", removeOp(request))
+  ## [SPEC PM §15] `remove_package`; [G502] a reader's `progress_key` has its progress.
+  await m.operate("remove_package", removeOp(request), inv, request.progress_key)
 
 proc `update_package`*(
     m: PackageManager,
     request: LogosNSPackageManagerUpdatePackageRequest,
     inv: Invocation,
 ): Future[Result[PreEncoded, InvocationFailure]] {.async: (raises: []).} =
-  ## [SPEC PM §15] `update_package`.
+  ## [SPEC PM §15] `update_package`; [G502] a reader's `progress_key` has its progress.
   let op = ?updateOp(request)
-  await m.operate("update_package", op)
+  await m.operate("update_package", op, inv, request.progress_key)
 
 proc `get_runtime_handoff`*(
     m: PackageManager,
@@ -269,6 +374,48 @@ proc `list_installed_packages`*(
       return err(cancelled())
   m.queried(inv, "list_installed_packages", a)
 
+func watchEnded(): LogosNSPackageManagerWatchInstalledPackagesResponse =
+  LogosNSPackageManagerWatchInstalledPackagesResponse(
+    kind: LogosNSPackageManagerWatchInstalledPackagesResponseKind.Map
+  )
+
+proc observe(
+    m: PackageManager, inv: Invocation
+): Future[
+    Result[LogosNSPackageManagerWatchInstalledPackagesResponse, InvocationFailure]
+] {.async: (raises: []).} =
+  ## [G501; PKG-0545..0562] The watch's loop. Its cancellation is seen while it waits and
+  ## while a hint is in flight (`race`: the hint is not cancelled, the kit answers it).
+  const meth = "watch_installed_packages"
+  var seen = m.shell.changes
+  while true:
+    try:
+      await m.shell.changedSince(seen)
+    except CancelledError:
+      m.log("package-manager: " & meth & " cancelled by the Runtime")
+      return err(cancelled())
+    if m.shell.closing:
+      return ok(watchEnded())
+    seen = m.shell.changes
+    # [PKG-0550] At publication admission the caller is still a reader; then every
+    # committed change is observable to it (PKG-0530), a removal included.
+    if m.readerOf(inv).isNone:
+      return err(m.refuse(inv, meth, "not a reader"))
+    let hint = inv.publishScoped(LogosNSPackageManagerInstalledPackagesChangedEvent())
+    try:
+      discard await race(FutureBase(hint))
+    except CancelledError:
+      m.log("package-manager: " & meth & " cancelled by the Runtime")
+      return err(cancelled())
+    let sent = await hint
+    if sent.isErr:
+      m.log(
+        "package-manager: " & meth & " for " & oneLine(describe(inv.caller())) &
+          " ended: a hint was not delivered: " & $sent.error.code & " " &
+          oneLine(sent.error.message.get(""))
+      )
+      return ok(watchEnded())
+
 proc `watch_installed_packages`*(
     m: PackageManager,
     request: LogosNSPackageManagerWatchInstalledPackagesRequest,
@@ -276,7 +423,43 @@ proc `watch_installed_packages`*(
 ): Future[
     Result[LogosNSPackageManagerWatchInstalledPackagesResponse, InvocationFailure]
 ] {.async: (raises: []).} =
-  ## [G495] Refused in 5-6a: 5-6b serves readers (C4, PKG-0544).
-  err(m.refuse(inv, "watch_installed_packages", "not a reader"))
+  ## [SPEC PM §15.1; G501] A reader's watch: one hint per landed commit, coalesced while
+  ## one is in flight, through this invocation's scope, until the Runtime cancels it, a
+  ## hint is not delivered or the Package Manager stops.
+  const meth = "watch_installed_packages"
+  let o = m.readerOf(inv).valueOr:
+    return err(m.refuse(inv, meth, "not a reader"))
+  let k = keyOf(o)
+  let mine = m.watches.getOrDefault(k)
+  if mine >= WatchesPerOrigin:
+    return err(
+      m.refuse(
+        inv,
+        meth,
+        "at the watch bound: " & $WatchesPerOrigin & " in flight for this caller",
+      )
+    )
+  if m.watching >= WatchesAggregate:
+    return err(
+      m.refuse(
+        inv, meth, "at the watch bound: " & $WatchesAggregate & " in flight in all"
+      )
+    )
+  m.watches[k] = mine + 1
+  inc m.watching
+  # A watch is long-lived: the operator's log shows each, and what it holds of the bounds.
+  m.log(
+    "package-manager: " & meth & " admitted for " & oneLine(describe(inv.caller())) &
+      ": " & $(mine + 1) & " of " & $WatchesPerOrigin & " for this caller, " &
+      $m.watching & " of " & $WatchesAggregate & " in all"
+  )
+  let ended = await m.observe(inv)
+  dec m.watching
+  let left = m.watches.getOrDefault(k) - 1
+  if left > 0:
+    m.watches[k] = left
+  else:
+    m.watches.del(k)
+  ended
 
 exportLogosPackageManager(PackageManager)

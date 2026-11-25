@@ -827,6 +827,34 @@ The Package Manager's readers, cursors and lists (DECISIONS I143; G498, G499, G5
   - **PKG-0558** waits for 5-6b-2's watch bounds (its page-job half is built); **PKG-0559** stays not met (G504).
   - **Windows** hosts no Package Manager until 5-9, and **mobile** none, as in 5-6a-1.
 
+### What Tier 5 step 5-6b-2 changes
+
+The Package Manager's watch and progress (DECISIONS I144; G501, G502, G504; the owner's Q11 and Q12 (a); ruling 4;
+`docs/PACKAGE-MANAGER.md` §15, `docs/HOST-CONFIG.md`).
+
+- **Claimed:** PKG-0520 and PKG-0522 to PKG-0524 (the events and the watch's response), PKG-0544 to PKG-0553,
+  PKG-0556 to PKG-0558 and PKG-0560 to PKG-0562 (the watch: ordinary routes only, scoped hints and their
+  admission, coalescing, no revision, its end, its bounds, the cancel seen independently), PKG-0564 to PKG-0572
+  (progress: only with a key, scoped, the key echoed, measured counters within their totals, nothing implied,
+  authorized at publication), and App A's copies PKG-0632 and PKG-0634 to PKG-0636. PKG-0547 to PKG-0549 and PKG-0560
+  are claimed by inspection. TXT-0497 and TXT-0498 leave the re-pin's list with PKG-0568. 33 units.
+- **Limits of the claim:**
+  - **Readers only** (Q12 (a), G498): a caller that is not a reader is refused the watch and gets no progress.
+  - **The call workers** (G501): each watch, operation and page call holds one of the Runtime's call workers while it
+    runs, so the Package Manager can hold 58 of the 128 at once, a stated limit with no lane of its own
+    (HOST-CONFIG, Runtime limits). Freeing a hosted call's worker is a core item held by the pause.
+  - **`installing` carries no counters** (G502): extraction is one worker job and measures nothing before its end.
+  - **A deadline is never seen by the provider:** a watch it ends ends `CANCELLED`, like any cancel.
+  - **PKG-0554, PKG-0555 and PKG-0573** are the consumer's duties, `lcn_call`'s in 5-6b-3.
+  - **PKG-0559 is not met** (G504; the owner's Q11, "Record as not met"). A handoff can wait behind replies a
+    consumer does not read: `commit` waits on the module thread while the Module Host's 64 MiB output budget is full
+    (four maximal replies, or sixty-four of 1 MiB, from any caller, operation and inspect replies included), until
+    the stalled consumer is closed at `write_stall_timeout_ms` (30 s by default); each reply's check and copies run
+    on the module thread too (G497). What it waits for is the held large-reply core item: piece (b), the commit's
+    wait and the response check off the module thread, and the system session's room in both output pools, the
+    submitted bytes and the committed output. Built meanwhile: the page byte budget, the binding's own worker and the
+    bound on ordinary handoffs.
+
 ## Properties not claimed
 
 - A complete Logos module system (BCP §5.1; owner decision 10 (a), K18; DECISIONS G310, I97): there

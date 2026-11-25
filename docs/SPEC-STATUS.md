@@ -87,7 +87,7 @@ The 308 PKG units by step (`PKG-` omitted):
 | 5-6a-1 | A1 | 20 | 0003-0008, 0366, 0367, 0369-0377, 0379, 0519, 0521 |
 | 5-6a-1 | A2 | 2 | 0513, 0514 |
 | 5-6a-2 | A1 | 2 | 0380, 0388 (built, I141; with App A's copy 0650) |
-| 5-6b | A1 | 55 | 0368, 0378, 0381, 0383-0387, 0520, 0522-0533, 0538-0542, 0544-0562, 0564-0573 (5-6b-1 built 22, I143: 0368, 0378, 0381, 0383-0387, 0525-0533, 0538-0542; with App A's copies 0638 and 0648) |
+| 5-6b | A1 | 55 | 0368, 0378, 0381, 0383-0387, 0520, 0522-0533, 0538-0542, 0544-0562, 0564-0573 (5-6b-1 built 22, I143: 0368, 0378, 0381, 0383-0387, 0525-0533, 0538-0542; with App A's copies 0638 and 0648. 5-6b-2 built 29, I144: 0520, 0522-0524, 0544-0553, 0556-0558, 0560-0562, 0564-0572, four by inspection; with App A's copies 0632, 0634-0636. 0554, 0555 and 0573 are 5-6b-3's; 0559 is not met, G504) |
 | 5-7a | A4 | 1 | 0435 |
 | 5-8 | B | 19 | 0060, 0287, 0289, 0335, 0337-0345, 0347-0351, 0512 (and TXT-0545, riding on 0351: G391) |
 | 5-8 | A2 | 1 | 0354 |
@@ -869,6 +869,24 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
   Claimed: PKG-0368, PKG-0378, PKG-0381, PKG-0383 to PKG-0387, PKG-0525 to PKG-0533 and PKG-0538 to PKG-0542, and
   App A's copies PKG-0638 and PKG-0648, which leave the re-pin's deferred list (24 units). PKG-0558 waits for
   5-6b-2's watch bounds; PKG-0559 stays not met.
+
+- 2026-11-24, Tier 5 step 5-6b-2 (I144; G501, G502, G504; the owner's Q11 and Q12 (a); ruling 4), the Package
+  Manager's watch and progress:
+  - The watch: a reader's, one `installed_packages_changed` through its own call per landed commit, coalesced while
+    one is in flight; 4 per caller and 16 in all, each admission and refusal logged; the Runtime's cancel (the
+    caller's, a lost session, a deadline) ends it at once, and ending touches no operation (G501).
+  - Progress: a reader's operation with a `progress_key` publishes `operation_progress` through its own call, the key
+    echoed; the engine's phases with measured counters (fetching, verifying), none for resolving, installing and
+    removing (G502).
+  - The Package Manager can hold 58 of the Runtime's 128 call workers, a stated limit (HOST-CONFIG; G501).
+  - PKG-0559 is recorded as not met until the held large-reply core item (G504).
+  - Cases in `test_pm_install`, `test_pm_queries`, `test_system_binding`; `test_logosd_pm` lists through `lcn_call`,
+    the default reader.
+
+  Claimed: PKG-0520, PKG-0522 to PKG-0524, PKG-0544 to PKG-0553, PKG-0556 to PKG-0558, PKG-0560 to PKG-0562 and
+  PKG-0564 to PKG-0572 (PKG-0547 to PKG-0549 and PKG-0560 by inspection), and App A's copies PKG-0632 and PKG-0634 to
+  PKG-0636, which leave the re-pin's deferred list with TXT-0497 and TXT-0498 (33 units). PKG-0554, PKG-0555 and
+  PKG-0573, the consumer's, wait for 5-6b-3; PKG-0559 is not met.
 
 ## Tiers at f4f83471 (the original plan)
 

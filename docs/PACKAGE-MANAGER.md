@@ -12,7 +12,8 @@ installation: 5-5-1 the installed records, the responses, the handoff's construc
 bound (§8, §12, §13); 5-5-2 the store's root and extraction (§8, §9); 5-5-3 the worker and the spool
 (§10); the operations (§11) follow. Step 5-6a-1 makes it the module `logos_package_manager`, which
 logosd composes as the reserved instance `package_manager` (§14); 5-6a-2 binds it as the Runtime's
-system service, which `get_runtime_handoff` serves; 5-6b-1 serves the readers and the two lists (§15).
+system service, which `get_runtime_handoff` serves; 5-6b-1 serves the readers and the two lists, and
+5-6b-2 the watch and progress (§15).
 
 ## 1. Placement and the data path
 
@@ -583,7 +584,7 @@ Step 5-6a-1 (DECISIONS G490, G491, G494, G495, G500; the owner's Q2, Q7 (b), Q11
   `list_installed_packages`, `watch_installed_packages`) are for readers (Q7 (b); §15). Anyone else
   is answered `MODULE_ERROR` with no message or detail, the only refusal a provider may answer
   (INTERFACE l.3308-3311); the operator's log has "package-manager: <method> refused for <caller>:
-  not a reader" (G495, G498). `watch_installed_packages` is refused for everyone until 5-6b-2.
+  not a reader" (G495, G498).
 - **The Runtime's binding** (G492, G493; TRANSPORT §8.1.2). The instance's Module Host serves a second
   listener, the system-service endpoint (fd 6, in a private directory of its own), from the primary
   contract alone. It accepts only a Hello with a system-service ticket the Runtime issued for this
@@ -599,9 +600,10 @@ Step 5-6a-1 (DECISIONS G490, G491, G494, G495, G500; the owner's Q2, Q7 (b), Q11
 - **`list_packages`** (G500; `pm/listing.nim`): the `lgx` entries of the catalog in use, in its
   canonical order, optionally one package's (§15).
 
-## 15. Readers and the lists
+## 15. Readers, the lists, the watch and progress
 
-Step 5-6b-1 (DECISIONS G498, G499, G500, I143; C4; the owner's Q7 (b)).
+Step 5-6b-1 (DECISIONS G498, G499, G500, I143; C4; the owner's Q7 (b)) and step 5-6b-2 (G501, G502,
+G504, I144; the owner's Q11 and Q12 (a)).
 
 - **Readers** (G498; PM l.1636-1648). The protected input names them (§2): in logosd,
   `package_manager.readers` ([DAEMON.md](DAEMON.md) §3), else `lcn_call` when logosd composes it, else
@@ -645,3 +647,31 @@ catalog listing's cursor ends by age. A continuation is answered when its origin
   page budget does not apply to it.
 - **What `MODULE_ERROR` from a query means.** Not a reader, a bound, or a fault reading the installed
   state; the Package Manager's log line says which.
+- **`watch_installed_packages`** (G501; l.1736-1774) is a reader's. Each commit that lands, a removal
+  included, is one `installed_packages_changed` (`{}`) through the watch's own call, never broadcast;
+  changes while one is being delivered make one more. An install or remove that changes nothing
+  commits nothing and gives none. The event carries nothing: re-query `list_installed_packages`, and
+  watch again after a watch ends. The Runtime's cancel ends a watch at once, `CANCELLED`: the caller's
+  cancel, the loss of its session, or a deadline it set. A hint the Runtime does not deliver, or the
+  Package Manager's stop, ends it `{}`. Ending a watch touches no operation. Each watch admitted has a
+  log line, "package-manager: watch_installed_packages admitted for <caller>: 1 of 4 for this caller,
+  1 of 16 in all"; past 4 per caller or 16 in all the call is `MODULE_ERROR` with no detail, and the log
+  names the bound ("at the watch bound: 4 in flight for this caller", "… 16 in flight in all").
+- **The call workers it holds** (G501). A hosted call holds one of the Runtime's call workers while it
+  runs, so the Package Manager can hold up to 58 of the 128 at once (16 watches, 34 operations, 8 page
+  calls), leaving 70 for other modules ([HOST-CONFIG.md](HOST-CONFIG.md), Runtime limits). The
+  Runtime's own binding has a worker of its own.
+- **Progress** (G502; l.1776-1798). `install_package`, `remove_package` and `update_package` with a
+  `progress_key` from a reader publish `operation_progress` through the operation's own call, the key
+  echoed; without a key, or for a caller that is not a reader, nothing. The phases: `resolving` when
+  resolution starts; `fetching` as an archive is read, with the bytes read of its size; `verifying` as
+  an archive's inspection pass starts (0 of its size) and ends (all of it), none when the verification
+  cache already knows it; `installing` as each package is staged, with no counters; `removing` at a
+  remove's commit. Phases recur per package and have no order. One event is in flight per operation,
+  the latest report replacing one waiting; none follows the operation's answer. Progress is advisory:
+  the answer is authoritative, and a cancel or a lost session is not a rollback.
+- **PKG-0559 is not met** (G504). A handoff can still wait behind replies a consumer does not read:
+  the module thread's commit waits while the Module Host's 64 MiB output budget is full, until the
+  stalled consumer is closed at `write_stall_timeout_ms` (30 s by default). The page budget, the
+  binding's own worker and the bound on ordinary handoffs are built; the rest is the held large-reply
+  core item ([CONFORMANCE.md](CONFORMANCE.md)).

@@ -291,22 +291,22 @@ when defined(posix):
     ]
     document = catalogBytes(catalogEntries)
 
-  proc pmInputBytes(): seq[byte] =
-    ## [G498] The protected input `logosd` would compose with `readers = ["c", "d"]`.
+  proc pmInputBytes(readers: seq[string]): seq[byte] =
+    ## [G498] The protected input `logosd` would compose with `readers`.
     var v = pmValue(
       trust,
       document,
       bindings = [("main", "hf")],
       catalogLocator = "fetch-fake/state/catalog",
     )
-    v.readers = Opt.some(@["c", "d"])
+    v.readers = Opt.some(readers)
     v.runtime_instance_id = Opt.some(RuntimeId)
     v.encode.tryGet
 
-  proc hosted(env: openArray[string] = []): EngineConfig =
+  proc hosted(env: openArray[string] = [], readers = @["c", "d"]): EngineConfig =
     ## `config` with the Runtime id, a state root, the Module Host program and the
     ## environment names `env` passed to it, a short endpoint directory and the Package
-    ## Manager's protected input; `pm` is the marked instance (G490).
+    ## Manager's protected input naming `readers`; `pm` is the marked instance (G490).
     result = config()
     result.runtimeInstanceId = RuntimeId
     result.stateRoot = Opt.some(result.workDir / "state")
@@ -319,7 +319,7 @@ when defined(posix):
     t.writeStallTimeout = 10_000 * Ms * Slow
     result.transport = Opt.some(t)
     result.shutdownGrace = initDuration(seconds = 10 * Slow)
-    result.protectedInputs = @[("pm", pmInputBytes())]
+    result.protectedInputs = @[("pm", pmInputBytes(readers))]
     result.packageManager = Opt.some("pm")
 
   proc stateDir(cfg: EngineConfig, state: string): string =
@@ -607,14 +607,17 @@ when defined(posix):
       releaseAll()
       leftover()
 
-    test "[PKG-0525] [PKG-0527] [PKG-0529] [PKG-0530] [PKG-0531] [PKG-0532] [PKG-0386] [IMPL-DECISION G498] [IMPL-DECISION G495] a caller the protected input does not name as a reader: list_packages, list_installed_packages and get_runtime_handoff end MODULE_ERROR with no message and no detail, one operator line each naming the caller; the readers are answered":
+    test "[PKG-0525] [PKG-0527] [PKG-0529] [PKG-0530] [PKG-0531] [PKG-0532] [PKG-0386] [IMPL-DECISION G498] [IMPL-DECISION G495] [IMPL-DECISION G501] a caller the protected input does not name as a reader: list_packages, list_installed_packages, get_runtime_handoff and watch_installed_packages end MODULE_ERROR with no message and no detail, one operator line each naming the caller; the readers are answered":
       let s = setup(hosted(), "nonreader")
       let handoff = cborMap(
         (cbor("module"), cbor("alpha_module")),
         (cbor("package"), rootRequest("logos.example", "1.0.0")),
       )
-      let methods = ["list_packages", "list_installed_packages", "get_runtime_handoff"]
-      let requests = [cborMap(), cborMap(), handoff]
+      let methods = [
+        "list_packages", "list_installed_packages", "get_runtime_handoff",
+        "watch_installed_packages",
+      ]
+      let requests = [cborMap(), cborMap(), handoff, cborMap()]
       for i, meth in methods:
         checkpoint meth
         let r = pmX.call(meth, requests[i])
@@ -624,7 +627,7 @@ when defined(posix):
         check r.response.len == 0
       check waitUntil(
         proc(): bool =
-          s.log.linesWith("refused for").len == 3
+          s.log.linesWith("refused for").len == 4
       )
       for meth in methods:
         let lines = s.log.linesWith(
@@ -820,5 +823,275 @@ when defined(posix):
         "package-manager: list_installed_packages refused for module instance c of Runtime " &
           RuntimeId & ": at the page-job bound: 2 in flight for this caller"
       ).len == 1
+      releaseAll()
+      s.e.finish()
+
+  # The watch and progress (5-6b-2; G501, G502) ---------------------------------------------
+
+  const
+    InstalledEvent = "logos.package_manager.installed_packages_changed_event"
+    ProgressEvent = "logos.package_manager.operation_progress_event"
+    Phases = ["resolving", "fetching", "verifying", "installing", "removing"]
+
+  proc subscribed(o: Owner, conn: ConnId, event: string): bool =
+    ## `event` subscribed to on `conn`, and the subscription answered with success.
+    inc nextTag
+    let id = nextTag
+    o.subscribe(conn, id, event)
+    let ev = o.seen(
+      proc(ev: IoEvent): bool =
+        ev.conn == conn and ev.kind == evSubscription and ev.subscriptionId == id
+    )
+    ev.isSome and ev.get.subscriptionFailure.isNone
+
+  proc heard(o: Owner, conn: ConnId, event: string): seq[CborValue] =
+    ## The `event`s delivered on `conn` so far, decoded.
+    discard o.pump(0)
+    for ev in o.log:
+      if ev.kind == evEvent and ev.conn == conn and ev.eventName == event:
+        result.add(decodeCbor(ev.eventData).get(cbor("not one CBOR value")))
+
+  proc ended(o: Owner, conn: ConnId, tag: uint64, code: ErrorCode): bool =
+    ## The call `tag` on `conn` ended with the invocation error `code`.
+    let r = o.outcome(conn, tag)
+    checkpoint "the call's outcome: " & (
+      if r.isNone: "none"
+      elif r.get.ok: "ok"
+      else: $r.get.failure.code & " " & r.get.failure.message.get("")
+    )
+    r.isSome and not r.get.ok and r.get.failure.code == code
+
+  proc admitted(log, instance: string, mine, all: int, count = 1): bool =
+    ## The operator's log has `count` lines admitting a watch of `instance` as its `mine`th
+    ## and the `all`th in all.
+    log.linesWith(
+      "package-manager: watch_installed_packages admitted for module instance " &
+        instance & " of Runtime " & RuntimeId & ": " & $mine & " of 4 for this caller, " &
+        $all & " of 16 in all"
+    ).len == count
+
+  suite "the Package Manager's watch and progress, hosted (G501, G502)":
+    teardown:
+      releaseAll()
+      leftover()
+
+    test "[PKG-0545] [PKG-0546] [PKG-0550] [PKG-0551] [PKG-0552] [PKG-0553] [PKG-0556] [PKG-0557] [PKG-0562] [PKG-0522] [PKG-0523] [PKG-0634] [PKG-0635] [IMPL-DECISION G501] a reader's watch: each landed change is one installed_packages_changed {} through the watch's own invocation, coalesced while one is in flight, heard on no other session, none for a no-op, one for a removal; the Runtime's cancel ends it CANCELLED and touches no operation; so does the loss of its session":
+      let s = setup(hosted(), "watch")
+      let o = newOwner(fastConfig())
+      o.autoRelease = true
+      defer:
+        o.stop()
+      let conn = o.session(s.rc.directOf())
+      let other = o.session(s.rcD.directOf())
+      check o.subscribed(conn, InstalledEvent)
+      check o.subscribed(other, InstalledEvent)
+      let watch = o.send(conn, "watch_installed_packages", cborMap())
+      check waitUntil(
+        proc(): bool =
+          s.log.admitted("c", 1, 1),
+        Answer,
+      )
+      # Two commits, `lib` then `app`: one hint, or two when the second landed after the
+      # first hint was delivered.
+      check installRecord("app", "1.0.0").idOf == "app@1.0.0"
+      check waitUntil(
+        proc(): bool =
+          o.heard(conn, InstalledEvent).len >= 1,
+        Answer,
+      )
+      o.settle(500 * Slow)
+      let hints = o.heard(conn, InstalledEvent)
+      check hints.len in 1 .. 2
+      check hints.allIt(it == cborMap())
+      check o.heard(other, InstalledEvent).len == 0
+      check o.outcome(conn, watch, 0).isNone
+      # The same install again commits nothing: no hint.
+      check installRecord("app", "1.0.0").idOf == "app@1.0.0"
+      o.settle(500 * Slow)
+      check o.heard(conn, InstalledEvent).len == hints.len
+      # A removal is one more.
+      check pm.call(
+        "remove_package", cborMap((cbor("identity"), rootRequest("app", "1.0.0")))
+      ).valueOf.codeOf == ""
+      check waitUntil(
+        proc(): bool =
+          o.heard(conn, InstalledEvent).len == hints.len + 1,
+        Answer,
+      )
+      o.cancel(conn, watch)
+      check o.ended(conn, watch, ecCancelled)
+      check waitUntil(
+        proc(): bool =
+          s.log.linesWith("watch_installed_packages cancelled by the Runtime").len == 1,
+        Answer,
+      )
+      check o.heard(other, InstalledEvent).len == 0
+      # The Package Manager goes on: `lib` is still installed.
+      let left = pm.pageOf("list_installed_packages").packagesOf.mapIt(it.idOf)
+      check left.len == 1 and left.allIt(it.startsWith("lib@"))
+      # [PKG-0556] Destination loss: the watch of a session that ends stops.
+      let gone = o.session(s.rc.directOf())
+      discard o.send(gone, "watch_installed_packages", cborMap())
+      check waitUntil(
+        proc(): bool =
+          s.log.admitted("c", 1, 1, count = 2),
+        Answer,
+      )
+      # The consumer closes its connection (a caller's session has no termination of
+      # its own, TRANSPORT §8.1): the Runtime cancels its served invocations.
+      o.send(IoCommand(conn: gone, kind: cmdClose))
+      check waitUntil(
+        proc(): bool =
+          s.log.linesWith("watch_installed_packages cancelled by the Runtime").len == 2,
+        Answer,
+      )
+      releaseAll()
+      s.e.finish()
+
+    test "[PKG-0558] [PKG-0561] [IMPL-DECISION G501] watches: past 4 for one reader, and past 16 in all, the call is MODULE_ERROR with no message and one operator line naming the bound; equivalent watches on one session each hint once for one change; a watch that ends gives its place back":
+      let s = setup(hosted(readers = @["c", "d", "e", "f", "g"]), "watches")
+      let o = newOwner(fastConfig())
+      o.autoRelease = true
+      defer:
+        o.stop()
+      var conns = @[o.session(s.rc.directOf()), o.session(s.rcD.directOf())]
+      for name in ["e", "f", "g"]:
+        conns.add(o.session(s.e.startClient(name)[1].directOf()))
+      var watches: seq[seq[uint64]]
+      for i in 0 .. 3:
+        var tags: seq[uint64]
+        for k in 1 .. 4:
+          tags.add(o.send(conns[i], "watch_installed_packages", cborMap()))
+        watches.add(tags)
+      check waitUntil(
+        proc(): bool =
+          s.log.linesWith("watch_installed_packages admitted for").len == 16,
+        Answer,
+      )
+      check s.log
+        .linesWith(" of 16 in all")
+        .filterIt(it.endsWith(" 16 of 16 in all")).len == 1
+      # [PKG-0561] One landed change: one hint from each of a session's four watches.
+      for c in conns[0 .. 3]:
+        check o.subscribed(c, InstalledEvent)
+      check installRecord("logos.example", "1.0.0").idOf == "logos.example@1.0.0"
+      check waitUntil(
+        proc(): bool =
+          conns[0 .. 3].allIt(o.heard(it, InstalledEvent).len == 4),
+        Answer,
+      )
+      o.settle(300 * Slow)
+      check conns[0 .. 3].allIt(o.heard(it, InstalledEvent).len == 4)
+      let fifth = o.send(conns[0], "watch_installed_packages", cborMap())
+      check o.ended(conns[0], fifth, ecModule)
+      let g = o.send(conns[4], "watch_installed_packages", cborMap())
+      check o.ended(conns[4], g, ecModule)
+      for (c, tag) in [(conns[0], fifth), (conns[4], g)]:
+        let r = o.outcome(c, tag, 0)
+        if r.isSome:
+          check r.get.failure.message.get("") == ""
+      check s.log.linesWith(
+        "package-manager: watch_installed_packages refused for module instance c of Runtime " &
+          RuntimeId & ": at the watch bound: 4 in flight for this caller"
+      ).len == 1
+      check s.log.linesWith(
+        "package-manager: watch_installed_packages refused for module instance g of Runtime " &
+          RuntimeId & ": at the watch bound: 16 in flight in all"
+      ).len == 1
+      # One of `c`'s ends: `g` is admitted in its place.
+      o.cancel(conns[0], watches[0][0])
+      check o.ended(conns[0], watches[0][0], ecCancelled)
+      # The caller has its CANCELLED from the Runtime first; the place is given back
+      # once the Package Manager's watch has seen the cancel.
+      check waitUntil(
+        proc(): bool =
+          s.log.linesWith("watch_installed_packages cancelled by the Runtime").len == 1,
+        Answer,
+      )
+      let again = o.send(conns[4], "watch_installed_packages", cborMap())
+      check waitUntil(
+        proc(): bool =
+          s.log.admitted("g", 1, 16),
+        Answer,
+      )
+      o.cancel(conns[4], again)
+      check o.ended(conns[4], again, ecCancelled)
+      for i in 0 .. 3:
+        for tag in watches[i]:
+          if i == 0 and tag == watches[0][0]:
+            continue
+          o.cancel(conns[i], tag)
+          check o.ended(conns[i], tag, ecCancelled)
+      releaseAll()
+      s.e.finish()
+
+    test "[PKG-0564] [PKG-0565] [PKG-0566] [PKG-0567] [PKG-0568] [PKG-0569] [PKG-0570] [PKG-0571] [PKG-0572] [PKG-0520] [PKG-0524] [PKG-0632] [PKG-0636] [IMPL-DECISION G502] a reader's install and remove with a progress_key: operation_progress through the operation's own invocation, the key echoed, resolving first, counters within their totals; heard on no other session; none without a key, and none for a caller that is not a reader":
+      let s = setup(hosted(), "progress")
+      let o = newOwner(fastConfig())
+      o.autoRelease = true
+      defer:
+        o.stop()
+      let conn = o.session(s.rc.directOf())
+      let other = o.session(s.rc.directOf())
+      let notReader = o.session(s.e.startClient("y")[1].directOf())
+      for c in [conn, other, notReader]:
+        check o.subscribed(c, ProgressEvent)
+
+      proc installWith(c: ConnId, package, version, key: string): bool =
+        var e = @[(cbor("package"), cbor(package)), (cbor("version"), cbor(version))]
+        if key.len > 0:
+          e.add((cbor("progress_key"), cbor(key)))
+        let r = o.outcome(c, o.send(c, "install_package", cborMap(e)))
+        r.isSome and r.get.ok and
+          decodeCbor(r.get.result).get(cborMap()).lookup("installed").isSome
+
+      proc checked(events: seq[CborValue], key: string) =
+        for v in events:
+          check v.lookup("progress_key") == Opt.some(cbor(key))
+          let phase = v.lookup("phase").get(cbor("")).getText.get("")
+          check phase in Phases
+          let done = v.lookup("bytes_completed")
+          let total = v.lookup("bytes_total")
+          if done.isSome and total.isSome:
+            let (d, t) = (done.get.getUint64, total.get.getUint64)
+            check d.isSome and t.isSome
+            if d.isSome and t.isSome:
+              check d.get <= t.get
+
+      check conn.installWith("app", "1.0.0", "k1")
+      let first = o.heard(conn, ProgressEvent)
+      checkpoint "the phases: " &
+        first.mapIt(it.lookup("phase").get(cbor("")).getText.get("")).join(", ")
+      check first.len >= 1
+      if first.len > 0:
+        check first[0].lookup("phase") == Opt.some(cbor("resolving"))
+      first.checked("k1")
+      check o.heard(other, ProgressEvent).len == 0
+      # The remove's: `removing`, with no counters.
+      let tag = o.send(
+        conn,
+        "remove_package",
+        cborMap(
+          (cbor("identity"), rootRequest("app", "1.0.0")),
+          (cbor("progress_key"), cbor("k2")),
+        ),
+      )
+      let removed = o.outcome(conn, tag)
+      check removed.isSome and removed.get.ok
+      let second = o.heard(conn, ProgressEvent)[first.len ..^ 1]
+      check second.len == 1
+      second.checked("k2")
+      if second.len == 1:
+        check second[0].lookup("phase") == Opt.some(cbor("removing"))
+        check second[0].lookup("bytes_completed").isNone
+        check second[0].lookup("bytes_total").isNone
+      # Without a key, and for a caller that is not a reader: none.
+      let heardBefore = o.heard(conn, ProgressEvent).len
+      check conn.installWith("logos.example", "1.0.0", "")
+      check notReader.installWith("app", "1.0.0", "k3")
+      o.settle(300 * Slow)
+      check o.heard(conn, ProgressEvent).len == heardBefore
+      check o.heard(notReader, ProgressEvent).len == 0
+      check o.heard(other, ProgressEvent).len == 0
       releaseAll()
       s.e.finish()

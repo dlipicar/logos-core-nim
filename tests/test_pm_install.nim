@@ -1397,3 +1397,93 @@ suite "the engine's page jobs (5-6b-1; G499, G500)":
     )
     check w.answers[^1].codeOf == "invalid-request"
     check not w.has({cmPage})
+
+# The watch's hints and the operations' progress (5-6b-2) -------------------------------
+
+when defined(posix):
+  proc progressOf(s: Scene, request: uint64): seq[Command] =
+    s.w.queue.filterIt(it.kind == cmProgress and it.progressOf == request)
+
+  proc changed(s: Scene): int =
+    s.w.queue.countIt(it.kind == cmChanged)
+
+  suite "the watch's hints and the operations' progress (5-6b-2; G501, G502)":
+    test "[PKG-0564] [PKG-0568] [PKG-0569] [PKG-0570] [TXT-0497] [TXT-0498] [IMPL-DECISION G502] an install submitted with progress reports resolving first, then for each archive fetching (bytes read of the size stat_object gave), verifying (none, then all of its bytes) and installing (no counters); one submitted without reports nothing; [IMPL-DECISION G501] each landed commit is one cmChanged, and a no-op none":
+      withStore(
+        "progress",
+        scene([(entryOf("app", "1.0.0"), app100), (entryOf("lib", "1.0.0"), lib100)]),
+      ):
+        s.w.emit(s.w.e.submit(1, install("app"), progress = true))
+        s.w.serve(s.objects, s.calls)
+        check s.encodedOf(1).installedIdentity == ident("app", "1.0.0")
+        let p = s.progressOf(1)
+        checkpoint $p.mapIt((it.phase, it.completed, it.total))
+        check p.len > 0
+        if p.len > 0:
+          check p[0].phase == ppResolving
+          check p[0].completed.isNone and p[0].total.isNone
+        check p.allIt(it.phase in {ppResolving, ppFetching, ppVerifying, ppInstalling})
+        check p.countIt(it.phase == ppResolving) == 1
+        let sizes = [uint64(app100.len), uint64(lib100.len)]
+        let fetching = p.filterIt(it.phase == ppFetching)
+        check fetching.len >= 2
+        check fetching.allIt(
+          it.completed.isSome and it.total.isSome and it.total.get in sizes and
+            it.completed.get <= it.total.get
+        )
+        let verifying = p.filterIt(it.phase == ppVerifying)
+        check verifying.len == 4
+        for size in sizes:
+          check fetching.anyIt(it.total.get == size and it.completed.get == size)
+          check verifying.anyIt(
+            it.completed == Opt.some(0'u64) and it.total == Opt.some(size)
+          )
+          check verifying.anyIt(
+            it.completed == Opt.some(size) and it.total == Opt.some(size)
+          )
+        let installing = p.filterIt(it.phase == ppInstalling)
+        check installing.len == 2
+        check installing.allIt(it.completed.isNone and it.total.isNone)
+        check s.changed == 2
+        s.submit(2, install("app"))
+        s.w.serve(s.objects, s.calls)
+        check s.encodedOf(2).installedIdentity == ident("app", "1.0.0")
+        check s.progressOf(2).len == 0
+        check s.changed == 2
+        store.close()
+
+    test "[PKG-0564] [PKG-0568] [TXT-0498] [IMPL-DECISION G502] a remove submitted with progress reports removing, with no counters; [IMPL-DECISION G501] its commit is one cmChanged, and a remove of what is not installed none":
+      withStore(
+        "progress-remove",
+        scene([(entryOf("app", "1.0.0"), app100), (entryOf("lib", "1.0.0"), lib100)]),
+      ):
+        s.submit(1, install("app"))
+        s.w.serve(s.objects, s.calls)
+        check s.changed == 2
+        s.w.emit(s.w.e.submit(2, remove("app", "1.0.0"), progress = true))
+        s.w.serve(s.objects, s.calls)
+        check s.resultOf(2).errorCode == ""
+        let p = s.progressOf(2)
+        check p.mapIt(it.phase) == @[ppRemoving]
+        check p.allIt(it.completed.isNone and it.total.isNone)
+        check s.changed == 3
+        s.w.emit(s.w.e.submit(3, remove("app", "1.0.0"), progress = true))
+        s.w.serve(s.objects, s.calls)
+        check s.resultOf(3).errorCode == ""
+        check s.progressOf(3).len == 0
+        check s.changed == 3
+        store.close()
+
+    test "[IMPL-DECISION G502] a cancelled operation reports nothing more":
+      withStore(
+        "progress-cancel",
+        scene([(entryOf("app", "1.0.0"), app100), (entryOf("lib", "1.0.0"), lib100)]),
+      ):
+        s.w.emit(s.w.e.submit(1, install("app"), progress = true))
+        let before = s.progressOf(1).len
+        check before >= 1
+        s.w.emit(s.w.e.cancel(1))
+        s.w.serve(s.objects, s.calls)
+        check s.progressOf(1).len == before
+        check s.changed == 0
+        store.close()

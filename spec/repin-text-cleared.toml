@@ -2872,17 +2872,15 @@ decision = "G363"
 id = "PKG-0650"
 decision = "G363"
 
-[[deferred]]
+[[text]]
 id = "TXT-0497"
-rides = "PKG-0568"
-decision = "G362"
-reason = "What each progress phase covers (PM l.1787): nothing publishes progress before 5-6b, so nothing shows a phase's coverage; PKG-0568 is the unit of its paragraph."
+step = "5-6b"
+test = "tests/test_pm_install.nim"
 
-[[deferred]]
+[[text]]
 id = "TXT-0498"
-rides = "PKG-0568"
-decision = "G362"
-reason = "What the installing and removing phases cover and that phases have no order (PM l.1788): nothing publishes progress before 5-6b; PKG-0568 is the unit of its paragraph."
+step = "5-6b"
+test = "tests/test_pm_install.nim"
 
 [[text]]
 id = "TXT-0454"

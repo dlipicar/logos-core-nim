@@ -157,6 +157,14 @@ type
     rsBackoff ## an establishment was refused; another follows a back-off
     rsStopped
 
+  ProgressPhase* = enum
+    ## [SPEC PM §15.2 l.1786-1789; G502] `operation_progress`'s phases.
+    ppResolving = "resolving"
+    ppFetching = "fetching"
+    ppVerifying = "verifying"
+    ppInstalling = "installing"
+    ppRemoving = "removing"
+
   KeySource* = proc(): string {.gcsafe, raises: [].}
     ## A fresh `request_key`: 128 random bits in hex in the shell, never a fixed
     ## value. An empty key counts as a refused establishment.
@@ -187,6 +195,9 @@ type
       ## [G449] cancel the outstanding call `cancelled` through the Interface's
       ## cancel; its answer, if one still comes, is an `evAnswer`
     cmPage ## [G500] hand `job` to the read-only worker; its answer is an `evWorked`
+    cmChanged ## [G501] the installed state changed: a commit landed (a watch's hint)
+    cmProgress
+      ## [G502] `progressOf`, an operation submitted with progress, reached `phase`
 
   Command* = object
     case kind*: CommandKind
@@ -221,6 +232,13 @@ type
       answer*: OperationAnswer
     of cmCancelCall:
       cancelled*: uint64
+    of cmChanged:
+      discard
+    of cmProgress:
+      progressOf*: uint64
+      phase*: ProgressPhase
+      completed*: Opt[uint64] ## measured bytes of the phase, when it has counters
+      total*: Opt[uint64] ## omitted when unknown; never below `completed`
 
   RouteAnswer* = enum
     raReady
@@ -322,6 +340,8 @@ type
     signer: PackageSigner
     variant: string
     refetch: bool ## [G446] fetched again by digest at extraction: not judged here
+    fetched: int64 ## [G502] the bytes handed to the worker so far
+    size: int64 ## [G502] the spooled bytes the digest covered
 
   TimerKind = enum
     tkRoute ## a binding's establishment back-off
@@ -337,6 +357,7 @@ type
 
   Operation = object ## [G449] One operation from `submit` to its answer.
     request: OperationRequest
+    progress: bool ## [G502] its caller asked for progress: `cmProgress` reports it
     slot: SlotKind
     started: bool ## it holds its slot
     startedMs: int64
@@ -634,6 +655,35 @@ proc timer(
 
 proc log(cmds: var seq[Command], text: string) =
   cmds.add(Command(kind: cmLog, text: text))
+
+proc progress(
+    e: var Engine,
+    request: uint64,
+    phase: ProgressPhase,
+    cmds: var seq[Command],
+    completed = Opt.none(uint64),
+    total = Opt.none(uint64),
+) =
+  ## [G502] `request` reached `phase`, reported when its caller asked for progress and
+  ## the operation still runs. Counters are measured bytes; `completed` never exceeds a
+  ## supplied `total` (PKG-0569).
+  e.operations.withValue(request, op):
+    if op.progress:
+      var c = completed
+      if c.isSome and total.isSome and c.get > total.get:
+        c = total
+      cmds.add(
+        Command(
+          kind: cmProgress,
+          progressOf: request,
+          phase: phase,
+          completed: c,
+          total: total,
+        )
+      )
+
+func bytesOf(n: int64): Opt[uint64] =
+  Opt.some(uint64(max(n, 0)))
 
 func index(e: Engine, name: string): int =
   for i, b in e.bindings:
@@ -1273,6 +1323,8 @@ proc reserve(e: var Engine, bi: int, size: int64) =
 proc append(e: var Engine, file: uint64, chunk: sink string, cmds: var seq[Command]) =
   ## [G447] A piece for the worker, the first creating the spool file.
   var sp = addr e.spools.mgetOrPut(file, Spool())
+  sp.fetched += chunk.len
+  let (request, fetched, size) = (sp.request, sp.fetched, sp.reserved)
   var job = WorkerJob(kind: wjAppend, file: file, chunk: chunk)
   if not sp.created:
     sp.created = true
@@ -1280,6 +1332,8 @@ proc append(e: var Engine, file: uint64, chunk: sink string, cmds: var seq[Comma
     job.name = spoolName(sp.request, file)
   inc sp.unacked
   cmds.work(job)
+  # [G502] bytes read of the size `stat_object` gave
+  e.progress(request, ppFetching, cmds, bytesOf(fetched), bytesOf(size))
 
 proc fits(e: Engine, size: int64): bool =
   e.shareUsed == 0 or e.shareUsed + size <= e.shareCap
@@ -1557,7 +1611,10 @@ proc onWorked(e: var Engine, r: sink WorkerResult, cmds: var seq[Command]) =
       e.supplyTo(request, source, hit.get, cmds)
       return
     sp.digest = r.digest
+    sp.size = r.size
     sp.phase = spOpening
+    # [G502] the inspection pass over the archive's bytes begins
+    e.progress(request, ppVerifying, cmds, bytesOf(0), bytesOf(r.size))
     cmds.work(
       WorkerJob(
         kind: wjOpen,
@@ -1569,6 +1626,8 @@ proc onWorked(e: var Engine, r: sink WorkerResult, cmds: var seq[Command]) =
     )
   of wrOpened:
     let (request, source, digest) = (sp.request, sp.source, sp.digest)
+    # [G502] the pass ended, whatever it judged
+    e.progress(request, ppVerifying, cmds, bytesOf(sp.size), bytesOf(sp.size))
     if sp.mutation and request in e.requests:
       e.keep(r.file, r.opened.inspection.kind == ikEligible)
       if r.opened.inspection.kind == ikEligible:
@@ -1878,6 +1937,7 @@ proc startResolution(e: var Engine, request: uint64, cmds: var seq[Command]) =
   e.operations.withValue(request, op):
     root = op.request.root
     snap = op.snap
+  e.progress(request, ppResolving, cmds)
   e.requests[request] = initDriver(
     e.catalog.inUse.get.entries,
     e.input.trust,
@@ -1982,6 +2042,7 @@ proc stageNext(e: var Engine, request: uint64, cmds: var seq[Command]) =
     op.pending =
       Pending(selected: sel, signer: sp.signer, rid: rid, root: isRoot, file: f.get)
     op.phase = mpStaging
+  e.progress(request, ppInstalling, cmds)
   cmds.work(
     WorkerJob(
       kind: wjStage,
@@ -2082,6 +2143,7 @@ proc alreadyInstalled(
           base: cur.base,
         )
         op.phase = mpStaging
+      e.progress(request, ppInstalling, cmds)
       cmds.work(
         WorkerJob(
           kind: wjStageSigner,
@@ -2225,6 +2287,7 @@ proc commitRemove(e: var Engine, request: uint64, at: int, cmds: var seq[Command
     op.phase = mpCommitting
   do:
     return
+  e.progress(request, ppRemoving, cmds)
   e.committing[request] = CommitPending(drop: @[rid])
   cmds.work(WorkerJob(kind: wjCommit, request: request, drop: @[rid]))
 
@@ -2539,6 +2602,7 @@ proc onCommitted(e: var Engine, r: sink WorkerResult, cmds: var seq[Command]) =
   for it in r.retired:
     e.retired.add(Retired(sequence: r.sequence, item: it))
   inc e.installedChanges
+  cmds.add(Command(kind: cmChanged)) # [G501] a watch's hint
   var file = 0'u64
   var kind: OperationKind
   var last = false
@@ -2607,8 +2671,11 @@ proc onCollected(e: var Engine, r: sink WorkerResult, cmds: var seq[Command]) =
 
 # Entry points -----------------------------------------------------------------------
 
-proc submit*(e: var Engine, request: uint64, op: sink OperationRequest): seq[Command] =
-  ## [G449] One operation; its answer is a later `cmAnswer`, or one now. It runs in its
+proc submit*(
+    e: var Engine, request: uint64, op: sink OperationRequest, progress = false
+): seq[Command] =
+  ## [G449] One operation; its answer is a later `cmAnswer`, or one now. [G502] With
+  ## `progress`, each phase it reaches is a `cmProgress` until its answer. It runs in its
   ## slot (mutations one at a time, inspections one at a time beside them), waits behind
   ## the running one, or, with `MaxQueuedOperations` waiting already, is refused at once
   ## with `MODULE_ERROR`, before any work and with no snapshot taken (§4.13). A request id
@@ -2639,9 +2706,9 @@ proc submit*(e: var Engine, request: uint64, op: sink OperationRequest): seq[Com
       ),
     )
   of adQueued:
-    e.operations[request] = Operation(request: op, slot: slot)
+    e.operations[request] = Operation(request: op, slot: slot, progress: progress)
   of adRun:
-    e.operations[request] = Operation(request: op, slot: slot)
+    e.operations[request] = Operation(request: op, slot: slot, progress: progress)
     e.begin(request, result)
 
 proc handoff*(
