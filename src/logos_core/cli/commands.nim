@@ -58,6 +58,8 @@ testHooksMarker("lcn_call_commands") # [PKG-0555] the watch's hook (`LCN_TEST_CL
 
 when defined(posix):
   import std/posix
+else:
+  from std/os import sleep
 
 export results
 
@@ -1112,6 +1114,9 @@ const
     ## [G503; PKG-0554, PKG-0555] a watch lists the installed packages again this
     ## often: a submitted watch proves no observation boundary
   WatchResyncMs = 1_000 ## [IMPL] the pause before a lost watch is made again
+  WatchRemakeMs* = WatchRefreshMs
+    ## [G503; IMPL, Fable §17.1 point 3] how long a lost watch is made again before the
+    ## command ends with the last failure: the refresh period, from the loss
   InstalledEvent = "logos.package_manager.installed_packages_changed_event"
   ProgressEvent = "logos.package_manager.operation_progress_event"
   PmRefusal* =
@@ -1121,17 +1126,39 @@ const
     ## [G503; plan §5.7, Fable §11.2 point 1] what lcn_call says for a MODULE_ERROR
     ## with no detail from a reader's method: it cannot tell the three apart
 
+proc waitCancel(cancelFd: cint, ms: int): bool =
+  ## [IMPL] Waits `ms`, or less when the launcher cancels: true then. With no
+  ## descriptor to wait on (not POSIX; Fable §17.3 point 5) a sleep of `ms`, never a
+  ## spin; lcn_call is POSIX only today.
+  when defined(posix):
+    var p = TPollfd(fd: cancelFd, events: POLLIN)
+    let r = poll(addr p, 1, cint(ms))
+    r > 0 and cancelFd >= 0 and (p.revents and (POLLIN or POLLHUP or POLLERR)) != 0
+  else:
+    sleep(ms)
+    false
+
+proc tryEnter*(slot: var Atomic[int], bound: int): bool =
+  ## [G503] One of `bound` places if one is free now.
+  var n = slot.load
+  while n < bound:
+    if slot.compareExchange(n, n + 1):
+      return true
+  false
+
 proc enter*(
-    slot: var Atomic[int], bound: int, cancelFd: cint, deadline: Opt[MonoTime]
+    slot: var Atomic[int],
+    bound: int,
+    cancelFd: cint,
+    deadline: Opt[MonoTime],
+    past = "--timeout",
 ): Result[void, Stop] =
   ## [G503; ruling 4] One of `bound` places, waited for: until one is free, the
-  ## launcher cancels, or `deadline` passes (exit 2: nothing was sent).
+  ## launcher cancels, or `deadline` passes (exit 2: nothing was sent); `past` names
+  ## the option that set it.
   while true:
-    var n = slot.load
-    if n < bound:
-      if slot.compareExchange(n, n + 1):
-        return ok()
-      continue
+    if slot.tryEnter(bound):
+      return ok()
     var wait = GateTickMs
     if deadline.isSome:
       let left = inMilliseconds(deadline.get - getMonoTime())
@@ -1141,15 +1168,12 @@ proc enter*(
             exit: ExitUnreachable,
             message:
               "lcn_call's calls to the Package Manager stayed at its bound (" & $bound &
-              ") past --timeout; nothing was sent",
+              ") past " & past & "; nothing was sent",
           )
         )
       wait = min(wait, int(left))
-    when defined(posix):
-      var p = TPollfd(fd: cancelFd, events: POLLIN)
-      let r = poll(addr p, 1, cint(wait))
-      if r > 0 and cancelFd >= 0 and (p.revents and (POLLIN or POLLHUP or POLLERR)) != 0:
-        return err(cancelled())
+    if waitCancel(cancelFd, wait):
+      return err(cancelled())
 
 proc leave*(slot: var Atomic[int]) =
   discard slot.fetchSub(1)
@@ -1568,6 +1592,12 @@ proc installedView(items: seq[CborValue]): (JsonNode, string) =
     "installed: " & (if names.len == 0: "(none)" else: names.join(", ")),
   )
 
+func remakable(s: Stop): bool =
+  ## [G503; Fable §17.1 point 3] A failure a lost watch is made again after: the Package
+  ## Manager not ready (stopped, starting, its route ended), a transport failure, a
+  ## timeout, or a cancel lcn_call's user did not ask for.
+  not s.silent and s.code in [$ecNotReady, $ecTransport, $ecTimeout, $ecCancelled]
+
 proc runWatch(c: Ctx, cmd: LcnCliPackageCommand): Result[void, Stop] =
   ## [G503; PM §15.1] The installed packages as a stream: one line with every
   ## installed identity at the start, and again whenever they changed.
@@ -1575,16 +1605,31 @@ proc runWatch(c: Ctx, cmd: LcnCliPackageCommand): Result[void, Stop] =
   ## watch proves no observation boundary, so lcn_call lists the packages after
   ## each hint, every `WatchRefreshMs` and after a lost watch, which it makes
   ## again; a line is written when the list differs from the last one written.
+  ## [Fable §17.1 point 3] A watch that was made and listed, then lost (it ended, its
+  ## route or its hints were lost, or the Package Manager stopped), is made again every
+  ## `WatchResyncMs` for up to `WatchRemakeMs` from the loss, with one notice on stderr
+  ## for each loss. [Fable §17.1 point 4] A watch waiting at lcn_call's own bound says
+  ## so on stderr, and `--for` bounds that wait.
   ## The stream ends as `subscribe`'s does (count, for, the launcher's cancel), or
-  ## with the failure of a list or of the watch itself.
+  ## with the failure of a list or of the watch itself: one no re-making helps, one
+  ## before the watch was first made, or one still there `WatchRemakeMs` after a loss.
   let (count, forMs) = ?limits(cmd.count, cmd.for_ms)
   var shown = Opt.none(string)
   var written = 0
   let started = getMonoTime()
   var pres = c.pres
   ?pres.streamStart().mapErr(outputStop)
-  if c.env.pm != nil:
-    ?enter(c.env.pm[].watches, PmWatches, c.cancelFd, Opt.none(MonoTime))
+  if c.env.pm != nil and not c.env.pm[].watches.tryEnter(PmWatches):
+    let msg =
+      "lcn_call has " & $PmWatches &
+      " watches open: this one waits for one of them to end"
+    ?pres.notice(%*{"notice": msg}, "notice: " & msg).mapErr(outputStop)
+    let deadline =
+      if forMs.isSome:
+        Opt.some(started + initDuration(milliseconds = forMs.get))
+      else:
+        Opt.none(MonoTime)
+    ?enter(c.env.pm[].watches, PmWatches, c.cancelFd, deadline, past = "--for")
   defer:
     if c.env.pm != nil:
       leave(c.env.pm[].watches)
@@ -1599,13 +1644,61 @@ proc runWatch(c: Ctx, cmd: LcnCliPackageCommand): Result[void, Stop] =
   proc expired(): bool =
     forMs.isSome and int(inMilliseconds(getMonoTime() - started)) >= forMs.get
 
+  var made = false ## a watch was made and its list written or compared
+  var lostAt = Opt.none(MonoTime) ## when the watch was lost; none while it is made
+  proc lose(s: Opt[Stop]): Result[void, Stop] =
+    ## The watch is lost: it is made again, unless `s` is a failure no re-making helps
+    ## or one before the watch was first made, or the loss is `WatchRemakeMs` old.
+    if s.isSome and (not made or not s.get.remakable):
+      return err(s.get)
+    let now = getMonoTime()
+    if lostAt.isNone:
+      lostAt = Opt.some(now)
+      let why =
+        if s.isSome and s.get.message.len > 0:
+          " (" & s.get.message & ")"
+        else:
+          ""
+      let msg =
+        "the watch on the Package Manager was lost" & why &
+        "; it is made again for up to " & $(WatchRemakeMs div 1000) & " s"
+      pres.notice(%*{"notice": msg}, "notice: " & msg).isOkOr:
+        return err(outputStop(error))
+    elif int(inMilliseconds(now - lostAt.get)) >= WatchRemakeMs:
+      if s.isSome:
+        return err(s.get)
+      return err(
+        Stop(
+          exit: ExitRc,
+          code: $ecNotReady,
+          message:
+            "the watch on the Package Manager was not made again within " &
+            $(WatchRemakeMs div 1000) & " s",
+        )
+      )
+    ok()
+
   while true:
+    if lostAt.isSome:
+      # A lost watch: a pause, then made again.
+      if expired():
+        return ok()
+      if waitCancel(c.cancelFd, WatchResyncMs):
+        return err(nc.interrupted)
+      if expired():
+        return ok()
     # The provider each time the watch is made: a lost one may come back as a new record.
-    # A watch that cannot be made again ends with that failure.
-    let p = ?c.pmProvider()
-    let (wm, _, wroot, wparams) =
-      ?c.pmChecked(p, "watch_installed_packages", CborValue(kind: ckMap))
-    let sub = ?nc.openSub(p, InstalledEvent, wroot)
+    let p = c.pmProvider().valueOr:
+      ?lose(Opt.some(error))
+      continue
+    let (wm, _, wroot, wparams) = c.pmChecked(
+      p, "watch_installed_packages", CborValue(kind: ckMap)
+    ).valueOr:
+      ?lose(Opt.some(error))
+      continue
+    let sub = nc.openSub(p, InstalledEvent, wroot).valueOr:
+      ?lose(Opt.some(error))
+      continue
     var failure = Opt.none(Stop)
     var finished = false
     var lastList = getMonoTime()
@@ -1623,6 +1716,8 @@ proc runWatch(c: Ctx, cmd: LcnCliPackageCommand): Result[void, Stop] =
       if items.isErr:
         failure = Opt.some(items.error)
         return false
+      made = true
+      lostAt = Opt.none(MonoTime)
       let (j, t) = installedView(items.get)
       if shown.isNone or shown.get != t:
         pres.streamLine(j, t).isOkOr:
@@ -1665,29 +1760,24 @@ proc runWatch(c: Ctx, cmd: LcnCliPackageCommand): Result[void, Stop] =
     )
     nc.closeSub(sub)
     if failure.isSome:
-      return err(failure.get)
+      ?lose(failure) # a list's failure: made again when it is one a re-making helps
+      continue
     if finished:
       return ok()
     if call.cancelled:
       return err(nc.interrupted)
     if not call.ok and not call.ended:
-      let s = readerStop(classify(call))
-      if s.exit != ExitUnreachable:
-        return
-          err(s) # a refusal or a fault; TRANSPORT_ERROR and the like are a lost watch
-    elif call.ok:
+      # A refusal or a fault ends it; NOT_READY, TRANSPORT_ERROR and the like are a loss.
+      ?lose(Opt.some(readerStop(classify(call))))
+      continue
+    if call.ok:
       let v = decodeCbor(call.response)
       if v.isOk:
         let failed = packageStop(v.get)
         if failed.isSome:
           return err(failed.get)
     # The watch ended (`{}`), its route or its hints were lost: made again.
-    if expired():
-      return ok()
-    when defined(posix):
-      var pf = TPollfd(fd: c.cancelFd, events: POLLIN)
-      if poll(addr pf, 1, cint(WatchResyncMs)) > 0:
-        return err(nc.interrupted)
+    ?lose(Opt.none(Stop))
 
 # The actions ------------------------------------------------------------------------------
 

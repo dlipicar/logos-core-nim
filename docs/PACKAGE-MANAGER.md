@@ -585,7 +585,8 @@ Step 5-6a-1 (DECISIONS G490, G491, G494, G495, G500; the owner's Q2, Q7 (b), Q11
   `list_installed_packages`, `watch_installed_packages`) are for readers (Q7 (b); §15). Anyone else
   is answered `MODULE_ERROR` with no message or detail, the only refusal a provider may answer
   (INTERFACE l.3308-3311); the operator's log has "package-manager: <method> refused for <caller>:
-  not a reader" (G495, G498).
+  not a reader" (G495, G498). Each refusal line is limited: the same line again within a minute is
+  counted, and the first after it is written with the count (G495).
 - **The Runtime's binding** (G492, G493; TRANSPORT §8.1.2). The instance's Module Host serves a second
   listener, the system-service endpoint (fd 6, in a private directory of its own), from the primary
   contract alone. It accepts only a Hello with a system-service ticket the Runtime issued for this
@@ -643,6 +644,8 @@ catalog listing's cursor ends by age. A continuation is answered when its origin
 - **Page jobs** are bounded (PKG-0558): 2 in flight per origin and 8 in all. Past either the call is
   `MODULE_ERROR` with no detail, and the log names the bound: "package-manager:
   list_installed_packages refused for <caller>: at the page-job bound: 2 in flight for this caller".
+  A cancelled page job keeps its place until the read-only worker answers it, and that answer is
+  dropped: a reader that lists and cancels in a loop meets the bound (G500).
 - **A reader's `get_runtime_handoff`** is a page job on the read-only worker, under the same bounds,
   built by the same code as the binding's (§13) with that worker's own trust copy: the same bytes for
   the same identity and module. It never queues on the first worker. Its reply is one value, so the

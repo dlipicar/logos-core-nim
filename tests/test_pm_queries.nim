@@ -28,7 +28,7 @@ import logos_sdk/testing/generated/meter_module_calls
 import logos_sdk/contracts/generated/lcn_storage_fetch_root
 import ../src/logos_core/pins as core_pins
 import ../src/logos_core/package/[manifest, records]
-import ../src/logos_core/pm/[cursors, listing]
+import ../src/logos_core/pm/[cursors, listing, refusals]
 from ./support/pmfixture import textOf
 
 let
@@ -197,6 +197,45 @@ suite "the lists' pages (G500)":
     check fits(10, PageBudget - 10, 1)
     check not fits(11, PageBudget - 10, 1)
     check not fits(0, 2, 1, budget = 1)
+
+# The refusal lines (G495; Fable §17.3 point 3) --------------------------------------------
+
+suite "the operator's refusal lines, limited for each caller (G495)":
+  test "[IMPL-DECISION G495] a refusal's line is written the first time; the same line within a minute is counted, and the first after it is written with the count; another method or cause is a line of its own":
+    let t0 = getMonoTime()
+    proc at(ms: int): MonoTime =
+      t0 + initDuration(milliseconds = ms)
+
+    const
+      x = "package-manager: list_packages refused for x: not a reader"
+      y = "package-manager: list_installed_packages refused for x: not a reader"
+    var r: RefusalLog
+    check r.admit(x, at(0)) == @[x]
+    for i in 1 .. 4:
+      check r.admit(x, at(i * 1000)).len == 0
+    check r.admit(y, at(5000)) == @[y]
+    check r.admit(x, at(RefusalLogMs - 1)).len == 0
+    check r.admit(x, at(RefusalLogMs)) == @[x & " (5 more like it since its last line)"]
+    check r.admit(x, at(RefusalLogMs + 1)).len == 0
+    check r.admit(x, at(2 * RefusalLogMs + 1)) ==
+      @[x & " (1 more like it since its last line)"]
+    check r.admit(x, at(3 * RefusalLogMs + 1)) == @[x]
+    # A count not written yet is written as the Package Manager stops.
+    check r.admit(y, at(3 * RefusalLogMs + 2)) == @[y]
+    check r.admit(y, at(3 * RefusalLogMs + 3)).len == 0
+    check r.flush() == @[y & " (1 more like it since its last line)"]
+    check r.kinds == 0
+
+  test "[IMPL-DECISION G495] the kinds held are bounded: at the bound, kinds past their interval are given up, each with its count":
+    let t0 = getMonoTime()
+    var r: RefusalLog
+    for i in 0 ..< RefusalKinds:
+      check r.admit("k" & $i, t0).len == 1
+    check r.admit("k0", t0).len == 0
+    check r.kinds == RefusalKinds
+    let later = t0 + initDuration(milliseconds = RefusalLogMs)
+    check r.admit("new", later) == @["k0 (1 more like it since its last line)", "new"]
+    check r.kinds == 1
 
 # The queries through the Module Host's boundary ------------------------------------------
 
@@ -637,6 +676,12 @@ when defined(posix):
         )
         checkpoint meth & ": " & $s.log.linesWith("refused for")
         check lines.len == 1
+      # [Fable §17.3 point 3] The same refusal again within a minute is counted, not
+      # written: a caller cannot write the operator's log at its own call rate. Each
+      # line is written before its refusal is answered.
+      for _ in 0 ..< 5:
+        check pmX.call("list_packages", cborMap()).code == ecModule
+      check s.log.linesWith("refused for").len == 4
       # The readers: answered, and a reader's handoff of what is not installed is the
       # package error the binding's would be.
       check pm.pageOf("list_packages").packagesOf.len == 4

@@ -487,6 +487,9 @@ type
     filter: Opt[string]
     token: string ## the cursor the page continues; empty for a first page
     positions: seq[int] ## the candidates' places in the listing order
+    cancelled: bool
+      ## [G500; PKG-0558] the caller gave it up: it keeps its place (and its snapshot)
+      ## until the worker answers its job, and that answer is dropped
 
   BindingStatus* = object
     name*: string
@@ -3074,9 +3077,12 @@ proc readerHandoff*(
 proc onPage(e: var Engine, r: sink WorkerResult, cmds: var seq[Command]) =
   ## [G500] A page job's answer: the page framed around the records' encodings, with the
   ## next cursor exactly when another record of the snapshot matches after it
-  ## (PM l.1650). A cancelled job's answer is dropped.
+  ## (PM l.1650). A cancelled job's answer is dropped; its place is given back now.
   var p: PageJob
   if not e.pages.pop(r.request, p):
+    return
+  if p.cancelled:
+    e.releaseSnapshot(p.snapshot, cmds)
     return
   if r.hasFault or r.count == 0:
     cmds.log(
@@ -3114,9 +3120,12 @@ proc onPage(e: var Engine, r: sink WorkerResult, cmds: var seq[Command]) =
 
 proc onReaderHandoff(e: var Engine, r: sink WorkerResult, cmds: var seq[Command]) =
   ## [G500] A reader's handoff answered by the read-only worker, as `onReply` answers the
-  ## binding's.
+  ## binding's. A cancelled one's answer is dropped; its place is given back now.
   var p: PageJob
   if not e.pages.pop(r.request, p):
+    return
+  if p.cancelled:
+    e.releaseSnapshot(p.snapshot, cmds)
     return
   if r.failure.len > 0:
     cmds.log("get_runtime_handoff: " & r.failure)
@@ -3335,10 +3344,15 @@ proc cancel*(e: var Engine, request: uint64): seq[Command] =
   if e.queries.pop(request, snap):
     e.releaseSnapshot(snap, result)
     return
-  var p: PageJob
-  if e.pages.pop(request, p):
-    # [G500] Its job still runs on the read-only worker, for nobody.
-    e.releaseSnapshot(p.snapshot, result)
+  # [G500; PKG-0558] A page job still runs on the read-only worker, for nobody: it keeps
+  # its place in the bounds, and its snapshot, until the worker answers it, so a reader
+  # that lists and cancels in a loop meets the bound and queues no more jobs than the
+  # places (Fable §17.3 point 1).
+  var paged = false
+  e.pages.withValue(request, p):
+    p.cancelled = true
+    paged = true
+  if paged:
     return
   if request in e.operations:
     let op = e.operations.getOrDefault(request)
@@ -3376,8 +3390,9 @@ proc stop*(e: var Engine): seq[Command] =
     ops.add(id)
   for id in e.queries.keys:
     ops.add(id)
-  for id in e.pages.keys:
-    ops.add(id)
+  for id, p in e.pages:
+    if not p.cancelled: # a cancelled call is answered by nobody
+      ops.add(id)
   ops.sort()
   for id in ops:
     result.answer(

@@ -901,6 +901,11 @@ TF-54 to TF-62 (DECISIONS, "Open items"). TL-01, TL-02, TF-04, TF-12, TF-14 and 
 
   Claimed by test: PKG-0554, PKG-0555 (through the test hook `LCN_TEST_CLI_WATCH`) and PKG-0573 (3 units).
 
+  The merge follow-up (Fable §17, planning 2026-11-25): a cancelled page job keeps its place until its job has ended
+  (PKG-0558); a lost watch is made again for 30 s, with a notice, and survives a stop and start of the Package Manager
+  (PKG-0555); a fifth watch's notice and `--for` deadline; the refusal lines limited per caller (G495); PKG-0559
+  deferred by name with G504's five conditions.
+
 ## Tiers at f4f83471 (the original plan)
 
 | Tier | Area | Verdict |

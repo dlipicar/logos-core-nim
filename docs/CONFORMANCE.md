@@ -846,7 +846,8 @@ The Package Manager's watch and progress (DECISIONS I144; G501, G502, G504; the 
   - **`installing` carries no counters** (G502): extraction is one worker job and measures nothing before its end.
   - **A deadline is never seen by the provider:** a watch it ends ends `CANCELLED`, like any cancel.
   - **PKG-0554, PKG-0555 and PKG-0573** are the consumer's duties, `lcn_call`'s, claimed in 5-6b-3 (below).
-  - **PKG-0559 is not met** (G504; the owner's Q11, "Record as not met"). A handoff can wait behind replies a
+  - **PKG-0559 is not met** (G504; the owner's Q11, "Record as not met"), deferred by name in
+    `conformance/claims/PKG.toml` with the five conditions it waits for. A handoff can wait behind replies a
     consumer does not read: `commit` waits on the module thread while the Module Host's 64 MiB output budget is full
     (four maximal replies, or sixty-four of 1 MiB, from any caller, operation and inspect replies included), until
     the stalled consumer is closed at `write_stall_timeout_ms` (30 s by default); each reply's check and copies run
@@ -862,16 +863,20 @@ The Package Manager's watch and progress (DECISIONS I144; G501, G502, G504; the 
 
 - **Claimed:** PKG-0554 (a hint or a submitted watch is never taken for the state: `lcn_call` lists after each),
   PKG-0555 (the refresh and the resynchronization: through the test hook `LCN_TEST_CLI_WATCH`, a lost watch is made
-  again and lists, and a change whose hint is ignored is written from a shortened refresh) and PKG-0573 (a cancel, a
+  again and lists, and a change whose hint is ignored is written from a shortened refresh, each in its own case) and PKG-0573 (a cancel, a
   timeout or a lost route is exit 2, the outcome unknown; an install goes on without progress). 3 units, by test.
+  At the merge (Fable §17), PKG-0555's hook case is split so each list is shown on its own (a loss with the refresh
+  out of reach, a refresh with no loss), and a real loss is added: a stop and a start of the Package Manager under a
+  watch, which goes on. PKG-0558 gains a list-and-cancel loop refused at the bound: a cancelled page job keeps its
+  place until its job has ended.
 - **Limits of the claim:**
   - **`lcn_call` sees only its own calls:** it holds its page calls and watches within the Package Manager's
     per-caller bounds (2 and 4), and a query refused at a bound in all (8 page calls, 16 watches) is reported with
     the three causes it cannot tell apart; the Package Manager's log says which.
   - **Progress is not every phase:** the Package Manager replaces a pending publication with the next and drops the
     last at the answer.
-  - **A watch whose Package Manager stopped ends** with the failure of making it again; it does not wait for a
-    restart.
+  - **A lost watch is made again for 30 s from the loss** (Fable §17.1 point 3): a Package Manager stopped or
+    restarting longer than that ends the watch with the last failure. Each loss writes a notice on stderr.
   - **S14 includes the operations** (Q14 (a)): every process of logosd's user can install and remove packages.
 
 ## Properties not claimed

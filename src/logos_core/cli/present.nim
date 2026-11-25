@@ -198,6 +198,14 @@ proc progressLine*(p: Presenter, v: JsonNode, text: string): Result[void, SinkEr
     return p.errors.line($v)
   p.errors.line(text)
 
+proc notice*(p: Presenter, v: JsonNode, text: string): Result[void, SinkError] =
+  ## [G503; Fable §17.1 points 3, 4] A notice about a stream (a watch made again, a wait
+  ## at lcn_call's own bound): a JSON line, or a text line, on stderr in either format,
+  ## since stdout carries the stream's lines.
+  if p.json:
+    return p.errors.line($v)
+  p.errors.line(text)
+
 proc streamStart*(p: Presenter): Result[void, SinkError] =
   ## The banner before a text stream's first line.
   if not p.json and p.nonProduction:

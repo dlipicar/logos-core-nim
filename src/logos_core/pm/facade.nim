@@ -42,18 +42,20 @@
 ##   NOT_AUTHORISED (INTERFACE l.3308-3311; G495, Q6 (b)). The operator's log gets one
 ##   line naming the caller, the method and why: not a reader, or the bound it met
 ##   (Fable §11.2, point 1), so the log tells the causes of an opaque MODULE_ERROR apart.
+##   The lines are limited for each caller (`refusals.nim`; Fable §17.3 point 3): the
+##   same line again within a minute is counted, and written with its count after that.
 ## - **The stop**: the Runtime cancels the calls in flight first; `destroyModule` then
 ##   runs `closeShell`, which stops the engine and the worker (§4.1 of the plan).
 
 {.push raises: [], gcsafe.}
 {.used.}
 
-import std/tables
+import std/[monotimes, tables]
 import results
 import logos_sdk/cbor
 from logos_sdk/base/logtext import oneLine
 import ../package/records
-import ./[logos_package_manager_kit, requests, shell]
+import ./[logos_package_manager_kit, refusals, requests, shell]
 
 export logos_package_manager_kit
 
@@ -69,6 +71,7 @@ type
     runtime: string ## [G498] the Runtime readers' calls come from
     watches: Table[string, int] ## [G501] by origin (`keyOf`)
     watching: int ## [G501] in all
+    refusals: RefusalLog ## [G495; Fable §17.3 point 3] the refusal lines, limited
 
   Progress = ref object
     ## [G502] One operation's progress publications: one in flight, the latest report
@@ -156,12 +159,13 @@ func keyOf(o: Origin): string =
   o.runtime & "\0" & o.instance
 
 proc refuse(m: PackageManager, inv: Invocation, meth, why: string): InvocationFailure =
-  ## [G495] One operator log line naming the caller, the method and why; the caller
-  ## gets MODULE_ERROR with nothing more.
-  m.log(
+  ## [G495] One operator log line naming the caller, the method and why, limited for
+  ## each caller (`refusals.nim`); the caller gets MODULE_ERROR with nothing more.
+  let line =
     "package-manager: " & meth & " refused for " & oneLine(describe(inv.caller())) & ": " &
-      why
-  )
+    why
+  for l in m.refusals.admit(line, getMonoTime()):
+    m.log(l)
   refused()
 
 proc queried(
@@ -273,6 +277,9 @@ proc initModule*(
 
 proc destroyModule*(m: PackageManager) {.async: (raises: []).} =
   ## [G437] After the Runtime ended the calls in flight: the engine and the worker stop.
+  ## The refusals counted and not written yet are written first.
+  for l in m.refusals.flush():
+    m.log(l)
   await m.shell.closeShell()
 
 proc `inspect_package`*(

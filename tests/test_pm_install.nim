@@ -1274,7 +1274,7 @@ suite "the engine's page jobs (5-6b-1; G499, G500)":
   proc last(w: var World): Command =
     w.answers[^1]
 
-  test "[PKG-0558] [IMPL-DECISION G500] page jobs: 2 in flight per origin and 8 in all, readers' handoffs among them; past either bound MODULE_ERROR naming it; a cancel frees its place":
+  test "[PKG-0558] [IMPL-DECISION G500] page jobs: 2 in flight per origin and 8 in all, readers' handoffs among them; past either bound MODULE_ERROR naming it; a cancel frees its place once the job has ended":
     var w = world()
     var id = 0'u64
     proc list(w: var World, o: Origin): uint64 =
@@ -1314,11 +1314,69 @@ suite "the engine's page jobs (5-6b-1; G499, G500)":
     # Readers' handoffs went to the read-only worker, none to the first.
     check w.queue.filterIt(it.kind == cmPage).countIt(it.job.kind == wjReaderHandoff) ==
       3
+    # [Fable §17.3 point 1] A cancel: the job still runs on the read-only worker, so it
+    # keeps its place and its snapshot, and the bound still refuses.
     w.emit(w.e.cancel(1))
+    check w.e.pagesRunning == 8
+    check w.e.heldSnapshots == held
+    discard w.list(b)
+    check w.last.answer.kind == oaModuleError
+    check "8 in flight in all" in w.last.answer.reason
+    # The worker answers it: nothing is answered for it, and its place is free.
+    let job = w.take({cmPage})
+    check job.job.request == 1
+    let n2 = w.answers.len
+    w.handle(
+      worked(
+        WorkerResult(
+          kind: wrPage, request: 1, count: 1, reply: textOf(encodeCbor(cbor(1'u64)))
+        )
+      )
+    )
+    check w.answers.len == n2
     check w.e.pagesRunning == 7
     check w.e.heldSnapshots == held - 1
     discard w.list(b)
     check w.e.pagesRunning == 8
+
+  test "[PKG-0558] [IMPL-DECISION G500] a reader that lists and cancels in a loop is refused once its places are full, and the read-only worker's queue holds no more of its jobs than its places":
+    var w = world()
+    var queued: seq[uint64]
+    var refused = 0
+    for id in 1'u64 .. 10'u64:
+      let n = w.count({cmPage})
+      w.emit(
+        w.e.listInstalled(id, a, Opt.none(string), Opt.none(string), Opt.none(uint16))
+      )
+      if w.count({cmPage}) > n:
+        queued.add(id)
+      else:
+        check w.last.answer.kind == oaModuleError
+        check "2 in flight for this caller" in w.last.answer.reason
+        inc refused
+      w.emit(w.e.cancel(id))
+    check queued == @[1'u64, 2]
+    check refused == 8
+    check w.count({cmPage}) == PagesPerOrigin
+    check w.e.pagesRunning == PagesPerOrigin
+    # The worker answers the first: dropped, and one place is free for the next list.
+    discard w.take({cmPage})
+    let n = w.answers.len
+    w.handle(
+      worked(
+        WorkerResult(
+          kind: wrPage, request: 1, count: 1, reply: textOf(encodeCbor(cbor(1'u64)))
+        )
+      )
+    )
+    check w.answers.len == n
+    check w.e.pagesRunning == 1
+    w.emit(
+      w.e.listInstalled(11, a, Opt.none(string), Opt.none(string), Opt.none(uint16))
+    )
+    check w.e.pagesRunning == 2
+    check w.count({cmPage}) == 2
+    check w.e.heldSnapshots == 2
 
   test "[PKG-0533] [PKG-0384] [PKG-0387] [IMPL-DECISION G499] [IMPL-DECISION G500] a page's answer: next_cursor exactly when a matching record remains; its continuation goes on; after a commit it is invalid-request":
     var w = world()

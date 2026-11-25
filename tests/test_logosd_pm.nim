@@ -775,8 +775,18 @@ when defined(posix):
       check d.stopped == 0
       check hostsGone()
 
-    test "[PKG-0555] [IMPL-DECISION G503] the watch refreshes and resynchronizes (LCN_TEST_CLI_WATCH: a 300 ms refresh, the first hint lost with its watch, later hints ignored): the lost watch is made again and lists, and a change whose hint is ignored is written from the refresh, with no third watch":
-      let c = newCase()
+    proc watchesAdmitted(d: Child): int =
+      # The watches the Package Manager admitted for lcn_call, over its starts.
+      d.errText.linesOf.countIt(
+        it.startsWith(
+          "package-manager: watch_installed_packages admitted for module instance " &
+            CliInstance & " of Runtime "
+        )
+      )
+
+    proc hookedWatch(c: Case, hook: string): (Child, Child) =
+      # logosd with lcn_call's watch hook `hook`, ready, its catalog in use; then a
+      # `package watch --count 2` past its first line and its admission.
       var dc = pmConfig()
       dc.runtime.module_host_env = Opt.some(@SanitizerEnv & @[WatchHookVariable])
       check c.initPm(dc).code == 0
@@ -787,25 +797,16 @@ when defined(posix):
         ["--session-dir", c.s.dir],
         c.dir,
         "logosd" & $children.len,
-        env = [(WatchHookVariable, "refresh=300,lose-first-hint,deaf")],
+        env = [(WatchHookVariable, hook)],
       )
       children.add(d)
       c.expectReady(d)
       check c.reaches(d, PmInstance, "ready")
       check c.setReadiness("ready")
       check c.acquired(d, catalogLine("configured"))
-      proc admitted(): int =
-        # The watches the Package Manager admitted for lcn_call.
-        d.errText.linesOf.countIt(
-          it.startsWith(
-            "package-manager: watch_installed_packages admitted for module instance " &
-              CliInstance & " of Runtime "
-          )
-        )
-
       let watch = spawnChild(
         ctlExe,
-        ["--session-dir", c.s.dir, "--json", "package", "watch", "--count", "3"],
+        ["--session-dir", c.s.dir, "--json", "package", "watch", "--count", "2"],
         c.dir,
         "watch",
       )
@@ -820,8 +821,17 @@ when defined(posix):
         "the watch's admission",
         d,
         proc(): bool =
-          admitted() == 1,
+          d.watchesAdmitted == 1,
       )
+      (d, watch)
+
+    proc lostNotices(watch: Child): int =
+      watch.errText.linesOf.countIt("the watch on the Package Manager was lost" in it)
+
+    test "[PKG-0555] [IMPL-DECISION G503] a lost watch is made again and lists (LCN_TEST_CLI_WATCH: the first hint lost with its watch, the refresh longer than the case): the line after the loss is the re-made watch's, with one notice":
+      let c = newCase()
+      # No line can come from the refresh: it is 10 minutes.
+      let (d, watch) = c.hookedWatch("refresh=600000,lose-first-hint")
       # The install's hint is lost with its watch: lcn_call makes the watch again, on
       # the provider looked up again, and lists before it writes.
       check c.ctl("package", "install", "lib", "1.2.0").code == 0
@@ -829,32 +839,153 @@ when defined(posix):
         "the watch made again",
         d,
         proc(): bool =
-          admitted() == 2,
+          d.watchesAdmitted == 2,
       )
-      check eventually(
-        "the watch's line after the loss",
-        d,
-        proc(): bool =
-          watch.outText.linesOf.len == 2,
-      )
-      # Every hint is ignored from now on: the next change is written from the refresh.
-      check c.ctl("package", "install", "app", "1.0.0").code == 0
       check waitExit(watch, ReadyMs) == 0
       checkpoint("the watch: " & watch.outText & watch.errText)
       check watch.outText.linesOf ==
         @[
           $(%*{"installed": newJArray()}),
           $(%*{"installed": [{"package": "lib", "version": "1.2.0"}]}),
-          $(
-            %*{
-              "installed": [
-                {"package": "app", "version": "1.0.0"},
-                {"package": "lib", "version": "1.2.0"},
-              ]
-            }
-          ),
         ]
-      check admitted() == 2
+      check d.watchesAdmitted == 2
+      check watch.lostNotices == 1
+      check d.stopped == 0
+      check hostsGone()
+
+    test "[PKG-0555] [IMPL-DECISION G503] the refresh lists on its own (LCN_TEST_CLI_WATCH: a 300 ms refresh, every hint ignored, no loss): a change whose hint is ignored is written from the refresh, and the watch is never made again":
+      let c = newCase()
+      let (d, watch) = c.hookedWatch("refresh=300,deaf")
+      check c.ctl("package", "install", "lib", "1.2.0").code == 0
+      check waitExit(watch, ReadyMs) == 0
+      checkpoint("the watch: " & watch.outText & watch.errText)
+      check watch.outText.linesOf ==
+        @[
+          $(%*{"installed": newJArray()}),
+          $(%*{"installed": [{"package": "lib", "version": "1.2.0"}]}),
+        ]
+      check d.watchesAdmitted == 1
+      check watch.lostNotices == 0
+      check d.stopped == 0
+      check hostsGone()
+
+    test "[PKG-0555] [IMPL-DECISION G503] a watch under a stop and a start of the Package Manager: the lost watch is made again, with one notice on stderr, and goes on writing the changes":
+      let c = newCase()
+      check c.initPm(pmConfig()).code == 0
+      c.stock()
+      c.anchor()
+      let d = c.ready()
+      check c.setReadiness("ready")
+      check c.acquired(d, catalogLine("configured"))
+      let watch = spawnChild(
+        ctlExe,
+        ["--session-dir", c.s.dir, "--json", "package", "watch", "--count", "2"],
+        c.dir,
+        "watch",
+      )
+      children.add(watch)
+      check eventually(
+        "the watch's first line",
+        d,
+        proc(): bool =
+          watch.outText.linesOf.len == 1,
+      )
+      check eventually(
+        "the watch's admission",
+        d,
+        proc(): bool =
+          d.watchesAdmitted == 1,
+      )
+      # The stop ends the watch, a real loss; lcn_call says so, and makes it again until the
+      # Package Manager is back, within 30 s of the loss (Fable §17.1 point 3).
+      let stoppedAt = getMonoTime()
+      check c.ctl("module", "stop", PmModule, "--instance", PmInstance).code == 0
+      check c.reaches(d, PmInstance, "unloaded")
+      check eventually(
+        "the watch's notice",
+        d,
+        proc(): bool =
+          "the watch on the Package Manager was lost" in watch.errText,
+      )
+      check watch.alive
+      check c.ctl("module", "start", PmModule, "--instance", PmInstance).code == 0
+      check c.reaches(d, PmInstance, "ready")
+      check c.acquired(d, catalogLine("configured"))
+      check eventually(
+        "the watch made again",
+        d,
+        proc(): bool =
+          d.watchesAdmitted == 2,
+      )
+      let remadeMs = inMilliseconds(getMonoTime() - stoppedAt)
+      checkpoint("made again " & $remadeMs & " ms after the stop")
+      check remadeMs < 30_000 # lcn_call's `WatchRemakeMs`
+      check watch.alive
+      # The same list after the start writes nothing; the next change is written.
+      check watch.outText.linesOf.len == 1
+      check c.ctl("package", "install", "lib", "1.2.0").code == 0
+      check waitExit(watch, ReadyMs) == 0
+      checkpoint("the watch: " & watch.outText & watch.errText)
+      check watch.outText.linesOf ==
+        @[
+          $(%*{"installed": newJArray()}),
+          $(%*{"installed": [{"package": "lib", "version": "1.2.0"}]}),
+        ]
+      check watch.lostNotices == 1
+      check d.stopped == 0
+      check hostsGone()
+
+    test "[IMPL-DECISION G503] a fifth watch waits at lcn_call's own bound of 4 with a notice on stderr, and its --for bounds the wait: exit 2, nothing sent; a place given back admits the next":
+      const watchBound = 4 # lcn_call's `PmWatches`
+      let c = newCase()
+      check c.initPm(pmConfig()).code == 0
+      c.stock()
+      c.anchor()
+      let d = c.ready()
+      # One at a time, each after the last one's admission: commands started together
+      # while lcn_call is activated may be refused busy by the daemon.
+      var watches: seq[Child] = @[]
+      for i in 0 ..< watchBound:
+        let w = spawnChild(
+          ctlExe,
+          ["--session-dir", c.s.dir, "--json", "package", "watch"],
+          c.dir,
+          "watch" & $i,
+        )
+        children.add(w)
+        watches.add(w)
+        check eventually(
+          "watch " & $i & "'s admission",
+          d,
+          proc(): bool =
+            d.watchesAdmitted == i + 1,
+        )
+      let t0 = getMonoTime()
+      let fifth = c.ctl("package", "watch", "--for", "2s")
+      let took = inMilliseconds(getMonoTime() - t0)
+      checkpoint(
+        "exit " & $fifth.code & " in " & $took & " ms: " & fifth.stdout & fifth.stderr
+      )
+      check fifth.code == 2
+      check "notice: lcn_call has 4 watches open: this one waits for one of them to end" in
+        fifth.stderr
+      check "stayed at its bound (4) past --for; nothing was sent" in fifth.stderr
+      check took >= 2000
+      check took < 2000 + 10_000 * Slow
+      check d.watchesAdmitted == watchBound
+      # One watch ends: its place is given back, and the next watch is admitted.
+      discard stopChild(watches[0], StopMs)
+      let next = c.ctl("package", "watch", "--count", "1")
+      checkpoint("exit " & $next.code & ": " & next.stdout & next.stderr)
+      check next.code == 0
+      check eventually(
+        "the next watch's admission",
+        d,
+        proc(): bool =
+          d.watchesAdmitted == watchBound + 1,
+      )
+      for w in watches[1 ..^ 1]:
+        discard stopChild(w, StopMs)
       check d.stopped == 0
       check hostsGone()
 

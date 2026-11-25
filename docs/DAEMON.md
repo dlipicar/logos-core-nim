@@ -1600,17 +1600,23 @@ items. `package watch` writes `{"installed": [{"package": NAME, "version": VERSI
 
 - **Pages.** A list reads every page, in order. When the Package Manager no longer holds the listing
   (`invalid-request` for its cursor: a commit or a catalog change between two pages), the listing starts
-  over, at most 3 times; then it fails (5) saying the list kept changing.
+  over, at most 3 times; then it fails (5) saying the list kept changing. So that a start over writes
+  nothing twice, `lcn_call` collects a list whole before it writes anything: what it holds is the
+  installed set, or the catalog's entries, all at once.
 - **`lcn_call`'s own bounds.** The Package Manager serves a reader at most 2 page calls (list pages and
   handoffs) and 4 watches in flight, 8 and 16 in all (PACKAGE-MANAGER.md §15), and every logosctl
   command is the one caller `lcn_call`. So `lcn_call` holds a third page call, or a fifth watch, until
   one of its own ends, rather than send it to be refused; a held call past `--timeout` ends (2) with
-  nothing sent. It cannot see the other readers' calls.
+  nothing sent. A fifth watch says on stderr that it waits (`notice: lcn_call has 4 watches open: this
+  one waits for one of them to end`; in JSON `{"notice": ...}`), and its `--for` bounds the wait: past
+  it, it ends (2) with nothing sent. It cannot see the other readers' calls.
 - **A refusal.** A reader's method answers `MODULE_ERROR` with no message at a query bound in all, to a
   caller that is not one of `package_manager.readers`, and when it failed; `lcn_call` cannot tell these
   apart and says so (5): "the Package Manager refused the query: it is at its query bound (8 page calls
   or 16 watches in all), lcn_call is not one of its readers, or it failed; the Package Manager's log says
-  which". The log has one line naming the cause.
+  which". The log has one line naming the caller, the method and the cause. The same line again within a
+  minute is counted, not written; the first after that is written with the count (`… (12 more like it
+  since its last line)`), and a count not written yet is written as the Package Manager stops.
 - **Package errors.** The Package Manager's error arm (`package-not-installed`, `package-in-use`, …; PM
   §14) is exit 5 with its code and its declared text.
 - **Remove.** `remove_package` succeeds with `{}` whether or not the package was installed (PM §15
@@ -1628,13 +1634,19 @@ items. `package watch` writes `{"installed": [{"package": NAME, "version": VERSI
   rollback. Progress is a reader's: for another caller the operation runs with no lines.
 - **The watch.** A hint only says to look again, and a submitted watch proves no observation boundary
   (PKG-0554), so `lcn_call` lists the installed packages when the watch starts, after each hint, every
-  30 s, and after a lost watch, which it makes again after a second (PKG-0555); it writes a line when the
-  list differs from the last one it wrote. The hints come in the watch's own scope, so, as for progress,
-  the watch and its subscription share a route, and both end with that route's session ("One route
-  session", above), after which the watch is made again, on the provider looked up again. It ends as
-  `subscribe` does: `--count` lines or `--for` (0), the launcher's EOF (130), or a failure: a refusal or
-  a package error (5), a list that failed, or a watch that cannot be made again, as when the Package
-  Manager stopped. A watch counts as a stream (`cli.streams`).
+  30 s, and after a lost watch, which it makes again (PKG-0555); it writes a line when the list differs
+  from the last one it wrote. The hints come in the watch's own scope, so, as for progress, the watch and
+  its subscription share a route, and both end with that route's session ("One route session", above).
+- **A lost watch.** A watch that ended, whose route or hints were lost, or whose Package Manager stopped
+  or restarts (`NOT_READY`, a transport failure, a timeout, a cancel nobody asked for) is made again, on
+  the provider looked up again, every second for up to 30 s from the loss, and lists once it is. Each
+  loss writes one notice on stderr (`notice: the watch on the Package Manager was lost (…); it is made
+  again for up to 30 s`; in JSON `{"notice": ...}`). A Package Manager that is back within the 30 s
+  goes on being watched; one that is not ends the watch with the last failure.
+- **Its end.** As `subscribe`'s: `--count` lines or `--for` (0), the launcher's EOF (130), or a failure:
+  a refusal or a package error (5), a list that failed with anything else, a watch not made again within
+  30 s of its loss, or a failure before the watch was first made, as for `package list`. A watch counts
+  as a stream (`cli.streams`).
 - **Who can.** S14 includes the operations: every process of logosd's user can install, update and
   remove packages through `lcn_call`, as it can stop modules through the logosctl instance (§7). Keep
   the session directory to the users who may.
