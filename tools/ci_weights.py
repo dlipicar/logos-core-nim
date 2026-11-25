@@ -3,6 +3,7 @@
 
     tools/ci_weights.py --run <run id> --checks <names.json> [--repo owner/name] [--cache DIR]
                         [--estimate <check>=<minutes>:<note> ...]
+                        [--replace <check>=<minutes>:<note> ...]
 
 `--checks` is the JSON list of x86_64 Linux check names, from
 `nix eval --json <flake>#checks.x86_64-linux --apply builtins.attrNames` (on the Mac through a
@@ -15,7 +16,10 @@ check the run did not build gets its group's mean in flake.nix, or `--estimate`.
 
 `--estimate` gives a check the run did not build its minutes, with a note on where they come from
 (a check split out of one the run built, say); it is recorded in the file's `estimated`, and is an
-error for a check the run measured.
+error for a check the run measured. `--replace` gives one the run did measure other minutes, when a
+failure being fixed made its run longer than it will be (a suite that waited out its timeouts); it
+is recorded the same way, with the minutes the run gave, and is an error for a check the run gave
+none.
 
 A check's minutes are the time from its first to its last `<check>> ` line in the
 `nix build -L` output of the x86_64 Linux job that built it. That is its build and test time while
@@ -104,6 +108,7 @@ def main():
     ap.add_argument("--repo")
     ap.add_argument("--cache")
     ap.add_argument("--estimate", action="append", default=[])
+    ap.add_argument("--replace", action="append", default=[])
     ap.add_argument("--out", default=OUT)
     a = ap.parse_args()
     a.cache = a.cache or os.path.join(ROOT, "build", "ci-logs", a.run)
@@ -111,12 +116,13 @@ def main():
     with open(a.checks) as f:
         checks = set(json.load(f))
     os.makedirs(a.cache, exist_ok=True)
-    given = {}
-    for e in a.estimate:
-        m = ESTIMATE.match(e)
-        if not m or m.group(1) not in checks:
-            sys.exit(f"--estimate {e}: expected <check>=<minutes>:<note> for a check in --checks")
-        given[m.group(1)] = (float(m.group(2)), m.group(3))
+    given, replaced = {}, {}
+    for flag, into in (("--estimate", given), ("--replace", replaced)):
+        for e in getattr(a, flag[2:]):
+            m = ESTIMATE.match(e)
+            if not m or m.group(1) not in checks:
+                sys.exit(f"{flag} {e}: expected <check>=<minutes>:<note> for a check in --checks")
+            into[m.group(1)] = (float(m.group(2)), m.group(3))
     run = json.loads(gh("api", f"repos/{repo}/actions/runs/{a.run}"))
     jobs, page = [], 1
     while True:
@@ -155,6 +161,12 @@ def main():
                 if n in weights:
                     sys.exit(f"--estimate {n}: the run measured it ({weights[n]:.1f} minutes)")
                 weights[n], estimated[n] = given[n]
+            if n in replaced:
+                if n not in weights:
+                    sys.exit(f"--replace {n}: the run did not measure it; use --estimate")
+                was = f"{weights[n]:.1f}" + (f", {estimated[n]}" if n in estimated else "")
+                estimated[n] = f"{replaced[n][1]} (the run gave {was})"
+                weights[n] = replaced[n][0]
     means = {}
     for g in ["orc-spec"] + VARIANTS:
         ws = [w for n, w in weights.items() if group_of(n) == g]
