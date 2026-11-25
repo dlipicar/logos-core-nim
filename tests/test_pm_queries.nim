@@ -1114,7 +1114,7 @@ when defined(posix):
       releaseAll()
       s.e.finish()
 
-    test "[IMPL-DECISION G501] [IMPL-DECISION G495] a reader that opens and cancels watches in a loop: its admission lines and its cancel lines are written 8 times a minute each, the rest counted, and the counts written as the Package Manager stops":
+    test "[IMPL-DECISION G501] [IMPL-DECISION G495] a reader that opens and cancels watches in a loop: its admission lines and its cancel lines are written 8 times a minute each, the rest counted, and the counts written as the Package Manager stops, once another reader's watch shows every cancel has run":
       let s = setup(hosted(), "watchloop")
       let o = newOwner(fastConfig())
       o.autoRelease = true
@@ -1163,8 +1163,38 @@ when defined(posix):
 
       for n in 1 .. 3:
         o.round(n)
-      # The third round's lines are counted, not written: 8 of each kind in the window.
-      o.settle(500 * Slow)
+      # [Fable §17.9] The third round's cancel lines are counted, not written, and its
+      # cancels reach the module in no set order. A watch gives its place back just after
+      # its cancel line, so another reader's watch admitted as "1 of 16 in all" shows that
+      # every one of `c`'s has run: `d` asks until it is (at most 8 times, so each of its
+      # lines is written), and gives each place back before asking again.
+      let other = o.session(s.rcD.directOf())
+      var asked = 0
+      while asked < 8:
+        inc asked
+        let probe = o.send(other, "watch_installed_packages", cborMap())
+        let n = asked
+        check waitUntil(
+          proc(): bool =
+            s.log.linesWith("watch_installed_packages admitted for module instance d ").len ==
+              n,
+          Answer,
+        )
+        let alone = s.log.admitted("d", 1, 1)
+        o.cancel(other, probe)
+        check o.ended(other, probe, ecCancelled)
+        check waitUntil(
+          proc(): bool =
+            s.log.linesWith(
+              "watch_installed_packages cancelled by the Runtime for module instance d "
+            ).len == n,
+          Answer,
+        )
+        if alone:
+          break
+      checkpoint "d asked " & $asked & " times"
+      check s.log.admitted("d", 1, 1)
+      # 8 of each of `c`'s kinds in the window; the third round's counted.
       check s.log.linesWith(head).len == 8
       check s.log.linesWith(cancels).len == 8
       # At the stop, the counts: the last line held of each kind, with the 3 others.

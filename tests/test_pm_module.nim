@@ -686,7 +686,7 @@ when defined(posix):
       releaseAll()
       s.e.finish()
 
-    test "[IMPL-DECISION G338] [IMPL-DECISION G449] a full mutation queue answers MODULE_ERROR; a consumer's cancel of a queued and of a running install ends each call CANCELLED and the handler logs it":
+    test "[IMPL-DECISION G338] [IMPL-DECISION G449] [IMPL-DECISION G501] a full mutation queue answers MODULE_ERROR; a consumer's cancel of waiting installs and removes and of a running install ends each call CANCELLED and each handler logs it, 8 lines of a kind a minute (G501), the rest counted at the stop":
       putEnv("LCN_TEST_EXTRACT_PACE_MS", "1500")
       defer:
         delEnv("LCN_TEST_EXTRACT_PACE_MS")
@@ -704,11 +704,21 @@ when defined(posix):
         Answer,
       )
       # The mutation slot runs `big`; 16 more wait (`MaxQueuedOperations`), and one more
-      # finds the queue full. The 17 calls are concurrent and reach the engine in no set
-      # order, so the refused one is whichever came last, not always the last sent.
-      var sent: seq[uint64]
-      for i in 1 .. 17:
-        sent.add(o.send(conn, "install_package", rootRequest("app", "1.0.0")))
+      # finds the queue full: 9 installs and 8 removes, which wait in the same slot
+      # (`slotOf`). The 17 calls are concurrent and reach the engine in no set order, so
+      # the refused one is whichever came last, not always the last sent.
+      var installs, removes: seq[uint64]
+      for i in 1 .. 9:
+        installs.add(o.send(conn, "install_package", rootRequest("app", "1.0.0")))
+      for i in 1 .. 8:
+        removes.add(
+          o.send(
+            conn,
+            "remove_package",
+            cborMap((cbor("identity"), identity("app", "1.0.0"))),
+          )
+        )
+      let sent = installs & removes
       var answered: seq[uint64]
       check waitUntil(
         proc(): bool =
@@ -726,10 +736,13 @@ when defined(posix):
           check f.get.message == Opt.some(
             "the Package Manager's mutation queue is full"
           )
-      let queued = sent.filterIt(it notin answered)
-      check queued.len == 16
-      # Each queued call, then the running one, cancelled by their consumer: the queued
-      # ones first, so that none starts once `big` ends.
+      let
+        waitingInstalls = installs.filterIt(it notin answered)
+        waitingRemoves = removes.filterIt(it notin answered)
+      checkpoint "waiting: " & $waitingInstalls.len & " installs, " & $waitingRemoves.len &
+        " removes"
+      check waitingInstalls.len + waitingRemoves.len == 16
+      check waitingInstalls.len >= 8
       proc cancelled(tag: uint64): Opt[ErrorCode] =
         o.cancel(conn, tag)
         o.outcome(conn, tag).failureOf.map(
@@ -737,33 +750,76 @@ when defined(posix):
             x.code
         )
 
-      for tag in queued:
-        let c = cancelled(tag)
-        check c == Opt.some(ecCancelled)
-      let c = cancelled(running)
-      check c == Opt.some(ecCancelled)
-      # One caller's 17 cancels: 8 lines in the window (G501's limit, `ReaderLineBurst`),
-      # the rest counted and written with their count as the Package Manager stops.
-      const cancelLine = "package-manager: install_package cancelled by the Runtime"
+      # [Fable §17.9] The cancels reach the module in no set order: the session answers
+      # CANCELLED at once, each call's worker forwards its own cancel, and the host runs each
+      # as a job. So each step waits for what shows its handlers ran: a kind's first 8 lines
+      # are written, not counted (G501), and a started operation's cancel writes its end line
+      # (G449) in the step that schedules its handler. A waiting one writes none.
+      const
+        installLine = "package-manager: install_package cancelled by the Runtime"
+        removeLine = "package-manager: remove_package cancelled by the Runtime"
+        endedLine = "package-manager: install_package ended after "
+      proc endedCancelled(): int =
+        s.log.linesWith(endedLine).countIt(it.endsWith(": cancelled"))
+
+      # 1. The waiting removes: one line each, at most 8.
+      for tag in waitingRemoves:
+        check cancelled(tag) == Opt.some(ecCancelled)
       check waitUntil(
         proc(): bool =
-          s.log.linesWith(cancelLine).len == 8
+          s.log.linesWith(removeLine).len == waitingRemoves.len
       )
-      # The worker goes on extracting for nobody (G449's limit) until the stop.
+      # 2. The waiting installs but one: one line each, at most 8.
+      let last = waitingInstalls[^1]
+      for tag in waitingInstalls[0 ..^ 2]:
+        check cancelled(tag) == Opt.some(ecCancelled)
+      check waitUntil(
+        proc(): bool =
+          s.log.linesWith(installLine).len == waitingInstalls.len - 1
+      )
+      # 3. The running install: its end line. Its slot passes to the one install left.
+      check cancelled(running) == Opt.some(ecCancelled)
+      check waitUntil(
+        proc(): bool =
+          endedCancelled() == 1
+      )
+      # 4. That install holds the slot, and the worker is still on `big`'s archive, so it
+      # cannot have reached its commit: its cancel writes a second end line.
+      check cancelled(last) == Opt.some(ecCancelled)
+      check waitUntil(
+        proc(): bool =
+          endedCancelled() == 2
+      )
+      # 5. Every handler has run or is scheduled: the stop. The worker goes on extracting for
+      # nobody (G449's limit) until then.
       let stopped = s.e.stopTimed()
       check stopped < initDuration(seconds = 5)
       check not extracting(s.pmDir)
       releaseAll()
       s.e.finish()
-      var noted = 0
-      for l in s.log.linesWith(cancelLine):
-        noted.inc
-        let i = l.rfind(" (")
-        if i >= 0 and l.endsWith(" more like it since its last line)"):
-          noted += parseInt(l[i + 2 ..< l.find(" ", i + 2)])
-      checkpoint $s.log.linesWith(cancelLine)
-      check s.log.linesWith(cancelLine).len == 9
-      check noted == 17
+      proc noted(lines: seq[string]): int =
+        ## The cancels the lines account for: one each, and the count a line carries.
+        for l in lines:
+          result.inc
+          let i = l.rfind(" (")
+          if i >= 0 and l.endsWith(" more like it since its last line)"):
+            result += parseInt(l[i + 2 ..< l.find(" ", i + 2)])
+
+      let
+        ins = s.log.linesWith(installLine)
+        outs = s.log.linesWith(removeLine)
+      checkpoint $ins
+      # The installs' lines: 8 written in the window, the last by the flush at the stop.
+      # With 9 waiting it carries one more like it; with 8 it is plain, `big`'s own line
+      # being the eighth.
+      check ins.len == 9
+      if ins.len == 9:
+        if waitingInstalls.len == 9:
+          check ins[^1].endsWith(" (1 more like it since its last line)")
+        else:
+          check not ins[^1].endsWith(" more like it since its last line)")
+      check outs.len == waitingRemoves.len
+      check noted(ins) + noted(outs) == 17
 
     test "[IMPL-DECISION G449] [IMPL-DECISION G402] during a long extraction the module thread answers: a second operation and a route renewal go through; a stop with the install's call in flight: the handler ends, its operation cancelled and one line logged; the caller's call fails; the stop ends inside its deadline, the record's directory deleted":
       # Were the extraction not stopped, it would run about 24 s, past the 10 s stop

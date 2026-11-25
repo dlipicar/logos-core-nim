@@ -1615,15 +1615,20 @@ items. `package watch` writes `{"installed": [{"package": NAME, "version": VERSI
   apart and says so (5): "the Package Manager refused the query: it is at its query bound (8 page calls
   or 16 watches in all), lcn_call is not one of its readers, or it failed; the Package Manager's log says
   which". The log has one line naming the caller, the method and the cause, limited as the next item says.
-- **The Package Manager's lines a caller can repeat.** Each line of its log that a caller causes and can
-  repeat is limited for each caller and kind of line, in a window of a minute from the kind's first line:
-  a refusal is written once a window, and the other lines 8 times (a watch admitted, cancelled by the
-  Runtime or ended; an operation or a handoff cancelled by the Runtime; a reader's handoff that failed).
+- **The Package Manager's lines a caller can repeat.** Its lines for a refused call, a watch, a call the
+  Runtime cancels and a reader's handoff that fails are limited for each caller and kind of line, in a
+  window of a minute from the kind's first line: a refusal is written once a window, and the other lines 8
+  times (a watch admitted, cancelled by the Runtime or ended; an operation or a handoff cancelled by the
+  Runtime; a reader's handoff that failed).
   The rest are counted, and the kind's first line after the window carries the count (`… (12 more like it
   since its last line)`); counts not written yet are written as the Package Manager stops. It holds at
   most 1024 kinds: past that, with none whose window has passed, a line of a new kind is counted into one
   line for all callers ("lines of a new kind are counted, not written: 1024 kinds of line are held"),
-  written at most once a minute (G495).
+  written at most once a minute. An operation's own lines are not limited: at most one end line for each
+  `inspect_package`, `install_package`, `remove_package` or `update_package`, and its limit or fault
+  lines; so a module allowed to call those methods writes the log at the rate of its operations. Neither
+  is a reader's list's detail line when the installed state cannot be read (G495). A hosted module's own
+  stderr reaches this log unfiltered in any case.
 - **Package errors.** The Package Manager's error arm (`package-not-installed`, `package-in-use`, …; PM
   §14) is exit 5 with its code and its declared text.
 - **Remove.** `remove_package` succeeds with `{}` whether or not the package was installed (PM §15

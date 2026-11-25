@@ -664,7 +664,8 @@ catalog listing's cursor ends by age. A continuation is answered when its origin
   names the bound ("at the watch bound: 4 in flight for this caller", "… 16 in flight in all"). A
   reader's watch lines (admitted, cancelled, ended), its handoffs' lines (cancelled, failed) and an
   operation's cancel line are written 8 times a minute for each caller and kind; the rest are counted,
-  and the next line says how many (G495, G501; DAEMON.md states the limit).
+  and the next line says how many (G495, G501; DAEMON.md states the limit). An operation's own lines
+  (its end line, its limit and fault lines) are not limited: at most one each per operation (G495).
 - **The call workers it holds** (G501). A hosted call holds one of the Runtime's call workers while it
   runs, so the Package Manager can hold up to 58 of the 128 at once (16 watches, 34 operations, 8 page
   calls), leaving 70 for other modules ([HOST-CONFIG.md](HOST-CONFIG.md), Runtime limits). The
