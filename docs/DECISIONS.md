@@ -8240,13 +8240,14 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   §17.6, planning 2026-11-25): through the test hook `LCN_TEST_CLI_WATCH`, the first hint lost with its watch and the
   refresh longer than the case, so the line after the loss is the re-made watch's, with one notice; a 300 ms refresh
   with every hint ignored and no loss, so a change is written from the refresh and the watch is never made again;
-  and a real loss, the Package Manager stopped and started under a watch, which is made again within 30 s with one
-  notice and writes the next change; a fifth watch with `--for 2s`, its notice, exit 2 at its deadline, and a place
-  given back admitting the next), `test_cli`
+  and a real loss, the Package Manager stopped and started under a watch, which is made again within lcn_call's remake
+  window (30 s, times `Slow` through `remake=MS` since big CI run 1, 2026-11-25: under ThreadSanitizer the restart took
+  about 27 of the 30 s) with one notice and writes the next change; a fifth watch with `--for 2s`, its notice, exit 2
+  at its deadline, and a place given back admitting the next), `test_cli`
   (PKG-0573: `classify` makes a cancel, a timeout or a lost route the outcome unknown).
 - **Claims (planning, 2026-11-25):** PKG-0554, PKG-0555 and PKG-0573 by test, none by inspection. The test hook
-  (`-d:lcnTestHooks`, `LCN_TEST_CLI_WATCH`: `refresh=MS`, `lose-first-hint`, `deaf`) is read when a watch command
-  starts; `tests/support/clibuild.nim` builds the test `liblcn_call` with the define, as `pmbuild` does.
+  (`-d:lcnTestHooks`, `LCN_TEST_CLI_WATCH`: `refresh=MS`, `remake=MS`, `lose-first-hint`, `deaf`) is read when a
+  watch command starts; `tests/support/clibuild.nim` builds the test `liblcn_call` with the define, as `pmbuild` does.
 - **Status:** built 5-6b-3 (I148); the lost watch, the fifth watch's notice and deadline, and the wait off POSIX
   in 5-6b's merge follow-up (Fable §17).
 
