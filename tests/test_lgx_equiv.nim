@@ -17,6 +17,21 @@
 ## once in the final CI pass, orc-release on Linux, from the dev shell (a flake check does not see
 ## the caller's environment): `LCN_LGX_FULL_CORPUS=1 nim c -r --mm:orc -d:release
 ## tests/test_lgx_equiv.nim`. CONFORMANCE, "The streaming reader".
+##
+## **The sanitizer subset** [IMPL] (DECISIONS G446; CI run 1, where x86_64 MemorySanitizer took
+## 72 minutes over the default corpus): under ASan, TSan or MSan each class of case keeps its
+## first case and then one in `SubsetStride` (`keep`). A class is one mutation of one archive (a
+## cut of each kind, a flip of each stream, an entry dropped, doubled or swapped, one header
+## field) or one extra host of the generated packages. Every random draw is still made, so a kept
+## case is the default corpus's own, draw for draw, and every test and every class runs. orc,
+## refc and orc-release run the default corpus; `LCN_LGX_FULL_CORPUS=1` samples nothing in any
+## build.
+##
+## **A fixed hedge** [IMPL] (the same note): the corpus signs with `fixedHedge`, so every
+## archive is the same on every run and in every build. Signed with fresh bytes, as before, a
+## stream flip or cut met other signature bytes on each run, and the agreements seen changed
+## from run to run (`agFormat` 4 to 6). The signing path's default stays fresh, and a test
+## checks it.
 
 import std/[algorithm, atomics, os, random, sequtils, strutils, tables]
 import unittest2
@@ -30,6 +45,23 @@ createDir(scratch)
 let full = getEnv("LCN_LGX_FULL_CORPUS") == "1" ## nothing sampled (above)
 if full:
   echo "    LCN_LGX_FULL_CORPUS=1: the full corpus, nothing sampled"
+
+const SubsetStride = 10 ## the sanitizer subset's stride (above)
+let subset = (defined(asan) or defined(tsan) or defined(msan)) and not full
+if subset:
+  echo "    a sanitizer build: the subset, one case in ", SubsetStride, " of each class"
+
+var
+  met = initCountTable[string]() ## each class's cases, kept or not
+  kept = initCountTable[string]() ## each class's cases compared
+
+proc keep(class: string): bool =
+  ## The sanitizer subset (above): a class's first case and then one in `SubsetStride`; every
+  ## case in another build. The caller has made the case's random draws already.
+  result = not subset or met[class] mod SubsetStride == 0
+  met.inc(class)
+  if result:
+    kept.inc(class)
 
 var kinds = initCountTable[Agreement]()
 
@@ -204,9 +236,10 @@ proc locate(hay, needle: openArray[byte]): int =
   -1
 
 proc coseWith(payload: seq[byte], signer = key, kidBytes = kid): seq[byte] =
-  ## A COSE_Sign1 over `payload` under `kidBytes`, signed with `signer`.
+  ## A COSE_Sign1 over `payload` under `kidBytes`, signed with `signer` under the corpus's fixed
+  ## hedge.
   var (c, tbs) = unsignedCose(kidBytes, payload)
-  c.signature = sign(signer, tbs).get
+  c.signature = sign(signer, tbs, random = fixedHedge).get
   encodeCoseSign1(c)
 
 # Suites ----------------------------------------------------------------------------------------
@@ -234,42 +267,54 @@ suite "pkg.lgx streaming: equivalence with the in-memory reader (step 5-5-2b, pl
       let a = generated(rng, variants, count, contracts)
       check agrees(a) == agSame
       for host in [darwinHost, windowsHost]:
-        discard agrees(a, host)
+        if keep("generated: the " & host.os & " host"):
+          discard agrees(a, host)
     check agrees(rich) == agSame
 
   test "[IMPL-DECISION G446] [IMPL-DECISION G29] truncations: the tar stream at every 512-byte boundary of two archives, the trailer at every byte, and random offsets":
     # `rich` too, and every compressed stream, with the full corpus.
     let cutAll =
       if full:
-        @[base, small, rich]
+        @[("base", base), ("small", small), ("rich", rich)]
       else:
-        @[base, small]
-    for a in cutAll:
+        @[("base", base), ("small", small)]
+    for (name, a) in cutAll:
       let t = gunzip(a, 1 shl 30).get
       for cut in countup(0, t.len - 1, 512):
-        discard agrees(gzipCompress(t[0 ..< cut]).get)
+        if keep(name & ": tar cut"):
+          discard agrees(gzipCompress(t[0 ..< cut]).get)
     # The compressed stream: every 512 bytes of `base`, and the trailer's every byte of both.
-    for a in (if full: cutAll else: @[base]):
+    for (name, a) in (if full: cutAll else: cutAll[0 .. 0]):
       for cut in countup(0, a.len - 1, 512):
-        discard agrees(a[0 ..< cut])
-    for a in cutAll:
+        if keep(name & ": stream cut"):
+          discard agrees(a[0 ..< cut])
+    for (name, a) in cutAll:
       for back in 1 .. 16:
-        discard agrees(a[0 ..< a.len - back])
-    for a in [base, small, rich]:
+        if keep(name & ": trailer cut"):
+          discard agrees(a[0 ..< a.len - back])
+    for (name, a) in [("base", base), ("small", small), ("rich", rich)]:
       let t = gunzip(a, 1 shl 30).get
       for _ in 0 ..< 16:
-        discard agrees(gzipCompress(t[0 ..< rng.rand(t.len - 1)]).get)
-        discard agrees(a[0 ..< rng.rand(a.len - 1)])
+        let tarCut = rng.rand(t.len - 1)
+        if keep(name & ": tar cut at random"):
+          discard agrees(gzipCompress(t[0 ..< tarCut]).get)
+        let streamCut = rng.rand(a.len - 1)
+        if keep(name & ": stream cut at random"):
+          discard agrees(a[0 ..< streamCut])
 
   test "[IMPL-DECISION G446] [IMPL-DECISION G29] flipped bytes in the compressed stream, and in the tar stream recompressed":
-    for a in [base, small, rich]:
+    for (name, a) in [("base", base), ("small", small), ("rich", rich)]:
       let t = gunzip(a, 1 shl 30).get
       for _ in 0 ..< 24:
-        discard agrees(a.flipped(rng.rand(a.len - 1)))
-        discard agrees(gzipCompress(t.flipped(rng.rand(t.len - 1))).get)
+        let streamAt = rng.rand(a.len - 1)
+        if keep(name & ": stream flip"):
+          discard agrees(a.flipped(streamAt))
+        let tarAt = rng.rand(t.len - 1)
+        if keep(name & ": tar flip"):
+          discard agrees(gzipCompress(t.flipped(tarAt)).get)
 
   test "[IMPL-DECISION G446] [IMPL-DECISION G29] entries reordered, duplicated or dropped":
-    for a in [base, small, rich]:
+    for (name, a) in [("base", base), ("small", small), ("rich", rich)]:
       let es = entriesOf(a)
       # Every entry of `base`; the first twelve of `small` (the manifest files, the
       # directories, the first files) and twelve more; twelve of `rich`. Every entry of each,
@@ -282,13 +327,15 @@ suite "pkg.lgx streaming: equivalence with the in-memory reader (step 5-5-2b, pl
       elif a == rich:
         at = toSeq(0 ..< 12).mapIt(rng.rand(es.len - 1))
       for i in at:
-        var dropped = es
-        dropped.delete(i)
-        discard agrees(gz(tar(dropped)))
-        var doubled = es
-        doubled.insert(es[i], i)
-        discard agrees(gz(tar(doubled)))
-        if i + 1 < es.len:
+        if keep(name & ": entry dropped"):
+          var dropped = es
+          dropped.delete(i)
+          discard agrees(gz(tar(dropped)))
+        if keep(name & ": entry doubled"):
+          var doubled = es
+          doubled.insert(es[i], i)
+          discard agrees(gz(tar(doubled)))
+        if i + 1 < es.len and keep(name & ": entries swapped"):
           var swapped = es
           swap(swapped[i], swapped[i + 1])
           discard agrees(gz(tar(swapped)))
@@ -329,11 +376,12 @@ suite "pkg.lgx streaming: equivalence with the in-memory reader (step 5-5-2b, pl
       else:
         r.prefix = "elsewhere"
 
-    for a in [base, small, rich]:
+    for (name, a) in [("base", base), ("small", small), ("rich", rich)]:
       let es = entriesOf(a)
       # Every field of the first eight entries (the manifest files, the directories, the first
       # files) of the two smaller archives; one field of each later entry of `small`, in turn;
       # eight random pairs of `rich`. Every field of every entry of each, with the full corpus.
+      # Each field is a class of the sanitizer subset.
       var pairs: seq[(int, int)]
       if full:
         for i in 0 ..< es.len:
@@ -350,9 +398,10 @@ suite "pkg.lgx streaming: equivalence with the in-memory reader (step 5-5-2b, pl
           for i in 8 ..< es.len:
             pairs.add((i, i mod 16))
       for (i, k) in pairs:
-        var changed = es
-        changed[i].broken(k)
-        discard agrees(gz(tar(changed)))
+        if keep(name & ": field " & $k):
+          var changed = es
+          changed[i].broken(k)
+          discard agrees(gz(tar(changed)))
       # a checksum that does not match, and trailing bytes of each kind
       var t = gunzip(a, 1 shl 30).get
       t[148] = t[148] xor 1
@@ -678,11 +727,22 @@ suite "pkg.lgx streaming: equivalence with the in-memory reader (step 5-5-2b, pl
     let r = streaming(a)
     check r.isErr and r.error.code == pecInvalidPackage and r.error.msg == CapMessage
 
+  test "[IMPL-DECISION G446] the corpus's hedge is fixed, and the signing path's default is fresh: two default signatures of one manifest differ":
+    let m = decodeManifest(encodeCbor(manifestValue())).get
+    check signManifest(m, kid, key, fixedHedge).get == signed(manifestValue())[1]
+    check signManifest(m, kid, key).get != signManifest(m, kid, key).get
+
   test "the agreements seen":
     checkpoint $kinds
     if existsEnv("LCN_TEST_TRACE"):
       echo "    ", kinds
-    check kinds[agSame] > 500
+      for class, n in met:
+        echo "    ", class, ": ", kept[class], " of ", n
+    # Every class compared at least once, the sanitizer subset's included.
+    for class, n in met:
+      checkpoint class
+      check kept[class] > 0
+    check kinds[agSame] > (if subset: 100 else: 500)
     check kinds[agFormat] > 0 and kinds[agBound] > 0 and kinds[agSignatureSize] > 0
     check kinds[agDocument] > 0
 

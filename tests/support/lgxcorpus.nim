@@ -162,10 +162,19 @@ var signatures*: Table[seq[byte], seq[byte]]
   ## One signature per distinct manifest: SLH-DSA-SHA2-192s signing takes most
   ## of a second, and most tests pack the same manifest.
 
+proc fixedHedge*(dest: var openArray[byte]): bool =
+  ## The corpus's hedge (DECISIONS G446's tests, CI run 1): the same bytes on every run, so
+  ## a manifest's signature, and every archive built around it, is the same on every run and
+  ## in every build. Only test support passes it; `signManifest` and `sign` keep the
+  ## operating system's fresh bytes by default.
+  for i in 0 ..< dest.len:
+    dest[i] = byte(i)
+  true
+
 proc signed*(v: CborValue): (seq[byte], seq[byte]) =
   let m = decodeManifest(encodeCbor(v)).get
   if m.encoded notin signatures:
-    signatures[m.encoded] = signManifest(m, kid, key).get
+    signatures[m.encoded] = signManifest(m, kid, key, fixedHedge).get
   (m.encoded, signatures[m.encoded])
 
 proc pack*(v = manifestValue(), linux = linuxFiles, darwin = darwinFiles): seq[byte] =
