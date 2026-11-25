@@ -10,21 +10,26 @@ name: CI
 # over two hours for every check on Linux x86_64, and 86 of its 90 minutes on macOS (5bd731f,
 # 2026-11-13). Each check is in exactly one group, and the first orc-spec shard also evaluates every
 # flake output. Linux has six groups; macOS has no sanitizer checks, so only orc-spec, refc and
-# orc-release. On Linux orc-spec runs as four shards, refc as three, orc-release as two, asan and
+# orc-release. On Linux orc-spec runs as four shards, refc and orc-release as three, asan and
 # tsan as four and msan as five (flake.nix `ciShards`, balanced by each check's minutes in a saved
 # run, nix/ci-weights.json). A shard's heaviest check, when it takes 25 minutes or more, is its head:
 # it builds on one build slot from the start and the rest beside it on three, since Nix starts a
 # build's checks in no order of weight. On 0a459c9 (2026-11-21, run 44888184613) the x86_64 shards
 # holding test_lcn_call under asan and msan, and orc-spec's holding kit-toolchains, passed the
 # 90-minute limit when those checks started late; under asan and msan test_lcn_call alone still
-# takes 80 and 73 minutes there.
-# macOS builds each of its three groups as two shards, without heads: the whole orc-spec group took
-# 49 minutes on 19a6274 (2026-11-15) and 73 on dc2e7ef (2026-11-16), and on b823baa (2026-11-25, run
-# 45616293974) refc and orc-release, each whole, reached the 90-minute limit with 87 and 76 suites
-# done. Its six jobs and the nimble job's four share the five macOS runners a public repository
-# has at once, so some wait for one; a job's timeout-minutes count from when it starts.
-# The sanitizer jobs (asan, tsan, msan) do not fail the run between waves; the repository variable
-# SANITIZERS_BLOCKING makes them block again (the nix job's `continue-on-error`).
+# takes 80 and 73 minutes there. On b823baa (2026-11-25, run 45616293974) the two orc-release shards
+# on x86_64 reached it too: the Package Manager's and the remote suites take 11 to 37 minutes each
+# there.
+# macOS builds orc-spec as three shards and refc and orc-release as two, without heads: on b823baa
+# refc and orc-release, each whole, reached the 90-minute limit with 87 and 76 suites done, and
+# orc-spec's two shards took 88 and 83 minutes. Its seven jobs and the nimble job's four share the
+# five macOS runners a public repository has at once, so some wait for one; a job's timeout-minutes
+# count from when it starts.
+# The sanitizer jobs (asan, tsan, msan) have 150 minutes and every other job 90 (the nix job's
+# `timeout-minutes`): on b823baa one suite alone takes up to 73 minutes there (test_logosd under
+# asan on x86_64), so a shard holding it cannot be balanced under 90 by more shards. They do not
+# fail the run between waves; the repository variable SANITIZERS_BLOCKING makes them block again
+# (the nix job's `continue-on-error`).
 
 on:
   pull_request:
@@ -49,7 +54,7 @@ concurrency:
 jobs:
   nix:
     if: ${{ !inputs.windows_only && !inputs.nimble_only }}
-    name: nix (${{ matrix.os }}, ${{ matrix.group }}${{ (matrix.os != 'macos-latest' && format(' {0}/{1}', matrix.shard, (matrix.group == 'msan' && 5) || ((matrix.group == 'orc-spec' || matrix.group == 'asan' || matrix.group == 'tsan') && 4) || (matrix.group == 'refc' && 3) || 2)) || format(' {0}/2', matrix.shard) }})
+    name: nix (${{ matrix.os }}, ${{ matrix.group }}${{ (matrix.os != 'macos-latest' && format(' {0}/{1}', matrix.shard, (matrix.group == 'msan' && 5) || ((matrix.group == 'refc' || matrix.group == 'orc-release') && 3) || 4)) || format(' {0}/{1}', matrix.shard, (matrix.group == 'orc-spec' && 3) || 2) }})
     # ATTIC_TOKEN_PUBLIC only exists in the public-cache environment.
     environment: ${{ github.ref == 'refs/heads/master' && 'public-cache' || '' }}
     strategy:
@@ -57,9 +62,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
         group: [orc-spec, refc, orc-release, asan, tsan, msan]
-        # `ciShardCount` in flake.nix. On Linux: 4 for orc-spec, 3 for refc, 2 for orc-release, 4
-        # for asan and tsan and 5 for msan (the shards past 2 in `include`). On macOS: 2 for each
-        # of orc-spec, refc and orc-release.
+        # `ciShardCount` in flake.nix. On Linux: 4 for orc-spec, 3 for refc and orc-release, 4 for
+        # asan and tsan and 5 for msan (the shards past 2 in `include`). On macOS: 3 for orc-spec
+        # and 2 for refc and orc-release.
         shard: [1, 2]
         # flake.nix defines the sanitizer variants on Linux only.
         exclude:
@@ -87,6 +92,15 @@ jobs:
             shard: 3
           - os: ubuntu-24.04-arm
             group: refc
+            shard: 3
+          - os: ubuntu-latest
+            group: orc-release
+            shard: 3
+          - os: ubuntu-24.04-arm
+            group: orc-release
+            shard: 3
+          - os: macos-latest
+            group: orc-spec
             shard: 3
           - os: ubuntu-latest
             group: asan
@@ -131,7 +145,8 @@ jobs:
             group: msan
             shard: 5
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    # 150 minutes for a sanitizer group, 90 for the others (the header).
+    timeout-minutes: ${{ contains(fromJSON('["asan", "tsan", "msan"]'), matrix.group) && 150 || 90 }}
     # The owner's decision of 2026-11-21: between waves the sanitizer groups do not block. A failed
     # asan, tsan or msan job still shows as failed, but the run succeeds, and planning triages each
     # run. For the end-of-tier sanitizer pass, set the repository variable SANITIZERS_BLOCKING to

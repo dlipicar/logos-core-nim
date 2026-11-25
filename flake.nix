@@ -1123,9 +1123,12 @@
       # and heads, asan's at 87 and msan's at 80 while test_lcn_call alone takes as long. Every
       # check is placed exactly once whatever the weights say: evaluation fails if a group's heads
       # and tails do not hold its checks exactly once, or if a check heads two shards. The counts
-      # must match the `shard` lists in ci.yml. macOS builds each of its three groups as two parts,
-      # without heads (its runners have three cores, and the weights are x86_64 Linux times): on
-      # b823baa (run 45616293974) refc and orc-release, each whole, reached the 90-minute limit.
+      # must match the `shard` lists in ci.yml. macOS builds orc-spec as three parts and refc and
+      # orc-release as two, without heads (its runners have three cores, and the weights are x86_64
+      # Linux times): on b823baa (run 45616293974) refc and orc-release, each whole, reached the
+      # 90-minute limit, and orc-spec's two parts took 88 and 83 minutes. There too the two x86_64
+      # orc-release shards reached it, with the Package Manager's and the remote suites at 11 to 37
+      # minutes each; they are three on Linux since.
       legacyPackages = forAllSystems (
         system:
         let
@@ -1161,12 +1164,14 @@
               {
                 orc-spec = 4;
                 refc = 3;
-                orc-release = 2;
+                orc-release = 3;
                 asan = 4;
                 tsan = 4;
                 msan = 5;
               }
               .${group} or 2
+            else if group == "orc-spec" then
+              3
             else
               2;
           ciHeadMinutes = if isLinux then 25 else null;
