@@ -1516,7 +1516,7 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
       "package_manager: package_manager gets resolver limits partial_closure_names 16, dependency_depth 15, " &
       "candidates_per_name 4, assignment_attempts 1000 (package_manager.resolver_limits)"
 
-  test "compose: the instance's lcn.pm_input, byte for byte, its only protected input":
+  posixTest "compose: the instance's lcn.pm_input, byte for byte, its only protected input":
     let s = Session(dir: freshDir())
     let p = prepareDaemon(s, dcBytes(withHost(pmText())), prod).get
     let app = p.composition.appConfig
@@ -1577,7 +1577,7 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
     ).get
     check plain.composition.appConfig.protected_inputs.isNone
 
-  test "[IMPL-DECISION G498] [PKG-0529] compose: the input's readers are package_manager.readers, else lcn_call when this start composes it, else none, with the Runtime's id; a reader named twice, the Package Manager itself or an instance this start does not run is refused":
+  posixTest "[IMPL-DECISION G498] [PKG-0529] compose: the input's readers are package_manager.readers, else lcn_call when this start composes it, else none, with the Runtime's id; a reader named twice, the Package Manager itself or an instance this start does not run is refused":
     proc inputOf(text: string): CborValue =
       result = cborMap()
       let p = prepareDaemon(Session(dir: freshDir()), dcBytes(text), prod)
@@ -1724,7 +1724,7 @@ suite "dc.package_manager: the Package Manager's section, its input and S9 to S1
     ) ==
       "package_manager.artifact.id must be logos_package_manager, the companion library's id"
 
-  test "[G402] [IMPL-DECISION G491] [IMPL-DECISION G503] S9 to S13 with the section: seven rules, each provider once, in byte order; S14 with lcn_call too":
+  posixTest "[G402] [IMPL-DECISION G491] [IMPL-DECISION G503] S9 to S13 with the section: seven rules, each provider once, in byte order; S14 with lcn_call too":
     let orch = orchestratorValue(dcOf(pmText())).get
     let base = systemRules(orch).get
     let two = PmSettings(instance: PmInstance, providers: @["st", "a", "st"])
