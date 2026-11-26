@@ -446,19 +446,26 @@ when defined(posix):
   # 100 + the code for an invocation failure.
   var bAnswer: Atomic[int]
 
+  proc installAnswer(package: string): int =
+    ## `package` 1.0.0 installed through `pmA`: its answer as `bAnswer` holds it.
+    let r = pmA.call("install_package", rootRequest(package, "1.0.0"))
+    result = 2
+    if r.code != ecOk:
+      result = 100 + ord(r.code)
+    else:
+      let v = decodeCbor(r.response)
+      if v.isOk and v.get.lookup("installed").isSome:
+        result = 0
+      elif v.isOk and v.get.codeOf == "package-unavailable":
+        result = 1
+
   proc installBig() {.thread.} =
     {.gcsafe.}:
-      let r = pmA.call("install_package", rootRequest("big", "1.0.0"))
-      var code = 2
-      if r.code != ecOk:
-        code = 100 + ord(r.code)
-      else:
-        let v = decodeCbor(r.response)
-        if v.isOk and v.get.lookup("installed").isSome:
-          code = 0
-        elif v.isOk and v.get.codeOf == "package-unavailable":
-          code = 1
-      bAnswer.store(code)
+      bAnswer.store(installAnswer("big"))
+
+  proc installExample() {.thread.} =
+    {.gcsafe.}:
+      bAnswer.store(installAnswer("logos.example"))
 
   # The transport consumer, for the cases that cancel a call --------------------------------
 
@@ -886,9 +893,12 @@ when defined(posix):
     test "[IMPL-DECISION G449] an operation's deadline answers its call while the worker extracts; a stop then ends at the worker's next piece, its directory deleted":
       # The worker holds at the extraction's first write until `hold` exists or the stop
       # (`LCN_TEST_EXTRACT_HOLD_FILE`, `pm/store.nim`), so the deadline passes while it
-      # extracts however fast the runner is. The deadline only has to outlast big's
-      # retrieval and verification, which a sanitizer slows: under ThreadSanitizer on arm64
-      # they took longer than 8 s (big CI run 1). The case is about the order, not the value.
+      # extracts however fast the runner is. The deadline only has to outlast the retrieval
+      # and verification before the extraction, so the case installs `logos.example`, a few
+      # files of a few bytes, not `big` [IMPL]: big's 16 MiB took longer than 8 s under
+      # ThreadSanitizer on arm64 (big CI run 1) and under refc on both Linux runners (the fix
+      # run, 45720883425). On the Mac under refc the extraction begins after 1.1 s for big
+      # and 0.09 s for `logos.example`. The case is about the order, not the value.
       let hold = work / "deadline-hold"
       removeFile(hold)
       putEnv("LCN_TEST_EXTRACT_HOLD_FILE", hold)
@@ -909,7 +919,7 @@ when defined(posix):
       bAnswer.store(-1)
       let began = getMonoTime()
       var t: Thread[void]
-      createThread(t, installBig)
+      createThread(t, installExample)
       check waitUntil(
         proc(): bool =
           extracting(s.pmDir) or bAnswer.load != -1,
