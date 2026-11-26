@@ -304,9 +304,6 @@ when defined(posix):
     PmModule = "logos_package_manager"
     RuntimeId = "3b7c1e94-6a2d-4f05-9c81-d2e4a7b05f36"
       ## the test Runtime's id, which the protected input names (G498)
-    PaceMs = 2000 * Slow
-      ## the page jobs' pause per record (`LCN_TEST_PM_PAGE_PACE_MS`, `pm/jobs.nim`) where
-      ## a case holds page jobs in flight
     RecordKeys = [
       "artifacts", "identity", "manifest_commitment", "modules",
       "resolved_dependencies", "signer", "source", "variant",
@@ -929,10 +926,22 @@ when defined(posix):
         s.e.finish()
 
     test "[PKG-0558] [IMPL-DECISION G500] page jobs: past 2 in flight for one reader the call is MODULE_ERROR with no message and one operator line naming the bound, while another reader's goes on; the first worker is not behind them, so an install is answered while they wait; each page is its own snapshot's":
-      putEnv("LCN_TEST_PM_PAGE_PACE_MS", $PaceMs)
+      # The page jobs wait before each record until `hold` exists or the stop
+      # (`LCN_TEST_PM_PAGE_HOLD_FILE`, `pm/jobs.nim`), so they are in flight while the
+      # install runs however slow the runner is [IMPL]. Under a pause of 2 s per record
+      # instead, the install had to be answered inside it: 0.21 s on the Mac under refc,
+      # where the big CI fix run's Linux runners were over 7 times slower than the Mac at
+      # `test_pm_module`'s install of `big`.
+      let hold = work / "page-hold"
+      removeFile(hold)
+      putEnv("LCN_TEST_PM_PAGE_HOLD_FILE", hold)
       defer:
-        delEnv("LCN_TEST_PM_PAGE_PACE_MS")
-      let s = setup(hosted(["LCN_TEST_PM_PAGE_PACE_MS"]), "bound")
+        delEnv("LCN_TEST_PM_PAGE_HOLD_FILE")
+        try:
+          writeFile(hold, "") # lets page jobs this case failed to release go on
+        except IOError:
+          discard
+      let s = setup(hosted(["LCN_TEST_PM_PAGE_HOLD_FILE"]), "bound")
       discard installRecord("app", "1.0.0")
       let o = newOwner(fastConfig())
       defer:
@@ -971,6 +980,7 @@ when defined(posix):
       for tag in running:
         check o.outcome(conn, tag, 0).isNone
       check o.outcome(connD, other, 0).isNone
+      writeFile(hold, "")
       # Each page answers from the snapshot it began on: `app` and its `lib`, without
       # `logos.example`, and its next cursor has expired with that snapshot.
       for (c, tag) in [(conn, running[0]), (conn, running[1]), (connD, other)]:

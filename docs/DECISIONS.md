@@ -8094,7 +8094,8 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   a page: its reply is one value of up to about 14 MiB, so the byte budget does not apply, and its cost on the module
   thread is a large reply's (G497, G504).
 - **Test hooks** (`-d:lcnTestHooks`): `LCN_TEST_PM_PAGE_BUDGET` (the budget), `LCN_TEST_PM_PAGE_PACE_MS` (a pause per
-  record a page job reads), `LCN_TEST_HANDOFF_JOBS` (a line per first-worker handoff).
+  record a page job reads), `LCN_TEST_PM_PAGE_HOLD_FILE` (a page job's wait before each record until that file exists
+  or the worker's stop; since the big CI fix run), `LCN_TEST_HANDOFF_JOBS` (a line per first-worker handoff).
 - **Tests:** `test_listing`; `test_pm_queries` (the order, `next_cursor`, continuation, the filter, the limits, the
   budget: a page cut by it before `limit`, one cut by `limit` before it, a record over it alone in its page and the
   next page going on after it; the bounds and their log line, the first worker not behind the pages, PKG-0167); `test_pm_install` (the

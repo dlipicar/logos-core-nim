@@ -472,6 +472,17 @@ when defined(posix):
       when defined(lcnTestHooks):
         if pagePaceMs > 0:
           sleep(pagePaceMs)
+        # [IMPL] A hosted test's hold, `LCN_TEST_PM_PAGE_HOLD_FILE` (unset: none): the job
+        # waits before each record until that file exists or the worker is stopped, so that
+        # a case can act while page jobs are in flight however slow the runner is (the big
+        # CI fix run: `test_pm_queries`' bound case had a 2 s pace for an install). Read
+        # here, on the worker, not into a global string.
+        let hold = getEnv("LCN_TEST_PM_PAGE_HOLD_FILE")
+        if hold.len > 0:
+          while (stop.isNil or not stop[].load(moRelaxed)) and not fileExists(hold):
+            sleep(5)
+          if not stop.isNil and stop[].load(moRelaxed):
+            break
       let read = readRecordFiles(
         w.config.root,
         IndexEntry(rid: p.rid, generation: p.generation, identity: p.identity),
