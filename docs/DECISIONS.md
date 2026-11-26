@@ -8260,9 +8260,10 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   lists at once and no refusal; with `lcn_call` not a reader, both lists refused with `PmRefusal` and the log's line,
   an install with `--progress` and no lines, PKG-0573; PKG-0555 in three cases, each list shown on its own (Fable
   §17.6, planning 2026-11-25): through the test hook `LCN_TEST_CLI_WATCH`, the first hint lost with its watch and the
-  refresh longer than the case, so the line after the loss is the re-made watch's, with one notice; a 300 ms refresh
-  with every hint ignored and no loss, so a change is written from the refresh and the watch is never made again;
-  and a real loss, the Package Manager stopped and started under a watch, which is made again within lcn_call's remake
+  refresh longer than the case, so the line after the loss is the re-made watch's, with one notice (the watch kept
+  open past that line, `--count 3`, until the re-made watch's admission, then stopped, since the big CI fix run); a
+  300 ms refresh with every hint ignored and no loss, so a change is written from the refresh and the watch is never
+  made again; and a real loss, the Package Manager stopped and started under a watch, which is made again within lcn_call's remake
   window (30 s, times `Slow` through `remake=MS` since big CI run 1, 2026-11-25: under ThreadSanitizer the restart took
   about 27 of the 30 s) with one notice and writes the next change; a fifth watch with `--for 2s`, its notice, exit 2
   at its deadline, and a place given back admitting the next, kept open until the Package Manager's admission line so
