@@ -1229,7 +1229,8 @@ when defined(posix):
 # The engine's page jobs (5-6b-1) ----------------------------------------------------------
 
 # Off POSIX the engine answers a page job or a reader's handoff MODULE_ERROR (the installed
-# state is POSIX only), so the cases that reach one skip there; the limit check runs everywhere.
+# state is POSIX only, G444), so the cases that reach one skip there and the last case checks
+# both refusals; the limit check runs everywhere.
 suite "the engine's page jobs (5-6b-1; G499, G500)":
   let
     a = Origin(runtime: "rt", instance: "a")
@@ -1469,6 +1470,26 @@ suite "the engine's page jobs (5-6b-1; G499, G500)":
     )
     check w.answers[^1].codeOf == "invalid-request"
     check not w.has({cmPage})
+
+  when not defined(posix):
+    test "[IMPL-DECISION G444] [IMPL-DECISION G500] off POSIX a list that matches and a reader's handoff of an installed package are MODULE_ERROR, and no page job is queued":
+      # The engine's two refusals stand in front of the read-only worker, whose
+      # installed-state jobs assert off POSIX; nothing else runs them (5-6).
+      var w = world()
+      let held = w.e.heldSnapshots
+      w.emit(
+        w.e.listInstalled(1, a, Opt.none(string), Opt.none(string), Opt.none(uint16))
+      )
+      check w.last.answer.kind == oaModuleError
+      check w.last.answer.reason == "the installed state is POSIX only"
+      w.emit(
+        w.e.readerHandoff(2, a, PackageIdentity(package: "app", version: "1.0.0"), "m")
+      )
+      check w.last.answer.kind == oaModuleError
+      check w.last.answer.reason == "the installed state is POSIX only"
+      check not w.has({cmPage})
+      check w.e.pagesRunning == 0
+      check w.e.heldSnapshots == held
 
 # The watch's hints and the operations' progress (5-6b-2) -------------------------------
 
