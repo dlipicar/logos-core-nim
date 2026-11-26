@@ -213,10 +213,15 @@ proc overwriteKey(key: string, n: int) =
       discard fsync(fd)
       discard posix.close(fd)
   else:
+    # [IMPL] Best effort, as the POSIX branch's discards: a write or a flush that
+    # fails still closes the file, and the key is removed after.
     var f: File
     if open(f, key, fmReadWriteExisting):
-      discard writeBuffer(f, addr zeros[0], zeros.len)
-      flushFile(f)
+      try:
+        discard writeBuffer(f, addr zeros[0], zeros.len)
+        flushFile(f)
+      except IOError:
+        discard
       close(f)
 
 proc removeCredentialDir(dir: string): Result[void, string] =

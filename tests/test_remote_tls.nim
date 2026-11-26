@@ -6,15 +6,19 @@
 ## (step 5-2a; G324, G325). The one suite that imports the TLS library, so that
 ## one test build per variant compiles BoringSSL.
 
-import std/[os, posix, sequtils, strutils, sysrand]
+import std/[os, sequtils, strutils, sysrand]
 import unittest2
 import results
 import logos_sdk/base/[wipe, wipeaudit]
 import ../src/logos_core/transport/tls/boring
 import ../src/logos_core/daemon/[credential, session, signsvc]
 from ../src/logos_core/durable import ensurePrivateDir
-import ./support/[daemonbuild, daemonproc, rchannel, slowdown, tls_fixtures]
+import ./support/[slowdown, tls_fixtures]
 from logos_sdk/testing/kitbuild import kitVariant
+when defined(posix):
+  # The signing channel's processes and socket pairs (5-7a-1, below).
+  import std/posix
+  import ./support/[daemonbuild, daemonproc, rchannel]
 
 proc waitUntil(cond: proc(): bool {.gcsafe, raises: [].}, ms: int): bool =
   ## Runs the event loop until `cond` holds, at most `ms` × `Slow`.
@@ -1469,95 +1473,98 @@ proc credentialParty(id, name: string): (Session, Party) =
   let key = loadCredentialKey(s.credentialDir).get
   (s, Party(id: id, key: key, cert: info.certificate, spki: info.spki))
 
-suite "tls.signing channel: handshakes signed by logosd, its key holder and the test copy":
-  teardown:
-    # Before the exit procedures: upstream ISSUES.md 194.
-    killAll()
+when defined(posix):
+  # logosd, its key holder and their channels are POSIX processes (logosd is a stub on
+  # Windows, G107); the credential code above still builds everywhere.
+  suite "tls.signing channel: handshakes signed by logosd, its key holder and the test copy":
+    teardown:
+      # Before the exit procedures: upstream ISSUES.md 194.
+      killAll()
 
-  test "[IMPL-DECISION G410] the client signs through logosd's service, the server through a key holder logosd relays to":
-    let (sd, d) = credentialParty(IdD, "client")
-    let (se, e) = credentialParty(IdE, "server")
-    let faults = new int
-    # The client process's channel to logosd, whose service holds the key.
-    let svc = newSignService(sd.credentialDir).get
-    let (cp, cl) = socketPair()
-    let clientProc = endOf(cp)
-    let clientLogosd = endOf(cl)
-    let cc = clientProc.clientOn(tlsClient)
-    asyncSpawn clientProc.pumpAnswers(cc, faults)
-    asyncSpawn clientLogosd.serveService(svc, tlsClient)
-    # The server process's channel to logosd, which relays to the key holder.
-    let (ho, ht) = socketPair()
-    let holder = spawnChild(
-      keyholderProgram(),
-      ["--session=" & se.dir, "--parent=" & $getpid()],
-      se.dir,
-      "holder",
-      channel = ht,
-    )
-    discard posix.close(ht)
-    let holderEnd = endOf(ho)
-    let (sp, sl) = socketPair()
-    let serverProc = endOf(sp)
-    let serverLogosd = endOf(sl)
-    let sc = serverProc.clientOn(tlsServer)
-    asyncSpawn serverProc.pumpAnswers(sc, faults)
-    asyncSpawn serverLogosd.serveRelay(holderEnd, tlsServer, new HolderRelay)
-    let seen = Seen()
-    let l = listen(e, seen, [d], signer = sc.signer)
-    let st = l.dial(d, e, signer = cc.signer)
-    check st.isOk
-    if st.isOk:
-      check st.get.roundTrip(@[1'u8, 2, 3]).get == @[1'u8, 2, 3]
-      waitFor st.get.close()
-    check waitUntil(
-      proc(): bool =
-        seen.peers.len == 1,
-      5000,
-    )
-    check seen.peers == @[IdD]
-    check svc.count.signed == 1
-    check faults[] == 0
-    # No key crossed either process's channel: each read answers only.
-    for x in [clientProc, serverProc]:
-      check x.got.len == 1
-      check x.got.allIt(it in {lcn_Rch_signed, lcn_Rch_sign_refused})
-    waitFor l.close()
-    for x in [clientProc, serverProc, holderEnd]:
-      waitFor x.close()
-    check waitExit(holder, 60_000 * Slow) == 0
-    check readHolderCount(se).get.get.signed == 1
-    svc.close()
-    d.free()
-    e.free()
+    test "[IMPL-DECISION G410] the client signs through logosd's service, the server through a key holder logosd relays to":
+      let (sd, d) = credentialParty(IdD, "client")
+      let (se, e) = credentialParty(IdE, "server")
+      let faults = new int
+      # The client process's channel to logosd, whose service holds the key.
+      let svc = newSignService(sd.credentialDir).get
+      let (cp, cl) = socketPair()
+      let clientProc = endOf(cp)
+      let clientLogosd = endOf(cl)
+      let cc = clientProc.clientOn(tlsClient)
+      asyncSpawn clientProc.pumpAnswers(cc, faults)
+      asyncSpawn clientLogosd.serveService(svc, tlsClient)
+      # The server process's channel to logosd, which relays to the key holder.
+      let (ho, ht) = socketPair()
+      let holder = spawnChild(
+        keyholderProgram(),
+        ["--session=" & se.dir, "--parent=" & $getpid()],
+        se.dir,
+        "holder",
+        channel = ht,
+      )
+      discard posix.close(ht)
+      let holderEnd = endOf(ho)
+      let (sp, sl) = socketPair()
+      let serverProc = endOf(sp)
+      let serverLogosd = endOf(sl)
+      let sc = serverProc.clientOn(tlsServer)
+      asyncSpawn serverProc.pumpAnswers(sc, faults)
+      asyncSpawn serverLogosd.serveRelay(holderEnd, tlsServer, new HolderRelay)
+      let seen = Seen()
+      let l = listen(e, seen, [d], signer = sc.signer)
+      let st = l.dial(d, e, signer = cc.signer)
+      check st.isOk
+      if st.isOk:
+        check st.get.roundTrip(@[1'u8, 2, 3]).get == @[1'u8, 2, 3]
+        waitFor st.get.close()
+      check waitUntil(
+        proc(): bool =
+          seen.peers.len == 1,
+        5000,
+      )
+      check seen.peers == @[IdD]
+      check svc.count.signed == 1
+      check faults[] == 0
+      # No key crossed either process's channel: each read answers only.
+      for x in [clientProc, serverProc]:
+        check x.got.len == 1
+        check x.got.allIt(it in {lcn_Rch_signed, lcn_Rch_sign_refused})
+      waitFor l.close()
+      for x in [clientProc, serverProc, holderEnd]:
+        waitFor x.close()
+      check waitExit(holder, 60_000 * Slow) == 0
+      check readHolderCount(se).get.get.signed == 1
+      svc.close()
+      d.free()
+      e.free()
 
-  test "[IMPL-DECISION G410] the test copy: the key on the channel, the process signs with it":
-    let (sf, f) = credentialParty(IdF, "copy")
-    let (p, lo) = socketPair()
-    let process = endOf(p)
-    let logosd = endOf(lo)
-    check waitFor logosd.send(testKeyMessage(sf.credentialDir).get)
-    let m = (waitFor process.receive()).get
-    check m.kind == lcn_Rch_test_key
-    let key = fromPkcs8(m.arm_lcn_Rch_test_key.pkcs8).get
-    let seen = Seen()
-    let l = listen(b, seen, [f])
-    let st = l.dial(f, b, signer = keySigner(key, tlsClient))
-    check st.isOk
-    if st.isOk:
-      check st.get.roundTrip(@[7'u8]).get == @[7'u8]
-      waitFor st.get.close()
-    check waitUntil(
-      proc(): bool =
-        seen.peers.len == 1,
-      5000,
-    )
-    check seen.peers == @[IdF]
-    waitFor l.close()
-    waitFor process.close()
-    waitFor logosd.close()
-    key.free()
-    f.free()
+    test "[IMPL-DECISION G410] the test copy: the key on the channel, the process signs with it":
+      let (sf, f) = credentialParty(IdF, "copy")
+      let (p, lo) = socketPair()
+      let process = endOf(p)
+      let logosd = endOf(lo)
+      check waitFor logosd.send(testKeyMessage(sf.credentialDir).get)
+      let m = (waitFor process.receive()).get
+      check m.kind == lcn_Rch_test_key
+      let key = fromPkcs8(m.arm_lcn_Rch_test_key.pkcs8).get
+      let seen = Seen()
+      let l = listen(b, seen, [f])
+      let st = l.dial(f, b, signer = keySigner(key, tlsClient))
+      check st.isOk
+      if st.isOk:
+        check st.get.roundTrip(@[7'u8]).get == @[7'u8]
+        waitFor st.get.close()
+      check waitUntil(
+        proc(): bool =
+          seen.peers.len == 1,
+        5000,
+      )
+      check seen.peers == @[IdF]
+      waitFor l.close()
+      waitFor process.close()
+      waitFor logosd.close()
+      key.free()
+      f.free()
 
 freeContexts()
 for p in [a, b, c]:
