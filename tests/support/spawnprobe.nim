@@ -51,6 +51,8 @@ proc main() =
     text.add(l & "\n")
   let f = frameOf(toMessage(LcnCarrierFatal(message: text))).get
   discard posix.write(3, unsafeAddr f[0], f.len)
-  quit(0)
 
+# [IMPL] `main` returns, and the program ends with status 0, rather than quitting
+# itself: nothing it allocated is live when LeakSanitizer checks at exit (as in
+# `trnpeer.nim`).
 main()

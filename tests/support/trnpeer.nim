@@ -12,6 +12,11 @@
 ##   `<base>`, reports `ready <path>` and then `bytes <n>` on stdout (sudo closes
 ##   every fd above 2, so no control channel), then removes what it created.
 ##   G129's other-uid listener.
+##
+## [IMPL] Each mode returns its exit status and the main module quits with it,
+## so nothing a mode allocated is live when LeakSanitizer checks at exit. A
+## mode that quit itself left its last reply's temporary to a register on
+## aarch64: a leak, and an exit status of 1 where the suite expects 0.
 
 import std/[os, posix, strutils]
 import results
@@ -72,7 +77,7 @@ proc waitFor(o: Owner, kinds: set[IoEventKind], conn: ConnId): CborValue =
     return cborMap((cbor("kind"), cbor("timeout")))
   summary(ev.get)
 
-proc ownerMode(serve: bool) =
+proc ownerMode(serve: bool): int =
   let o = newOwner()
   if serve:
     doAssert o.serve(1, Inherited)
@@ -82,7 +87,7 @@ proc ownerMode(serve: bool) =
       continue
     let req = ctlRecv(Ctl).valueOr:
       o.stop()
-      quit(1)
+      return 1
     case req.text("op")
     of "issue":
       let t = o.issue(
@@ -123,7 +128,7 @@ proc ownerMode(serve: bool) =
     of "exit":
       o.stop()
       reply(cborMap((cbor("ok"), cbor(true))))
-      quit(0)
+      return 0
     else:
       reply(cborMap((cbor("error"), cbor("unknown op"))))
 
@@ -146,7 +151,7 @@ proc acceptOne(listener: cint, timeoutMs: int): cint =
     return -1
   sockAccept(listener)
 
-proc rawMode() =
+proc rawMode(): int =
   let fd = acceptOne(Inherited, 10_000)
   var n = -1
   if fd >= 0:
@@ -156,9 +161,9 @@ proc rawMode() =
     discard fdClose(fd)
   reply(cborMap((cbor("bytes"), cbor(int64(n)))))
   discard ctlRecv(Ctl)
-  quit(0)
+  0
 
-proc squatMode(base: string) =
+proc squatMode(base: string): int =
   var t: array[4, byte]
   doAssert osRandom(t)
   let dir = base / ("lcnsquat-" & toHex(t[0]) & toHex(t[1]) & toHex(t[2]) & toHex(t[3]))
@@ -184,9 +189,9 @@ proc squatMode(base: string) =
   discard fdClose(fd)
   discard unlink(cstring(path))
   discard rmdir(cstring(dir))
-  quit(0)
+  0
 
-when isMainModule:
+proc main(): int =
   let args = commandLineParams()
   doAssert args.len >= 1, "trnpeer <owner [serve]|raw|squat <base>>"
   case args[0]
@@ -197,4 +202,7 @@ when isMainModule:
   of "squat":
     squatMode(args[1])
   else:
-    quit(2)
+    2
+
+when isMainModule:
+  quit(main())
