@@ -499,6 +499,18 @@ when defined(posix):
     clock: Clock
     pmDir, log, meterDir: string
 
+  var caseClock: Clock ## the case's clock from `testClock`, until the suite's teardown
+
+  proc testClock(): Clock =
+    ## [IMPL] A frozen clock for the case's engine, freed by the suite's teardown after
+    ## `leftover`, on every path, failures included. The engine reads it on its own
+    ## workers, and a case that ends before its `finish` has its engine closed only in
+    ## that teardown, so a `defer` in the case would free it while the engine still runs.
+    ## An engine whose `close` gave up keeps its clock: a leak beside the failed check,
+    ## not a read of freed memory (the big CI fix run: six clocks leaked under ASan).
+    caseClock = newTestClock()
+    caseClock
+
   proc setup(
       name: string,
       clock = systemClock(),
@@ -555,9 +567,11 @@ when defined(posix):
       openGate()
       releaseAll()
       leftover()
+      if live == nil:
+        freeClock(caseClock)
 
     test "[RUN-0313] [RUN-0314] [RUN-0315] [RUN-0316] [RUN-0317] [RUN-0318] [RUN-0319] [RUN-0851] [TRN-0182] [TRN-0183] [TRN-0184] [TRN-0185] [TRN-0328] [TRN-0333] [IMPL-DECISION G492] [IMPL-DECISION G493] pending until the marked instance is ready and its first Hello succeeds, then ready; start waits for neither; the system-service endpoint is a listener of its own in a private directory":
-      let clk = newTestClock()
+      let clk = testClock()
       let s = setup("readiness", clk, refuse = true)
       let e = s.e
       # Made at the instance's readiness, `pending` while its first Hello is refused.
@@ -731,7 +745,7 @@ when defined(posix):
       e.finish()
 
     test "[TRN-0330] [TRN-0331] [TRN-0332] [TRN-0334] [TRN-0335] [TRN-0336] [TRN-0337] [TRN-0338] [TRN-0342] [TRN-0343] [RUN-0852] system-service tickets: unknown to the provider endpoint and route tickets unknown to the system endpoint, each still good where it belongs; expired, replayed and wrong-purpose material is NOT_AUTHORISED; no ticket in a Runtime Control result or a log":
-      let clk = newTestClock()
+      let clk = testClock()
       let s = setup("tickets", clk)
       let e = s.e
       check e.bindingReady()
@@ -781,7 +795,7 @@ when defined(posix):
       e.finish()
 
     test "[TRN-0187] [TRN-0188] [TRN-0189] [TRN-0190] [TRN-0191] [TRN-0339] [IMPL-DECISION G492] a failed attempt's ticket is deleted at once: the client's peer check fails, nothing is sent, the old ticket is refused afterwards, and the binding retries with a fresh one":
-      let clk = newTestClock()
+      let clk = testClock()
       let s = setup("peer", clk)
       let e = s.e
       check e.bindingReady()
@@ -956,7 +970,7 @@ when defined(posix):
       e.finish()
 
     test "[IMPL-DECISION G492] [IMPL-DECISION G493] a request's own end: parked, one past its deadline and one withdrawn are removed and never sent, TIMEOUT and CANCELLED; in flight past its deadline, Cancel is sent, it resumes TIMEOUT and the next is sent at once":
-      let clk = newTestClock()
+      let clk = testClock()
       let s = setup("ends", clk)
       let e = s.e
       check e.bindingReady()
@@ -991,7 +1005,7 @@ when defined(posix):
       e.finish()
 
     test "[RUN-0318] [RUN-0319] [IMPL-DECISION G493] the first Hello refused: create and start report nothing, the binding stays pending with one log line per attempt and retries with fresh tickets, 1 s doubling to 30 s; a handoff parked meanwhile fails NOT_READY after 10 s; once let through it is ready and answers; a stop ends the retries":
-      let clk = newTestClock()
+      let clk = testClock()
       let s = setup("first", clk, refuse = true)
       let e = s.e
       check e.failuresReach(1)
@@ -1054,7 +1068,7 @@ when defined(posix):
       e.finish()
 
     test "[IMPL-DECISION G493] a later Hello refused after a lost session: one log line per attempt, retries with fresh tickets; a request parked meanwhile ends at its own deadline with TIMEOUT; once let through the session is made again and a handoff answered":
-      let clk = newTestClock()
+      let clk = testClock()
       let s = setup("later", clk)
       let e = s.e
       check e.bindingReady()
