@@ -1228,6 +1228,9 @@ when defined(posix):
 
 # The engine's page jobs (5-6b-1) ----------------------------------------------------------
 
+# Off POSIX the engine answers a page job or a reader's handoff MODULE_ERROR (the installed
+# state is POSIX only, G444), so the cases that reach one skip there and the last case checks
+# both refusals; the limit check runs everywhere.
 suite "the engine's page jobs (5-6b-1; G499, G500)":
   let
     a = Origin(runtime: "rt", instance: "a")
@@ -1275,6 +1278,9 @@ suite "the engine's page jobs (5-6b-1; G499, G500)":
     w.answers[^1]
 
   test "[PKG-0558] [IMPL-DECISION G500] page jobs: 2 in flight per origin and 8 in all, readers' handoffs among them; past either bound MODULE_ERROR naming it; a cancel frees its place once the job has ended":
+    when not defined(posix):
+      skip()
+      break
     var w = world()
     var id = 0'u64
     proc list(w: var World, o: Origin): uint64 =
@@ -1340,6 +1346,9 @@ suite "the engine's page jobs (5-6b-1; G499, G500)":
     check w.e.pagesRunning == 8
 
   test "[PKG-0558] [IMPL-DECISION G500] a reader that lists and cancels in a loop is refused once its places are full, and the read-only worker's queue holds no more of its jobs than its places":
+    when not defined(posix):
+      skip()
+      break
     var w = world()
     var queued: seq[uint64]
     var refused = 0
@@ -1379,6 +1388,9 @@ suite "the engine's page jobs (5-6b-1; G499, G500)":
     check w.e.heldSnapshots == 2
 
   test "[PKG-0533] [PKG-0384] [PKG-0387] [IMPL-DECISION G499] [IMPL-DECISION G500] a page's answer: next_cursor exactly when a matching record remains; its continuation goes on; after a commit it is invalid-request":
+    when not defined(posix):
+      skip()
+      break
     var w = world()
     w.emit(w.e.listInstalled(1, a, Opt.some("lib"), Opt.none(string), Opt.some(1'u16)))
     let job = w.take({cmPage}).job
@@ -1429,6 +1441,9 @@ suite "the engine's page jobs (5-6b-1; G499, G500)":
     check w.e.cursorsHeld == 0
 
   test "[PKG-0387] [IMPL-DECISION G499] the 1 s timer reclaims expired cursors while any is held":
+    when not defined(posix):
+      skip()
+      break
     var w = world()
     w.emit(w.e.listInstalled(1, a, Opt.none(string), Opt.none(string), Opt.some(1'u16)))
     discard w.take({cmPage})
@@ -1455,6 +1470,26 @@ suite "the engine's page jobs (5-6b-1; G499, G500)":
     )
     check w.answers[^1].codeOf == "invalid-request"
     check not w.has({cmPage})
+
+  when not defined(posix):
+    test "[IMPL-DECISION G444] [IMPL-DECISION G500] off POSIX a list that matches and a reader's handoff of an installed package are MODULE_ERROR, and no page job is queued":
+      # The engine's two refusals stand in front of the read-only worker, whose
+      # installed-state jobs assert off POSIX; nothing else runs them (5-6).
+      var w = world()
+      let held = w.e.heldSnapshots
+      w.emit(
+        w.e.listInstalled(1, a, Opt.none(string), Opt.none(string), Opt.none(uint16))
+      )
+      check w.last.answer.kind == oaModuleError
+      check w.last.answer.reason == "the installed state is POSIX only"
+      w.emit(
+        w.e.readerHandoff(2, a, PackageIdentity(package: "app", version: "1.0.0"), "m")
+      )
+      check w.last.answer.kind == oaModuleError
+      check w.last.answer.reason == "the installed state is POSIX only"
+      check not w.has({cmPage})
+      check w.e.pagesRunning == 0
+      check w.e.heldSnapshots == held
 
 # The watch's hints and the operations' progress (5-6b-2) -------------------------------
 
