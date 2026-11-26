@@ -103,14 +103,26 @@ when defined(posix):
     child: Child
     e: RchEnd
 
-  proc startHolder(s: Session, name = "holder", args: seq[string] = @[]): Holder =
+  const FrozenLimitVariable = "LCN_TEST_HOLDER_LIMIT_FROZEN"
+    ## The holder's test hook (`daemon/keyholder.nim`): its limit's clock held at
+    ## its start.
+
+  proc startHolder(
+      s: Session, name = "holder", args: seq[string] = @[], frozenLimit = false
+  ): Holder =
     let (ours, theirs) = socketPair()
     let a =
       if args.len > 0:
         args
       else:
         @["--session=" & s.dir, "--parent=" & $getpid()]
-    result.child = spawnChild(keyholderProgram(), a, s.dir, name, channel = theirs)
+    let env =
+      if frozenLimit:
+        @[(FrozenLimitVariable, "1")]
+      else:
+        @[]
+    result.child =
+      spawnChild(keyholderProgram(), a, s.dir, name, env = env, channel = theirs)
     discard posix.close(theirs)
     result.e = endOf(ours)
 
@@ -328,8 +340,11 @@ when defined(posix):
       check first.signed == 1
       check first.refused == 0
       # A later run: its own check of a role other than the input's, sent to
-      # it directly as only logosd could, and its count carried on.
-      let h2 = startHolder(s, "holder2")
+      # it directly as only logosd could, and its count carried on. Its limit's
+      # clock is held still (the test hook): the burst below is exact however
+      # slowly this build serves it (under MemorySanitizer the bucket refilled
+      # as fast as the burst drained it, and all 260 were signed).
+      let h2 = startHolder(s, "holder2", frozenLimit = true)
       let direct = h2.holderAnswers(
         [
           holderRequest(100, tlsClient, EcdsaP256, cvInput(tlsServer)),
@@ -340,7 +355,8 @@ when defined(posix):
       if direct.len == 2:
         check direct[0].answerOf.status == ssRefused
         check direct[1].answerOf.status == ssSigned
-      # Its own limit, 100 a second with bursts of 200 [IMPL].
+      # Its own limit, 100 a second with bursts of 200 [IMPL]. The two requests
+      # above each took a token, refused or not.
       var burst: seq[LcnRchMessage]
       for i in 0 ..< 260:
         burst.add(holderRequest(uint64(200 + i), tlsServer, EcdsaP256, x))
@@ -348,8 +364,8 @@ when defined(posix):
       check answers.len == 260
       let (bs, br, bu) = statuses(answers.mapIt(it.answerOf))
       check bu == 0
-      check br > 0
-      check bs < 260
+      check bs == HolderBurst - 2
+      check br == 260 - (HolderBurst - 2)
       check endHolder(h2) == 0
       let count = readHolderCount(s).get.get
       check count.signed == uint64(2 + bs)

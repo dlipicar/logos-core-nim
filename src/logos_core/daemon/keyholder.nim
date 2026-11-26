@@ -21,21 +21,34 @@
 ##
 ## What the mode gives, and what it does not: docs/REMOTE.md. Any other message
 ## on fd 3, or one that does not decode, ends the holder (exit 1).
+##
+## The test hook (`-d:lcnTestHooks` only; DECISIONS G410, D27): with
+## `LCN_TEST_HOLDER_LIMIT_FROZEN=1` in its environment, the holder's limit reads
+## one time, its start's, for every answer, so a burst over the limit is exact
+## however slowly the build serves it [IMPL]. logosd starts the holder with an
+## empty environment (`remoteside.spawnKeyHolder`), so only a test that is the
+## holder's parent can select it.
 
 {.push raises: [].}
 
 import std/[atomics, os, posix, strutils]
 from std/cmdline import commandLineParams
 import results
-import logos_sdk/base/[entrymarks, parentwatch]
+import logos_sdk/base/[entrymarks, parentwatch, testhooks]
 import ../remote/carrier
 import ../transport/tls/p256
 import ./[credential, session, signsvc]
+
+testHooksMarker("keyholder")
 
 const
   ChannelFd* = cint(3) ## the socket pair to logosd
   SessionFlag* = "--session="
   PollMs = 1000 ## [IMPL] how often the holder looks at its parent and its count
+
+when defined(lcnTestHooks):
+  const FrozenLimitVariable = "LCN_TEST_HOLDER_LIMIT_FROZEN"
+    ## The test hook's variable; `1` selects it.
 
 var stopFlag: Atomic[bool]
 
@@ -91,6 +104,12 @@ proc runKeyHolder*() {.noreturn.} =
     ended(error)
   var c = count.get(SignCount())
   var limit = newRateLimit(HolderRate, HolderBurst)
+  when defined(lcnTestHooks):
+    let frozenNs =
+      if getEnv(FrozenLimitVariable) == "1":
+        monoNs()
+      else:
+        -1'i64
   discard signal(SIGTERM, onStop)
   discard signal(SIGINT, onStop)
   var reader = newRchReader()
@@ -138,7 +157,15 @@ proc runKeyHolder*() {.noreturn.} =
         if m.kind != LcnRchMessageKind.lcn_Rch_holder_sign:
           stop("a channel message that is not holder_sign", 1)
         let h = m.arm_lcn_Rch_holder_sign
-        let res = signWith(key, roleOf(h.role), h.alg, h.input, limit, c, monoNs())
+        let now =
+          when defined(lcnTestHooks):
+            if frozenNs >= 0:
+              frozenNs
+            else:
+              monoNs()
+          else:
+            monoNs()
+        let res = signWith(key, roleOf(h.role), h.alg, h.input, limit, c, now)
         let f = frameOf(signAnswer(h.id, res)).valueOr:
           stop(error, 1)
         if not writeAll(ChannelFd, f):
