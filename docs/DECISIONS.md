@@ -9218,6 +9218,17 @@ their history.
     test (an interposer recording every open under `remote/credential/` in logosd and the holder).
     5-7a-1 tests the holder as a program on a socket pair, the relay in process, and that what logosd
     reads at a key-holder start, rotation take-up included, works with `key.p8` unreadable.
+- **Test hook [IMPL]** (`-d:lcnTestHooks`, marker `keyholder`; since big CI's fix run 45720883425):
+  with `LCN_TEST_HOLDER_LIMIT_FROZEN=1` in its environment, the holder's limit reads one time, its
+  start's, for every answer (`daemon/keyholder.nim`), so `test_remote_signing`'s burst of 260 is exact:
+  198 signed, 62 refused. Under MemorySanitizer on a CI runner the bucket refilled as fast as the burst
+  drained it, and all 260 were signed. The limit itself (100 a second, bursts of 200) is unchanged.
+  - *Why a variable:* the holder is a process of its own, which a test cannot call, and its command
+    line is the product's. logosd starts it with an empty environment (`remoteside.spawnKeyHolder`),
+    so under logosd no variable reaches it: only a test that is the holder's parent selects the hook
+    (D27, rule 4). A packaged holder has no hook code (the flake check `no-test-hooks`).
+  - The tests' holder (`tests/support/daemonbuild.keyholderProgram`) is now a test-hook build;
+    `test_remote_tls` and `test_remote_lifecycle`, which have logosd start it, never set the variable.
 - **Status:** decided 2026-11-21 with the 5-7a plan; built 2026-11-22 (I117, part 5-7a-1), the spawn
   in 5-7a-2. `test_remote_signing`, `test_remote_tls` (handshakes signed through logosd's service, the
   relayed holder and the test copy).

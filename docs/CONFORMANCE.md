@@ -1826,7 +1826,7 @@ Hooks under `src/` follow one rule (D27, revised 2026-11-13; DECISIONS I89):
 
 The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `orchestration`,
 `hostsup`, `wipeaudit`, `ctlmodule`, `evstore`, `tls_engine`, `tls_stream`, `tls_keysigner`,
-`pm_store`, `pm_jobs` and `pm_admission`):
+`pm_store`, `pm_jobs`, `pm_admission` and `keyholder`):
 
 - `host.setPolicyForTests`: the authority policy the next `start` installs.
 - `engine.loaderJournalForTests`: the Module Loader's request journal, kept in the engine's side table.
@@ -1891,6 +1891,11 @@ The hooks so far (markers `host`, `engine`, `plumbing`, `sidetable`, `loader`, `
   which send the key to a TLS process, exist only in a build with `-d:logosTestSigning` (owner
   decision B1: tests only); a packaged logosd refuses the setting. `test_remote_signing` and
   `test_remote_tls` are built with it.
+- The key holder's limit clock (G410; since big CI's fix run): a test-hook build of
+  `logos_keyholder` (`daemon/keyholder.nim`) started with `LCN_TEST_HOLDER_LIMIT_FROZEN=1` reads one
+  time, its start's, for every answer's rate limit, so `test_remote_signing`'s burst is exact. A
+  variable selects it because the holder is a process of its own, which a test cannot call; logosd
+  starts the holder with an empty environment, so only a test that is the holder's parent selects it.
 - The Package Manager's installed state (5-5; DECISIONS G446, G447, G449): `store.crashAt=` stops
   a commit at a named point, as a crash would, `store.rules` changes a root's path rules, and
   `store.syncMode=` its sync; `jobs.failStage` fails the stage of a named package, and
