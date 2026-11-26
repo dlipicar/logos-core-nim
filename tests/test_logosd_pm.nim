@@ -789,9 +789,9 @@ when defined(posix):
         )
       )
 
-    proc hookedWatch(c: Case, hook: string): (Child, Child) =
+    proc hookedWatch(c: Case, hook: string, count = 2): (Child, Child) =
       # logosd with lcn_call's watch hook `hook`, ready, its catalog in use; then a
-      # `package watch --count 2` past its first line and its admission.
+      # `package watch --count COUNT` past its first line and its admission.
       var dc = pmConfig()
       dc.runtime.module_host_env = Opt.some(@SanitizerEnv & @[WatchHookVariable])
       check c.initPm(dc).code == 0
@@ -811,7 +811,7 @@ when defined(posix):
       check c.acquired(d, catalogLine("configured"))
       let watch = spawnChild(
         ctlExe,
-        ["--session-dir", c.s.dir, "--json", "package", "watch", "--count", "2"],
+        ["--session-dir", c.s.dir, "--json", "package", "watch", "--count", $count],
         c.dir,
         "watch",
       )
@@ -835,8 +835,12 @@ when defined(posix):
 
     test "[PKG-0555] [IMPL-DECISION G503] a lost watch is made again and lists (LCN_TEST_CLI_WATCH: the first hint lost with its watch, the refresh longer than the case): the line after the loss is the re-made watch's, with one notice":
       let c = newCase()
-      # No line can come from the refresh: it is 10 minutes.
-      let (d, watch) = c.hookedWatch("refresh=600000,lose-first-hint")
+      # No line can come from the refresh: it is 10 minutes. [IMPL] Past the line after
+      # the loss, the watch stays open (`--count 3`, no third change) until the re-made
+      # watch's admission, then is stopped: at `--count 2` that line ends the stream and
+      # cancels the re-made watch call right after its list, and a call still queued when
+      # its cancellation arrives is never admitted (G503; the big CI fix run).
+      let (d, watch) = c.hookedWatch("refresh=600000,lose-first-hint", count = 3)
       # The install's hint is lost with its watch: lcn_call makes the watch again, on
       # the provider looked up again, and lists before it writes.
       check c.ctl("package", "install", "lib", "1.2.0").code == 0
@@ -846,7 +850,14 @@ when defined(posix):
         proc(): bool =
           d.watchesAdmitted == 2,
       )
-      check waitExit(watch, ReadyMs) == 0
+      check eventually(
+        "the line after the loss",
+        d,
+        proc(): bool =
+          watch.outText.linesOf.len == 2,
+      )
+      check watch.alive
+      discard stopChild(watch, StopMs)
       checkpoint("the watch: " & watch.outText & watch.errText)
       check watch.outText.linesOf ==
         @[
@@ -992,10 +1003,20 @@ when defined(posix):
       check took < 2000 + 10_000 * Slow
       check d.watchesAdmitted == watchBound
       # One watch ends: its place is given back, and the next watch is admitted.
+      # [IMPL] The next one stays open until its admission, as the four did: a stream
+      # that ends at its first line (`--count 1`) cancels its watch call right after
+      # the list, and a call still queued when its cancellation arrives completes
+      # CANCELLED without its handler (G503), so its admission is not certain (the big
+      # CI fix run: aarch64 orc-release, no fifth admission line).
       discard stopChild(watches[0], StopMs)
-      let next = c.ctl("package", "watch", "--count", "1")
-      checkpoint("exit " & $next.code & ": " & next.stdout & next.stderr)
-      check next.code == 0
+      let next = spawnChild(
+        ctlExe,
+        ["--session-dir", c.s.dir, "--json", "package", "watch"],
+        c.dir,
+        "watch" & $watchBound,
+      )
+      children.add(next)
+      watches.add(next)
       check eventually(
         "the next watch's admission",
         d,

@@ -8247,6 +8247,11 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   - **Its end:** `--count`, `--for`, the launcher's cancel, or a failure: a refusal or an error arm (5), any other
     failure of a list or of the call, the last failure of a watch not made again within 30 s, or a failure before the
     watch was first made (as `package list`'s). It is a stream (`server.isStream`).
+  - **A stream that ends at its first line [IMPL] (planning, 2026-11-26):** with `--count 1` it may end before the
+    Package Manager admitted its watch: the line comes from the list, the watch call is then cancelled, and a call
+    still queued when its cancellation arrives completes `CANCELLED` without its handler (the confined kit's rule,
+    `sdk/src/logos_sdk/codegen/confinedrt.nim`). `lcn_call`'s own place is taken and given back regardless (the big
+    CI fix run 45750293828, aarch64 orc-release).
 - **Tests:** `test_cli` (every page in order, the restarts and their bound, an error arm ends a listing, the error arm's
   exit, the opaque refusal's text, the gate: a third waits, a deadline gives 2, a cancel 130, watches counted apart),
   `test_daemon_config` (S13 and S14 as rules and as the Capability Authority decides them, with and without
@@ -8255,12 +8260,14 @@ behaviour it leaves open; all were chosen fail-closed so evil-peer tests are una
   lists at once and no refusal; with `lcn_call` not a reader, both lists refused with `PmRefusal` and the log's line,
   an install with `--progress` and no lines, PKG-0573; PKG-0555 in three cases, each list shown on its own (Fable
   §17.6, planning 2026-11-25): through the test hook `LCN_TEST_CLI_WATCH`, the first hint lost with its watch and the
-  refresh longer than the case, so the line after the loss is the re-made watch's, with one notice; a 300 ms refresh
-  with every hint ignored and no loss, so a change is written from the refresh and the watch is never made again;
-  and a real loss, the Package Manager stopped and started under a watch, which is made again within lcn_call's remake
+  refresh longer than the case, so the line after the loss is the re-made watch's, with one notice (the watch kept
+  open past that line, `--count 3`, until the re-made watch's admission, then stopped, since the big CI fix run); a
+  300 ms refresh with every hint ignored and no loss, so a change is written from the refresh and the watch is never
+  made again; and a real loss, the Package Manager stopped and started under a watch, which is made again within lcn_call's remake
   window (30 s, times `Slow` through `remake=MS` since big CI run 1, 2026-11-25: under ThreadSanitizer the restart took
   about 27 of the 30 s) with one notice and writes the next change; a fifth watch with `--for 2s`, its notice, exit 2
-  at its deadline, and a place given back admitting the next), `test_cli`
+  at its deadline, and a place given back admitting the next, kept open until the Package Manager's admission line so
+  that the admission is exact on any runner, since the big CI fix run), `test_cli`
   (PKG-0573: `classify` makes a cancel, a timeout or a lost route the outcome unknown).
 - **Claims (planning, 2026-11-25):** PKG-0554, PKG-0555 and PKG-0573 by test, none by inspection. The test hook
   (`-d:lcnTestHooks`, `LCN_TEST_CLI_WATCH`: `refresh=MS`, `remake=MS`, `lose-first-hint`, `deaf`) is read when a
