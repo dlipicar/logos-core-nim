@@ -1229,6 +1229,14 @@ suite "run.async: deferred providers (INTERFACE §2.9.2, §2.9.3)":
 
 const Chain = MaxWorkers + 6 ## one past each pool's first workers, and some
 
+const Holds = 60 * Slow
+  ## seconds: [IMPL] a bound on the wait for every call worker, the nested ones
+  ## included, to hold a call. Past the first 64 the Runtime adds one call worker
+  ## each `starvationDelay` (50 ms; I88, deviation 5), so the last of 128 holds
+  ## its call 64 steps in: 3.7 s on an idle Mac (59 ms a step), and more than 10 s
+  ## on a loaded macOS CI runner under orc-release (CI run 45750293828: over 150 ms
+  ## a step, with the late worker's 400 ms after them).
+
 var
   many: array[MaxCallWorkers + MaxNestedCallWorkers + 2, Done]
   chain: array[Chain, Done]
@@ -1369,7 +1377,8 @@ suite "run.async: starvation (DECISIONS I88, deviation 5)":
       calls.add(h.started(req(19), addr many[i]))
     check waitUntil(
       proc(): bool =
-        held.load == before + MaxCallWorkers + MaxNestedCallWorkers
+        held.load == before + MaxCallWorkers + MaxNestedCallWorkers,
+      Holds,
     )
     # [IMPL] Each completion comes: a refused call's `refuseDelay` after the
     # 128th call is held (0.1 s with orc, 0.3 s with ASan on an idle Mac, over
@@ -1426,7 +1435,8 @@ suite "run.async: starvation (DECISIONS I88, deviation 5)":
       calls.add(h.started(req(19), addr many[i]))
     check waitUntil(
       proc(): bool =
-        held.load == before + MaxCallWorkers + MaxNestedCallWorkers
+        held.load == before + MaxCallWorkers + MaxNestedCallWorkers,
+      Holds,
     )
     const Completes = 60 * Slow ## seconds, as in the case above
     check waitUntil(
@@ -1467,7 +1477,8 @@ suite "run.async: starvation (DECISIONS I88, deviation 5)":
       calls.add(h.started(req(19), addr many[i]))
     check waitUntil(
       proc(): bool =
-        held.load == before + MaxCallWorkers + MaxNestedCallWorkers - 1
+        held.load == before + MaxCallWorkers + MaxNestedCallWorkers - 1,
+      Holds,
     )
     # The 128th worker is not busy, so nothing is refused after `refuseDelay`.
     sleep(Period div 2)
@@ -1536,7 +1547,8 @@ suite "run.async: starvation (DECISIONS I88, deviation 5)":
     createThread(t, background, addr hr) # synchronous, on its own thread
     check waitUntil(
       proc(): bool =
-        held.load == before + Workers + 1
+        held.load == before + Workers + 1,
+      Holds,
     )
     # Every call worker is busy: this one waits, not admitted.
     calls.add(hr.started(req(19), addr many[Workers]))
