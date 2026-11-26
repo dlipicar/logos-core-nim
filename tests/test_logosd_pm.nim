@@ -992,10 +992,20 @@ when defined(posix):
       check took < 2000 + 10_000 * Slow
       check d.watchesAdmitted == watchBound
       # One watch ends: its place is given back, and the next watch is admitted.
+      # [IMPL] The next one stays open until its admission, as the four did: a stream
+      # that ends at its first line (`--count 1`) cancels its watch call right after
+      # the list, and a call still queued when its cancellation arrives completes
+      # CANCELLED without its handler (G503), so its admission is not certain (the big
+      # CI fix run: aarch64 orc-release, no fifth admission line).
       discard stopChild(watches[0], StopMs)
-      let next = c.ctl("package", "watch", "--count", "1")
-      checkpoint("exit " & $next.code & ": " & next.stdout & next.stderr)
-      check next.code == 0
+      let next = spawnChild(
+        ctlExe,
+        ["--session-dir", c.s.dir, "--json", "package", "watch"],
+        c.dir,
+        "watch" & $watchBound,
+      )
+      children.add(next)
+      watches.add(next)
       check eventually(
         "the next watch's admission",
         d,
